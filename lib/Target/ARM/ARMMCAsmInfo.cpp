@@ -62,8 +62,11 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
   PrivateGlobalPrefix = ".L";
   WeakRefDirective = "\t.weak\t";
   HasLCOMMDirective = true;
+  PCSymbol = ".";
 
   DwarfRequiresFrameSection = false;
+
+  ExceptionsType = ExceptionHandling::Dwarf;
 
   SupportsDebugInformation = true;
 }

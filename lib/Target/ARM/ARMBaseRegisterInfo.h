@@ -151,6 +151,8 @@ public:
   virtual void emitPrologue(MachineFunction &MF) const;
   virtual void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const;
 
+  virtual void getInitialFrameState(std::vector<MachineMove> &Moves) const;
+
 private:
   unsigned estimateRSStackSizeLimit(MachineFunction &MF) const;
 

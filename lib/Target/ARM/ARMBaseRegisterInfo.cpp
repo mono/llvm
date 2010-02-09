@@ -27,6 +27,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineLocation.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/Support/Debug.h"
@@ -1112,6 +1113,55 @@ emitSPUpdate(bool isARM,
                            Pred, PredReg, TII);
 }
 
+//
+// Functions to emit MachineMoves. These use the DWARF unwind terminology, i.e
+// CFA == VirtualFP
+//
+
+// emitDefCfaOffset - Emit a MachineMove to set the CFA offset
+static void
+emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+                 DebugLoc dl, const ARMBaseInstrInfo &TII,
+                 MachineModuleInfo *MMI,
+                 std::vector<MachineMove> &Moves,
+                 int CfaOffset) {
+  unsigned FrameLabelId = MMI->NextLabelID();
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addImm(FrameLabelId);
+
+  MachineLocation SPDst(MachineLocation::VirtualFP);
+  MachineLocation SPSrc(MachineLocation::VirtualFP, -CfaOffset);
+  Moves.push_back(MachineMove(FrameLabelId, SPDst, SPSrc));
+}
+
+// emitDefCfa - Emit a MachineMove to set the CFA register+offset
+static void
+emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+           DebugLoc dl, const ARMBaseInstrInfo &TII,
+           MachineModuleInfo *MMI,
+           std::vector<MachineMove> &Moves,
+           int CfaReg, int CfaOffset) {
+  unsigned FrameLabelId = MMI->NextLabelID();
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addImm(FrameLabelId);
+
+  MachineLocation SPDst(MachineLocation::VirtualFP);
+  MachineLocation SPSrc(CfaReg, CfaOffset);
+  Moves.push_back(MachineMove(FrameLabelId, SPDst, SPSrc));
+}
+
+// emitCfaOffset - Emit a MachineMove to define where Reg is saved
+static void
+emitCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+           DebugLoc dl, const ARMBaseInstrInfo &TII,
+           MachineModuleInfo *MMI,
+           std::vector<MachineMove> &Moves,
+           int Reg, int Offset) {
+  unsigned FrameLabelId = MMI->NextLabelID();
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addImm(FrameLabelId);
+
+  MachineLocation CSDst(MachineLocation::VirtualFP, Offset);
+  MachineLocation CSSrc(Reg);
+  Moves.push_back(MachineMove(FrameLabelId, CSDst, CSSrc));
+}
 
 void ARMBaseRegisterInfo::
 eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
@@ -1276,22 +1326,34 @@ emitPrologue(MachineFunction &MF) const {
   bool isARM = !AFI->isThumbFunction();
   unsigned VARegSaveSize = AFI->getVarArgsRegSaveSize();
   unsigned NumBytes = MFI->getStackSize();
+  MachineModuleInfo *MMI = MFI->getMachineModuleInfo();
   const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
   DebugLoc dl = (MBBI != MBB.end() ?
                  MBBI->getDebugLoc() : DebugLoc::getUnknownLoc());
+  bool NeedsFrameMoves = UnwindTablesMandatory;
+  // The cfa register
+  int CfaReg = ARM::SP;
+  // The offset between the value of CfaReg and the CFA
+  int CfaOffset = 0;
 
   // Determine the sizes of each callee-save spill areas and record which frame
   // belongs to which callee-save spill areas.
   unsigned GPRCS1Size = 0, GPRCS2Size = 0, DPRCSSize = 0;
   int FramePtrSpillFI = 0;
 
+  std::vector<MachineMove> &Moves = MMI->getFrameMoves();
+
   // Allocate the vararg register save area. This is not counted in NumBytes.
   if (VARegSaveSize)
     emitSPUpdate(isARM, MBB, MBBI, dl, TII, -VARegSaveSize);
+  CfaOffset += VARegSaveSize;
 
   if (!AFI->hasStackFrame()) {
     if (NumBytes != 0)
       emitSPUpdate(isARM, MBB, MBBI, dl, TII, -NumBytes);
+    CfaOffset += NumBytes;
+    if (NeedsFrameMoves && CfaOffset)
+      emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, CfaOffset);
     return;
   }
 
@@ -1331,7 +1393,30 @@ emitPrologue(MachineFunction &MF) const {
 
   // Build the new SUBri to adjust SP for integer callee-save spill area 1.
   emitSPUpdate(isARM, MBB, MBBI, dl, TII, -GPRCS1Size);
+  CfaOffset += GPRCS1Size;
   movePastCSLoadStoreOps(MBB, MBBI, ARM::STR, ARM::t2STRi12, 1, STI);
+
+  if (NeedsFrameMoves) {
+    // CFA = sp + offset
+    emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, CfaOffset);
+
+    unsigned FrameLabelId = MMI->NextLabelID();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addImm(FrameLabelId);
+
+    // Emit moves for the registers in spill area 1
+    for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+      unsigned Reg = CSI[i].getReg();
+      int FI = CSI[i].getFrameIdx();
+      int64_t Offset = MFI->getObjectOffset(FI);
+
+      // The offset is relative to the incoming stack pointer which is 
+      // the cfa
+      if (AFI->isGPRCalleeSavedArea1Frame(FI)) {
+        // Reg is saved at cfa + offset
+        emitCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, Reg, Offset);
+      }
+    }
+  }
 
   // Set FP to point to the stack slot that contains the previous FP.
   // For Darwin, FP is R7, which has now been stored in spill area 1.
@@ -1344,13 +1429,26 @@ emitPrologue(MachineFunction &MF) const {
       BuildMI(MBB, MBBI, dl, TII.get(ADDriOpc), FramePtr)
       .addFrameIndex(FramePtrSpillFI).addImm(0);
     AddDefaultCC(AddDefaultPred(MIB));
+
+    if (NeedsFrameMoves) {
+      // CFA = FramePtr + offset from cfa where fp was stored
+      CfaReg = FramePtr;
+      CfaOffset = MFI->getObjectOffset (FramePtrSpillFI);
+      emitDefCfa(MBB, MBBI, dl, TII, MMI, Moves, CfaReg, CfaOffset);
+    }
   }
 
   // Build the new SUBri to adjust SP for integer callee-save spill area 2.
   emitSPUpdate(isARM, MBB, MBBI, dl, TII, -GPRCS2Size);
+  movePastCSLoadStoreOps(MBB, MBBI, ARM::STR, ARM::t2STRi12, 2, STI);
+  if (NeedsFrameMoves && CfaReg == ARM::SP && GPRCS2Size) {
+    CfaOffset += GPRCS2Size;
+    emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, CfaOffset);
+    // FIXME: Emit frame info for registers saved here too
+    // This isn't a problem now since spill area 2 is only used on Darwin.
+  }
 
   // Build the new SUBri to adjust SP for FP callee-save spill area.
-  movePastCSLoadStoreOps(MBB, MBBI, ARM::STR, ARM::t2STRi12, 2, STI);
   emitSPUpdate(isARM, MBB, MBBI, dl, TII, -DPRCSSize);
 
   // Determine starting offsets of spill areas.
@@ -1365,10 +1463,21 @@ emitPrologue(MachineFunction &MF) const {
   AFI->setDPRCalleeSavedAreaOffset(DPRCSOffset);
 
   movePastCSLoadStoreOps(MBB, MBBI, ARM::VSTRD, 0, 3, STI);
+
+  if (NeedsFrameMoves && CfaReg == ARM::SP && DPRCSSize) {
+    CfaOffset += DPRCSSize;
+    emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, CfaOffset);
+  }
+
   NumBytes = DPRCSOffset;
   if (NumBytes) {
     // Adjust SP after all the callee-save spills.
     emitSPUpdate(isARM, MBB, MBBI, dl, TII, -NumBytes);
+
+    if (NeedsFrameMoves && CfaReg == ARM::SP) {
+      CfaOffset += NumBytes;
+      emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, CfaOffset);
+    }
   }
 
   if (STI.isTargetELF() && hasFP(MF)) {
@@ -1507,6 +1616,15 @@ emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const {
 
   if (VARegSaveSize)
     emitSPUpdate(isARM, MBB, MBBI, dl, TII, VARegSaveSize);
+}
+
+void
+ARMBaseRegisterInfo::getInitialFrameState(std::vector<MachineMove> &Moves) 
+  const {
+  // Initial state of the frame pointer is sp+0.
+  MachineLocation Dst(MachineLocation::VirtualFP);
+  MachineLocation Src(ARM::SP, 0);
+  Moves.push_back(MachineMove(0, Dst, Src));
 }
 
 #include "ARMGenRegisterInfo.inc"
