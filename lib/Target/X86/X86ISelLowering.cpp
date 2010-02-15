@@ -2033,6 +2033,13 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     // through a register, since the call instruction's 32-bit
     // pc-relative offset may not be large enough to hold the whole
     // address.
+
+    if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+      unsigned char OpFlags = 0;
+      GlobalValue *GV = G->getGlobal();
+      Callee = DAG.getTargetGlobalAddress(GV, getPointerTy(),
+                                          G->getOffset(), OpFlags);
+    }
   } else if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
     WasGlobalOrExternal = true;
     // If the callee is a GlobalAddress node (quite common, every direct call
