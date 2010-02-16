@@ -57,6 +57,11 @@ class DwarfException : public DwarfPrinter {
   /// augmentation.
   DenseMap<unsigned, bool> UsesLSDA;
 
+  /// UsesAugmention - Indicates whenever the CIE at the given index uses
+  /// augmention, which means we have to emit the augmention length in
+  /// the FDE.
+  DenseMap<unsigned, bool> UsesAugmention;
+
   /// shouldEmitTable - Per-function flag to indicate if EH tables should
   /// be emitted.
   bool shouldEmitTable;

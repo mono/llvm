@@ -164,6 +164,7 @@ void DwarfException::EmitCIE(const Function *PersonalityFn, unsigned Index) {
       EmitEncodingByte(LSDAEncoding, "LSDA");
     if (FDEEncoding != dwarf::DW_EH_PE_absptr)
       EmitEncodingByte(FDEEncoding, "FDE");
+    UsesAugmention[Index] = true;
   }
 
   // Indicate locations of general callee saved registers in frame.
@@ -261,7 +262,8 @@ void DwarfException::EmitFDE(const FunctionEHFrameInfo &EHFrameInfo) {
         Asm->OutStreamer.EmitIntValue(0, Size/*size*/, 0/*addrspace*/);
 
     } else {
-      EmitULEB128(0, "Augmentation size");
+      if (UsesAugmention[EHFrameInfo.Number])
+        EmitULEB128(0, "Augmentation size");
     }
 
     // Indicate locations of function specific callee saved registers in frame.
