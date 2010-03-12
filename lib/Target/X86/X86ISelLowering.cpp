@@ -2034,6 +2034,10 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     // pc-relative offset may not be large enough to hold the whole
     // address.
 
+    //
+    // This is a mono specific hack to force llvm to generate direct calls even if
+    // the code model is Large.
+    //
     if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
       unsigned char OpFlags = 0;
       GlobalValue *GV = G->getGlobal();
