@@ -15,7 +15,7 @@
 
 #define DEBUG_TYPE "instr-emitter"
 #include "InstrEmitter.h"
-#include "SDDbgValue.h"
+#include "SDNodeDbgValue.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -705,6 +705,13 @@ void InstrEmitter::EmitNode(SDNode *Node, bool IsClone, bool IsCloned,
     EmitCopyFromReg(Node, 0, IsClone, IsCloned, SrcReg, VRBaseMap);
     break;
   }
+  case ISD::EH_LABEL: {
+    MCSymbol *S = cast<EHLabelSDNode>(Node)->getLabel();
+    BuildMI(*MBB, InsertPos, Node->getDebugLoc(),
+            TII->get(TargetOpcode::EH_LABEL)).addSym(S);
+    break;
+  }
+      
   case ISD::INLINEASM: {
     unsigned NumOps = Node->getNumOperands();
     if (Node->getOperand(NumOps-1).getValueType() == MVT::Flag)

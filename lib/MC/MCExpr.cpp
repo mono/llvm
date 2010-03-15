@@ -145,7 +145,7 @@ void MCTargetExpr::Anchor() {}
 
 /* *** */
 
-bool MCExpr::EvaluateAsAbsolute(int64_t &Res, MCAsmLayout *Layout) const {
+bool MCExpr::EvaluateAsAbsolute(int64_t &Res, const MCAsmLayout *Layout) const {
   MCValue Value;
   
   if (!EvaluateAsRelocatable(Value, Layout) || !Value.isAbsolute())
@@ -177,7 +177,8 @@ static bool EvaluateSymbolicAdd(const MCValue &LHS, const MCSymbol *RHS_A,
   return true;
 }
 
-bool MCExpr::EvaluateAsRelocatable(MCValue &Res, MCAsmLayout *Layout) const {
+bool MCExpr::EvaluateAsRelocatable(MCValue &Res,
+                                   const MCAsmLayout *Layout) const {
   switch (getKind()) {
   case Target:
     return cast<MCTargetExpr>(this)->EvaluateAsRelocatableImpl(Res, Layout);
@@ -194,10 +195,11 @@ bool MCExpr::EvaluateAsRelocatable(MCValue &Res, MCAsmLayout *Layout) const {
       if (!Sym.getValue()->EvaluateAsRelocatable(Res, Layout))
         return false;
 
-      // Absolutize symbol differences when we have a layout object and the
-      // target requests it.
+      // Absolutize symbol differences between defined symbols when we have a
+      // layout object and the target requests it.
       if (Layout && Res.getSymB() &&
-          Layout->getAssembler().getBackend().hasAbsolutizedSet()) {
+          Layout->getAssembler().getBackend().hasAbsolutizedSet() &&
+          Res.getSymA()->isDefined() && Res.getSymB()->isDefined()) {
         MCSymbolData &A = Layout->getAssembler().getSymbolData(*Res.getSymA());
         MCSymbolData &B = Layout->getAssembler().getSymbolData(*Res.getSymB());
         Res = MCValue::get(+ A.getFragment()->getAddress() + A.getOffset()

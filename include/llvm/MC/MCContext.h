@@ -48,21 +48,25 @@ namespace llvm {
     /// objects.
     BumpPtrAllocator Allocator;
   public:
-    MCContext(const MCAsmInfo &MAI);
+    explicit MCContext(const MCAsmInfo &MAI);
     ~MCContext();
     
     const MCAsmInfo &getAsmInfo() const { return MAI; }
 
     /// @name Symbol Managment
     /// @{
+    
+    /// CreateTempSymbol - Create and return a new assembler temporary symbol
+    /// with a unique but unspecified name.
+    MCSymbol *CreateTempSymbol();
 
     /// GetOrCreateSymbol - Lookup the symbol inside with the specified
     /// @p Name.  If it exists, return it.  If not, create a forward
     /// reference and return it.
     ///
     /// @param Name - The symbol name, which must be unique across all symbols.
-    MCSymbol *GetOrCreateSymbol(StringRef Name);
-    MCSymbol *GetOrCreateSymbol(const Twine &Name);
+    MCSymbol *GetOrCreateSymbol(StringRef Name, bool isTemporary = false);
+    MCSymbol *GetOrCreateSymbol(const Twine &Name, bool isTemporary = false);
 
     /// GetOrCreateTemporarySymbol - Create a new assembler temporary symbol
     /// with the specified @p Name if it doesn't exist or return the existing

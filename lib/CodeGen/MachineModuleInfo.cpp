@@ -10,6 +10,11 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 
 #include "llvm/Constants.h"
+#include "llvm/DerivedTypes.h"
+#include "llvm/GlobalVariable.h"
+#include "llvm/Intrinsics.h"
+#include "llvm/Instructions.h"
+#include "llvm/Module.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -17,11 +22,7 @@
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/DerivedTypes.h"
-#include "llvm/GlobalVariable.h"
-#include "llvm/Intrinsics.h"
-#include "llvm/Instructions.h"
-#include "llvm/Module.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/ErrorHandling.h"
 using namespace llvm;
@@ -29,7 +30,7 @@ using namespace llvm::dwarf;
 
 // Handle the Pass registration stuff necessary to use TargetData's.
 static RegisterPass<MachineModuleInfo>
-X("machinemoduleinfo", "Module Information");
+X("machinemoduleinfo", "Machine Module Information");
 char MachineModuleInfo::ID = 0;
 
 // Out of line virtual method.
@@ -37,15 +38,19 @@ MachineModuleInfoImpl::~MachineModuleInfoImpl() {}
 
 //===----------------------------------------------------------------------===//
 
-MachineModuleInfo::MachineModuleInfo()
-: ImmutablePass(&ID)
-, ObjFileMMI(0)
-, CurCallSite(0)
-, CallsEHReturn(0)
-, CallsUnwindInit(0)
-, DbgInfoAvailable(false) {
+MachineModuleInfo::MachineModuleInfo(const MCAsmInfo &MAI)
+: ImmutablePass(&ID), Context(MAI),
+  ObjFileMMI(0),
+  CurCallSite(0), CallsEHReturn(0), CallsUnwindInit(0), DbgInfoAvailable(false){
   // Always emit some info, by default "no personality" info.
   Personalities.push_back(NULL);
+}
+
+MachineModuleInfo::MachineModuleInfo()
+: ImmutablePass(&ID), Context(*(MCAsmInfo*)0) {
+  assert(0 && "This MachineModuleInfo constructor should never be called, MMI "
+         "should always be explicitly constructed by LLVMTargetMachine");
+  abort();
 }
 
 MachineModuleInfo::~MachineModuleInfo() {
@@ -99,6 +104,18 @@ void MachineModuleInfo::AnalyzeModule(Module &M) {
       UsedFunctions.insert(F);
 }
 
+/// getAddrLabelSymbol - Return the symbol to be used for the specified basic
+/// block when its address is taken.  This cannot be its normal LBB label
+/// because the block may be accessed outside its containing function.
+MCSymbol *MachineModuleInfo::getAddrLabelSymbol(const BasicBlock *BB) {
+  assert(BB->hasAddressTaken() &&
+         "Shouldn't get label for block without address taken");
+  MCSymbol *&Entry = AddrLabelSymbols[const_cast<BasicBlock*>(BB)];
+  if (Entry) return Entry;
+  return Entry = Context.CreateTempSymbol();
+}
+
+
 //===-EH-------------------------------------------------------------------===//
 
 /// getOrCreateLandingPadInfo - Find or create an LandingPadInfo for the
@@ -119,7 +136,7 @@ LandingPadInfo &MachineModuleInfo::getOrCreateLandingPadInfo
 /// addInvoke - Provide the begin and end labels of an invoke style call and
 /// associate it with a try landing pad block.
 void MachineModuleInfo::addInvoke(MachineBasicBlock *LandingPad,
-                                  unsigned BeginLabel, unsigned EndLabel) {
+                                  MCSymbol *BeginLabel, MCSymbol *EndLabel) {
   LandingPadInfo &LP = getOrCreateLandingPadInfo(LandingPad);
   LP.BeginLabels.push_back(BeginLabel);
   LP.EndLabels.push_back(EndLabel);
@@ -127,8 +144,8 @@ void MachineModuleInfo::addInvoke(MachineBasicBlock *LandingPad,
 
 /// addLandingPad - Provide the label of a try LandingPad block.
 ///
-unsigned MachineModuleInfo::addLandingPad(MachineBasicBlock *LandingPad) {
-  unsigned LandingPadLabel = NextLabelID();
+MCSymbol *MachineModuleInfo::addLandingPad(MachineBasicBlock *LandingPad) {
+  MCSymbol *LandingPadLabel = Context.CreateTempSymbol();
   LandingPadInfo &LP = getOrCreateLandingPadInfo(LandingPad);
   LP.LandingPadLabel = LandingPadLabel;
   return LandingPadLabel;
@@ -185,7 +202,7 @@ void MachineModuleInfo::addCleanup(MachineBasicBlock *LandingPad) {
 void MachineModuleInfo::TidyLandingPads() {
   for (unsigned i = 0; i != LandingPads.size(); ) {
     LandingPadInfo &LandingPad = LandingPads[i];
-    if (isLabelDeleted(LandingPad.LandingPadLabel))
+    if (LandingPad.LandingPadLabel && !LandingPad.LandingPadLabel->isDefined())
       LandingPad.LandingPadLabel = 0;
 
     // Special case: we *should* emit LPs with null LP MBB. This indicates
@@ -195,16 +212,14 @@ void MachineModuleInfo::TidyLandingPads() {
       continue;
     }
 
-    for (unsigned j=0; j != LandingPads[i].BeginLabels.size(); ) {
-      unsigned BeginLabel = LandingPad.BeginLabels[j];
-      unsigned EndLabel = LandingPad.EndLabels[j];
-      if (isLabelDeleted(BeginLabel) || isLabelDeleted(EndLabel)) {
-        LandingPad.BeginLabels.erase(LandingPad.BeginLabels.begin() + j);
-        LandingPad.EndLabels.erase(LandingPad.EndLabels.begin() + j);
-        continue;
-      }
-
-      ++j;
+    for (unsigned j = 0, e = LandingPads[i].BeginLabels.size(); j != e; ++j) {
+      MCSymbol *BeginLabel = LandingPad.BeginLabels[j];
+      MCSymbol *EndLabel = LandingPad.EndLabels[j];
+      if (BeginLabel->isDefined() && EndLabel->isDefined()) continue;
+      
+      LandingPad.BeginLabels.erase(LandingPad.BeginLabels.begin() + j);
+      LandingPad.EndLabels.erase(LandingPad.EndLabels.begin() + j);
+      --j, --e;
     }
 
     // Remove landing pads with no try-ranges.
@@ -218,7 +233,6 @@ void MachineModuleInfo::TidyLandingPads() {
     if (!LandingPad.LandingPadBlock ||
         (LandingPad.TypeIds.size() == 1 && !LandingPad.TypeIds[0]))
       LandingPad.TypeIds.clear();
-
     ++i;
   }
 }

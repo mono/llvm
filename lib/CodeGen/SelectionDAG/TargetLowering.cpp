@@ -174,7 +174,13 @@ static void InitLibcallNames(const char **Names) {
   Names[RTLIB::FLOOR_F64] = "floor";
   Names[RTLIB::FLOOR_F80] = "floorl";
   Names[RTLIB::FLOOR_PPCF128] = "floorl";
+  Names[RTLIB::COPYSIGN_F32] = "copysignf";
+  Names[RTLIB::COPYSIGN_F64] = "copysign";
+  Names[RTLIB::COPYSIGN_F80] = "copysignl";
+  Names[RTLIB::COPYSIGN_PPCF128] = "copysignl";
   Names[RTLIB::FPEXT_F32_F64] = "__extendsfdf2";
+  Names[RTLIB::FPEXT_F16_F32] = "__gnu_h2f_ieee";
+  Names[RTLIB::FPROUND_F32_F16] = "__gnu_f2h_ieee";
   Names[RTLIB::FPROUND_F64_F32] = "__truncdfsf2";
   Names[RTLIB::FPROUND_F80_F32] = "__truncxfsf2";
   Names[RTLIB::FPROUND_PPCF128_F32] = "__trunctfsf2";
@@ -269,6 +275,7 @@ RTLIB::Libcall RTLIB::getFPEXT(EVT OpVT, EVT RetVT) {
     if (RetVT == MVT::f64)
       return FPEXT_F32_F64;
   }
+
   return UNKNOWN_LIBCALL;
 }
 
@@ -288,6 +295,7 @@ RTLIB::Libcall RTLIB::getFPROUND(EVT OpVT, EVT RetVT) {
     if (OpVT == MVT::ppcf128)
       return FPROUND_PPCF128_F64;
   }
+
   return UNKNOWN_LIBCALL;
 }
 

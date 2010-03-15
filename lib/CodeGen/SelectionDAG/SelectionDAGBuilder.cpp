@@ -2185,7 +2185,8 @@ void SelectionDAGBuilder::visitSelect(User &I) {
 
   for (unsigned i = 0; i != NumValues; ++i)
     Values[i] = DAG.getNode(ISD::SELECT, getCurDebugLoc(),
-                            TrueVal.getNode()->getValueType(i), Cond,
+                          TrueVal.getNode()->getValueType(TrueVal.getResNo()+i),
+                            Cond,
                             SDValue(TrueVal.getNode(),
                                     TrueVal.getResNo() + i),
                             SDValue(FalseVal.getNode(),
@@ -3999,6 +4000,14 @@ SelectionDAGBuilder::visitIntrinsicCall(CallInst &I, unsigned Intrinsic) {
   case Intrinsic::pow:
     visitPow(I);
     return 0;
+  case Intrinsic::convert_to_fp16:
+    setValue(&I, DAG.getNode(ISD::FP32_TO_FP16, dl,
+                             MVT::i16, getValue(I.getOperand(1))));
+    return 0;
+  case Intrinsic::convert_from_fp16:
+    setValue(&I, DAG.getNode(ISD::FP16_TO_FP32, dl,
+                             MVT::f32, getValue(I.getOperand(1))));
+    return 0;
   case Intrinsic::pcmarker: {
     SDValue Tmp = getValue(I.getOperand(1));
     DAG.setRoot(DAG.getNode(ISD::PCMARKER, dl, MVT::Other, getRoot(), Tmp));
@@ -4301,7 +4310,7 @@ void SelectionDAGBuilder::LowerCallTo(CallSite CS, SDValue Callee,
   const FunctionType *FTy = cast<FunctionType>(PT->getElementType());
   const Type *RetTy = FTy->getReturnType();
   MachineModuleInfo *MMI = DAG.getMachineModuleInfo();
-  unsigned BeginLabel = 0, EndLabel = 0;
+  MCSymbol *BeginLabel = 0;
 
   TargetLowering::ArgListTy Args;
   TargetLowering::ArgListEntry Entry;
@@ -4361,7 +4370,7 @@ void SelectionDAGBuilder::LowerCallTo(CallSite CS, SDValue Callee,
   if (LandingPad && MMI) {
     // Insert a label before the invoke call to mark the try range.  This can be
     // used to detect deletion of the invoke via the MachineModuleInfo.
-    BeginLabel = MMI->NextLabelID();
+    BeginLabel = MMI->getContext().CreateTempSymbol();
 
     // For SjLj, keep track of which landing pads go with which invokes
     // so as to maintain the ordering of pads in the LSDA.
@@ -4375,8 +4384,7 @@ void SelectionDAGBuilder::LowerCallTo(CallSite CS, SDValue Callee,
     // Both PendingLoads and PendingExports must be flushed here;
     // this call might not return.
     (void)getRoot();
-    DAG.setRoot(DAG.getLabel(ISD::EH_LABEL, getCurDebugLoc(),
-                             getControlRoot(), BeginLabel));
+    DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getControlRoot(), BeginLabel));
   }
 
   // Check if target-independent constraints permit a tail call here.
@@ -4464,9 +4472,8 @@ void SelectionDAGBuilder::LowerCallTo(CallSite CS, SDValue Callee,
   if (LandingPad && MMI) {
     // Insert a label at the end of the invoke call to mark the try range.  This
     // can be used to detect deletion of the invoke via the MachineModuleInfo.
-    EndLabel = MMI->NextLabelID();
-    DAG.setRoot(DAG.getLabel(ISD::EH_LABEL, getCurDebugLoc(),
-                             getRoot(), EndLabel));
+    MCSymbol *EndLabel = MMI->getContext().CreateTempSymbol();
+    DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getRoot(), EndLabel));
 
     // Inform MachineModuleInfo of range.
     MMI->addInvoke(LandingPad, BeginLabel, EndLabel);
@@ -4632,7 +4639,7 @@ void SelectionDAGBuilder::visitCall(CallInst &I) {
     // can't be a library call.
     if (!F->hasLocalLinkage() && F->hasName()) {
       StringRef Name = F->getName();
-      if (Name == "copysign" || Name == "copysignf") {
+      if (Name == "copysign" || Name == "copysignf" || Name == "copysignl") {
         if (I.getNumOperands() == 3 &&   // Basic sanity checks.
             I.getOperand(1)->getType()->isFloatingPointTy() &&
             I.getType() == I.getOperand(1)->getType() &&

@@ -13,7 +13,7 @@
 
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "SDNodeOrdering.h"
-#include "SDDbgValue.h"
+#include "SDNodeDbgValue.h"
 #include "llvm/Constants.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Function.h"
@@ -1314,23 +1314,22 @@ SDValue SelectionDAG::getRegister(unsigned RegNo, EVT VT) {
   return SDValue(N, 0);
 }
 
-SDValue SelectionDAG::getLabel(unsigned Opcode, DebugLoc dl,
-                               SDValue Root,
-                               unsigned LabelID) {
+SDValue SelectionDAG::getEHLabel(DebugLoc dl, SDValue Root, MCSymbol *Label) {
   FoldingSetNodeID ID;
   SDValue Ops[] = { Root };
-  AddNodeIDNode(ID, Opcode, getVTList(MVT::Other), &Ops[0], 1);
-  ID.AddInteger(LabelID);
+  AddNodeIDNode(ID, ISD::EH_LABEL, getVTList(MVT::Other), &Ops[0], 1);
+  ID.AddPointer(Label);
   void *IP = 0;
   if (SDNode *E = CSEMap.FindNodeOrInsertPos(ID, IP))
     return SDValue(E, 0);
-
-  SDNode *N = NodeAllocator.Allocate<LabelSDNode>();
-  new (N) LabelSDNode(Opcode, dl, Root, LabelID);
+  
+  SDNode *N = NodeAllocator.Allocate<EHLabelSDNode>();
+  new (N) EHLabelSDNode(dl, Root, Label);
   CSEMap.InsertNode(N, IP);
   AllNodes.push_back(N);
   return SDValue(N, 0);
 }
+
 
 SDValue SelectionDAG::getBlockAddress(BlockAddress *BA, EVT VT,
                                       bool isTarget,
@@ -2330,22 +2329,20 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL,
   // Constant fold unary operations with an integer constant operand.
   if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Operand.getNode())) {
     const APInt &Val = C->getAPIntValue();
-    unsigned BitWidth = VT.getSizeInBits();
     switch (Opcode) {
     default: break;
     case ISD::SIGN_EXTEND:
-      return getConstant(APInt(Val).sextOrTrunc(BitWidth), VT);
+      return getConstant(APInt(Val).sextOrTrunc(VT.getSizeInBits()), VT);
     case ISD::ANY_EXTEND:
     case ISD::ZERO_EXTEND:
     case ISD::TRUNCATE:
-      return getConstant(APInt(Val).zextOrTrunc(BitWidth), VT);
+      return getConstant(APInt(Val).zextOrTrunc(VT.getSizeInBits()), VT);
     case ISD::UINT_TO_FP:
     case ISD::SINT_TO_FP: {
       const uint64_t zero[] = {0, 0};
-      // No compile time operations on this type.
-      if (VT==MVT::ppcf128)
-        break;
-      APFloat apf = APFloat(APInt(BitWidth, 2, zero));
+      // No compile time operations on ppcf128.
+      if (VT == MVT::ppcf128) break;
+      APFloat apf = APFloat(APInt(VT.getSizeInBits(), 2, zero));
       (void)apf.convertFromAPInt(Val,
                                  Opcode==ISD::SINT_TO_FP,
                                  APFloat::rmNearestTiesToEven);
@@ -5666,6 +5663,8 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::FP_TO_SINT:  return "fp_to_sint";
   case ISD::FP_TO_UINT:  return "fp_to_uint";
   case ISD::BIT_CONVERT: return "bit_convert";
+  case ISD::FP16_TO_FP32: return "fp16_to_fp32";
+  case ISD::FP32_TO_FP16: return "fp32_to_fp16";
 
   case ISD::CONVERT_RNDSAT: {
     switch (cast<CvtRndSatSDNode>(this)->getCvtCode()) {

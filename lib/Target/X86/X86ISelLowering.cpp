@@ -37,6 +37,7 @@
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallSet.h"
@@ -45,10 +46,12 @@
 #include "llvm/ADT/VectorExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Dwarf.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
+using namespace dwarf;
 
 STATISTIC(NumTailCalls, "Number of tail calls");
 
@@ -67,10 +70,54 @@ Disable16Bit("disable-16bit", cl::Hidden,
 static SDValue getMOVL(SelectionDAG &DAG, DebugLoc dl, EVT VT, SDValue V1,
                        SDValue V2);
 
+// FIXME: This is for a test.
+static cl::opt<bool>
+EnableX86EHTest("enable-x86-eh-test", cl::Hidden);
+
+namespace llvm {
+  class X86_test_MachoTargetObjectFile : public TargetLoweringObjectFileMachO {
+  public:
+    virtual void Initialize(MCContext &Ctx, const TargetMachine &TM) {
+      TargetLoweringObjectFileMachO::Initialize(Ctx, TM);
+
+      // Exception Handling.
+      LSDASection = getMachOSection("__TEXT", "__gcc_except_tab", 0,
+                                    SectionKind::getReadOnlyWithRel());
+    }
+
+    virtual unsigned getTTypeEncoding() const {
+      return DW_EH_PE_indirect | DW_EH_PE_pcrel | DW_EH_PE_sdata4;
+    }
+  };
+
+  class X8664_test_MachoTargetObjectFile : public X8664_MachoTargetObjectFile {
+  public:
+    virtual void Initialize(MCContext &Ctx, const TargetMachine &TM) {
+      TargetLoweringObjectFileMachO::Initialize(Ctx, TM);
+
+      // Exception Handling.
+      LSDASection = getMachOSection("__TEXT", "__gcc_except_tab", 0,
+                                    SectionKind::getReadOnlyWithRel());
+    }
+
+    virtual unsigned getTTypeEncoding() const {
+      return DW_EH_PE_indirect | DW_EH_PE_pcrel | DW_EH_PE_sdata4;
+    }
+  };
+}
+
 static TargetLoweringObjectFile *createTLOF(X86TargetMachine &TM) {
   switch (TM.getSubtarget<X86Subtarget>().TargetType) {
   default: llvm_unreachable("unknown subtarget type");
   case X86Subtarget::isDarwin:
+    // FIXME: This is for an EH test.
+    if (EnableX86EHTest) {
+      if (TM.getSubtarget<X86Subtarget>().is64Bit())
+        return new X8664_test_MachoTargetObjectFile();
+      else
+        return new X86_test_MachoTargetObjectFile();
+    }
+
     if (TM.getSubtarget<X86Subtarget>().is64Bit())
       return new X8664_MachoTargetObjectFile();
     return new TargetLoweringObjectFileMachO();
@@ -1118,7 +1165,7 @@ X86TargetLowering::LowerCustomJumpTableEntry(const MachineJumpTableInfo *MJTI,
          Subtarget->isPICStyleGOT());
   // In 32-bit ELF systems, our jump table entries are formed with @GOTOFF
   // entries.
-  return X86MCTargetExpr::Create(MBB->getSymbol(Ctx),
+  return X86MCTargetExpr::Create(MBB->getSymbol(),
                                  X86MCTargetExpr::GOTOFF, Ctx);
 }
 
@@ -2097,18 +2144,6 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
                                          OpFlags);
   }
 
-  if (isTailCall && !WasGlobalOrExternal) {
-    // Force the address into a (call preserved) caller-saved register since
-    // tailcall must happen after callee-saved registers are poped.
-    // FIXME: Give it a special register class that contains caller-saved
-    // register instead?
-    unsigned TCReg = Is64Bit ? X86::R11 : X86::EAX;
-    Chain = DAG.getCopyToReg(Chain,  dl,
-                             DAG.getRegister(TCReg, getPointerTy()),
-                             Callee,InFlag);
-    Callee = DAG.getRegister(TCReg, getPointerTy());
-  }
-
   // Returns a chain & a flag for retval copy to use.
   SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Flag);
   SmallVector<SDValue, 8> Ops;
@@ -2154,14 +2189,6 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
         if (RVLocs[i].isRegLoc())
           MF.getRegInfo().addLiveOut(RVLocs[i].getLocReg());
     }
-
-    assert(((Callee.getOpcode() == ISD::Register &&
-               (cast<RegisterSDNode>(Callee)->getReg() == X86::EAX ||
-                cast<RegisterSDNode>(Callee)->getReg() == X86::R11)) ||
-              Callee.getOpcode() == ISD::TargetExternalSymbol ||
-              Callee.getOpcode() == ISD::TargetGlobalAddress) &&
-           "Expecting a global address, external symbol, or scratch register");
-
     return DAG.getNode(X86ISD::TC_RETURN, dl,
                        NodeTys, &Ops[0], Ops.size());
   }
@@ -6181,7 +6208,7 @@ SDValue X86TargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) {
           N2C && N2C->isNullValue() &&
           RHSC && RHSC->isNullValue()) {
         SDValue CmpOp0 = Cmp.getOperand(0);
-        Cmp = DAG.getNode(X86ISD::CMP, dl, CmpOp0.getValueType(),
+        Cmp = DAG.getNode(X86ISD::CMP, dl, MVT::i32,
                           CmpOp0, DAG.getConstant(1, CmpOp0.getValueType()));
         return DAG.getNode(X86ISD::SETCC_CARRY, dl, Op.getValueType(),
                            DAG.getConstant(X86::COND_B, MVT::i8), Cmp);
@@ -8462,6 +8489,11 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   case X86::CMOV_V4F32:
   case X86::CMOV_V2F64:
   case X86::CMOV_V2I64:
+  case X86::CMOV_GR16:
+  case X86::CMOV_GR32:
+  case X86::CMOV_RFP32:
+  case X86::CMOV_RFP64:
+  case X86::CMOV_RFP80:
     return EmitLoweredSelect(MI, BB, EM);
 
   case X86::FP32_TO_INT16_IN_MEM:
@@ -9848,7 +9880,8 @@ bool X86TargetLowering::ExpandInlineAsm(CallInst *CI) const {
         AsmPieces[2] == "${0:w}" &&
         IA->getConstraintString().compare(0, 5, "=r,0,") == 0) {
       AsmPieces.clear();
-      SplitString(IA->getConstraintString().substr(5), AsmPieces, ",");
+      const std::string &Constraints = IA->getConstraintString();
+      SplitString(StringRef(Constraints).substr(5), AsmPieces, ",");
       std::sort(AsmPieces.begin(), AsmPieces.end());
       if (AsmPieces.size() == 4 &&
           AsmPieces[0] == "~{cc}" &&

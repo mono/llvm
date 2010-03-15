@@ -23,6 +23,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/Mangler.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/ADT/SmallString.h"
@@ -54,7 +55,12 @@ GetSymbolFromOperand(const MachineOperand &MO) const {
 
   SmallString<128> Name;
   
-  if (MO.isGlobal()) {
+  if (!MO.isGlobal()) {
+    assert(MO.isSymbol());
+    Name += AsmPrinter.MAI->getGlobalPrefix();
+    Name += MO.getSymbolName();
+  } else {    
+    const GlobalValue *GV = MO.getGlobal();
     bool isImplicitlyPrivate = false;
     if (MO.getTargetFlags() == X86II::MO_DARWIN_STUB ||
         MO.getTargetFlags() == X86II::MO_DARWIN_NONLAZY ||
@@ -62,18 +68,7 @@ GetSymbolFromOperand(const MachineOperand &MO) const {
         MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE)
       isImplicitlyPrivate = true;
     
-    const GlobalValue *GV = MO.getGlobal();
     Mang->getNameWithPrefix(Name, GV, isImplicitlyPrivate);
-  
-    if (getSubtarget().isTargetCygMing()) {
-      X86COFFMachineModuleInfo &COFFMMI = 
-        AsmPrinter.MMI->getObjFileInfo<X86COFFMachineModuleInfo>();
-      COFFMMI.DecorateCygMingName(Name, GV, *AsmPrinter.TM.getTargetData());
-    }
-  } else {
-    assert(MO.isSymbol());
-    Name += AsmPrinter.MAI->getGlobalPrefix();
-    Name += MO.getSymbolName();
   }
 
   // If the target flags on the operand changes the name of the symbol, do that
@@ -97,7 +92,7 @@ GetSymbolFromOperand(const MachineOperand &MO) const {
       assert(MO.isGlobal() && "Extern symbol not handled yet");
       StubSym =
         MachineModuleInfoImpl::
-        StubValueTy(AsmPrinter.GetGlobalValueSymbol(MO.getGlobal()),
+        StubValueTy(AsmPrinter.Mang->getSymbol(MO.getGlobal()),
                     !MO.getGlobal()->hasInternalLinkage());
     }
     return Sym;
@@ -111,7 +106,7 @@ GetSymbolFromOperand(const MachineOperand &MO) const {
       assert(MO.isGlobal() && "Extern symbol not handled yet");
       StubSym =
         MachineModuleInfoImpl::
-        StubValueTy(AsmPrinter.GetGlobalValueSymbol(MO.getGlobal()),
+        StubValueTy(AsmPrinter.Mang->getSymbol(MO.getGlobal()),
                     !MO.getGlobal()->hasInternalLinkage());
     }
     return Sym;
@@ -127,7 +122,7 @@ GetSymbolFromOperand(const MachineOperand &MO) const {
     if (MO.isGlobal()) {
       StubSym =
         MachineModuleInfoImpl::
-        StubValueTy(AsmPrinter.GetGlobalValueSymbol(MO.getGlobal()),
+        StubValueTy(AsmPrinter.Mang->getSymbol(MO.getGlobal()),
                     !MO.getGlobal()->hasInternalLinkage());
     } else {
       Name.erase(Name.end()-5, Name.end());
@@ -247,7 +242,7 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       break;
     case MachineOperand::MO_MachineBasicBlock:
       MCOp = MCOperand::CreateExpr(MCSymbolRefExpr::Create(
-                       MO.getMBB()->getSymbol(Ctx), Ctx));
+                       MO.getMBB()->getSymbol(), Ctx));
       break;
     case MachineOperand::MO_GlobalAddress:
       MCOp = LowerSymbolOperand(MO, GetSymbolFromOperand(MO));
@@ -308,6 +303,29 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     LowerSubReg32_Op0(OutMI, X86::MOV32r0);   // MOV64r0 -> MOV32r0
     LowerUnaryToTwoAddr(OutMI, X86::XOR32rr); // MOV32r0 -> XOR32rr
     break;
+      
+      
+  // The assembler backend wants to see branches in their small form and relax
+  // them to their large form.  The JIT can only handle the large form because
+  // it does not do relaxation.  For now, translate the large form to the
+  // small one here.
+  case X86::JMP_4: OutMI.setOpcode(X86::JMP_1); break;
+  case X86::JO_4:  OutMI.setOpcode(X86::JO_1); break;
+  case X86::JNO_4: OutMI.setOpcode(X86::JNO_1); break;
+  case X86::JB_4:  OutMI.setOpcode(X86::JB_1); break;
+  case X86::JAE_4: OutMI.setOpcode(X86::JAE_1); break;
+  case X86::JE_4:  OutMI.setOpcode(X86::JE_1); break;
+  case X86::JNE_4: OutMI.setOpcode(X86::JNE_1); break;
+  case X86::JBE_4: OutMI.setOpcode(X86::JBE_1); break;
+  case X86::JA_4:  OutMI.setOpcode(X86::JA_1); break;
+  case X86::JS_4:  OutMI.setOpcode(X86::JS_1); break;
+  case X86::JNS_4: OutMI.setOpcode(X86::JNS_1); break;
+  case X86::JP_4:  OutMI.setOpcode(X86::JP_1); break;
+  case X86::JNP_4: OutMI.setOpcode(X86::JNP_1); break;
+  case X86::JL_4:  OutMI.setOpcode(X86::JL_1); break;
+  case X86::JGE_4: OutMI.setOpcode(X86::JGE_1); break;
+  case X86::JLE_4: OutMI.setOpcode(X86::JLE_1); break;
+  case X86::JG_4:  OutMI.setOpcode(X86::JG_1); break;
   }
 }
 
@@ -358,6 +376,13 @@ void X86AsmPrinter::EmitInstruction(const MachineInstr *MI) {
       } else
         printOperand(MI, 0);
     } else {
+      if (MI->getOperand(0).getType()==MachineOperand::MO_Register &&
+          MI->getOperand(0).getReg()==0) {
+        // Suppress offset in this case, it is not meaningful.
+        O << "undef";
+        OutStreamer.AddBlankLine();
+        return;
+      }
       // Frame address.  Currently handles register +- offset only.
       assert(MI->getOperand(0).getType()==MachineOperand::MO_Register);
       assert(MI->getOperand(3).getType()==MachineOperand::MO_Immediate);
@@ -406,11 +431,8 @@ void X86AsmPrinter::EmitInstruction(const MachineInstr *MI) {
     // For this, we want to print something like:
     //   MYGLOBAL + (. - PICBASE)
     // However, we can't generate a ".", so just emit a new label here and refer
-    // to it.  We know that this operand flag occurs at most once per function.
-    const char *Prefix = MAI->getPrivateGlobalPrefix();
-    MCSymbol *DotSym = OutContext.GetOrCreateTemporarySymbol(Twine(Prefix)+
-                                                             "picbaseref" +
-                                                    Twine(getFunctionNumber()));
+    // to it.
+    MCSymbol *DotSym = OutContext.GetOrCreateTemporarySymbol();
     OutStreamer.EmitLabel(DotSym);
     
     // Now that we have emitted the label, lower the complex operand expression.

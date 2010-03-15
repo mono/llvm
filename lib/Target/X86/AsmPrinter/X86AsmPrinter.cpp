@@ -53,30 +53,6 @@ void X86AsmPrinter::PrintPICBaseSymbol() const {
                                                                     OutContext);
 }
 
-MCSymbol *X86AsmPrinter::GetGlobalValueSymbol(const GlobalValue *GV) const {
-  SmallString<60> NameStr;
-  Mang->getNameWithPrefix(NameStr, GV, false);
-  MCSymbol *Symb;
-  if (GV->hasPrivateLinkage())
-    Symb = OutContext.GetOrCreateTemporarySymbol(NameStr.str());
-  else
-    Symb = OutContext.GetOrCreateSymbol(NameStr.str());
-
-  if (Subtarget->isTargetCygMing()) {
-    X86COFFMachineModuleInfo &COFFMMI =
-      MMI->getObjFileInfo<X86COFFMachineModuleInfo>();
-    COFFMMI.DecorateCygMingName(Symb, OutContext, GV, *TM.getTargetData());
-
-    // Save function name for later type emission.
-    if (const Function *F = dyn_cast<Function>(GV))
-      if (F->isDeclaration())
-        COFFMMI.addExternalFunction(Symb->getName());
-
-  }
-
-  return Symb;
-}
-
 /// runOnMachineFunction - Emit the function body.
 ///
 bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
@@ -124,7 +100,7 @@ void X86AsmPrinter::printSymbolOperand(const MachineOperand &MO) {
              MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE)
       GVSym = GetSymbolWithGlobalValueBase(GV, "$non_lazy_ptr");
     else
-      GVSym = GetGlobalValueSymbol(GV);
+      GVSym = Mang->getSymbol(GV);
 
     // Handle dllimport linkage.
     if (MO.getTargetFlags() == X86II::MO_DLLIMPORT)
@@ -137,21 +113,21 @@ void X86AsmPrinter::printSymbolOperand(const MachineOperand &MO) {
         MMI->getObjFileInfo<MachineModuleInfoMachO>().getGVStubEntry(Sym);
       if (StubSym.getPointer() == 0)
         StubSym = MachineModuleInfoImpl::
-          StubValueTy(GetGlobalValueSymbol(GV), !GV->hasInternalLinkage());
+          StubValueTy(Mang->getSymbol(GV), !GV->hasInternalLinkage());
     } else if (MO.getTargetFlags() == X86II::MO_DARWIN_HIDDEN_NONLAZY_PIC_BASE){
       MCSymbol *Sym = GetSymbolWithGlobalValueBase(GV, "$non_lazy_ptr");
       MachineModuleInfoImpl::StubValueTy &StubSym =
         MMI->getObjFileInfo<MachineModuleInfoMachO>().getHiddenGVStubEntry(Sym);
       if (StubSym.getPointer() == 0)
         StubSym = MachineModuleInfoImpl::
-          StubValueTy(GetGlobalValueSymbol(GV), !GV->hasInternalLinkage());
+          StubValueTy(Mang->getSymbol(GV), !GV->hasInternalLinkage());
     } else if (MO.getTargetFlags() == X86II::MO_DARWIN_STUB) {
       MCSymbol *Sym = GetSymbolWithGlobalValueBase(GV, "$stub");
       MachineModuleInfoImpl::StubValueTy &StubSym =
         MMI->getObjFileInfo<MachineModuleInfoMachO>().getFnStubEntry(Sym);
       if (StubSym.getPointer() == 0)
         StubSym = MachineModuleInfoImpl::
-          StubValueTy(GetGlobalValueSymbol(GV), !GV->hasInternalLinkage());
+          StubValueTy(Mang->getSymbol(GV), !GV->hasInternalLinkage());
     }
     
     // If the name begins with a dollar-sign, enclose it in parens.  We do this
@@ -238,7 +214,7 @@ void X86AsmPrinter::print_pcrel_imm(const MachineInstr *MI, unsigned OpNo) {
     O << MO.getImm();
     return;
   case MachineOperand::MO_MachineBasicBlock:
-    O << *MO.getMBB()->getSymbol(OutContext);
+    O << *MO.getMBB()->getSymbol();
     return;
   case MachineOperand::MO_GlobalAddress:
   case MachineOperand::MO_ExternalSymbol:
@@ -483,6 +459,11 @@ bool X86AsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
   return false;
 }
 
+void X86AsmPrinter::EmitStartOfAsmFile(Module &M) {
+  if (Subtarget->isTargetDarwin())
+    OutStreamer.SwitchSection(getObjFileLowering().getTextSection());
+}
+
 
 void X86AsmPrinter::EmitEndOfAsmFile(Module &M) {
   if (Subtarget->isTargetDarwin()) {
@@ -534,10 +515,18 @@ void X86AsmPrinter::EmitEndOfAsmFile(Module &M) {
         // L_foo$non_lazy_ptr:
         OutStreamer.EmitLabel(Stubs[i].first);
         // .indirect_symbol _foo
-        OutStreamer.EmitSymbolAttribute(Stubs[i].second.getPointer(),
+        MachineModuleInfoImpl::StubValueTy &MCSym = Stubs[i].second;
+        OutStreamer.EmitSymbolAttribute(MCSym.getPointer(),
                                         MCSA_IndirectSymbol);
         // .long 0
-        OutStreamer.EmitIntValue(0, 4/*size*/, 0/*addrspace*/);
+        if (MCSym.getInt())
+          // External to current translation unit.
+          OutStreamer.EmitIntValue(0, 4/*size*/, 0/*addrspace*/);
+        else
+          // Internal to current translation unit.
+          OutStreamer.EmitValue(MCSymbolRefExpr::Create(MCSym.getPointer(),
+                                                        OutContext),
+                                4/*size*/, 0/*addrspace*/);
       }
       Stubs.clear();
       OutStreamer.AddBlankLine();
@@ -590,15 +579,13 @@ void X86AsmPrinter::EmitEndOfAsmFile(Module &M) {
         static_cast<TargetLoweringObjectFileCOFF&>(getObjFileLowering());
 
       for (Module::const_iterator I = M.begin(), E = M.end(); I != E; ++I)
-        if (I->hasDLLExportLinkage()) {
-          MCSymbol *Sym = GetGlobalValueSymbol(I);
-          DLLExportedFns.push_back(Sym);
-        }
+        if (I->hasDLLExportLinkage())
+          DLLExportedFns.push_back(Mang->getSymbol(I));
 
       for (Module::const_global_iterator I = M.global_begin(),
              E = M.global_end(); I != E; ++I)
         if (I->hasDLLExportLinkage())
-          DLLExportedGlobals.push_back(GetGlobalValueSymbol(I));
+          DLLExportedGlobals.push_back(Mang->getSymbol(I));
 
       // Output linker support code for dllexported globals on windows.
       if (!DLLExportedGlobals.empty() || !DLLExportedFns.empty()) {

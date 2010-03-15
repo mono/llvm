@@ -298,16 +298,7 @@ const MCExpr *TargetLoweringObjectFile::
 getExprForDwarfGlobalReference(const GlobalValue *GV, Mangler *Mang,
                                MachineModuleInfo *MMI, unsigned Encoding,
                                MCStreamer &Streamer) const {
-  // FIXME: Use GetGlobalValueSymbol.
-  SmallString<128> Name;
-  Mang->getNameWithPrefix(Name, GV, false);
-  const MCSymbol *Sym;
-  
-  if (GV->hasPrivateLinkage())
-    Sym = getContext().GetOrCreateTemporarySymbol(Name.str());
-  else
-    Sym = getContext().GetOrCreateSymbol(Name.str());
-
+  const MCSymbol *Sym = Mang->getSymbol(GV);
   return getExprForDwarfReference(Sym, Mang, MMI, Encoding, Streamer);
 }
 
@@ -326,11 +317,7 @@ getExprForDwarfReference(const MCSymbol *Sym, Mangler *Mang,
   case dwarf::DW_EH_PE_pcrel: {
     // Emit a label to the streamer for the current position.  This gives us
     // .-foo addressing.
-    SmallString<128> Name;
-    Mang->getNameWithPrefix(Name, Twine("PCtemp") + Twine(Mang->getUniqueID()),
-                            Mangler::Private);
-
-    MCSymbol *PCSym = getContext().GetOrCreateTemporarySymbol(Name.str());
+    MCSymbol *PCSym = getContext().GetOrCreateTemporarySymbol();
     Streamer.EmitLabel(PCSym);
     const MCExpr *PC = MCSymbolRefExpr::Create(PCSym, getContext());
     return MCBinaryExpr::CreateSub(Res, PC, getContext());

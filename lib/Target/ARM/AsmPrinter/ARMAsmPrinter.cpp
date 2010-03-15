@@ -38,6 +38,7 @@
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/Target/Mangler.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -74,9 +75,8 @@ namespace {
 
   public:
     explicit ARMAsmPrinter(formatted_raw_ostream &O, TargetMachine &TM,
-                           MCContext &Ctx, MCStreamer &Streamer,
-                           const MCAsmInfo *T)
-      : AsmPrinter(O, TM, Ctx, Streamer, T), AFI(NULL), MCP(NULL) {
+                           MCStreamer &Streamer)
+      : AsmPrinter(O, TM, Streamer), AFI(NULL), MCP(NULL) {
       Subtarget = &TM.getSubtarget<ARMSubtarget>();
     }
 
@@ -198,7 +198,7 @@ namespace {
         bool isIndirect = Subtarget->isTargetDarwin() &&
           Subtarget->GVIsIndirectSymbol(GV, TM.getRelocationModel());
         if (!isIndirect)
-          O << *GetGlobalValueSymbol(GV);
+          O << *Mang->getSymbol(GV);
         else {
           // FIXME: Remove this when Darwin transition to @GOT like syntax.
           MCSymbol *Sym = GetSymbolWithGlobalValueBase(GV, "$non_lazy_ptr");
@@ -211,7 +211,7 @@ namespace {
                                         MMIMachO.getGVStubEntry(Sym);
           if (StubSym.getPointer() == 0)
             StubSym = MachineModuleInfoImpl::
-              StubValueTy(GetGlobalValueSymbol(GV), !GV->hasInternalLinkage());
+              StubValueTy(Mang->getSymbol(GV), !GV->hasInternalLinkage());
         }
       } else {
         assert(ACPV->isExtSymbol() && "unrecognized constant pool value");
@@ -304,7 +304,7 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
     break;
   }
   case MachineOperand::MO_MachineBasicBlock:
-    O << *MO.getMBB()->getSymbol(OutContext);
+    O << *MO.getMBB()->getSymbol();
     return;
   case MachineOperand::MO_GlobalAddress: {
     bool isCallOp = Modifier && !strcmp(Modifier, "call");
@@ -316,7 +316,7 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
     else if ((Modifier && strcmp(Modifier, "hi16") == 0) ||
              (TF & ARMII::MO_HI16))
       O << ":upper16:";
-    O << *GetGlobalValueSymbol(GV);
+    O << *Mang->getSymbol(GV);
 
     printOffset(MO.getOffset());
 
@@ -521,8 +521,10 @@ void ARMAsmPrinter::printAddrMode4Operand(const MachineInstr *MI, int Op,
     if (MO1.getReg() == ARM::SP) {
       // FIXME
       bool isLDM = (MI->getOpcode() == ARM::LDM ||
+                    MI->getOpcode() == ARM::LDM_UPD ||
                     MI->getOpcode() == ARM::LDM_RET ||
                     MI->getOpcode() == ARM::t2LDM ||
+                    MI->getOpcode() == ARM::t2LDM_UPD ||
                     MI->getOpcode() == ARM::t2LDM_RET);
       O << ARM_AM::getAMSubModeAltStr(Mode, isLDM);
     } else
@@ -815,11 +817,10 @@ void ARMAsmPrinter::printPCLabel(const MachineInstr *MI, int OpNum) {
 
 void ARMAsmPrinter::printRegisterList(const MachineInstr *MI, int OpNum) {
   O << "{";
-  // Always skip the first operand, it's the optional (and implicit writeback).
-  for (unsigned i = OpNum+1, e = MI->getNumOperands(); i != e; ++i) {
+  for (unsigned i = OpNum, e = MI->getNumOperands(); i != e; ++i) {
     if (MI->getOperand(i).isImplicit())
       continue;
-    if ((int)i != OpNum+1) O << ", ";
+    if ((int)i != OpNum) O << ", ";
     printOperand(MI, i);
   }
   O << "}";
@@ -889,16 +890,16 @@ void ARMAsmPrinter::printJTBlockOperand(const MachineInstr *MI, int OpNum) {
     if (UseSet && isNew) {
       O << "\t.set\t"
         << *GetARMSetPICJumpTableLabel2(JTI, MO2.getImm(), MBB) << ','
-        << *MBB->getSymbol(OutContext) << '-' << *JTISymbol << '\n';
+        << *MBB->getSymbol() << '-' << *JTISymbol << '\n';
     }
 
     O << JTEntryDirective << ' ';
     if (UseSet)
       O << *GetARMSetPICJumpTableLabel2(JTI, MO2.getImm(), MBB);
     else if (TM.getRelocationModel() == Reloc::PIC_)
-      O << *MBB->getSymbol(OutContext) << '-' << *JTISymbol;
+      O << *MBB->getSymbol() << '-' << *JTISymbol;
     else
-      O << *MBB->getSymbol(OutContext);
+      O << *MBB->getSymbol();
 
     if (i != e-1)
       O << '\n';
@@ -930,9 +931,9 @@ void ARMAsmPrinter::printJT2BlockOperand(const MachineInstr *MI, int OpNum) {
       O << MAI->getData16bitsDirective();
     
     if (ByteOffset || HalfWordOffset)
-      O << '(' << *MBB->getSymbol(OutContext) << "-" << *JTISymbol << ")/2";
+      O << '(' << *MBB->getSymbol() << "-" << *JTISymbol << ")/2";
     else
-      O << "\tb.w " << *MBB->getSymbol(OutContext);
+      O << "\tb.w " << *MBB->getSymbol();
 
     if (i != e-1)
       O << '\n';

@@ -24,6 +24,8 @@
 #include "llvm/Support/MachO.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Target/TargetRegistry.h"
+#include "llvm/Target/TargetAsmBackend.h"
 
 // FIXME: Gross.
 #include "../Target/X86/X86FixupKinds.h"
@@ -85,14 +87,19 @@ class MachObjectWriter {
     Header_Magic64 = 0xFEEDFACF
   };
 
-  static const unsigned Header32Size = 28;
-  static const unsigned Header64Size = 32;
-  static const unsigned SegmentLoadCommand32Size = 56;
-  static const unsigned Section32Size = 68;
-  static const unsigned SymtabLoadCommandSize = 24;
-  static const unsigned DysymtabLoadCommandSize = 80;
-  static const unsigned Nlist32Size = 12;
-  static const unsigned RelocationInfoSize = 8;
+  enum {
+    Header32Size = 28,
+    Header64Size = 32,
+    SegmentLoadCommand32Size = 56,
+    SegmentLoadCommand64Size = 72,
+    Section32Size = 68,
+    Section64Size = 80,
+    SymtabLoadCommandSize = 24,
+    DysymtabLoadCommandSize = 80,
+    Nlist32Size = 12,
+    Nlist64Size = 16,
+    RelocationInfoSize = 8
+  };
 
   enum HeaderFileType {
     HFT_Object = 0x1
@@ -105,7 +112,8 @@ class MachObjectWriter {
   enum LoadCommandType {
     LCT_Segment = 0x1,
     LCT_Symtab = 0x2,
-    LCT_Dysymtab = 0xb
+    LCT_Dysymtab = 0xb,
+    LCT_Segment64 = 0x19
   };
 
   // See <mach-o/nlist.h>.
@@ -160,11 +168,12 @@ class MachObjectWriter {
   };
 
   raw_ostream &OS;
-  bool IsLSB;
+  unsigned Is64Bit : 1;
+  unsigned IsLSB : 1;
 
 public:
-  MachObjectWriter(raw_ostream &_OS, bool _IsLSB = true)
-    : OS(_OS), IsLSB(_IsLSB) {
+  MachObjectWriter(raw_ostream &_OS, bool _Is64Bit, bool _IsLSB = true)
+    : OS(_OS), Is64Bit(_Is64Bit), IsLSB(_IsLSB) {
   }
 
   /// @name Helper Methods
@@ -221,22 +230,23 @@ public:
 
   /// @}
 
-  void WriteHeader32(unsigned NumLoadCommands, unsigned LoadCommandsSize,
-                     bool SubsectionsViaSymbols) {
+  void WriteHeader(unsigned NumLoadCommands, unsigned LoadCommandsSize,
+                   bool SubsectionsViaSymbols) {
     uint32_t Flags = 0;
 
     if (SubsectionsViaSymbols)
       Flags |= HF_SubsectionsViaSymbols;
 
-    // struct mach_header (28 bytes)
+    // struct mach_header (28 bytes) or
+    // struct mach_header_64 (32 bytes)
 
     uint64_t Start = OS.tell();
     (void) Start;
 
-    Write32(Header_Magic32);
+    Write32(Is64Bit ? Header_Magic64 : Header_Magic32);
 
     // FIXME: Support cputype.
-    Write32(MachO::CPUTypeI386);
+    Write32(Is64Bit ? MachO::CPUTypeX86_64 : MachO::CPUTypeI386);
     // FIXME: Support cpusubtype.
     Write32(MachO::CPUSubType_I386_ALL);
     Write32(HFT_Object);
@@ -244,48 +254,62 @@ public:
                                  // segment.
     Write32(LoadCommandsSize);
     Write32(Flags);
+    if (Is64Bit)
+      Write32(0); // reserved
 
-    assert(OS.tell() - Start == Header32Size);
+    assert(OS.tell() - Start == Is64Bit ? Header64Size : Header32Size);
   }
 
-  /// WriteSegmentLoadCommand32 - Write a 32-bit segment load command.
+  /// WriteSegmentLoadCommand - Write a segment load command.
   ///
   /// \arg NumSections - The number of sections in this segment.
   /// \arg SectionDataSize - The total size of the sections.
-  void WriteSegmentLoadCommand32(unsigned NumSections,
-                                 uint64_t VMSize,
-                                 uint64_t SectionDataStartOffset,
-                                 uint64_t SectionDataSize) {
-    // struct segment_command (56 bytes)
+  void WriteSegmentLoadCommand(unsigned NumSections,
+                               uint64_t VMSize,
+                               uint64_t SectionDataStartOffset,
+                               uint64_t SectionDataSize) {
+    // struct segment_command (56 bytes) or
+    // struct segment_command_64 (72 bytes)
 
     uint64_t Start = OS.tell();
     (void) Start;
 
-    Write32(LCT_Segment);
-    Write32(SegmentLoadCommand32Size + NumSections * Section32Size);
+    unsigned SegmentLoadCommandSize = Is64Bit ? SegmentLoadCommand64Size :
+      SegmentLoadCommand32Size;
+    Write32(Is64Bit ? LCT_Segment64 : LCT_Segment);
+    Write32(SegmentLoadCommandSize +
+            NumSections * (Is64Bit ? Section64Size : Section32Size));
 
     WriteString("", 16);
-    Write32(0); // vmaddr
-    Write32(VMSize); // vmsize
-    Write32(SectionDataStartOffset); // file offset
-    Write32(SectionDataSize); // file size
+    if (Is64Bit) {
+      Write64(0); // vmaddr
+      Write64(VMSize); // vmsize
+      Write64(SectionDataStartOffset); // file offset
+      Write64(SectionDataSize); // file size
+    } else {
+      Write32(0); // vmaddr
+      Write32(VMSize); // vmsize
+      Write32(SectionDataStartOffset); // file offset
+      Write32(SectionDataSize); // file size
+    }
     Write32(0x7); // maxprot
     Write32(0x7); // initprot
     Write32(NumSections);
     Write32(0); // flags
 
-    assert(OS.tell() - Start == SegmentLoadCommand32Size);
+    assert(OS.tell() - Start == SegmentLoadCommandSize);
   }
 
-  void WriteSection32(const MCSectionData &SD, uint64_t FileOffset,
-                      uint64_t RelocationsStart, unsigned NumRelocations) {
+  void WriteSection(const MCSectionData &SD, uint64_t FileOffset,
+                    uint64_t RelocationsStart, unsigned NumRelocations) {
     // The offset is unused for virtual sections.
     if (isVirtualSection(SD.getSection())) {
       assert(SD.getFileSize() == 0 && "Invalid file size!");
       FileOffset = 0;
     }
 
-    // struct section (68 bytes)
+    // struct section (68 bytes) or
+    // struct section_64 (80 bytes)
 
     uint64_t Start = OS.tell();
     (void) Start;
@@ -295,8 +319,13 @@ public:
       static_cast<const MCSectionMachO&>(SD.getSection());
     WriteString(Section.getSectionName(), 16);
     WriteString(Section.getSegmentName(), 16);
-    Write32(SD.getAddress()); // address
-    Write32(SD.getSize()); // size
+    if (Is64Bit) {
+      Write64(SD.getAddress()); // address
+      Write64(SD.getSize()); // size
+    } else {
+      Write32(SD.getAddress()); // address
+      Write32(SD.getSize()); // size
+    }
     Write32(FileOffset);
 
     unsigned Flags = Section.getTypeAndAttributes();
@@ -310,8 +339,10 @@ public:
     Write32(Flags);
     Write32(0); // reserved1
     Write32(Section.getStubSize()); // reserved2
+    if (Is64Bit)
+      Write32(0); // reserved3
 
-    assert(OS.tell() - Start == Section32Size);
+    assert(OS.tell() - Start == Is64Bit ? Section64Size : Section32Size);
   }
 
   void WriteSymtabLoadCommand(uint32_t SymbolOffset, uint32_t NumSymbols,
@@ -369,7 +400,7 @@ public:
     assert(OS.tell() - Start == DysymtabLoadCommandSize);
   }
 
-  void WriteNlist32(MachSymbolData &MSD) {
+  void WriteNlist(MachSymbolData &MSD) {
     MCSymbolData &Data = *MSD.SymbolData;
     const MCSymbol &Symbol = Data.getSymbol();
     uint8_t Type = 0;
@@ -428,7 +459,10 @@ public:
     // The Mach-O streamer uses the lowest 16-bits of the flags for the 'desc'
     // value.
     Write16(Flags);
-    Write32(Address);
+    if (Is64Bit)
+      Write64(Address);
+    else
+      Write32(Address);
   }
 
   struct MachRelocationEntry {
@@ -471,19 +505,6 @@ public:
       Value2 = B_SD->getAddress();
     }
 
-    // The value which goes in the fixup is current value of the expression.
-    Fixup.FixedValue = Value - Value2 + Target.getConstant();
-    if (IsPCRel)
-      Fixup.FixedValue -= Address;
-
-    // If this fixup is a vanilla PC relative relocation for a local label, we
-    // don't need a relocation.
-    //
-    // FIXME: Implement proper atom support.
-    if (IsPCRel && Target.getSymA() && Target.getSymA()->isTemporary() &&
-        !Target.getSymB())
-      return;
-
     MachRelocationEntry MRE;
     MRE.Word0 = ((Address   <<  0) |
                  (Type      << 24) |
@@ -514,9 +535,10 @@ public:
     // FIXME: Share layout object.
     MCAsmLayout Layout(Asm);
 
+    // Evaluate the fixup; if the value was resolved, no relocation is needed.
     MCValue Target;
-    if (!Fixup.Value->EvaluateAsRelocatable(Target, &Layout))
-      llvm_report_error("expected relocatable expression");
+    if (Asm.EvaluateFixup(Layout, Fixup, &Fragment, Target, Fixup.FixedValue))
+      return;
 
     // If this is a difference or a defined symbol plus an offset, then we need
     // a scattered relocation entry.
@@ -566,24 +588,6 @@ public:
 
       Type = RIT_Vanilla;
     }
-
-    // The value which goes in the fixup is current value of the expression.
-    Fixup.FixedValue = Value + Target.getConstant();
-    if (IsPCRel)
-      Fixup.FixedValue -= Address;
-
-    // If the target evaluates to a constant, we don't need a relocation. This
-    // occurs with absolutized expressions which are not resolved to constants
-    // until after relaxation.
-    if (Target.isAbsolute())
-      return;
-
-    // If this fixup is a vanilla PC relative relocation for a local label, we
-    // don't need a relocation.
-    //
-    // FIXME: Implement proper atom support.
-    if (IsPCRel && Target.getSymA() && Target.getSymA()->isTemporary())
-      return;
 
     // struct relocation_info (8 bytes)
     MachRelocationEntry MRE;
@@ -777,7 +781,8 @@ public:
     // The section data starts after the header, the segment load command (and
     // section headers) and the symbol table.
     unsigned NumLoadCommands = 1;
-    uint64_t LoadCommandsSize =
+    uint64_t LoadCommandsSize = Is64Bit ?
+      SegmentLoadCommand64Size + NumSections * Section64Size :
       SegmentLoadCommand32Size + NumSections * Section32Size;
 
     // Add the symbol table load command sizes, if used.
@@ -788,7 +793,8 @@ public:
 
     // Compute the total size of the section data, as well as its file size and
     // vm size.
-    uint64_t SectionDataStart = Header32Size + LoadCommandsSize;
+    uint64_t SectionDataStart = (Is64Bit ? Header64Size : Header32Size)
+      + LoadCommandsSize;
     uint64_t SectionDataSize = 0;
     uint64_t SectionDataFileSize = 0;
     uint64_t VMSize = 0;
@@ -814,10 +820,10 @@ public:
     SectionDataFileSize += SectionDataPadding;
 
     // Write the prolog, starting with the header and load command...
-    WriteHeader32(NumLoadCommands, LoadCommandsSize,
-                  Asm.getSubsectionsViaSymbols());
-    WriteSegmentLoadCommand32(NumSections, VMSize,
-                              SectionDataStart, SectionDataSize);
+    WriteHeader(NumLoadCommands, LoadCommandsSize,
+                Asm.getSubsectionsViaSymbols());
+    WriteSegmentLoadCommand(NumSections, VMSize,
+                            SectionDataStart, SectionDataSize);
 
     // ... and then the section headers.
     //
@@ -844,7 +850,7 @@ public:
 
       unsigned NumRelocs = RelocInfos.size() - NumRelocsStart;
       uint64_t SectionStart = SectionDataStart + SD.getAddress();
-      WriteSection32(SD, SectionStart, RelocTableEnd, NumRelocs);
+      WriteSection(SD, SectionStart, RelocTableEnd, NumRelocs);
       RelocTableEnd += NumRelocs * RelocationInfoSize;
     }
 
@@ -871,7 +877,8 @@ public:
 
       // The string table is written after symbol table.
       uint64_t StringTableOffset =
-        SymbolTableOffset + NumSymTabSymbols * Nlist32Size;
+        SymbolTableOffset + NumSymTabSymbols * (Is64Bit ? Nlist64Size :
+                                                Nlist32Size);
       WriteSymtabLoadCommand(SymbolTableOffset, NumSymTabSymbols,
                              StringTableOffset, StringTable.size());
 
@@ -925,11 +932,11 @@ public:
 
       // Write the symbol table entries.
       for (unsigned i = 0, e = LocalSymbolData.size(); i != e; ++i)
-        WriteNlist32(LocalSymbolData[i]);
+        WriteNlist(LocalSymbolData[i]);
       for (unsigned i = 0, e = ExternalSymbolData.size(); i != e; ++i)
-        WriteNlist32(ExternalSymbolData[i]);
+        WriteNlist(ExternalSymbolData[i]);
       for (unsigned i = 0, e = UndefinedSymbolData.size(); i != e; ++i)
-        WriteNlist32(UndefinedSymbolData[i]);
+        WriteNlist(UndefinedSymbolData[i]);
 
       // Write the string table.
       OS << StringTable.str();
@@ -1008,6 +1015,54 @@ MCAssembler::MCAssembler(MCContext &_Context, TargetAsmBackend &_Backend,
 }
 
 MCAssembler::~MCAssembler() {
+}
+
+bool MCAssembler::EvaluateFixup(const MCAsmLayout &Layout, MCAsmFixup &Fixup,
+                                MCDataFragment *DF,
+                                MCValue &Target, uint64_t &Value) const {
+  if (!Fixup.Value->EvaluateAsRelocatable(Target, &Layout))
+    llvm_report_error("expected relocatable expression");
+
+  // FIXME: How do non-scattered symbols work in ELF? I presume the linker
+  // doesn't support small relocations, but then under what criteria does the
+  // assembler allow symbol differences?
+
+  Value = Target.getConstant();
+
+  // FIXME: This "resolved" check isn't quite right. The assumption is that if
+  // we have a PCrel access to a temporary, then that temporary is in the same
+  // atom, and so the value is resolved. We need explicit atom's to implement
+  // this more precisely.
+  bool IsResolved = true, IsPCRel = isFixupKindPCRel(Fixup.Kind);
+  if (const MCSymbol *Symbol = Target.getSymA()) {
+    if (Symbol->isDefined())
+      Value += getSymbolData(*Symbol).getAddress();
+    else
+      IsResolved = false;
+
+    // With scattered symbols, we assume anything that isn't a PCrel temporary
+    // access can have an arbitrary value.
+    if (getBackend().hasScatteredSymbols() &&
+        (!IsPCRel || !Symbol->isTemporary()))
+      IsResolved = false;
+  }
+  if (const MCSymbol *Symbol = Target.getSymB()) {
+    if (Symbol->isDefined())
+      Value -= getSymbolData(*Symbol).getAddress();
+    else
+      IsResolved = false;
+
+    // With scattered symbols, we assume anything that isn't a PCrel temporary
+    // access can have an arbitrary value.
+    if (getBackend().hasScatteredSymbols() &&
+        (!IsPCRel || !Symbol->isTemporary()))
+      IsResolved = false;
+  }
+
+  if (IsPCRel)
+    Value -= DF->getAddress() + Fixup.Offset;
+
+  return IsResolved;
 }
 
 void MCAssembler::LayoutSection(MCSectionData &SD) {
@@ -1256,6 +1311,43 @@ void MCAssembler::Finish() {
       llvm::errs() << "assembler backend - pre-layout\n--\n";
       dump(); });
 
+  // Layout until everything fits.
+  while (LayoutOnce())
+    continue;
+
+  DEBUG_WITH_TYPE("mc-dump", {
+      llvm::errs() << "assembler backend - post-layout\n--\n";
+      dump(); });
+
+  // Write the object file.
+  //
+  // FIXME: Factor out MCObjectWriter.
+  bool Is64Bit = StringRef(getBackend().getTarget().getName()) == "x86-64";
+  MachObjectWriter MOW(OS, Is64Bit);
+  MOW.WriteObject(*this);
+
+  OS.flush();
+}
+
+bool MCAssembler::FixupNeedsRelaxation(MCAsmFixup &Fixup, MCDataFragment *DF) {
+  // FIXME: Share layout object.
+  MCAsmLayout Layout(*this);
+
+  // Currently we only need to relax X86::reloc_pcrel_1byte.
+  if (unsigned(Fixup.Kind) != X86::reloc_pcrel_1byte)
+    return false;
+
+  // If we cannot resolve the fixup value, it requires relaxation.
+  MCValue Target;
+  uint64_t Value;
+  if (!EvaluateFixup(Layout, Fixup, DF, Target, Value))
+    return true;
+
+  // Otherwise, relax if the value is too big for a (signed) i8.
+  return int64_t(Value) != int64_t(int8_t(Value));
+}
+
+bool MCAssembler::LayoutOnce() {
   // Layout the concrete sections and fragments.
   uint64_t Address = 0;
   MCSectionData *Prev = 0;
@@ -1297,20 +1389,94 @@ void MCAssembler::Finish() {
     SD.setAddress(Address);
     LayoutSection(SD);
     Address += SD.getSize();
-
   }
 
-  DEBUG_WITH_TYPE("mc-dump", {
-      llvm::errs() << "assembler backend - post-layout\n--\n";
-      dump(); });
+  // Scan the fixups in order and relax any that don't fit.
+  for (iterator it = begin(), ie = end(); it != ie; ++it) {
+    MCSectionData &SD = *it;
 
-  // Write the object file.
-  MachObjectWriter MOW(OS);
-  MOW.WriteObject(*this);
+    for (MCSectionData::iterator it2 = SD.begin(),
+           ie2 = SD.end(); it2 != ie2; ++it2) {
+      MCDataFragment *DF = dyn_cast<MCDataFragment>(it2);
+      if (!DF)
+        continue;
 
-  OS.flush();
+      for (MCDataFragment::fixup_iterator it3 = DF->fixup_begin(),
+             ie3 = DF->fixup_end(); it3 != ie3; ++it3) {
+        MCAsmFixup &Fixup = *it3;
+
+        // Check whether we need to relax this fixup.
+        if (!FixupNeedsRelaxation(Fixup, DF))
+          continue;
+
+        // Relax the instruction.
+        //
+        // FIXME: This is a huge temporary hack which just looks for x86
+        // branches; the only thing we need to relax on x86 is
+        // 'X86::reloc_pcrel_1byte'. Once we have MCInst fragments, this will be
+        // replaced by a TargetAsmBackend hook (most likely tblgen'd) to relax
+        // an individual MCInst.
+        SmallVectorImpl<char> &C = DF->getContents();
+        uint64_t PrevOffset = Fixup.Offset;
+        unsigned Amt = 0;
+
+          // jcc instructions
+        if (unsigned(C[Fixup.Offset-1]) >= 0x70 &&
+            unsigned(C[Fixup.Offset-1]) <= 0x7f) {
+          C[Fixup.Offset] = C[Fixup.Offset-1] + 0x10;
+          C[Fixup.Offset-1] = char(0x0f);
+          ++Fixup.Offset;
+          Amt = 4;
+
+          // jmp rel8
+        } else if (C[Fixup.Offset-1] == char(0xeb)) {
+          C[Fixup.Offset-1] = char(0xe9);
+          Amt = 3;
+
+        } else
+          llvm_unreachable("unknown 1 byte pcrel instruction!");
+
+        Fixup.Value = MCBinaryExpr::Create(
+          MCBinaryExpr::Sub, Fixup.Value,
+          MCConstantExpr::Create(3, getContext()),
+          getContext());
+        C.insert(C.begin() + Fixup.Offset, Amt, char(0));
+        Fixup.Kind = MCFixupKind(X86::reloc_pcrel_4byte);
+
+        // Update the remaining fixups, which have slid.
+        //
+        // FIXME: This is bad for performance, but will be eliminated by the
+        // move to MCInst specific fragments.
+        ++it3;
+        for (; it3 != ie3; ++it3)
+          it3->Offset += Amt;
+
+        // Update all the symbols for this fragment, which may have slid.
+        //
+        // FIXME: This is really really bad for performance, but will be
+        // eliminated by the move to MCInst specific fragments.
+        for (MCAssembler::symbol_iterator it = symbol_begin(),
+               ie = symbol_end(); it != ie; ++it) {
+          MCSymbolData &SD = *it;
+
+          if (it->getFragment() != DF)
+            continue;
+
+          if (SD.getOffset() > PrevOffset)
+            SD.setOffset(SD.getOffset() + Amt);
+        }
+
+        // Restart layout.
+        //
+        // FIXME: This is O(N^2), but will be eliminated once we have a smart
+        // MCAsmLayout object.
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
-
 
 // Debugging methods
 
