@@ -1125,12 +1125,12 @@ emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
                  MachineModuleInfo *MMI,
                  std::vector<MachineMove> &Moves,
                  int CfaOffset) {
-  unsigned FrameLabelId = MMI->NextLabelID();
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addImm(FrameLabelId);
+  MCSymbol *FrameLabel = MMI->getContext().CreateTempSymbol();
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
 
   MachineLocation SPDst(MachineLocation::VirtualFP);
   MachineLocation SPSrc(MachineLocation::VirtualFP, -CfaOffset);
-  Moves.push_back(MachineMove(FrameLabelId, SPDst, SPSrc));
+  Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
 }
 
 // emitDefCfa - Emit a MachineMove to set the CFA register+offset
@@ -1140,12 +1140,12 @@ emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
            MachineModuleInfo *MMI,
            std::vector<MachineMove> &Moves,
            int CfaReg, int CfaOffset) {
-  unsigned FrameLabelId = MMI->NextLabelID();
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addImm(FrameLabelId);
+  MCSymbol *FrameLabel = MMI->getContext().CreateTempSymbol();
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
 
   MachineLocation SPDst(MachineLocation::VirtualFP);
   MachineLocation SPSrc(CfaReg, CfaOffset);
-  Moves.push_back(MachineMove(FrameLabelId, SPDst, SPSrc));
+  Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
 }
 
 // emitCfaOffset - Emit a MachineMove to define where Reg is saved
@@ -1155,12 +1155,12 @@ emitCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
            MachineModuleInfo *MMI,
            std::vector<MachineMove> &Moves,
            int Reg, int Offset) {
-  unsigned FrameLabelId = MMI->NextLabelID();
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addImm(FrameLabelId);
+  MCSymbol *FrameLabel = MMI->getContext().CreateTempSymbol();
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
 
   MachineLocation CSDst(MachineLocation::VirtualFP, Offset);
   MachineLocation CSSrc(Reg);
-  Moves.push_back(MachineMove(FrameLabelId, CSDst, CSSrc));
+  Moves.push_back(MachineMove(FrameLabel, CSDst, CSSrc));
 }
 
 void ARMBaseRegisterInfo::
@@ -1400,8 +1400,8 @@ emitPrologue(MachineFunction &MF) const {
     // CFA = sp + offset
     emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, CfaOffset);
 
-    unsigned FrameLabelId = MMI->NextLabelID();
-    BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addImm(FrameLabelId);
+    MCSymbol *FrameLabel = MMI->getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
 
     // Emit moves for the registers in spill area 1
     for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
