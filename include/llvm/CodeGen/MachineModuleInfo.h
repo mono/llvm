@@ -88,6 +88,8 @@ struct LandingPadInfo {
     : LandingPadBlock(MBB), LandingPadLabel(0), Personality(0) {}
 };
 
+class MMIAddrLabelMap;
+  
 //===----------------------------------------------------------------------===//
 /// MachineModuleInfo - This class contains meta information specific to a
 /// module.  Queries can be made by different debugging and exception handling 
@@ -142,7 +144,7 @@ class MachineModuleInfo : public ImmutablePass {
   
   /// AddrLabelSymbols - This map keeps track of which symbol is being used for
   /// the specified basic block's address of label.
-  DenseMap<AssertingVH<BasicBlock>, MCSymbol*> AddrLabelSymbols;
+  MMIAddrLabelMap *AddrLabelSymbols;
   
   bool CallsEHReturn;
   bool CallsUnwindInit;
@@ -212,6 +214,19 @@ public:
   /// block when its address is taken.  This cannot be its normal LBB label
   /// because the block may be accessed outside its containing function.
   MCSymbol *getAddrLabelSymbol(const BasicBlock *BB);
+
+  /// getAddrLabelSymbolToEmit - Return the symbol to be used for the specified
+  /// basic block when its address is taken.  If other blocks were RAUW'd to
+  /// this one, we may have to emit them as well, return the whole set.
+  std::vector<MCSymbol*> getAddrLabelSymbolToEmit(const BasicBlock *BB);
+  
+  /// takeDeletedSymbolsForFunction - If the specified function has had any
+  /// references to address-taken blocks generated, but the block got deleted,
+  /// return the symbol now so we can emit it.  This prevents emitting a
+  /// reference to a symbol that has no definition.
+  void takeDeletedSymbolsForFunction(const Function *F, 
+                                     std::vector<MCSymbol*> &Result);
+
   
   //===- EH ---------------------------------------------------------------===//
 

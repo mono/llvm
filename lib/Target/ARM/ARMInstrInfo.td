@@ -392,9 +392,9 @@ def addrmode5 : Operand<i32>,
 // addrmode6 := reg with optional writeback
 //
 def addrmode6 : Operand<i32>,
-                ComplexPattern<i32, 4, "SelectAddrMode6", []> {
+                ComplexPattern<i32, 2, "SelectAddrMode6", []> {
   let PrintMethod = "printAddrMode6Operand";
-  let MIOperandInfo = (ops GPR:$addr, GPR:$upd, i32imm, i32imm);
+  let MIOperandInfo = (ops GPR:$addr, i32imm);
 }
 
 // addrmodepc := pc + reg
@@ -909,7 +909,7 @@ let isReturn = 1, isTerminator = 1, isBarrier = 1, mayLoad = 1,
   def LDM_RET : AXI4ld<(outs GPR:$wb), (ins addrmode4:$addr, pred:$p,
                                         reglist:$dsts, variable_ops),
                        IndexModeUpd, LdStMulFrm, IIC_Br,
-                       "ldm${addr:submode}${p}\t$addr, $dsts",
+                       "ldm${addr:submode}${p}\t$addr!, $dsts",
                        "$addr.addr = $wb", []>;
 
 // On non-Darwin platforms R9 is callee-saved.
@@ -1354,8 +1354,10 @@ def LDM : AXI4ld<(outs), (ins addrmode4:$addr, pred:$p,
 def LDM_UPD : AXI4ld<(outs GPR:$wb), (ins addrmode4:$addr, pred:$p,
                                       reglist:$dsts, variable_ops),
                      IndexModeUpd, LdStMulFrm, IIC_iLoadm,
-                     "ldm${addr:submode}${p}\t$addr, $dsts",
-                     "$addr.addr = $wb", []>;
+                     "ldm${addr:submode}${p}\t$addr!, $dsts",
+                     "$addr.addr = $wb", []> {
+  let Inst{21} = 1; // wback
+}
 } // mayLoad, hasExtraDefRegAllocReq
 
 let mayStore = 1, hasExtraSrcRegAllocReq = 1 in {
@@ -1367,8 +1369,10 @@ def STM : AXI4st<(outs), (ins addrmode4:$addr, pred:$p,
 def STM_UPD : AXI4st<(outs GPR:$wb), (ins addrmode4:$addr, pred:$p,
                                       reglist:$srcs, variable_ops),
                      IndexModeUpd, LdStMulFrm, IIC_iStorem,
-                     "stm${addr:submode}${p}\t$addr, $srcs",
-                     "$addr.addr = $wb", []>;
+                     "stm${addr:submode}${p}\t$addr!, $srcs",
+                     "$addr.addr = $wb", []> {
+  let Inst{21} = 1; // wback
+}
 } // mayStore, hasExtraSrcRegAllocReq
 
 //===----------------------------------------------------------------------===//

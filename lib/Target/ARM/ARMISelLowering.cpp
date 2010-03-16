@@ -130,7 +130,7 @@ void ARMTargetLowering::addQRTypeForNEON(EVT VT) {
 
 static TargetLoweringObjectFile *createTLOF(TargetMachine &TM) {
   if (TM.getSubtarget<ARMSubtarget>().isTargetDarwin())
-    return new ARMMachOTargetObjectFile();
+    return new TargetLoweringObjectFileMachO();
 
   return new ARMElfTargetObjectFile();
 }
@@ -4449,6 +4449,9 @@ ARMTargetLowering::getRegForInlineAsmConstraint(const std::string &Constraint,
       break;
     }
   }
+  if (StringRef("{cc}").equals_lower(Constraint))
+    return std::make_pair(0U, ARM::CCRRegisterClass);
+
   return TargetLowering::getRegForInlineAsmConstraint(Constraint, VT);
 }
 

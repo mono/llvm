@@ -307,6 +307,16 @@ void AsmPrinter::EmitFunctionHeader() {
   // do their wild and crazy things as required.
   EmitFunctionEntryLabel();
   
+  // If the function had address-taken blocks that got deleted, then we have
+  // references to the dangling symbols.  Emit them at the start of the function
+  // so that we don't get references to undefined symbols.
+  std::vector<MCSymbol*> DeadBlockSyms;
+  MMI->takeDeletedSymbolsForFunction(F, DeadBlockSyms);
+  for (unsigned i = 0, e = DeadBlockSyms.size(); i != e; ++i) {
+    OutStreamer.AddComment("Address taken block that was later removed");
+    OutStreamer.EmitLabel(DeadBlockSyms[i]);
+  }
+  
   // Add some workaround for linkonce linkage on Cygwin\MinGW.
   if (MAI->getLinkOnceDirective() != 0 &&
       (F->hasLinkOnceLinkage() || F->hasWeakLinkage()))
@@ -1128,6 +1138,21 @@ static void EmitGlobalConstantStruct(const ConstantStruct *CS,
          "Layout of constant struct may be incorrect!");
 }
 
+static void EmitGlobalConstantUnion(const ConstantUnion *CU, 
+                                    unsigned AddrSpace, AsmPrinter &AP) {
+  const TargetData *TD = AP.TM.getTargetData();
+  unsigned Size = TD->getTypeAllocSize(CU->getType());
+
+  const Constant *Contents = CU->getOperand(0);
+  unsigned FilledSize = TD->getTypeAllocSize(Contents->getType());
+    
+  // Print the actually filled part
+  AP.EmitGlobalConstant(Contents, AddrSpace);
+
+  // And pad with enough zeroes
+  AP.OutStreamer.EmitZeros(Size-FilledSize, AddrSpace);
+}
+
 static void EmitGlobalConstantFP(const ConstantFP *CFP, unsigned AddrSpace,
                                  AsmPrinter &AP) {
   // FP Constants are printed as integer constants to avoid losing
@@ -1247,15 +1272,18 @@ void AsmPrinter::EmitGlobalConstant(const Constant *CV, unsigned AddrSpace) {
 
   if (const ConstantFP *CFP = dyn_cast<ConstantFP>(CV))
     return EmitGlobalConstantFP(CFP, AddrSpace, *this);
-  
-  if (const ConstantVector *V = dyn_cast<ConstantVector>(CV))
-    return EmitGlobalConstantVector(V, AddrSpace, *this);
 
   if (isa<ConstantPointerNull>(CV)) {
     unsigned Size = TM.getTargetData()->getTypeAllocSize(CV->getType());
     OutStreamer.EmitIntValue(0, Size, AddrSpace);
     return;
   }
+  
+  if (const ConstantUnion *CVU = dyn_cast<ConstantUnion>(CV))
+    return EmitGlobalConstantUnion(CVU, AddrSpace, *this);
+  
+  if (const ConstantVector *V = dyn_cast<ConstantVector>(CV))
+    return EmitGlobalConstantVector(V, AddrSpace, *this);
   
   // Otherwise, it must be a ConstantExpr.  Lower it to an MCExpr, then emit it
   // thread the streamer with EmitValue.
@@ -1308,6 +1336,8 @@ void AsmPrinter::processDebugLoc(const MachineInstr *MI,
                                  bool BeforePrintingInsn) {
   if (!MAI || !DW || !MAI->doesSupportDebugInformation()
       || !DW->ShouldEmitDwarfDebug())
+    return;
+  if (MI->getOpcode() == TargetOpcode::DBG_VALUE)
     return;
   DebugLoc DL = MI->getDebugLoc();
   if (DL.isUnknown())
@@ -1697,16 +1727,19 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock *MBB) const {
   if (unsigned Align = MBB->getAlignment())
     EmitAlignment(Log2_32(Align));
 
-  // If the block has its address taken, emit a special label to satisfy
-  // references to the block. This is done so that we don't need to
-  // remember the number of this label, and so that we can make
-  // forward references to labels without knowing what their numbers
-  // will be.
+  // If the block has its address taken, emit any labels that were used to
+  // reference the block.  It is possible that there is more than one label
+  // here, because multiple LLVM BB's may have been RAUW'd to this block after
+  // the references were generated.
   if (MBB->hasAddressTaken()) {
     const BasicBlock *BB = MBB->getBasicBlock();
     if (VerboseAsm)
-      OutStreamer.AddComment("Address Taken");
-    OutStreamer.EmitLabel(GetBlockAddressSymbol(BB));
+      OutStreamer.AddComment("Block address taken");
+    
+    std::vector<MCSymbol*> Syms = MMI->getAddrLabelSymbolToEmit(BB);
+
+    for (unsigned i = 0, e = Syms.size(); i != e; ++i)
+      OutStreamer.EmitLabel(Syms[i]);
   }
 
   // Print the main label for the block.

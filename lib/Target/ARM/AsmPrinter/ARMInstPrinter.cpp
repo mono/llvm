@@ -222,27 +222,16 @@ void ARMInstPrinter::printAddrMode3OffsetOperand(const MCInst *MI,
 
 void ARMInstPrinter::printAddrMode4Operand(const MCInst *MI, unsigned OpNum,
                                            const char *Modifier) {
-  const MCOperand &MO1 = MI->getOperand(OpNum);
   const MCOperand &MO2 = MI->getOperand(OpNum+1);
   ARM_AM::AMSubMode Mode = ARM_AM::getAM4SubMode(MO2.getImm());
   if (Modifier && strcmp(Modifier, "submode") == 0) {
-    if (MO1.getReg() == ARM::SP) {
-      // FIXME
-      bool isLDM = (MI->getOpcode() == ARM::LDM ||
-                    MI->getOpcode() == ARM::LDM_RET ||
-                    MI->getOpcode() == ARM::t2LDM ||
-                    MI->getOpcode() == ARM::t2LDM_RET);
-      O << ARM_AM::getAMSubModeAltStr(Mode, isLDM);
-    } else
-      O << ARM_AM::getAMSubModeStr(Mode);
+    O << ARM_AM::getAMSubModeStr(Mode);
   } else if (Modifier && strcmp(Modifier, "wide") == 0) {
     ARM_AM::AMSubMode Mode = ARM_AM::getAM4SubMode(MO2.getImm());
     if (Mode == ARM_AM::ia)
       O << ".w";
   } else {
     printOperand(MI, OpNum);
-    if (ARM_AM::getAM4WBFlag(MO2.getImm()))
-      O << "!";
   }
 }
 
@@ -263,8 +252,6 @@ void ARMInstPrinter::printAddrMode5Operand(const MCInst *MI, unsigned OpNum,
   } else if (Modifier && strcmp(Modifier, "base") == 0) {
     // Used for FSTM{D|S} and LSTM{D|S} operations.
     O << getRegisterName(MO1.getReg());
-    if (ARM_AM::getAM5WBFlag(MO2.getImm()))
-      O << "!";
     return;
   }
   
@@ -281,17 +268,13 @@ void ARMInstPrinter::printAddrMode5Operand(const MCInst *MI, unsigned OpNum,
 void ARMInstPrinter::printAddrMode6Operand(const MCInst *MI, unsigned OpNum) {
   const MCOperand &MO1 = MI->getOperand(OpNum);
   const MCOperand &MO2 = MI->getOperand(OpNum+1);
-  const MCOperand &MO3 = MI->getOperand(OpNum+2);
   
-  // FIXME: No support yet for specifying alignment.
-  O << '[' << getRegisterName(MO1.getReg()) << ']';
-  
-  if (ARM_AM::getAM6WBFlag(MO3.getImm())) {
-    if (MO2.getReg() == 0)
-      O << '!';
-    else
-      O << ", " << getRegisterName(MO2.getReg());
+  O << "[" << getRegisterName(MO1.getReg());
+  if (MO2.getImm()) {
+    // FIXME: Both darwin as and GNU as violate ARM docs here.
+    O << ", :" << MO2.getImm();
   }
+  O << "]";
 }
 
 void ARMInstPrinter::printAddrModePCOperand(const MCInst *MI, unsigned OpNum,

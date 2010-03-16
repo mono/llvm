@@ -514,29 +514,16 @@ void ARMAsmPrinter::printAddrMode3OffsetOperand(const MachineInstr *MI, int Op){
 
 void ARMAsmPrinter::printAddrMode4Operand(const MachineInstr *MI, int Op,
                                           const char *Modifier) {
-  const MachineOperand &MO1 = MI->getOperand(Op);
   const MachineOperand &MO2 = MI->getOperand(Op+1);
   ARM_AM::AMSubMode Mode = ARM_AM::getAM4SubMode(MO2.getImm());
   if (Modifier && strcmp(Modifier, "submode") == 0) {
-    if (MO1.getReg() == ARM::SP) {
-      // FIXME
-      bool isLDM = (MI->getOpcode() == ARM::LDM ||
-                    MI->getOpcode() == ARM::LDM_UPD ||
-                    MI->getOpcode() == ARM::LDM_RET ||
-                    MI->getOpcode() == ARM::t2LDM ||
-                    MI->getOpcode() == ARM::t2LDM_UPD ||
-                    MI->getOpcode() == ARM::t2LDM_RET);
-      O << ARM_AM::getAMSubModeAltStr(Mode, isLDM);
-    } else
-      O << ARM_AM::getAMSubModeStr(Mode);
+    O << ARM_AM::getAMSubModeStr(Mode);
   } else if (Modifier && strcmp(Modifier, "wide") == 0) {
     ARM_AM::AMSubMode Mode = ARM_AM::getAM4SubMode(MO2.getImm());
     if (Mode == ARM_AM::ia)
       O << ".w";
   } else {
     printOperand(MI, Op);
-    if (ARM_AM::getAM4WBFlag(MO2.getImm()))
-      O << "!";
   }
 }
 
@@ -559,8 +546,6 @@ void ARMAsmPrinter::printAddrMode5Operand(const MachineInstr *MI, int Op,
   } else if (Modifier && strcmp(Modifier, "base") == 0) {
     // Used for FSTM{D|S} and LSTM{D|S} operations.
     O << getRegisterName(MO1.getReg());
-    if (ARM_AM::getAM5WBFlag(MO2.getImm()))
-      O << "!";
     return;
   }
 
@@ -577,22 +562,13 @@ void ARMAsmPrinter::printAddrMode5Operand(const MachineInstr *MI, int Op,
 void ARMAsmPrinter::printAddrMode6Operand(const MachineInstr *MI, int Op) {
   const MachineOperand &MO1 = MI->getOperand(Op);
   const MachineOperand &MO2 = MI->getOperand(Op+1);
-  const MachineOperand &MO3 = MI->getOperand(Op+2);
-  const MachineOperand &MO4 = MI->getOperand(Op+3);
 
   O << "[" << getRegisterName(MO1.getReg());
-  if (MO4.getImm()) {
+  if (MO2.getImm()) {
     // FIXME: Both darwin as and GNU as violate ARM docs here.
-    O << ", :" << MO4.getImm();
+    O << ", :" << MO2.getImm();
   }
   O << "]";
-
-  if (ARM_AM::getAM6WBFlag(MO3.getImm())) {
-    if (MO2.getReg() == 0)
-      O << "!";
-    else
-      O << ", " << getRegisterName(MO2.getReg());
-  }
 }
 
 void ARMAsmPrinter::printAddrModePCOperand(const MachineInstr *MI, int Op,

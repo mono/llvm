@@ -950,7 +950,7 @@ void ARMCodeEmitter::emitLoadStoreMultipleInstruction(const MachineInstr &MI) {
   Binary |= getAddrModeUPBits(ARM_AM::getAM4SubMode(MO.getImm()));
 
   // Set bit W(21)
-  if (ARM_AM::getAM4WBFlag(MO.getImm()))
+  if (IsUpdating)
     Binary |= 0x1 << ARMII::W_BitShift;
 
   // Set registers
@@ -1353,7 +1353,7 @@ void ARMCodeEmitter::emitVFPLoadStoreMultipleInstruction(
   Binary |= getAddrModeUPBits(ARM_AM::getAM5SubMode(MO.getImm()));
 
   // Set bit W(21)
-  if (ARM_AM::getAM5WBFlag(MO.getImm()))
+  if (IsUpdating)
     Binary |= 0x1 << ARMII::W_BitShift;
 
   // First register is encoded in Dd.

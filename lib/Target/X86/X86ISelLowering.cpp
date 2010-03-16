@@ -16,7 +16,6 @@
 #include "X86.h"
 #include "X86InstrBuilder.h"
 #include "X86ISelLowering.h"
-#include "X86MCTargetExpr.h"
 #include "X86TargetMachine.h"
 #include "X86TargetObjectFile.h"
 #include "llvm/CallingConv.h"
@@ -37,7 +36,7 @@
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCSectionMachO.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallSet.h"
@@ -70,54 +69,10 @@ Disable16Bit("disable-16bit", cl::Hidden,
 static SDValue getMOVL(SelectionDAG &DAG, DebugLoc dl, EVT VT, SDValue V1,
                        SDValue V2);
 
-// FIXME: This is for a test.
-static cl::opt<bool>
-EnableX86EHTest("enable-x86-eh-test", cl::Hidden);
-
-namespace llvm {
-  class X86_test_MachoTargetObjectFile : public TargetLoweringObjectFileMachO {
-  public:
-    virtual void Initialize(MCContext &Ctx, const TargetMachine &TM) {
-      TargetLoweringObjectFileMachO::Initialize(Ctx, TM);
-
-      // Exception Handling.
-      LSDASection = getMachOSection("__TEXT", "__gcc_except_tab", 0,
-                                    SectionKind::getReadOnlyWithRel());
-    }
-
-    virtual unsigned getTTypeEncoding() const {
-      return DW_EH_PE_indirect | DW_EH_PE_pcrel | DW_EH_PE_sdata4;
-    }
-  };
-
-  class X8664_test_MachoTargetObjectFile : public X8664_MachoTargetObjectFile {
-  public:
-    virtual void Initialize(MCContext &Ctx, const TargetMachine &TM) {
-      TargetLoweringObjectFileMachO::Initialize(Ctx, TM);
-
-      // Exception Handling.
-      LSDASection = getMachOSection("__TEXT", "__gcc_except_tab", 0,
-                                    SectionKind::getReadOnlyWithRel());
-    }
-
-    virtual unsigned getTTypeEncoding() const {
-      return DW_EH_PE_indirect | DW_EH_PE_pcrel | DW_EH_PE_sdata4;
-    }
-  };
-}
-
 static TargetLoweringObjectFile *createTLOF(X86TargetMachine &TM) {
   switch (TM.getSubtarget<X86Subtarget>().TargetType) {
   default: llvm_unreachable("unknown subtarget type");
   case X86Subtarget::isDarwin:
-    // FIXME: This is for an EH test.
-    if (EnableX86EHTest) {
-      if (TM.getSubtarget<X86Subtarget>().is64Bit())
-        return new X8664_test_MachoTargetObjectFile();
-      else
-        return new X86_test_MachoTargetObjectFile();
-    }
-
     if (TM.getSubtarget<X86Subtarget>().is64Bit())
       return new X8664_MachoTargetObjectFile();
     return new TargetLoweringObjectFileMachO();
@@ -1035,6 +990,7 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
 
   // We have target-specific dag combine patterns for the following nodes:
   setTargetDAGCombine(ISD::VECTOR_SHUFFLE);
+  setTargetDAGCombine(ISD::EXTRACT_VECTOR_ELT);
   setTargetDAGCombine(ISD::BUILD_VECTOR);
   setTargetDAGCombine(ISD::SELECT);
   setTargetDAGCombine(ISD::SHL);
@@ -1165,8 +1121,8 @@ X86TargetLowering::LowerCustomJumpTableEntry(const MachineJumpTableInfo *MJTI,
          Subtarget->isPICStyleGOT());
   // In 32-bit ELF systems, our jump table entries are formed with @GOTOFF
   // entries.
-  return X86MCTargetExpr::Create(MBB->getSymbol(),
-                                 X86MCTargetExpr::GOTOFF, Ctx);
+  return MCSymbolRefExpr::Create(MBB->getSymbol(),
+                                 MCSymbolRefExpr::VK_GOTOFF, Ctx);
 }
 
 /// getPICJumpTableRelocaBase - Returns relocation base for the given PIC
@@ -1524,7 +1480,6 @@ X86TargetLowering::LowerFormalArguments(SDValue Chain,
                                         DebugLoc dl,
                                         SelectionDAG &DAG,
                                         SmallVectorImpl<SDValue> &InVals) {
-
   MachineFunction &MF = DAG.getMachineFunction();
   X86MachineFunctionInfo *FuncInfo = MF.getInfo<X86MachineFunctionInfo>();
 
@@ -1826,7 +1781,8 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 
   if (isTailCall) {
     // Check if it's really possible to do a tail call.
-    isTailCall = IsEligibleForTailCallOptimization(Callee, CallConv, isVarArg,
+    isTailCall = IsEligibleForTailCallOptimization(Callee, CallConv,
+                    isVarArg, IsStructRet, MF.getFunction()->hasStructRetAttr(),
                                                    Outs, Ins, DAG);
 
     // Sibcalls are automatically detected tailcalls which do not require
@@ -2335,6 +2291,8 @@ bool
 X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
                                                      CallingConv::ID CalleeCC,
                                                      bool isVarArg,
+                                                     bool isCalleeStructRet,
+                                                     bool isCallerStructRet,
                                     const SmallVectorImpl<ISD::OutputArg> &Outs,
                                     const SmallVectorImpl<ISD::InputArg> &Ins,
                                                      SelectionDAG& DAG) const {
@@ -2354,8 +2312,13 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
   // Look for obvious safe cases to perform tail call optimization that does not
   // requite ABI changes. This is what gcc calls sibcall.
 
-  // Do not tail call optimize vararg calls for now.
+  // Do not sibcall optimize vararg calls for now.
   if (isVarArg)
+    return false;
+
+  // Also avoid sibcall optimization if either caller or callee uses struct
+  // return semantics.
+  if (isCalleeStructRet || isCallerStructRet)
     return false;
 
   // If the callee takes no arguments then go on to check the results of the
@@ -8902,6 +8865,87 @@ static SDValue PerformShuffleCombine(SDNode *N, SelectionDAG &DAG,
   return SDValue();
 }
 
+/// PerformShuffleCombine - Detect vector gather/scatter index generation
+/// and convert it from being a bunch of shuffles and extracts to a simple
+/// store and scalar loads to extract the elements.
+static SDValue PerformEXTRACT_VECTOR_ELTCombine(SDNode *N, SelectionDAG &DAG,
+                                                const TargetLowering &TLI) {
+  SDValue InputVector = N->getOperand(0);
+
+  // Only operate on vectors of 4 elements, where the alternative shuffling
+  // gets to be more expensive.
+  if (InputVector.getValueType() != MVT::v4i32)
+    return SDValue();
+
+  // Check whether every use of InputVector is an EXTRACT_VECTOR_ELT with a
+  // single use which is a sign-extend or zero-extend, and all elements are
+  // used.
+  SmallVector<SDNode *, 4> Uses;
+  unsigned ExtractedElements = 0;
+  for (SDNode::use_iterator UI = InputVector.getNode()->use_begin(),
+       UE = InputVector.getNode()->use_end(); UI != UE; ++UI) {
+    if (UI.getUse().getResNo() != InputVector.getResNo())
+      return SDValue();
+
+    SDNode *Extract = *UI;
+    if (Extract->getOpcode() != ISD::EXTRACT_VECTOR_ELT)
+      return SDValue();
+
+    if (Extract->getValueType(0) != MVT::i32)
+      return SDValue();
+    if (!Extract->hasOneUse())
+      return SDValue();
+    if (Extract->use_begin()->getOpcode() != ISD::SIGN_EXTEND &&
+        Extract->use_begin()->getOpcode() != ISD::ZERO_EXTEND)
+      return SDValue();
+    if (!isa<ConstantSDNode>(Extract->getOperand(1)))
+      return SDValue();
+
+    // Record which element was extracted.
+    ExtractedElements |=
+      1 << cast<ConstantSDNode>(Extract->getOperand(1))->getZExtValue();
+
+    Uses.push_back(Extract);
+  }
+
+  // If not all the elements were used, this may not be worthwhile.
+  if (ExtractedElements != 15)
+    return SDValue();
+
+  // Ok, we've now decided to do the transformation.
+  DebugLoc dl = InputVector.getDebugLoc();
+
+  // Store the value to a temporary stack slot.
+  SDValue StackPtr = DAG.CreateStackTemporary(InputVector.getValueType());
+  SDValue Ch = DAG.getStore(DAG.getEntryNode(), dl, InputVector, StackPtr, NULL, 0,
+                            false, false, 0);
+
+  // Replace each use (extract) with a load of the appropriate element.
+  for (SmallVectorImpl<SDNode *>::iterator UI = Uses.begin(),
+       UE = Uses.end(); UI != UE; ++UI) {
+    SDNode *Extract = *UI;
+
+    // Compute the element's address.
+    SDValue Idx = Extract->getOperand(1);
+    unsigned EltSize =
+        InputVector.getValueType().getVectorElementType().getSizeInBits()/8;
+    uint64_t Offset = EltSize * cast<ConstantSDNode>(Idx)->getZExtValue();
+    SDValue OffsetVal = DAG.getConstant(Offset, TLI.getPointerTy());
+
+    SDValue ScalarAddr = DAG.getNode(ISD::ADD, dl, Idx.getValueType(), OffsetVal, StackPtr);
+
+    // Load the scalar.
+    SDValue LoadScalar = DAG.getLoad(Extract->getValueType(0), dl, Ch, ScalarAddr,
+                          NULL, 0, false, false, 0);
+
+    // Replace the exact with the load.
+    DAG.ReplaceAllUsesOfValueWith(SDValue(Extract, 0), LoadScalar);
+  }
+
+  // The replacement was made in place; don't return anything.
+  return SDValue();
+}
+
 /// PerformSELECTCombine - Do target-specific dag combines on SELECT nodes.
 static SDValue PerformSELECTCombine(SDNode *N, SelectionDAG &DAG,
                                     const X86Subtarget *Subtarget) {
@@ -9791,6 +9835,8 @@ SDValue X86TargetLowering::PerformDAGCombine(SDNode *N,
   switch (N->getOpcode()) {
   default: break;
   case ISD::VECTOR_SHUFFLE: return PerformShuffleCombine(N, DAG, *this);
+  case ISD::EXTRACT_VECTOR_ELT:
+                        return PerformEXTRACT_VECTOR_ELTCombine(N, DAG, *this);
   case ISD::SELECT:         return PerformSELECTCombine(N, DAG, Subtarget);
   case X86ISD::CMOV:        return PerformCMOVCombine(N, DAG, DCI);
   case ISD::MUL:            return PerformMulCombine(N, DAG, DCI);
