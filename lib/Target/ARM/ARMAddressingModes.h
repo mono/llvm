@@ -35,6 +35,10 @@ namespace ARM_AM {
     add = '+', sub = '-'
   };
 
+  static inline const char *getAddrOpcStr(AddrOpc Op) {
+    return Op == sub ? "-" : "";
+  }
+
   static inline const char *getShiftOpcStr(ShiftOpc Op) {
     switch (Op) {
     default: assert(0 && "Unknown shift opc!");
@@ -520,11 +524,23 @@ namespace ARM_AM {
   //
   // This is used for NEON load / store instructions.
   //
-  // addrmode6 := reg with optional alignment
+  // addrmode6 := reg with optional writeback and alignment
   //
-  // This is stored in two operands [regaddr, align].  The first is the
-  // address register.  The second operand is the value of the alignment
-  // specifier to use or zero if no explicit alignment.
+  // This is stored in four operands [regaddr, regupdate, opc, align].  The
+  // first is the address register.  The second register holds the value of
+  // a post-access increment for writeback or reg0 if no writeback or if the
+  // writeback increment is the size of the memory access.  The third
+  // operand encodes whether there is writeback to the address register. The
+  // fourth operand is the value of the alignment specifier to use or zero if
+  // no explicit alignment.
+
+  static inline unsigned getAM6Opc(bool WB = false) {
+    return (int)WB;
+  }
+
+  static inline bool getAM6WBFlag(unsigned Mode) {
+    return Mode & 1;
+  }
 
 } // end namespace ARM_AM
 } // end namespace llvm
