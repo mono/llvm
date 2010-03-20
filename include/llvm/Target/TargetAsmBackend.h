@@ -10,9 +10,15 @@
 #ifndef LLVM_TARGET_TARGETASMBACKEND_H
 #define LLVM_TARGET_TARGETASMBACKEND_H
 
+#include "llvm/System/DataTypes.h"
+
 namespace llvm {
+class MCAsmFixup;
+class MCDataFragment;
+class MCObjectWriter;
 class MCSection;
 class Target;
+class raw_ostream;
 
 /// TargetAsmBackend - Generic interface to target specific assembler backends.
 class TargetAsmBackend {
@@ -32,6 +38,10 @@ public:
   virtual ~TargetAsmBackend();
 
   const Target &getTarget() const { return TheTarget; }
+
+  /// createObjectWriter - Create a new MCObjectWriter instance for use by the
+  /// assembler backend to emit the final object file.
+  virtual MCObjectWriter *createObjectWriter(raw_ostream &OS) const = 0;
 
   /// hasAbsolutizedSet - Check whether this target "absolutizes"
   /// assignments. That is, given code like:
@@ -75,6 +85,16 @@ public:
   virtual bool doesSectionRequireSymbols(const MCSection &Section) const {
     return false;
   }
+
+  /// isVirtualSection - Check whether the given section is "virtual", that is
+  /// has no actual object file contents.
+  virtual bool isVirtualSection(const MCSection &Section) const = 0;
+
+  /// ApplyFixup - Apply the \arg Value for given \arg Fixup into the provided
+  /// data fragment, at the offset specified by the fixup and following the
+  /// fixup kind as appropriate.
+  virtual void ApplyFixup(const MCAsmFixup &Fixup, MCDataFragment &Fragment,
+                          uint64_t Value) const = 0;
 };
 
 } // End llvm namespace

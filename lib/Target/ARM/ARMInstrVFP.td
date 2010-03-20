@@ -25,8 +25,6 @@ def arm_ftoui  : SDNode<"ARMISD::FTOUI",  SDT_FTOI>;
 def arm_ftosi  : SDNode<"ARMISD::FTOSI",  SDT_FTOI>;
 def arm_sitof  : SDNode<"ARMISD::SITOF",  SDT_ITOF>;
 def arm_uitof  : SDNode<"ARMISD::UITOF",  SDT_ITOF>;
-def arm_f16tof32 : SDNode<"ARMISD::F16_TO_F32", SDT_ITOF>;
-def arm_f32tof16 : SDNode<"ARMISD::F32_TO_F16", SDT_FTOI>;
 def arm_fmstat : SDNode<"ARMISD::FMSTAT", SDTNone, [SDNPInFlag,SDNPOutFlag]>;
 def arm_cmpfp  : SDNode<"ARMISD::CMPFP",  SDT_ARMCmp, [SDNPOutFlag]>;
 def arm_cmpfp0 : SDNode<"ARMISD::CMPFPw0",SDT_CMPFP0, [SDNPOutFlag]>;
@@ -96,7 +94,6 @@ def VLDMD_UPD : AXDI5<(outs GPR:$wb), (ins addrmode5:$addr, pred:$p,
                       IndexModeUpd, IIC_fpLoadm,
                       "vldm${addr:submode}${p}\t${addr:base}!, $dsts",
                       "$addr.base = $wb", []> {
-  let Inst{21} = 1; // wback
   let Inst{20} = 1;
 }
 
@@ -105,7 +102,6 @@ def VLDMS_UPD : AXSI5<(outs GPR:$wb), (ins addrmode5:$addr, pred:$p,
                       IndexModeUpd, IIC_fpLoadm, 
                       "vldm${addr:submode}${p}\t${addr:base}!, $dsts",
                       "$addr.base = $wb", []> {
-  let Inst{21} = 1; // wback
   let Inst{20} = 1;
 }
 } // mayLoad, hasExtraDefRegAllocReq
@@ -128,7 +124,6 @@ def VSTMD_UPD : AXDI5<(outs GPR:$wb), (ins addrmode5:$addr, pred:$p,
                       IndexModeUpd, IIC_fpStorem,
                       "vstm${addr:submode}${p}\t${addr:base}!, $srcs",
                       "$addr.base = $wb", []> {
-  let Inst{21} = 1; // wback
   let Inst{20} = 0;
 }
 
@@ -137,7 +132,6 @@ def VSTMS_UPD : AXSI5<(outs GPR:$wb), (ins addrmode5:$addr, pred:$p,
                       IndexModeUpd, IIC_fpStorem,
                       "vstm${addr:submode}${p}\t${addr:base}!, $srcs",
                       "$addr.base = $wb", []> {
-  let Inst{21} = 1; // wback
   let Inst{20} = 0;
 }
 } // mayStore, hasExtraSrcRegAllocReq
@@ -263,11 +257,17 @@ def VCVTSD : VFPAI<(outs SPR:$dst), (ins DPR:$a), VFPUnaryFrm,
 
 def VCVTBSH : ASuI<0b11101, 0b11, 0b0010, 0b01, 0, (outs SPR:$dst), (ins SPR:$a),
                  /* FIXME */ IIC_fpCVTDS, "vcvtb", ".f32.f16\t$dst, $a",
-                 [(set SPR:$dst, (f32 (arm_f32tof16 SPR:$a)))]>;
+                 [/* For disassembly only; pattern left blank */]>;
+
+def : ARMPat<(f32_to_f16 SPR:$a),
+             (i32 (COPY_TO_REGCLASS (VCVTBSH SPR:$a), GPR))>;
 
 def VCVTBHS : ASuI<0b11101, 0b11, 0b0011, 0b01, 0, (outs SPR:$dst), (ins SPR:$a),
                  /* FIXME */ IIC_fpCVTDS, "vcvtb", ".f16.f32\t$dst, $a",
-                 [(set SPR:$dst, (arm_f16tof32 SPR:$a))]>;
+                 [/* For disassembly only; pattern left blank */]>;
+
+def : ARMPat<(f16_to_f32 GPR:$a),
+             (VCVTBHS (COPY_TO_REGCLASS GPR:$a, SPR))>;
 
 def VCVTTSH : ASuI<0b11101, 0b11, 0b0010, 0b11, 0, (outs SPR:$dst), (ins SPR:$a),
                  /* FIXME */ IIC_fpCVTDS, "vcvtt", ".f32.f16\t$dst, $a",

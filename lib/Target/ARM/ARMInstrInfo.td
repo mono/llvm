@@ -62,11 +62,14 @@ def ARMcallseq_end   : SDNode<"ISD::CALLSEQ_END",   SDT_ARMCallSeqEnd,
                               [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;
 
 def ARMcall          : SDNode<"ARMISD::CALL", SDT_ARMcall,
-                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;
+                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag,
+                               SDNPVariadic]>;
 def ARMcall_pred    : SDNode<"ARMISD::CALL_PRED", SDT_ARMcall,
-                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;
+                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag,
+                               SDNPVariadic]>;
 def ARMcall_nolink   : SDNode<"ARMISD::CALL_NOLINK", SDT_ARMcall,
-                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;
+                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag,
+                               SDNPVariadic]>;
 
 def ARMretflag       : SDNode<"ARMISD::RET_FLAG", SDTNone,
                               [SDNPHasChain, SDNPOptInFlag]>;
@@ -1355,9 +1358,7 @@ def LDM_UPD : AXI4ld<(outs GPR:$wb), (ins addrmode4:$addr, pred:$p,
                                       reglist:$dsts, variable_ops),
                      IndexModeUpd, LdStMulFrm, IIC_iLoadm,
                      "ldm${addr:submode}${p}\t$addr!, $dsts",
-                     "$addr.addr = $wb", []> {
-  let Inst{21} = 1; // wback
-}
+                     "$addr.addr = $wb", []>;
 } // mayLoad, hasExtraDefRegAllocReq
 
 let mayStore = 1, hasExtraSrcRegAllocReq = 1 in {
@@ -1370,9 +1371,7 @@ def STM_UPD : AXI4st<(outs GPR:$wb), (ins addrmode4:$addr, pred:$p,
                                       reglist:$srcs, variable_ops),
                      IndexModeUpd, LdStMulFrm, IIC_iStorem,
                      "stm${addr:submode}${p}\t$addr!, $srcs",
-                     "$addr.addr = $wb", []> {
-  let Inst{21} = 1; // wback
-}
+                     "$addr.addr = $wb", []>;
 } // mayStore, hasExtraSrcRegAllocReq
 
 //===----------------------------------------------------------------------===//

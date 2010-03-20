@@ -1675,11 +1675,10 @@ bool SelectionDAGBuilder::handleJTSwitchCase(CaseRec& CR,
     }
   }
 
-  // Create a jump table index for this jump table, or return an existing
-  // one.
+  // Create a jump table index for this jump table.
   unsigned JTEncoding = TLI.getJumpTableEncoding();
   unsigned JTI = CurMF->getOrCreateJumpTableInfo(JTEncoding)
-                       ->getJumpTableIndex(DestBBs);
+                       ->createJumpTableIndex(DestBBs);
 
   // Set the jump table information so that we can codegen it as a second
   // MachineBasicBlock
@@ -4282,7 +4281,7 @@ isInTailCallPosition(CallSite CS, Attributes CalleeRetAttr,
          --BBI) {
       if (&*BBI == I)
         break;
-      // Debug info intrinsic does not intefer during tail call optimization.
+      // Debug info intrinsics do not get in the way of tail call optimization.
       if (isa<DbgInfoIntrinsic>(BBI))
         continue;
       if (BBI->mayHaveSideEffects() || BBI->mayReadFromMemory() ||
