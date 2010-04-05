@@ -31,6 +31,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
@@ -56,11 +57,6 @@ EnableJoining("join-liveintervals",
 static cl::opt<bool>
 DisableCrossClassJoin("disable-cross-class-join",
                cl::desc("Avoid coalescing cross register class copies"),
-               cl::init(false), cl::Hidden);
-
-static cl::opt<bool>
-PhysJoinTweak("tweak-phys-join-heuristics",
-               cl::desc("Tweak heuristics for joining phys reg with vr"),
                cl::init(false), cl::Hidden);
 
 static RegisterPass<SimpleRegisterCoalescing>
@@ -1444,7 +1440,6 @@ bool SimpleRegisterCoalescing::JoinCopy(CopyRec &TheCopy, bool &Again) {
   const TargetRegisterClass *SrcRC= SrcIsPhys ? 0 : mri_->getRegClass(SrcReg);
   const TargetRegisterClass *DstRC= DstIsPhys ? 0 : mri_->getRegClass(DstReg);
   const TargetRegisterClass *NewRC = NULL;
-  MachineBasicBlock *CopyMBB = CopyMI->getParent();
   unsigned RealDstReg = 0;
   unsigned RealSrcReg = 0;
   if (isExtSubReg || isInsSubReg || isSubRegToReg) {
@@ -1639,14 +1634,14 @@ bool SimpleRegisterCoalescing::JoinCopy(CopyRec &TheCopy, bool &Again) {
   // Save a copy of the virtual register live interval. We'll manually
   // merge this into the "real" physical register live interval this is
   // coalesced with.
-  LiveInterval *SavedLI = 0;
+  OwningPtr<LiveInterval> SavedLI;
   if (RealDstReg)
-    SavedLI = li_->dupInterval(&SrcInt);
+    SavedLI.reset(li_->dupInterval(&SrcInt));
   else if (RealSrcReg)
-    SavedLI = li_->dupInterval(&DstInt);
+    SavedLI.reset(li_->dupInterval(&DstInt));
 
-  // Check if it is necessary to propagate "isDead" property.
   if (!isExtSubReg && !isInsSubReg && !isSubRegToReg) {
+    // Check if it is necessary to propagate "isDead" property.
     MachineOperand *mopd = CopyMI->findRegisterDefOperand(DstReg, false);
     bool isDead = mopd->isDead();
 
@@ -1655,60 +1650,42 @@ bool SimpleRegisterCoalescing::JoinCopy(CopyRec &TheCopy, bool &Again) {
     // these are not spillable! If the destination interval uses are far away,
     // think twice about coalescing them!
     if (!isDead && (SrcIsPhys || DstIsPhys)) {
-      // If the copy is in a loop, take care not to coalesce aggressively if the
-      // src is coming in from outside the loop (or the dst is out of the loop).
-      // If it's not in a loop, then determine whether to join them base purely
-      // by the length of the interval.
-      if (PhysJoinTweak) {
-        if (SrcIsPhys) {
-          if (!isWinToJoinVRWithSrcPhysReg(CopyMI, CopyMBB, DstInt, SrcInt)) {
-            mri_->setRegAllocationHint(DstInt.reg, 0, SrcReg);
-            ++numAborts;
-            DEBUG(dbgs() << "\tMay tie down a physical register, abort!\n");
-            Again = true;  // May be possible to coalesce later.
-            return false;
-          }
-        } else {
-          if (!isWinToJoinVRWithDstPhysReg(CopyMI, CopyMBB, DstInt, SrcInt)) {
-            mri_->setRegAllocationHint(SrcInt.reg, 0, DstReg);
-            ++numAborts;
-            DEBUG(dbgs() << "\tMay tie down a physical register, abort!\n");
-            Again = true;  // May be possible to coalesce later.
-            return false;
-          }
-        }
-      } else {
-        // If the virtual register live interval is long but it has low use
-        // density, do not join them, instead mark the physical register as its
-        // allocation preference.
-        LiveInterval &JoinVInt = SrcIsPhys ? DstInt : SrcInt;
-        LiveInterval &JoinPInt = SrcIsPhys ? SrcInt : DstInt;
-        unsigned JoinVReg = SrcIsPhys ? DstReg : SrcReg;
-        unsigned JoinPReg = SrcIsPhys ? SrcReg : DstReg;
+      // If the virtual register live interval is long but it has low use
+      // density, do not join them, instead mark the physical register as its
+      // allocation preference.
+      LiveInterval &JoinVInt = SrcIsPhys ? DstInt : SrcInt;
+      LiveInterval &JoinPInt = SrcIsPhys ? SrcInt : DstInt;
+      unsigned JoinVReg = SrcIsPhys ? DstReg : SrcReg;
+      unsigned JoinPReg = SrcIsPhys ? SrcReg : DstReg;
 
-        // Don't join with physregs that have a ridiculous number of live
-        // ranges. The data structure performance is really bad when that
-        // happens.
-        if (JoinPInt.ranges.size() > 1000) {
-          mri_->setRegAllocationHint(JoinVInt.reg, 0, JoinPReg);
-          ++numAborts;
-          DEBUG(dbgs() << "\tPhysical register too complicated, abort!\n");
-          return false;
-        }
+      // Don't join with physregs that have a ridiculous number of live
+      // ranges. The data structure performance is really bad when that
+      // happens.
+      if (JoinPInt.ranges.size() > 1000) {
+        mri_->setRegAllocationHint(JoinVInt.reg, 0, JoinPReg);
+        ++numAborts;
+        DEBUG(dbgs()
+              << "\tPhysical register live interval too complicated, abort!\n");
+        return false;
+      }
 
-        const TargetRegisterClass *RC = mri_->getRegClass(JoinVReg);
-        unsigned Threshold = allocatableRCRegs_[RC].count() * 2;
-        unsigned Length = li_->getApproximateInstructionCount(JoinVInt);
-        float Ratio = 1.0 / Threshold;
-        if (Length > Threshold &&
-            (((float)std::distance(mri_->use_nodbg_begin(JoinVReg),
-                                   mri_->use_nodbg_end()) / Length) < Ratio)) {
-          mri_->setRegAllocationHint(JoinVInt.reg, 0, JoinPReg);
-          ++numAborts;
-          DEBUG(dbgs() << "\tMay tie down a physical register, abort!\n");
-          Again = true;  // May be possible to coalesce later.
-          return false;
-        }
+      const TargetRegisterClass *RC = mri_->getRegClass(JoinVReg);
+      unsigned Threshold = allocatableRCRegs_[RC].count() * 2;
+      unsigned Length = li_->getApproximateInstructionCount(JoinVInt);
+      float Ratio = 1.0 / Threshold;
+      if (Length > Threshold &&
+          (((float)std::distance(mri_->use_nodbg_begin(JoinVReg),
+                                 mri_->use_nodbg_end()) / Length) < Ratio)) {
+        // Before giving up coalescing, if definition of source is defined by
+        // trivial computation, try rematerializing it.
+        if (ReMaterializeTrivialDef(SrcInt, DstReg, DstSubIdx, CopyMI))
+          return true;
+
+        mri_->setRegAllocationHint(JoinVInt.reg, 0, JoinPReg);
+        ++numAborts;
+        DEBUG(dbgs() << "\tMay tie down a physical register, abort!\n");
+        Again = true;  // May be possible to coalesce later.
+        return false;
       }
     }
   }
@@ -1719,16 +1696,15 @@ bool SimpleRegisterCoalescing::JoinCopy(CopyRec &TheCopy, bool &Again) {
   // been modified, so we can use this information below to update aliases.
   bool Swapped = false;
   // If SrcInt is implicitly defined, it's safe to coalesce.
-  bool isEmpty = SrcInt.empty();
-  if (isEmpty && !CanCoalesceWithImpDef(CopyMI, DstInt, SrcInt)) {
-    // Only coalesce an empty interval (defined by implicit_def) with
-    // another interval which has a valno defined by the CopyMI and the CopyMI
-    // is a kill of the implicit def.
-    DEBUG(dbgs() << "Not profitable!\n");
-    return false;
-  }
-
-  if (!isEmpty && !JoinIntervals(DstInt, SrcInt, Swapped)) {
+  if (SrcInt.empty()) {
+    if (!CanCoalesceWithImpDef(CopyMI, DstInt, SrcInt)) {
+      // Only coalesce an empty interval (defined by implicit_def) with
+      // another interval which has a valno defined by the CopyMI and the CopyMI
+      // is a kill of the implicit def.
+      DEBUG(dbgs() << "Not profitable!\n");
+      return false;
+    }
+  } else if (!JoinIntervals(DstInt, SrcInt, Swapped)) {
     // Coalescing failed.
 
     // If definition of source is defined by trivial computation, try
@@ -1853,7 +1829,7 @@ bool SimpleRegisterCoalescing::JoinCopy(CopyRec &TheCopy, bool &Again) {
   // Manually deleted the live interval copy.
   if (SavedLI) {
     SavedLI->clear();
-    delete SavedLI;
+    SavedLI.reset();
   }
 
   // If resulting interval has a preference that no longer fits because of subreg
@@ -2799,7 +2775,7 @@ bool SimpleRegisterCoalescing::runOnMachineFunction(MachineFunction &fn) {
           if (MO.isDead())
             continue;
           if (TargetRegisterInfo::isPhysicalRegister(Reg) ||
-              !mri_->use_empty(Reg)) {
+              !mri_->use_nodbg_empty(Reg)) {
             isDead = false;
             break;
           }

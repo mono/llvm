@@ -39,12 +39,19 @@ namespace llvm {
     
     virtual void PrintSwitchToSection(const MCAsmInfo &MAI,
                                       raw_ostream &OS) const = 0;
+
+    /// isBaseAddressKnownZero - Return true if we know that this section will
+    /// get a base address of zero.  In cases where we know that this is true we
+    /// can emit section offsets as direct references to avoid a subtraction
+    /// from the base of the section, saving a relocation.
+    virtual bool isBaseAddressKnownZero() const {
+      return false;
+    }
   };
 
   class MCSectionCOFF : public MCSection {
-    // FIXME: This memory is leaked because MCSectionCOFF is bump pointer
-    // allocated and this never gets freed.
-    std::string Name;
+    // The memory for this string is stored in the same MCContext as *this.
+    StringRef Name;
     
     /// IsDirective - This is true if the section name is a directive, not
     /// something that should be printed with ".section".
@@ -61,7 +68,7 @@ namespace llvm {
     static MCSectionCOFF *Create(StringRef Name, bool IsDirective, 
                                  SectionKind K, MCContext &Ctx);
 
-    const std::string &getName() const { return Name; }
+    StringRef getName() const { return Name; }
     bool isDirective() const { return IsDirective; }
     
     virtual void PrintSwitchToSection(const MCAsmInfo &MAI,

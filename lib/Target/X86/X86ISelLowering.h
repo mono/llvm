@@ -418,11 +418,18 @@ namespace llvm {
 
     /// getOptimalMemOpType - Returns the target specific optimal type for load
     /// and store operations as a result of memset, memcpy, and memmove
-    /// lowering. It returns EVT::iAny if SelectionDAG should be responsible for
-    /// determining it.
-    virtual EVT getOptimalMemOpType(uint64_t Size, unsigned Align,
-                                    bool isSrcConst, bool isSrcStr,
-                                    SelectionDAG &DAG) const;
+    /// lowering. If DstAlign is zero that means it's safe to destination
+    /// alignment can satisfy any constraint. Similarly if SrcAlign is zero it
+    /// means there isn't a need to check it against alignment requirement,
+    /// probably because the source does not need to be loaded. If
+    /// 'NonScalarIntSafe' is true, that means it's safe to return a
+    /// non-scalar-integer type, e.g. empty string source, constant, or loaded
+    /// from memory. It returns EVT::Other if SelectionDAG should be responsible
+    /// for determining it.
+    virtual EVT
+    getOptimalMemOpType(uint64_t Size,
+                        unsigned DstAlign, unsigned SrcAlign,
+                        bool NonScalarIntSafe, SelectionDAG &DAG) const;
 
     /// allowsUnalignedMemoryAccesses - Returns true if the target allows
     /// unaligned memory accesses. of the specified type.
@@ -568,7 +575,6 @@ namespace llvm {
     /// or null if the target does not support "fast" ISel.
     virtual FastISel *
     createFastISel(MachineFunction &mf,
-                   MachineModuleInfo *mmi, DwarfWriter *dw,
                    DenseMap<const Value *, unsigned> &,
                    DenseMap<const BasicBlock *, MachineBasicBlock *> &,
                    DenseMap<const AllocaInst *, int> &
@@ -734,12 +740,13 @@ namespace llvm {
                                     SDValue Chain,
                                     SDValue Dst, SDValue Src,
                                     SDValue Size, unsigned Align,
+                                    bool isVolatile,
                                     const Value *DstSV, uint64_t DstSVOff);
     SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG, DebugLoc dl,
                                     SDValue Chain,
                                     SDValue Dst, SDValue Src,
                                     SDValue Size, unsigned Align,
-                                    bool AlwaysInline,
+                                    bool isVolatile, bool AlwaysInline,
                                     const Value *DstSV, uint64_t DstSVOff,
                                     const Value *SrcSV, uint64_t SrcSVOff);
     
@@ -749,7 +756,7 @@ namespace llvm {
     /// block, the number of args, and whether or not the second arg is
     /// in memory or not.
     MachineBasicBlock *EmitPCMP(MachineInstr *BInstr, MachineBasicBlock *BB,
-				unsigned argNum, bool inMem) const;
+                                unsigned argNum, bool inMem) const;
 
     /// Utility function to emit atomic bitwise operations (and, or, xor).
     /// It takes the bitwise instruction to expand, the associated machine basic
@@ -808,7 +815,6 @@ namespace llvm {
 
   namespace X86 {
     FastISel *createFastISel(MachineFunction &mf,
-                           MachineModuleInfo *mmi, DwarfWriter *dw,
                            DenseMap<const Value *, unsigned> &,
                            DenseMap<const BasicBlock *, MachineBasicBlock *> &,
                            DenseMap<const AllocaInst *, int> &

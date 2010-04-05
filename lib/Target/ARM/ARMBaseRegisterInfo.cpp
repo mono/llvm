@@ -1122,10 +1122,10 @@ emitSPUpdate(bool isARM,
 static void
 emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
                  DebugLoc dl, const ARMBaseInstrInfo &TII,
-                 MachineModuleInfo *MMI,
+                 MachineModuleInfo &MMI,
                  std::vector<MachineMove> &Moves,
                  int CfaOffset) {
-  MCSymbol *FrameLabel = MMI->getContext().CreateTempSymbol();
+  MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
   BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
 
   MachineLocation SPDst(MachineLocation::VirtualFP);
@@ -1137,10 +1137,10 @@ emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
 static void
 emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
            DebugLoc dl, const ARMBaseInstrInfo &TII,
-           MachineModuleInfo *MMI,
+           MachineModuleInfo &MMI,
            std::vector<MachineMove> &Moves,
            int CfaReg, int CfaOffset) {
-  MCSymbol *FrameLabel = MMI->getContext().CreateTempSymbol();
+  MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
   BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
 
   MachineLocation SPDst(MachineLocation::VirtualFP);
@@ -1152,10 +1152,10 @@ emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
 static void
 emitCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
            DebugLoc dl, const ARMBaseInstrInfo &TII,
-           MachineModuleInfo *MMI,
+           MachineModuleInfo &MMI,
            std::vector<MachineMove> &Moves,
            int Reg, int Offset) {
-  MCSymbol *FrameLabel = MMI->getContext().CreateTempSymbol();
+  MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
   BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
 
   MachineLocation CSDst(MachineLocation::VirtualFP, Offset);
@@ -1326,10 +1326,9 @@ emitPrologue(MachineFunction &MF) const {
   bool isARM = !AFI->isThumbFunction();
   unsigned VARegSaveSize = AFI->getVarArgsRegSaveSize();
   unsigned NumBytes = MFI->getStackSize();
-  MachineModuleInfo *MMI = MFI->getMachineModuleInfo();
+  MachineModuleInfo &MMI = MF.getMMI();
   const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
-  DebugLoc dl = (MBBI != MBB.end() ?
-                 MBBI->getDebugLoc() : DebugLoc::getUnknownLoc());
+  DebugLoc dl = MBBI != MBB.end() ? MBBI->getDebugLoc() : DebugLoc();
   bool NeedsFrameMoves = UnwindTablesMandatory;
   // The cfa register
   int CfaReg = ARM::SP;
@@ -1341,7 +1340,7 @@ emitPrologue(MachineFunction &MF) const {
   unsigned GPRCS1Size = 0, GPRCS2Size = 0, DPRCSSize = 0;
   int FramePtrSpillFI = 0;
 
-  std::vector<MachineMove> &Moves = MMI->getFrameMoves();
+  std::vector<MachineMove> &Moves = MMI.getFrameMoves();
 
   // Allocate the vararg register save area. This is not counted in NumBytes.
   if (VARegSaveSize)
@@ -1400,7 +1399,7 @@ emitPrologue(MachineFunction &MF) const {
     // CFA = sp + offset
     emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, CfaOffset);
 
-    MCSymbol *FrameLabel = MMI->getContext().CreateTempSymbol();
+    MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
     BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
 
     // Emit moves for the registers in spill area 1

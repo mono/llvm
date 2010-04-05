@@ -315,6 +315,48 @@ def runTests(numThreads, litConfig, provider, display):
     except KeyboardInterrupt:
         sys.exit(2)
 
+def load_test_suite(inputs):
+    import unittest
+
+    # Create the global config object.
+    litConfig = LitConfig.LitConfig(progname = 'lit',
+                                    path = [],
+                                    quiet = False,
+                                    useValgrind = False,
+                                    valgrindLeakCheck = False,
+                                    valgrindArgs = [],
+                                    useTclAsSh = False,
+                                    noExecute = False,
+                                    debug = False,
+                                    isWindows = (platform.system()=='Windows'),
+                                    params = {})
+
+    # Load the tests from the inputs.
+    tests = []
+    testSuiteCache = {}
+    localConfigCache = {}
+    for input in inputs:
+        prev = len(tests)
+        tests.extend(getTests(input, litConfig,
+                              testSuiteCache, localConfigCache)[1])
+        if prev == len(tests):
+            litConfig.warning('input %r contained no tests' % input)
+
+    # If there were any errors during test discovery, exit now.
+    if litConfig.numErrors:
+        print >>sys.stderr, '%d errors, exiting.' % litConfig.numErrors
+        sys.exit(2)
+
+    # Return a unittest test suite which just runs the tests in order.
+    def get_test_fn(test):
+        return unittest.FunctionTestCase(
+            lambda: test.config.test_format.execute(
+                test, litConfig),
+            description = test.getFullName())
+
+    from LitTestCase import LitTestCase
+    return unittest.TestSuite([LitTestCase(test, litConfig) for test in tests])
+
 def main():
     # Bump the GIL check interval, its more important to get any one thread to a
     # blocking operation (hopefully exec) than to try and unblock other threads.
@@ -361,6 +403,9 @@ def main():
                      action="append", type=str, default=[])
     group.add_option("", "--vg", dest="useValgrind",
                      help="Run tests under valgrind",
+                     action="store_true", default=False)
+    group.add_option("", "--vg-leak", dest="valgrindLeakCheck",
+                     help="Check for memory leaks under valgrind",
                      action="store_true", default=False)
     group.add_option("", "--vg-arg", dest="valgrindArgs", metavar="ARG",
                      help="Specify an extra argument for valgrind",
@@ -436,6 +481,7 @@ def main():
                                     path = opts.path,
                                     quiet = opts.quiet,
                                     useValgrind = opts.useValgrind,
+                                    valgrindLeakCheck = opts.valgrindLeakCheck,
                                     valgrindArgs = opts.valgrindArgs,
                                     useTclAsSh = opts.useTclAsSh,
                                     noExecute = opts.noExecute,

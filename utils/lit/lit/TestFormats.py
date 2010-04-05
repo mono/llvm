@@ -73,12 +73,7 @@ class GoogleTest(object):
 
         cmd = [testPath, '--gtest_filter=' + testName]
         if litConfig.useValgrind:
-            valgrindArgs = ['valgrind', '-q', '--run-libc-freeres=no',
-                            '--tool=memcheck', '--trace-children=yes',
-                            '--error-exitcode=123']
-            valgrindArgs.extend(litConfig.valgrindArgs)
-
-            cmd = valgrindArgs + cmd
+            cmd = litConfig.valgrindArgs + cmd
 
         out, err, exitCode = TestRunner.executeCommand(
             cmd, env=test.config.environment)
@@ -95,8 +90,9 @@ class FileBasedTest(object):
                             litConfig, localConfig):
         source_path = testSuite.getSourcePath(path_in_suite)
         for filename in os.listdir(source_path):
-            # Ignore dot files.
-            if filename.startswith('.'):
+            # Ignore dot files and excluded tests.
+            if (filename.startswith('.') or
+                filename in localConfig.excludes):
                 continue
 
             filepath = os.path.join(source_path, filename)

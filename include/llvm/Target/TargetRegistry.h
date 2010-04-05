@@ -38,7 +38,6 @@ namespace llvm {
   class TargetAsmLexer;
   class TargetAsmParser;
   class TargetMachine;
-  class formatted_raw_ostream;
   class raw_ostream;
 
   /// Target - Wrapper for Target specific information.
@@ -55,24 +54,22 @@ namespace llvm {
 
     typedef unsigned (*TripleMatchQualityFnTy)(const std::string &TT);
 
-    typedef const MCAsmInfo *(*AsmInfoCtorFnTy)(const Target &T,
+    typedef MCAsmInfo *(*AsmInfoCtorFnTy)(const Target &T,
                                                 StringRef TT);
     typedef TargetMachine *(*TargetMachineCtorTy)(const Target &T,
                                                   const std::string &TT,
                                                   const std::string &Features);
-    typedef AsmPrinter *(*AsmPrinterCtorTy)(formatted_raw_ostream &OS,
-                                            TargetMachine &TM,
+    typedef AsmPrinter *(*AsmPrinterCtorTy)(TargetMachine &TM,
                                             MCStreamer &Streamer);
     typedef TargetAsmBackend *(*AsmBackendCtorTy)(const Target &T,
                                                   const std::string &TT);
     typedef TargetAsmLexer *(*AsmLexerCtorTy)(const Target &T,
                                               const MCAsmInfo &MAI);
     typedef TargetAsmParser *(*AsmParserCtorTy)(const Target &T,MCAsmParser &P);
-    typedef const MCDisassembler *(*MCDisassemblerCtorTy)(const Target &T);
+    typedef MCDisassembler *(*MCDisassemblerCtorTy)(const Target &T);
     typedef MCInstPrinter *(*MCInstPrinterCtorTy)(const Target &T,
                                                   unsigned SyntaxVariant,
-                                                  const MCAsmInfo &MAI,
-                                                  raw_ostream &O);
+                                                  const MCAsmInfo &MAI);
     typedef MCCodeEmitter *(*CodeEmitterCtorTy)(const Target &T,
                                                 TargetMachine &TM,
                                                 MCContext &Ctx);
@@ -184,7 +181,7 @@ namespace llvm {
     /// feature set; it should always be provided. Generally this should be
     /// either the target triple from the module, or the target triple of the
     /// host if that does not exist.
-    const MCAsmInfo *createAsmInfo(StringRef Triple) const {
+    MCAsmInfo *createAsmInfo(StringRef Triple) const {
       if (!AsmInfoCtorFn)
         return 0;
       return AsmInfoCtorFn(*this, Triple);
@@ -234,25 +231,23 @@ namespace llvm {
 
     /// createAsmPrinter - Create a target specific assembly printer pass.  This
     /// takes ownership of the MCStreamer object.
-    AsmPrinter *createAsmPrinter(formatted_raw_ostream &OS, TargetMachine &TM,
-                                 MCStreamer &Streamer) const {
+    AsmPrinter *createAsmPrinter(TargetMachine &TM, MCStreamer &Streamer) const{
       if (!AsmPrinterCtorFn)
         return 0;
-      return AsmPrinterCtorFn(OS, TM, Streamer);
+      return AsmPrinterCtorFn(TM, Streamer);
     }
 
-    const MCDisassembler *createMCDisassembler() const {
+    MCDisassembler *createMCDisassembler() const {
       if (!MCDisassemblerCtorFn)
         return 0;
       return MCDisassemblerCtorFn(*this);
     }
 
     MCInstPrinter *createMCInstPrinter(unsigned SyntaxVariant,
-                                       const MCAsmInfo &MAI,
-                                       raw_ostream &O) const {
+                                       const MCAsmInfo &MAI) const {
       if (!MCInstPrinterCtorFn)
         return 0;
-      return MCInstPrinterCtorFn(*this, SyntaxVariant, MAI, O);
+      return MCInstPrinterCtorFn(*this, SyntaxVariant, MAI);
     }
 
 
@@ -529,7 +524,7 @@ namespace llvm {
       TargetRegistry::RegisterAsmInfo(T, &Allocator);
     }
   private:
-    static const MCAsmInfo *Allocator(const Target &T, StringRef TT) {
+    static MCAsmInfo *Allocator(const Target &T, StringRef TT) {
       return new MCAsmInfoImpl(T, TT);
     }
 
@@ -646,9 +641,8 @@ namespace llvm {
     }
 
   private:
-    static AsmPrinter *Allocator(formatted_raw_ostream &OS, TargetMachine &TM,
-                                 MCStreamer &Streamer) {
-      return new AsmPrinterImpl(OS, TM, Streamer);
+    static AsmPrinter *Allocator(TargetMachine &TM, MCStreamer &Streamer) {
+      return new AsmPrinterImpl(TM, Streamer);
     }
   };
 

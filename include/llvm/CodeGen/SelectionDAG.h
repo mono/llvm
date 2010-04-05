@@ -29,11 +29,10 @@
 namespace llvm {
 
 class AliasAnalysis;
-class DwarfWriter;
 class FunctionLoweringInfo;
 class MachineConstantPoolValue;
 class MachineFunction;
-class MachineModuleInfo;
+class MDNode;
 class SDNodeOrdering;
 class SDDbgValue;
 class TargetLowering;
@@ -60,42 +59,40 @@ private:
 
 /// SDDbgInfo - Keeps track of dbg_value information through SDISel.  We do
 /// not build SDNodes for these so as not to perturb the generated code;
-/// instead the info is kept off to the side in this structure.  SDNodes may
-/// have an associated dbg_value entry in DbgValMap.  Debug info that is not
-/// associated with any SDNode is held in DbgConstMap.  It is possible for
-/// optimizations to change a variable to a constant, in which case the
-/// corresponding debug info is moved from the variable to the constant table
-/// (NYI).
+/// instead the info is kept off to the side in this structure. Each SDNode may
+/// have one or more associated dbg_value entries. This information is kept in
+/// DbgValMap.
 class SDDbgInfo {
-  DenseMap<const SDNode*, SDDbgValue*> DbgVblMap;
-  SmallVector<SDDbgValue*, 4> DbgConstMap;
+  SmallVector<SDDbgValue*, 32> DbgValues;
+  DenseMap<const SDNode*, SmallVector<SDDbgValue*, 2> > DbgValMap;
 
   void operator=(const SDDbgInfo&);   // Do not implement.
   SDDbgInfo(const SDDbgInfo&);   // Do not implement.
 public:
   SDDbgInfo() {}
 
-  void add(const SDNode *Node, SDDbgValue *V) {
-    DbgVblMap[Node] = V;
+  void add(SDDbgValue *V, const SDNode *Node = 0) {
+    if (Node)
+      DbgValMap[Node].push_back(V);
+    DbgValues.push_back(V);
   }
-  void add(SDDbgValue *V) { DbgConstMap.push_back(V); }
-  void remove(const SDNode *Node) {
-    DenseMap<const SDNode*, SDDbgValue*>::iterator Itr =
-                      DbgVblMap.find(Node);
-    if (Itr != DbgVblMap.end())
-      DbgVblMap.erase(Itr);
-  }
-  // No need to remove a constant.
+
   void clear() {
-    DbgVblMap.clear();
-    DbgConstMap.clear();
+    DbgValMap.clear();
+    DbgValues.clear();
   }
-  SDDbgValue *getSDDbgValue(const SDNode *Node) {
-    return DbgVblMap[Node];
+
+  bool empty() const {
+    return DbgValues.empty();
   }
-  typedef SmallVector<SDDbgValue*, 4>::iterator ConstDbgIterator;
-  ConstDbgIterator DbgConstBegin() { return DbgConstMap.begin(); }
-  ConstDbgIterator DbgConstEnd() { return DbgConstMap.end(); }
+
+  SmallVector<SDDbgValue*,2> &getSDDbgValues(const SDNode *Node) {
+    return DbgValMap[Node];
+  }
+
+  typedef SmallVector<SDDbgValue*,32>::iterator DbgIterator;
+  DbgIterator DbgBegin() { return DbgValues.begin(); }
+  DbgIterator DbgEnd()   { return DbgValues.end(); }
 };
 
 enum CombineLevel {
@@ -123,9 +120,7 @@ class SelectionDAG {
   TargetLowering &TLI;
   MachineFunction *MF;
   FunctionLoweringInfo &FLI;
-  MachineModuleInfo *MMI;
-  DwarfWriter *DW;
-  LLVMContext* Context;
+  LLVMContext *Context;
 
   /// EntryNode - The starting token.
   SDNode EntryNode;
@@ -183,7 +178,7 @@ public:
   /// init - Prepare this SelectionDAG to process code in the given
   /// MachineFunction.
   ///
-  void init(MachineFunction &mf, MachineModuleInfo *mmi, DwarfWriter *dw);
+  void init(MachineFunction &mf);
 
   /// clear - Clear state and free memory necessary to make this
   /// SelectionDAG ready to process a new block.
@@ -194,8 +189,6 @@ public:
   const TargetMachine &getTarget() const;
   TargetLowering &getTargetLoweringInfo() const { return TLI; }
   FunctionLoweringInfo &getFunctionLoweringInfo() const { return FLI; }
-  MachineModuleInfo *getMachineModuleInfo() const { return MMI; }
-  DwarfWriter *getDwarfWriter() const { return DW; }
   LLVMContext *getContext() const {return Context; }
 
   /// viewGraph - Pop up a GraphViz/gv window with the DAG rendered using 'dot'.
@@ -462,8 +455,7 @@ public:
   SDValue getCALLSEQ_START(SDValue Chain, SDValue Op) {
     SDVTList VTs = getVTList(MVT::Other, MVT::Flag);
     SDValue Ops[] = { Chain,  Op };
-    return getNode(ISD::CALLSEQ_START, DebugLoc::getUnknownLoc(),
-                   VTs, Ops, 2);
+    return getNode(ISD::CALLSEQ_START, DebugLoc(), VTs, Ops, 2);
   }
 
   /// getCALLSEQ_END - Return a new CALLSEQ_END node, which always must have a
@@ -477,20 +469,19 @@ public:
     Ops.push_back(Op1);
     Ops.push_back(Op2);
     Ops.push_back(InFlag);
-    return getNode(ISD::CALLSEQ_END, DebugLoc::getUnknownLoc(), NodeTys,
-                   &Ops[0],
+    return getNode(ISD::CALLSEQ_END, DebugLoc(), NodeTys, &Ops[0],
                    (unsigned)Ops.size() - (InFlag.getNode() == 0 ? 1 : 0));
   }
 
   /// getUNDEF - Return an UNDEF node.  UNDEF does not have a useful DebugLoc.
   SDValue getUNDEF(EVT VT) {
-    return getNode(ISD::UNDEF, DebugLoc::getUnknownLoc(), VT);
+    return getNode(ISD::UNDEF, DebugLoc(), VT);
   }
 
   /// getGLOBAL_OFFSET_TABLE - Return a GLOBAL_OFFSET_TABLE node.  This does
   /// not have a useful DebugLoc.
   SDValue getGLOBAL_OFFSET_TABLE(EVT VT) {
-    return getNode(ISD::GLOBAL_OFFSET_TABLE, DebugLoc::getUnknownLoc(), VT);
+    return getNode(ISD::GLOBAL_OFFSET_TABLE, DebugLoc(), VT);
   }
 
   /// getNode - Gets or creates the specified node.
@@ -535,17 +526,17 @@ public:
   SDValue getStackArgumentTokenFactor(SDValue Chain);
 
   SDValue getMemcpy(SDValue Chain, DebugLoc dl, SDValue Dst, SDValue Src,
-                    SDValue Size, unsigned Align, bool AlwaysInline,
+                    SDValue Size, unsigned Align, bool isVol, bool AlwaysInline,
                     const Value *DstSV, uint64_t DstSVOff,
                     const Value *SrcSV, uint64_t SrcSVOff);
 
   SDValue getMemmove(SDValue Chain, DebugLoc dl, SDValue Dst, SDValue Src,
-                     SDValue Size, unsigned Align,
+                     SDValue Size, unsigned Align, bool isVol,
                      const Value *DstSV, uint64_t DstOSVff,
                      const Value *SrcSV, uint64_t SrcSVOff);
 
   SDValue getMemset(SDValue Chain, DebugLoc dl, SDValue Dst, SDValue Src,
-                    SDValue Size, unsigned Align,
+                    SDValue Size, unsigned Align, bool isVol,
                     const Value *DstSV, uint64_t DstSVOff);
 
   /// getSetCC - Helper function to make it easier to build SetCC's if you just
@@ -769,6 +760,15 @@ public:
   SDNode *getNodeIfExists(unsigned Opcode, SDVTList VTs,
                           const SDValue *Ops, unsigned NumOps);
 
+  /// getDbgValue - Creates a SDDbgValue node.
+  ///
+  SDDbgValue *getDbgValue(MDNode *MDPtr, SDNode *N, unsigned R, uint64_t Off,
+                          DebugLoc DL, unsigned O);
+  SDDbgValue *getDbgValue(MDNode *MDPtr, Value *C, uint64_t Off,
+                          DebugLoc DL, unsigned O);
+  SDDbgValue *getDbgValue(MDNode *MDPtr, unsigned FI, uint64_t Off,
+                          DebugLoc DL, unsigned O);
+
   /// DAGUpdateListener - Clients of various APIs that cause global effects on
   /// the DAG can optionally implement this interface.  This allows the clients
   /// to handle the various sorts of updates that happen.
@@ -871,19 +871,21 @@ public:
   /// GetOrdering - Get the order for the SDNode.
   unsigned GetOrdering(const SDNode *SD) const;
 
-  /// AssignDbgInfo - Assign debug info to the SDNode.
-  void AssignDbgInfo(SDNode *SD, SDDbgValue *db);
+  /// AddDbgValue - Add a dbg_value SDNode. If SD is non-null that means the
+  /// value is produced by SD.
+  void AddDbgValue(SDDbgValue *DB, SDNode *SD = 0);
 
-  /// RememberDbgInfo - Remember debug info with no associated SDNode.
-  void RememberDbgInfo(SDDbgValue *db);
-
-  /// GetDbgInfo - Get the debug info for the SDNode.
-  SDDbgValue *GetDbgInfo(const SDNode* SD);
-
-  SDDbgInfo::ConstDbgIterator DbgConstBegin() { 
-    return DbgInfo->DbgConstBegin(); 
+  /// GetDbgValues - Get the debug values which reference the given SDNode.
+  SmallVector<SDDbgValue*,2> &GetDbgValues(const SDNode* SD) {
+    return DbgInfo->getSDDbgValues(SD);
   }
-  SDDbgInfo::ConstDbgIterator DbgConstEnd() { return DbgInfo->DbgConstEnd(); }
+
+  /// hasDebugValues - Return true if there are any SDDbgValue nodes associated
+  /// with this SelectionDAG.
+  bool hasDebugValues() const { return !DbgInfo->empty(); }
+
+  SDDbgInfo::DbgIterator DbgBegin() { return DbgInfo->DbgBegin(); }
+  SDDbgInfo::DbgIterator DbgEnd()   { return DbgInfo->DbgEnd(); }
 
   void dump() const;
 

@@ -62,9 +62,13 @@ class TargetAsmBackend;
     /// @name Assembly File Formatting.
     /// @{
     
-    /// isVerboseAsm - Return true if this streamer supports verbose assembly at
-    /// all.
+    /// isVerboseAsm - Return true if this streamer supports verbose assembly
+    /// and if it is enabled.
     virtual bool isVerboseAsm() const { return false; }
+    
+    /// hasRawTextSupport - Return true if this asm streamer supports emitting
+    /// unformatted text to the .s file with EmitRawText.
+    virtual bool hasRawTextSupport() const { return false; }
 
     /// AddComment - Add a comment that can be emitted to the generated .s
     /// file if applicable as a QoI issue to make the output of the compiler
@@ -88,7 +92,7 @@ class TargetAsmBackend;
     /// @name Symbol & Section Management
     /// @{
     
-    /// getCurrentSection - Return the current seciton that the streamer is
+    /// getCurrentSection - Return the current section that the streamer is
     /// emitting code to.
     const MCSection *getCurrentSection() const { return CurSection; }
 
@@ -278,6 +282,12 @@ class TargetAsmBackend;
     /// section.
     virtual void EmitInstruction(const MCInst &Inst) = 0;
 
+    /// EmitRawText - If this file is backed by a assembly streamer, this dumps
+    /// the specified string in the output .s file.  This capability is
+    /// indicated by the hasRawTextSupport() predicate.  By default this aborts.
+    virtual void EmitRawText(StringRef String);
+    void EmitRawText(const Twine &String);
+    
     /// Finish - Finish emission of machine code and flush any output.
     virtual void Finish() = 0;
   };
@@ -308,7 +318,8 @@ class TargetAsmBackend;
   /// createMachOStream - Create a machine code streamer which will generative
   /// Mach-O format object files.
   MCStreamer *createMachOStreamer(MCContext &Ctx, TargetAsmBackend &TAB,
-                                  raw_ostream &OS, MCCodeEmitter *CE);
+                                  raw_ostream &OS, MCCodeEmitter *CE,
+                                  bool RelaxAll = false);
 
 } // end namespace llvm
 

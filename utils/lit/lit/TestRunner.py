@@ -63,6 +63,7 @@ def executeShCmd(cmd, cfg, cwd, results):
     procs = []
     input = subprocess.PIPE
     stderrTempFiles = []
+    opened_files = []
     # To avoid deadlock, we use a single stderr stream for piped
     # output. This is null until we have seen some output using
     # stderr.
@@ -113,8 +114,11 @@ def executeShCmd(cmd, cfg, cwd, results):
                     else:
                         r[2] = open(r[0], r[1])
                     # Workaround a Win32 and/or subprocess bug when appending.
+                    #
+                    # FIXME: Actually, this is probably an instance of PR6753.
                     if r[1] == 'a':
                         r[2].seek(0, 2)
+                    opened_files.append(r[2])
                 result = r[2]
             final_redirects.append(result)
 
@@ -176,7 +180,7 @@ def executeShCmd(cmd, cfg, cwd, results):
         else:
             err = ''
         procData[i] = (out,err)
-        
+
     # Read stderr out of the temp files.
     for i,f in stderrTempFiles:
         f.seek(0, 0)
@@ -198,6 +202,10 @@ def executeShCmd(cmd, cfg, cwd, results):
                 exitCode = max(exitCode, res)
         else:
             exitCode = res
+
+    # Explicitly close any redirected files.
+    for f in opened_files:
+        f.close()
 
     if cmd.negate:
         exitCode = not exitCode
@@ -253,16 +261,12 @@ def executeTclScriptInternal(test, litConfig, tmpBase, commands, cwd):
             return (Test.FAIL, "Tcl 'exec' parse error on: %r" % ln)
 
     if litConfig.useValgrind:
-        valgrindArgs = ['valgrind', '-q', '--run-libc-freeres=no',
-                        '--tool=memcheck', '--trace-children=yes',
-                        '--error-exitcode=123']
-        valgrindArgs.extend(litConfig.valgrindArgs)
         for pipeline in cmds:
             if pipeline.commands:
                 # Only valgrind the first command in each pipeline, to avoid
                 # valgrinding things like grep, not, and FileCheck.
                 cmd = pipeline.commands[0]
-                cmd.args = valgrindArgs + cmd.args
+                cmd.args = litConfig.valgrindArgs + cmd.args
 
     cmd = cmds[0]
     for c in cmds[1:]:
@@ -339,12 +343,7 @@ def executeScript(test, litConfig, tmpBase, commands, cwd):
         if litConfig.useValgrind:
             # FIXME: Running valgrind on sh is overkill. We probably could just
             # run on clang with no real loss.
-            valgrindArgs = ['valgrind', '-q', '--run-libc-freeres=no',
-                            '--tool=memcheck', '--trace-children=yes',
-                            '--error-exitcode=123']
-            valgrindArgs.extend(litConfig.valgrindArgs)
-
-            command = valgrindArgs + command
+            command = litConfig.valgrindArgs + command
 
     return executeCommand(command, cwd=cwd, env=test.config.environment)
 

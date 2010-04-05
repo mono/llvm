@@ -54,8 +54,6 @@ class X86FastISel : public FastISel {
 
 public:
   explicit X86FastISel(MachineFunction &mf,
-                       MachineModuleInfo *mmi,
-                       DwarfWriter *dw,
                        DenseMap<const Value *, unsigned> &vm,
                        DenseMap<const BasicBlock *, MachineBasicBlock *> &bm,
                        DenseMap<const AllocaInst *, int> &am
@@ -63,7 +61,7 @@ public:
                        , SmallSet<Instruction*, 8> &cil
 #endif
                        )
-    : FastISel(mf, mmi, dw, vm, bm, am
+    : FastISel(mf, vm, bm, am
 #ifndef NDEBUG
                , cil
 #endif
@@ -383,7 +381,7 @@ bool X86FastISel::X86SelectAddress(Value *V, X86AddressMode &AM) {
     if (ConstantInt *CI = dyn_cast<ConstantInt>(U->getOperand(1))) {
       uint64_t Disp = (int32_t)AM.Disp + (uint64_t)CI->getSExtValue();
       // They have to fit in the 32-bit signed displacement field though.
-      if (isInt32(Disp)) {
+      if (isInt<32>(Disp)) {
         AM.Disp = (uint32_t)Disp;
         return X86SelectAddress(U->getOperand(0), AM);
       }
@@ -427,7 +425,7 @@ bool X86FastISel::X86SelectAddress(Value *V, X86AddressMode &AM) {
       }
     }
     // Check for displacement overflow.
-    if (!isInt32(Disp))
+    if (!isInt<32>(Disp))
       break;
     // Ok, the GEP indices were covered by constant-offset and scaled-index
     // addressing. Update the address state and move on to examining the base.
@@ -1753,8 +1751,6 @@ unsigned X86FastISel::TargetMaterializeAlloca(AllocaInst *C) {
 
 namespace llvm {
   llvm::FastISel *X86::createFastISel(MachineFunction &mf,
-                        MachineModuleInfo *mmi,
-                        DwarfWriter *dw,
                         DenseMap<const Value *, unsigned> &vm,
                         DenseMap<const BasicBlock *, MachineBasicBlock *> &bm,
                         DenseMap<const AllocaInst *, int> &am
@@ -1762,7 +1758,7 @@ namespace llvm {
                         , SmallSet<Instruction*, 8> &cil
 #endif
                         ) {
-    return new X86FastISel(mf, mmi, dw, vm, bm, am
+    return new X86FastISel(mf, vm, bm, am
 #ifndef NDEBUG
                            , cil
 #endif
