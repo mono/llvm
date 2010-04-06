@@ -610,62 +610,69 @@ static GlobalVariable *SRAGlobal(GlobalVariable *GV, const TargetData &TD) {
 /// AllUsesOfValueWillTrapIfNull - Return true if all users of the specified
 /// value will trap if the value is dynamically null.  PHIs keeps track of any 
 /// phi nodes we've seen to avoid reprocessing them.
-static bool AllUsesOfValueWillTrapIfNull(Value *V,
-                                         SmallPtrSet<PHINode*, 8> &PHIs) {
-  for (Value::use_iterator UI = V->use_begin(), E = V->use_end(); UI != E; ++UI)
-    if (isa<LoadInst>(*UI)) {
+static bool AllUsesOfValueWillTrapIfNull(const Value *V,
+                                         SmallPtrSet<const PHINode*, 8> &PHIs) {
+  for (Value::const_use_iterator UI = V->use_begin(), E = V->use_end(); UI != E;
+       ++UI) {
+    const User *U = *UI;
+
+    if (isa<LoadInst>(U)) {
       // Will trap.
-    } else if (StoreInst *SI = dyn_cast<StoreInst>(*UI)) {
+    } else if (const StoreInst *SI = dyn_cast<StoreInst>(U)) {
       if (SI->getOperand(0) == V) {
-        //cerr << "NONTRAPPING USE: " << **UI;
+        //cerr << "NONTRAPPING USE: " << *U;
         return false;  // Storing the value.
       }
-    } else if (CallInst *CI = dyn_cast<CallInst>(*UI)) {
+    } else if (const CallInst *CI = dyn_cast<CallInst>(U)) {
       if (CI->getCalledValue() != V) {
-        //cerr << "NONTRAPPING USE: " << **UI;
+        //cerr << "NONTRAPPING USE: " << *U;
         return false;  // Not calling the ptr
       }
-    } else if (InvokeInst *II = dyn_cast<InvokeInst>(*UI)) {
+    } else if (const InvokeInst *II = dyn_cast<InvokeInst>(U)) {
       if (II->getCalledValue() != V) {
-        //cerr << "NONTRAPPING USE: " << **UI;
+        //cerr << "NONTRAPPING USE: " << *U;
         return false;  // Not calling the ptr
       }
-    } else if (BitCastInst *CI = dyn_cast<BitCastInst>(*UI)) {
+    } else if (const BitCastInst *CI = dyn_cast<BitCastInst>(U)) {
       if (!AllUsesOfValueWillTrapIfNull(CI, PHIs)) return false;
-    } else if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(*UI)) {
+    } else if (const GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(U)) {
       if (!AllUsesOfValueWillTrapIfNull(GEPI, PHIs)) return false;
-    } else if (PHINode *PN = dyn_cast<PHINode>(*UI)) {
+    } else if (const PHINode *PN = dyn_cast<PHINode>(U)) {
       // If we've already seen this phi node, ignore it, it has already been
       // checked.
       if (PHIs.insert(PN) && !AllUsesOfValueWillTrapIfNull(PN, PHIs))
         return false;
-    } else if (isa<ICmpInst>(*UI) &&
+    } else if (isa<ICmpInst>(U) &&
                isa<ConstantPointerNull>(UI->getOperand(1))) {
       // Ignore icmp X, null
     } else {
-      //cerr << "NONTRAPPING USE: " << **UI;
+      //cerr << "NONTRAPPING USE: " << *U;
       return false;
     }
+  }
   return true;
 }
 
 /// AllUsesOfLoadedValueWillTrapIfNull - Return true if all uses of any loads
 /// from GV will trap if the loaded value is null.  Note that this also permits
 /// comparisons of the loaded value against null, as a special case.
-static bool AllUsesOfLoadedValueWillTrapIfNull(GlobalVariable *GV) {
-  for (Value::use_iterator UI = GV->use_begin(), E = GV->use_end(); UI!=E; ++UI)
-    if (LoadInst *LI = dyn_cast<LoadInst>(*UI)) {
-      SmallPtrSet<PHINode*, 8> PHIs;
+static bool AllUsesOfLoadedValueWillTrapIfNull(const GlobalVariable *GV) {
+  for (Value::const_use_iterator UI = GV->use_begin(), E = GV->use_end();
+       UI != E; ++UI) {
+    const User *U = *UI;
+
+    if (const LoadInst *LI = dyn_cast<LoadInst>(U)) {
+      SmallPtrSet<const PHINode*, 8> PHIs;
       if (!AllUsesOfValueWillTrapIfNull(LI, PHIs))
         return false;
-    } else if (isa<StoreInst>(*UI)) {
+    } else if (isa<StoreInst>(U)) {
       // Ignore stores to the global.
     } else {
       // We don't know or understand this user, bail out.
-      //cerr << "UNKNOWN USER OF GLOBAL!: " << **UI;
+      //cerr << "UNKNOWN USER OF GLOBAL!: " << *U;
       return false;
     }
-
+  }
   return true;
 }
 
@@ -682,16 +689,17 @@ static bool OptimizeAwayTrappingUsesOfValue(Value *V, Constant *NewV) {
         Changed = true;
       }
     } else if (isa<CallInst>(I) || isa<InvokeInst>(I)) {
-      if (I->getOperand(0) == V) {
+      CallSite CS(I);
+      if (CS.getCalledValue() == V) {
         // Calling through the pointer!  Turn into a direct call, but be careful
         // that the pointer is not also being passed as an argument.
-        I->setOperand(0, NewV);
+        CS.setCalledFunction(NewV);
         Changed = true;
         bool PassedAsArg = false;
-        for (unsigned i = 1, e = I->getNumOperands(); i != e; ++i)
-          if (I->getOperand(i) == V) {
+        for (unsigned i = 0, e = CS.arg_size(); i != e; ++i)
+          if (CS.getArgument(i) == V) {
             PassedAsArg = true;
-            I->setOperand(i, NewV);
+            CS.setArgument(i, NewV);
           }
 
         if (PassedAsArg) {
@@ -938,17 +946,18 @@ static GlobalVariable *OptimizeGlobalAddressOfMalloc(GlobalVariable *GV,
 /// to make sure that there are no complex uses of V.  We permit simple things
 /// like dereferencing the pointer, but not storing through the address, unless
 /// it is to the specified global.
-static bool ValueIsOnlyUsedLocallyOrStoredToOneGlobal(Instruction *V,
-                                                      GlobalVariable *GV,
-                                              SmallPtrSet<PHINode*, 8> &PHIs) {
-  for (Value::use_iterator UI = V->use_begin(), E = V->use_end(); UI != E;++UI){
-    Instruction *Inst = cast<Instruction>(*UI);
-    
+static bool ValueIsOnlyUsedLocallyOrStoredToOneGlobal(const Instruction *V,
+                                                      const GlobalVariable *GV,
+                                         SmallPtrSet<const PHINode*, 8> &PHIs) {
+  for (Value::const_use_iterator UI = V->use_begin(), E = V->use_end();
+       UI != E; ++UI) {
+    const Instruction *Inst = cast<Instruction>(*UI);
+
     if (isa<LoadInst>(Inst) || isa<CmpInst>(Inst)) {
       continue; // Fine, ignore.
     }
     
-    if (StoreInst *SI = dyn_cast<StoreInst>(Inst)) {
+    if (const StoreInst *SI = dyn_cast<StoreInst>(Inst)) {
       if (SI->getOperand(0) == V && SI->getOperand(1) != GV)
         return false;  // Storing the pointer itself... bad.
       continue; // Otherwise, storing through it, or storing into GV... fine.
@@ -960,7 +969,7 @@ static bool ValueIsOnlyUsedLocallyOrStoredToOneGlobal(Instruction *V,
       continue;
     }
     
-    if (PHINode *PN = dyn_cast<PHINode>(Inst)) {
+    if (const PHINode *PN = dyn_cast<PHINode>(Inst)) {
       // PHIs are ok if all uses are ok.  Don't infinitely recurse through PHI
       // cycles.
       if (PHIs.insert(PN))
@@ -969,7 +978,7 @@ static bool ValueIsOnlyUsedLocallyOrStoredToOneGlobal(Instruction *V,
       continue;
     }
     
-    if (BitCastInst *BCI = dyn_cast<BitCastInst>(Inst)) {
+    if (const BitCastInst *BCI = dyn_cast<BitCastInst>(Inst)) {
       if (!ValueIsOnlyUsedLocallyOrStoredToOneGlobal(BCI, GV, PHIs))
         return false;
       continue;
@@ -1467,7 +1476,7 @@ static bool TryToOptimizeStoreOfMallocToGlobal(GlobalVariable *GV,
   // GEP'd.  These are all things we could transform to using the global
   // for.
   {
-    SmallPtrSet<PHINode*, 8> PHIs;
+    SmallPtrSet<const PHINode*, 8> PHIs;
     if (!ValueIsOnlyUsedLocallyOrStoredToOneGlobal(CI, GV, PHIs))
       return false;
   }  

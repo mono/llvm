@@ -14,19 +14,34 @@
 #define DEBUG_TYPE "asm-printer"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/InlineAsm.h"
+#include "llvm/LLVMContext.h"
+#include "llvm/Module.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCParser/AsmParser.h"
+#include "llvm/Target/TargetAsmParser.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetRegistry.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 /// EmitInlineAsm - Emit a blob of inline asm to the output streamer.
-void AsmPrinter::EmitInlineAsm(StringRef Str) const {
+void AsmPrinter::EmitInlineAsm(StringRef Str, unsigned LocCookie) const {
   assert(!Str.empty() && "Can't emit empty inline asm block");
+  
+  // Remember if the buffer is nul terminated or not so we can avoid a copy.
+  bool isNullTerminated = Str.back() == 0;
+  if (isNullTerminated)
+    Str = Str.substr(0, Str.size()-1);
   
   // If the output streamer is actually a .s file, just emit the blob textually.
   // This is useful in case the asm parser doesn't handle something but the
@@ -36,7 +51,38 @@ void AsmPrinter::EmitInlineAsm(StringRef Str) const {
     return;
   }
   
-  errs() << "Inline asm not supported by this streamer!\n";
+  SourceMgr SrcMgr;
+  
+  // If the current LLVMContext has an inline asm handler, set it in SourceMgr.
+  LLVMContext &LLVMCtx = MMI->getModule()->getContext();
+  bool HasDiagHandler = false;
+  if (void *DiagHandler = LLVMCtx.getInlineAsmDiagnosticHandler()) {
+    SrcMgr.setDiagHandler((SourceMgr::DiagHandlerTy)(intptr_t)DiagHandler,
+                          LLVMCtx.getInlineAsmDiagnosticContext(), LocCookie);
+    HasDiagHandler = true;
+  }
+  
+  MemoryBuffer *Buffer;
+  if (isNullTerminated)
+    Buffer = MemoryBuffer::getMemBuffer(Str, "<inline asm>");
+  else
+    Buffer = MemoryBuffer::getMemBufferCopy(Str, "<inline asm>");
+
+  // Tell SrcMgr about this buffer, it takes ownership of the buffer.
+  SrcMgr.AddNewSourceBuffer(Buffer, SMLoc());
+  
+  AsmParser Parser(SrcMgr, OutContext, OutStreamer, *MAI);
+  OwningPtr<TargetAsmParser> TAP(TM.getTarget().createAsmParser(Parser));
+  if (!TAP)
+    llvm_report_error("Inline asm not supported by this streamer because"
+                      " we don't have an asm parser for this target\n");
+  Parser.setTargetParser(*TAP.get());
+
+  // Don't implicitly switch to the text section before the asm.
+  int Res = Parser.Run(/*NoInitialTextSection*/ true,
+                       /*NoFinalize*/ true);
+  if (Res && !HasDiagHandler)
+    llvm_report_error("Error parsing inline asm\n");
 }
 
 
@@ -61,6 +107,7 @@ void AsmPrinter::EmitInlineAsm(const MachineInstr *MI) const {
   // If this asmstr is empty, just print the #APP/#NOAPP markers.
   // These are useful to see where empty asm's wound up.
   if (AsmStr[0] == 0) {
+    // Don't emit the comments if writing to a .o file.
     if (!OutStreamer.hasRawTextSupport()) return;
 
     OutStreamer.EmitRawText(Twine("\t")+MAI->getCommentString()+
@@ -104,7 +151,7 @@ void AsmPrinter::EmitInlineAsm(const MachineInstr *MI) const {
     }
     case '\n':
       ++LastEmitted;   // Consume newline character.
-      OS << '\n';       // Indent code with newline.
+      OS << '\n';      // Indent code with newline.
       break;
     case '$': {
       ++LastEmitted;   // Consume '$' character.
@@ -183,26 +230,23 @@ void AsmPrinter::EmitInlineAsm(const MachineInstr *MI) const {
         // supports syntax like ${0:u}, which correspond to "%u0" in GCC asm.
         if (*LastEmitted == ':') {
           ++LastEmitted;    // Consume ':' character.
-          if (*LastEmitted == 0) {
-            llvm_report_error("Bad ${:} expression in inline asm string: '" 
-                              + std::string(AsmStr) + "'");
-          }
+          if (*LastEmitted == 0)
+            llvm_report_error("Bad ${:} expression in inline asm string: '" +
+                              std::string(AsmStr) + "'");
           
           Modifier[0] = *LastEmitted;
           ++LastEmitted;    // Consume modifier character.
         }
         
-        if (*LastEmitted != '}') {
+        if (*LastEmitted != '}')
           llvm_report_error("Bad ${} expression in inline asm string: '" 
                             + std::string(AsmStr) + "'");
-        }
         ++LastEmitted;    // Consume '}' character.
       }
       
-      if (Val >= NumOperands-1) {
+      if (Val >= NumOperands-1)
         llvm_report_error("Invalid $ operand number in inline asm string: '" 
                           + std::string(AsmStr) + "'");
-      }
       
       // Okay, we finally have a value number.  Ask the target to print this
       // operand!
@@ -251,9 +295,8 @@ void AsmPrinter::EmitInlineAsm(const MachineInstr *MI) const {
     }
     }
   }
-  OS << "\n";
-  
-  EmitInlineAsm(OS.str());
+  OS << '\n' << (char)0;  // null terminate string.
+  EmitInlineAsm(OS.str(), 0/*no loc cookie*/);
   
   // Emit the #NOAPP end marker.  This has to happen even if verbose-asm isn't
   // enabled, so we use EmitRawText.

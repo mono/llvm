@@ -14,6 +14,7 @@
 #define DEBUG_TYPE "dwarfdebug"
 #include "DwarfDebug.h"
 #include "DIE.h"
+#include "llvm/Constants.h"
 #include "llvm/Module.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -799,10 +800,24 @@ void DwarfDebug::addToContextOwner(DIE *Die, DIDescriptor Context) {
   } else if (Context.isNameSpace()) {
     DIE *ContextDIE = getOrCreateNameSpace(DINameSpace(Context.getNode()));
     ContextDIE->addChild(Die);
+  } else if (Context.isSubprogram()) {
+    DIE *ContextDIE = createSubprogramDIE(DISubprogram(Context.getNode()),
+                                          /*MakeDecl=*/false);
+    ContextDIE->addChild(Die);
   } else if (DIE *ContextDIE = ModuleCU->getDIE(Context.getNode()))
     ContextDIE->addChild(Die);
   else 
     ModuleCU->addDie(Die);
+}
+
+/// isFunctionContext - True if given Context is nested within a function. 
+bool DwarfDebug::isFunctionContext(DIE *context) {
+  if (context == (DIE *)0)
+    return false;
+  if (context->getTag() == dwarf::DW_TAG_subprogram)
+    return true;
+  else
+    return isFunctionContext(context->getParent());
 }
 
 /// getOrCreateTypeDIE - Find existing DIE or create new DIE for the
@@ -986,6 +1001,10 @@ void DwarfDebug::constructTypeDIE(DIE &Buffer, DICompositeType CTy) {
     if (DIDescriptor(ContainingType.getNode()).isCompositeType())
       addDIEEntry(&Buffer, dwarf::DW_AT_containing_type, dwarf::DW_FORM_ref4, 
                   getOrCreateTypeDIE(DIType(ContainingType.getNode())));
+    else {
+      DIDescriptor Context = CTy.getContext();
+      addToContextOwner(&Buffer, Context);
+    }
     break;
   }
   default:
@@ -1532,6 +1551,31 @@ DIE *DwarfDebug::constructVariableDIE(DbgVariable *DV, DbgScope *Scope) {
           if (MCSymbol *VS = DV->getDbgValueLabel())
             addLabel(VariableDie, dwarf::DW_AT_start_scope, dwarf::DW_FORM_addr,
                      VS);
+        } else if (DbgValueInsn->getOperand(0).getType() == 
+                   MachineOperand::MO_FPImmediate) {
+          DIEBlock *Block = new (DIEValueAllocator) DIEBlock();
+          APFloat FPImm = DbgValueInsn->getOperand(0).getFPImm()->getValueAPF();
+
+          // Get the raw data form of the floating point.
+          const APInt FltVal = FPImm.bitcastToAPInt();
+          const char *FltPtr = (const char*)FltVal.getRawData();
+
+          unsigned NumBytes = FltVal.getBitWidth() / 8; // 8 bits per byte.
+          bool LittleEndian = Asm->getTargetData().isLittleEndian();
+          int Incr = (LittleEndian ? 1 : -1);
+          int Start = (LittleEndian ? 0 : NumBytes - 1);
+          int Stop = (LittleEndian ? NumBytes : -1);
+
+          // Output the constant to DWARF one byte at a time.
+          for (; Start != Stop; Start += Incr)
+            addUInt(Block, 0, dwarf::DW_FORM_data1,
+                    (unsigned char)0xFF & FltPtr[Start]);
+
+          addBlock(VariableDie, dwarf::DW_AT_const_value, 0, Block);
+
+          if (MCSymbol *VS = DV->getDbgValueLabel())
+            addLabel(VariableDie, dwarf::DW_AT_start_scope, dwarf::DW_FORM_addr,
+                     VS);
         } else {
           //FIXME : Handle other operand types.
           delete VariableDie;
@@ -1776,19 +1820,15 @@ void DwarfDebug::constructGlobalVariableDIE(MDNode *N) {
 void DwarfDebug::constructSubprogramDIE(MDNode *N) {
   DISubprogram SP(N);
 
-  // Check for pre-existence.
-  if (ModuleCU->getDIE(N))
-    return;
-
   if (!SP.isDefinition())
     // This is a method declaration which will be handled while constructing
     // class type.
     return;
 
-  DIE *SubprogramDie = createSubprogramDIE(SP);
-
-  // Add to map.
-  ModuleCU->insertDIE(N, SubprogramDie);
+  // Check for pre-existence.
+  DIE *SubprogramDie = ModuleCU->getDIE(N);
+  if (!SubprogramDie)
+    SubprogramDie = createSubprogramDIE(SP);
 
   // Add to context owner.
   addToContextOwner(SubprogramDie, SP.getContext());

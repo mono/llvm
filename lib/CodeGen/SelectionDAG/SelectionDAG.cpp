@@ -3206,11 +3206,9 @@ static bool FindOptimalMemOpLowering(std::vector<EVT> &MemOps,
                                    NonScalarIntSafe, DAG);
 
   if (VT == MVT::Other) {
-    VT = TLI.getPointerTy();
-    const Type *Ty = VT.getTypeForEVT(*DAG.getContext());
-    if (DstAlign >= TLI.getTargetData()->getABITypeAlignment(Ty) ||
+    if (DstAlign >= TLI.getTargetData()->getPointerPrefAlignment() ||
         TLI.allowsUnalignedMemoryAccesses(VT)) {
-      VT = MVT::i64;
+      VT = TLI.getPointerTy();
     } else {
       switch (DstAlign & 7) {
       case 0:  VT = MVT::i64; break;
@@ -3518,8 +3516,13 @@ SDValue SelectionDAG::getMemcpy(SDValue Chain, DebugLoc dl, SDValue Dst,
                                    true, DstSV, DstSVOff, SrcSV, SrcSVOff);
   }
 
+  // FIXME: If the memcpy is volatile (isVol), lowering it to a plain libc
+  // memcpy is not guaranteed to be safe. libc memcpys aren't required to
+  // respect volatile, so they may do things like read or write memory
+  // beyond the given memory regions. But fixing this isn't easy, and most
+  // people don't care.
+
   // Emit a library call.
-  assert(!isVol && "library memcpy does not support volatile");
   TargetLowering::ArgListTy Args;
   TargetLowering::ArgListEntry Entry;
   Entry.Ty = TLI.getTargetData()->getIntPtrType(*getContext());
@@ -3568,8 +3571,10 @@ SDValue SelectionDAG::getMemmove(SDValue Chain, DebugLoc dl, SDValue Dst,
   if (Result.getNode())
     return Result;
 
+  // FIXME: If the memmove is volatile, lowering it to plain libc memmove may
+  // not be safe.  See memcpy above for more details.
+
   // Emit a library call.
-  assert(!isVol && "library memmove does not support volatile");
   TargetLowering::ArgListTy Args;
   TargetLowering::ArgListEntry Entry;
   Entry.Ty = TLI.getTargetData()->getIntPtrType(*getContext());
@@ -3617,8 +3622,7 @@ SDValue SelectionDAG::getMemset(SDValue Chain, DebugLoc dl, SDValue Dst,
   if (Result.getNode())
     return Result;
 
-  // Emit a library call.
-  assert(!isVol && "library memset does not support volatile");
+  // Emit a library call.  
   const Type *IntPtrTy = TLI.getTargetData()->getIntPtrType(*getContext());
   TargetLowering::ArgListTy Args;
   TargetLowering::ArgListEntry Entry;

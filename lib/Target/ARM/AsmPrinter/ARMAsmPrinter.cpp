@@ -237,7 +237,7 @@ namespace {
       if (ACPV->isLSDA()) {
         O << MAI->getPrivateGlobalPrefix() << "_LSDA_" << getFunctionNumber();
       } else if (ACPV->isBlockAddress()) {
-        O << GetBlockAddressSymbol(ACPV->getBlockAddress())->getName();
+        O << *GetBlockAddressSymbol(ACPV->getBlockAddress());
       } else if (ACPV->isGlobalValue()) {
         GlobalValue *GV = ACPV->getGV();
         bool isIndirect = Subtarget->isTargetDarwin() &&
@@ -281,10 +281,16 @@ namespace {
 void ARMAsmPrinter::EmitFunctionEntryLabel() {
   if (AFI->isThumbFunction()) {
     OutStreamer.EmitRawText(StringRef("\t.code\t16"));
-    if (Subtarget->isTargetDarwin())
-      OutStreamer.EmitRawText("\t.thumb_func\t"+Twine(CurrentFnSym->getName()));
-    else    
+    if (!Subtarget->isTargetDarwin())
       OutStreamer.EmitRawText(StringRef("\t.thumb_func"));
+    else {
+      // This needs to emit to a temporary string to get properly quoted
+      // MCSymbols when they have spaces in them.
+      SmallString<128> Tmp;
+      raw_svector_ostream OS(Tmp);
+      OS << "\t.thumb_func\t" << *CurrentFnSym;
+      OutStreamer.EmitRawText(OS.str());
+    }
   }
   
   OutStreamer.EmitLabel(CurrentFnSym);
@@ -929,7 +935,9 @@ void ARMAsmPrinter::printJTBlockOperand(const MachineInstr *MI, int OpNum,
   
   unsigned JTI = MO1.getIndex();
   MCSymbol *JTISymbol = GetARMJTIPICJumpTableLabel2(JTI, MO2.getImm());
-  OutStreamer.EmitLabel(JTISymbol);
+  // Can't use EmitLabel until instprinter happens, label comes out in the wrong
+  // order.
+  O << *JTISymbol << ":\n";
 
   const char *JTEntryDirective = MAI->getData32bitsDirective();
 
@@ -968,7 +976,10 @@ void ARMAsmPrinter::printJT2BlockOperand(const MachineInstr *MI, int OpNum,
   unsigned JTI = MO1.getIndex();
   
   MCSymbol *JTISymbol = GetARMJTIPICJumpTableLabel2(JTI, MO2.getImm());
-  OutStreamer.EmitLabel(JTISymbol);
+  
+  // Can't use EmitLabel until instprinter happens, label comes out in the wrong
+  // order.
+  O << *JTISymbol << ":\n";
 
   const MachineJumpTableInfo *MJTI = MF->getJumpTableInfo();
   const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
