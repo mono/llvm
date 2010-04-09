@@ -39,6 +39,11 @@
 #include "llvm/System/Path.h"
 using namespace llvm;
 
+namespace {
+  const char *DWARFGroupName = "DWARF Emission";
+  const char *DbgTimerName = "DWARF Debug Writer";
+} // end anonymous namespace
+
 //===----------------------------------------------------------------------===//
 
 /// Configuration values for initial hash set sizes (log2).
@@ -187,8 +192,6 @@ class DbgScope {
   // Location at which this scope is inlined.
   AssertingVH<MDNode> InlinedAtLocation;  
   bool AbstractScope;                 // Abstract Scope
-  MCSymbol *StartLabel;               // Label ID of the beginning of scope.
-  MCSymbol *EndLabel;                 // Label ID of the end of scope.
   const MachineInstr *LastInsn;       // Last instruction of this scope.
   const MachineInstr *FirstInsn;      // First instruction of this scope.
   // Scopes defined in scope.  Contents not owned.
@@ -201,7 +204,6 @@ class DbgScope {
 public:
   DbgScope(DbgScope *P, DIDescriptor D, MDNode *I = 0)
     : Parent(P), Desc(D), InlinedAtLocation(I), AbstractScope(false),
-      StartLabel(0), EndLabel(0),
       LastInsn(0), FirstInsn(0), IndentLevel(0) {}
   virtual ~DbgScope();
 
@@ -211,12 +213,8 @@ public:
   DIDescriptor getDesc()         const { return Desc; }
   MDNode *getInlinedAt()         const { return InlinedAtLocation; }
   MDNode *getScopeNode()         const { return Desc.getNode(); }
-  MCSymbol *getStartLabel()      const { return StartLabel; }
-  MCSymbol *getEndLabel()        const { return EndLabel; }
   const SmallVector<DbgScope *, 4> &getScopes() { return Scopes; }
   const SmallVector<DbgVariable *, 8> &getVariables() { return Variables; }
-  void setStartLabel(MCSymbol *S) { StartLabel = S; }
-  void setEndLabel(MCSymbol *E)   { EndLabel = E; }
   void setLastInsn(const MachineInstr *MI) { LastInsn = MI; }
   const MachineInstr *getLastInsn()      { return LastInsn; }
   void setFirstInsn(const MachineInstr *MI) { FirstInsn = MI; }
@@ -282,7 +280,6 @@ void DbgScope::dump() const {
   err.indent(IndentLevel);
   MDNode *N = Desc.getNode();
   N->dump();
-  err << " [" << StartLabel << ", " << EndLabel << "]\n";
   if (AbstractScope)
     err << "Abstract Scope\n";
 
@@ -305,22 +302,22 @@ DbgScope::~DbgScope() {
 DwarfDebug::DwarfDebug(AsmPrinter *A, Module *M)
   : Asm(A), MMI(Asm->MMI), ModuleCU(0),
     AbbreviationsSet(InitAbbreviationsSetSize), 
-    CurrentFnDbgScope(0), DebugTimer(0) {
+    CurrentFnDbgScope(0) {
   NextStringPoolNumber = 0;
       
   DwarfFrameSectionSym = DwarfInfoSectionSym = DwarfAbbrevSectionSym = 0;
   DwarfStrSectionSym = TextSectionSym = 0;
-      
-  if (TimePassesIsEnabled)
-    DebugTimer = new Timer("Dwarf Debug Writer");
-      
-  beginModule(M);
+
+  if (TimePassesIsEnabled) {
+      NamedRegionTimer T(DbgTimerName, DWARFGroupName);
+      beginModule(M);
+  } else {
+      beginModule(M);
+  }
 }
 DwarfDebug::~DwarfDebug() {
   for (unsigned j = 0, M = DIEBlocks.size(); j < M; ++j)
     DIEBlocks[j]->~DIEBlock();
-
-  delete DebugTimer;
 }
 
 MCSymbol *DwarfDebug::getStringPoolEntry(StringRef Str) {
@@ -800,24 +797,10 @@ void DwarfDebug::addToContextOwner(DIE *Die, DIDescriptor Context) {
   } else if (Context.isNameSpace()) {
     DIE *ContextDIE = getOrCreateNameSpace(DINameSpace(Context.getNode()));
     ContextDIE->addChild(Die);
-  } else if (Context.isSubprogram()) {
-    DIE *ContextDIE = createSubprogramDIE(DISubprogram(Context.getNode()),
-                                          /*MakeDecl=*/false);
-    ContextDIE->addChild(Die);
   } else if (DIE *ContextDIE = ModuleCU->getDIE(Context.getNode()))
     ContextDIE->addChild(Die);
   else 
     ModuleCU->addDie(Die);
-}
-
-/// isFunctionContext - True if given Context is nested within a function. 
-bool DwarfDebug::isFunctionContext(DIE *context) {
-  if (context == (DIE *)0)
-    return false;
-  if (context->getTag() == dwarf::DW_TAG_subprogram)
-    return true;
-  else
-    return isFunctionContext(context->getParent());
 }
 
 /// getOrCreateTypeDIE - Find existing DIE or create new DIE for the
@@ -1001,10 +984,6 @@ void DwarfDebug::constructTypeDIE(DIE &Buffer, DICompositeType CTy) {
     if (DIDescriptor(ContainingType.getNode()).isCompositeType())
       addDIEEntry(&Buffer, dwarf::DW_AT_containing_type, dwarf::DW_FORM_ref4, 
                   getOrCreateTypeDIE(DIType(ContainingType.getNode())));
-    else {
-      DIDescriptor Context = CTy.getContext();
-      addToContextOwner(&Buffer, Context);
-    }
     break;
   }
   default:
@@ -1350,6 +1329,19 @@ DbgScope *DwarfDebug::getOrCreateAbstractScope(MDNode *N) {
   return AScope;
 }
 
+/// isSubprogramContext - Return true if Context is either a subprogram
+/// or another context nested inside a subprogram.
+bool isSubprogramContext(MDNode *Context) {
+  if (!Context)
+    return false;
+  DIDescriptor D(Context);
+  if (D.isSubprogram())
+    return true;
+  if (D.isType())
+    return isSubprogramContext(DIType(Context).getContext().getNode());
+  return false;
+}
+
 /// updateSubprogramScopeDIE - Find DIE for the given subprogram and
 /// attach appropriate DW_AT_low_pc and DW_AT_high_pc attributes.
 /// If there are global variables in this scope then create and insert
@@ -1365,7 +1357,8 @@ DIE *DwarfDebug::updateSubprogramScopeDIE(MDNode *SPNode) {
   // expect specification DIE in parent function. So avoid creating 
   // specification DIE for a function defined inside a function.
   if (SP.isDefinition() && !SP.getContext().isCompileUnit() &&
-      !SP.getContext().isFile() && !SP.getContext().isSubprogram()) {
+      !SP.getContext().isFile() && 
+      !isSubprogramContext(SP.getContext().getNode())) {
     addUInt(SPDie, dwarf::DW_AT_declaration, dwarf::DW_FORM_flag, 1);
     
     // Add arguments. 
@@ -1405,8 +1398,9 @@ DIE *DwarfDebug::updateSubprogramScopeDIE(MDNode *SPNode) {
 /// constructLexicalScope - Construct new DW_TAG_lexical_block
 /// for this scope and attach DW_AT_low_pc/DW_AT_high_pc labels.
 DIE *DwarfDebug::constructLexicalScopeDIE(DbgScope *Scope) {
-  MCSymbol *Start = Scope->getStartLabel();
-  MCSymbol *End = Scope->getEndLabel();
+  
+  MCSymbol *Start = InsnBeforeLabelMap.lookup(Scope->getFirstInsn());
+  MCSymbol *End = InsnAfterLabelMap.lookup(Scope->getLastInsn());
   if (Start == 0 || End == 0) return 0;
 
   assert(Start->isDefined() && "Invalid starting label for an inlined scope!");
@@ -1429,8 +1423,8 @@ DIE *DwarfDebug::constructLexicalScopeDIE(DbgScope *Scope) {
 /// a function. Construct DIE to represent this concrete inlined copy
 /// of the function.
 DIE *DwarfDebug::constructInlinedScopeDIE(DbgScope *Scope) {
-  MCSymbol *StartLabel = Scope->getStartLabel();
-  MCSymbol *EndLabel = Scope->getEndLabel();
+  MCSymbol *StartLabel = InsnBeforeLabelMap.lookup(Scope->getFirstInsn());
+  MCSymbol *EndLabel = InsnAfterLabelMap.lookup(Scope->getLastInsn());
   if (StartLabel == 0 || EndLabel == 0) return 0;
   
   assert(StartLabel->isDefined() &&
@@ -1560,7 +1554,7 @@ DIE *DwarfDebug::constructVariableDIE(DbgVariable *DV, DbgScope *Scope) {
           const APInt FltVal = FPImm.bitcastToAPInt();
           const char *FltPtr = (const char*)FltVal.getRawData();
 
-          unsigned NumBytes = FltVal.getBitWidth() / 8; // 8 bits per byte.
+          int NumBytes = FltVal.getBitWidth() / 8; // 8 bits per byte.
           bool LittleEndian = Asm->getTargetData().isLittleEndian();
           int Incr = (LittleEndian ? 1 : -1);
           int Start = (LittleEndian ? 0 : NumBytes - 1);
@@ -1784,7 +1778,8 @@ void DwarfDebug::constructGlobalVariableDIE(MDNode *N) {
   // Do not create specification DIE if context is either compile unit
   // or a subprogram.
   if (DI_GV.isDefinition() && !GVContext.isCompileUnit() &&
-      !GVContext.isFile() && !GVContext.isSubprogram()) {
+      !GVContext.isFile() && 
+      !isSubprogramContext(GVContext.getNode())) {
     // Create specification DIE.
     DIE *VariableSpecDIE = new DIE(dwarf::DW_TAG_variable);
     addDIEEntry(VariableSpecDIE, dwarf::DW_AT_specification,
@@ -1820,15 +1815,19 @@ void DwarfDebug::constructGlobalVariableDIE(MDNode *N) {
 void DwarfDebug::constructSubprogramDIE(MDNode *N) {
   DISubprogram SP(N);
 
+  // Check for pre-existence.
+  if (ModuleCU->getDIE(N))
+    return;
+
   if (!SP.isDefinition())
     // This is a method declaration which will be handled while constructing
     // class type.
     return;
 
-  // Check for pre-existence.
-  DIE *SubprogramDie = ModuleCU->getDIE(N);
-  if (!SubprogramDie)
-    SubprogramDie = createSubprogramDIE(SP);
+  DIE *SubprogramDie = createSubprogramDIE(SP);
+
+  // Add to map.
+  ModuleCU->insertDIE(N, SubprogramDie);
 
   // Add to context owner.
   addToContextOwner(SubprogramDie, SP.getContext());
@@ -1843,8 +1842,6 @@ void DwarfDebug::constructSubprogramDIE(MDNode *N) {
 /// content. Create global DIEs and emit initial debug info sections.
 /// This is inovked by the target AsmPrinter.
 void DwarfDebug::beginModule(Module *M) {
-  TimeRegion Timer(DebugTimer);
-
   DebugInfoFinder DbgFinder;
   DbgFinder.processModule(*M);
 
@@ -1907,10 +1904,7 @@ void DwarfDebug::beginModule(Module *M) {
 /// endModule - Emit all Dwarf sections that should come after the content.
 ///
 void DwarfDebug::endModule() {
-  if (!ModuleCU)
-    return;
-
-  TimeRegion Timer(DebugTimer);
+  if (!ModuleCU) return;
 
   // Attach DW_AT_inline attribute with inlined subprogram DIEs.
   for (SmallPtrSet<DIE *, 4>::iterator AI = InlinedSubprogramDIEs.begin(),
@@ -1918,11 +1912,6 @@ void DwarfDebug::endModule() {
     DIE *ISP = *AI;
     addUInt(ISP, dwarf::DW_AT_inline, 0, dwarf::DW_INL_inlined);
   }
-
-  // Insert top level DIEs.
-  for (SmallVector<DIE *, 4>::iterator TI = TopLevelDIEsVector.begin(),
-         TE = TopLevelDIEsVector.end(); TI != TE; ++TI)
-    ModuleCU->getCUDie()->addChild(*TI);
 
   for (DenseMap<DIE *, MDNode *>::iterator CI = ContainingTypeMap.begin(),
          CE = ContainingTypeMap.end(); CI != CE; ++CI) {
@@ -1932,8 +1921,6 @@ void DwarfDebug::endModule() {
     DIE *NDie = ModuleCU->getDIE(N);
     if (!NDie) continue;
     addDIEEntry(SPDie, dwarf::DW_AT_containing_type, dwarf::DW_FORM_ref4, NDie);
-    // FIXME - This is not the correct approach.
-    //addDIEEntry(NDie, dwarf::DW_AT_containing_type, dwarf::DW_FORM_ref4, NDie
   }
 
   // Standard sections final addresses.
@@ -2143,15 +2130,9 @@ void DwarfDebug::beginScope(const MachineInstr *MI) {
   MCSymbol *Label = recordSourceLine(DL.getLine(), DL.getCol(), Scope);
   PrevInstLoc = DL;
 
-  // update DbgScope if this instruction starts a new scope.
-  InsnToDbgScopeMapTy::iterator I = DbgScopeBeginMap.find(MI);
-  if (I == DbgScopeBeginMap.end())
-    return;
-
-  ScopeVector &SD = I->second;
-  for (ScopeVector::iterator SDI = SD.begin(), SDE = SD.end();
-       SDI != SDE; ++SDI)
-    (*SDI)->setStartLabel(Label);
+  // If this instruction begins a scope then note down corresponding label.
+  if (InsnsBeginScopeSet.count(MI) != 0)
+    InsnBeforeLabelMap[MI] = Label;
 }
 
 /// endScope - Process end of a scope.
@@ -2165,19 +2146,12 @@ void DwarfDebug::endScope(const MachineInstr *MI) {
   if (DL.isUnknown())
     return;
 
-  // Emit a label and update DbgScope if this instruction ends a scope.
-  InsnToDbgScopeMapTy::iterator I = DbgScopeEndMap.find(MI);
-  if (I == DbgScopeEndMap.end())
-    return;
-  
-  MCSymbol *Label = MMI->getContext().CreateTempSymbol();
-  Asm->OutStreamer.EmitLabel(Label);
-
-  SmallVector<DbgScope*, 2> &SD = I->second;
-  for (SmallVector<DbgScope *, 2>::iterator SDI = SD.begin(), SDE = SD.end();
-       SDI != SDE; ++SDI)
-    (*SDI)->setEndLabel(Label);
-  return;
+  if (InsnsEndScopeSet.count(MI) != 0) {
+    // Emit a label if this instruction ends a scope.
+    MCSymbol *Label = MMI->getContext().CreateTempSymbol();
+    Asm->OutStreamer.EmitLabel(Label);
+    InsnAfterLabelMap[MI] = Label;
+  }
 }
 
 /// createDbgScope - Create DbgScope for the scope.
@@ -2267,6 +2241,15 @@ bool DwarfDebug::extractScopeInformation() {
 
   CurrentFnDbgScope->fixInstructionMarkers(MIIndexMap);
 
+  identifyScopeMarkers();
+
+  return !DbgScopeMap.empty();
+}
+
+/// identifyScopeMarkers() - Indentify instructions that are marking
+/// beginning of or end of a scope.
+void DwarfDebug::identifyScopeMarkers() {
+
   // Each scope has first instruction and last instruction to mark beginning
   // and end of a scope respectively. Create an inverse map that list scopes
   // starts (and ends) with an instruction. One instruction may start (or end)
@@ -2284,35 +2267,19 @@ bool DwarfDebug::extractScopeInformation() {
 
     if (S->isAbstractScope())
       continue;
-    const MachineInstr *MI = S->getFirstInsn();
-    assert(MI && "DbgScope does not have first instruction!");
+    assert(S->getFirstInsn() && "DbgScope does not have first instruction!");
+    InsnsBeginScopeSet.insert(S->getFirstInsn());
 
-    InsnToDbgScopeMapTy::iterator IDI = DbgScopeBeginMap.find(MI);
-    if (IDI != DbgScopeBeginMap.end())
-      IDI->second.push_back(S);
-    else
-      DbgScopeBeginMap[MI].push_back(S);
-
-    MI = S->getLastInsn();
-    assert(MI && "DbgScope does not have last instruction!");
-    IDI = DbgScopeEndMap.find(MI);
-    if (IDI != DbgScopeEndMap.end())
-      IDI->second.push_back(S);
-    else
-      DbgScopeEndMap[MI].push_back(S);
+    assert(S->getLastInsn() && "DbgScope does not have last instruction!");
+    InsnsEndScopeSet.insert(S->getLastInsn());
   }
-
-  return !DbgScopeMap.empty();
 }
 
 /// beginFunction - Gather pre-function debug information.  Assumes being
 /// emitted immediately after the function entry point.
 void DwarfDebug::beginFunction(const MachineFunction *MF) {
   if (!MMI->hasDebugInfo()) return;
-  
-  TimeRegion Timer(DebugTimer);
-  if (!extractScopeInformation())
-    return;
+  if (!extractScopeInformation()) return;
   
   collectVariableInfo();
 
@@ -2343,10 +2310,7 @@ void DwarfDebug::beginFunction(const MachineFunction *MF) {
 /// endFunction - Gather and emit post-function debug information.
 ///
 void DwarfDebug::endFunction(const MachineFunction *MF) {
-  if (!MMI->hasDebugInfo() ||
-      DbgScopeMap.empty()) return;
-  
-  TimeRegion Timer(DebugTimer);
+  if (!MMI->hasDebugInfo() || DbgScopeMap.empty()) return;
 
   if (CurrentFnDbgScope) {
     // Define end label for subprogram.
@@ -2378,8 +2342,8 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
   // Clear debug info
   CurrentFnDbgScope = NULL;
   DeleteContainerSeconds(DbgScopeMap);
-  DbgScopeBeginMap.clear();
-  DbgScopeEndMap.clear();
+  InsnsBeginScopeSet.clear();
+  InsnsEndScopeSet.clear();
   DbgValueStartMap.clear();
   ConcreteScopes.clear();
   DeleteContainerSeconds(AbstractScopes);
@@ -2392,8 +2356,6 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
 /// unique label that was emitted and which provides correspondence to
 /// the source line list.
 MCSymbol *DwarfDebug::recordSourceLine(unsigned Line, unsigned Col, MDNode *S) {
-  TimeRegion Timer(DebugTimer);
-
   StringRef Dir;
   StringRef Fn;
 
@@ -2419,17 +2381,6 @@ MCSymbol *DwarfDebug::recordSourceLine(unsigned Line, unsigned Col, MDNode *S) {
 
   Asm->OutStreamer.EmitLabel(Label);
   return Label;
-}
-
-/// getOrCreateSourceID - Public version of GetOrCreateSourceID. This can be
-/// timed. Look up the source id with the given directory and source file
-/// names. If none currently exists, create a new id and insert it in the
-/// SourceIds map. This can update DirectoryNames and SourceFileNames maps as
-/// well.
-unsigned DwarfDebug::getOrCreateSourceID(const std::string &DirName,
-                                         const std::string &FileName) {
-  TimeRegion Timer(DebugTimer);
-  return GetOrCreateSourceID(DirName.c_str(), FileName.c_str());
 }
 
 //===----------------------------------------------------------------------===//

@@ -262,11 +262,15 @@ void Formula::InitialMatch(const SCEV *S, Loop *L,
   SmallVector<const SCEV *, 4> Bad;
   DoInitialMatch(S, L, Good, Bad, SE, DT);
   if (!Good.empty()) {
-    BaseRegs.push_back(SE.getAddExpr(Good));
+    const SCEV *Sum = SE.getAddExpr(Good);
+    if (!Sum->isZero())
+      BaseRegs.push_back(Sum);
     AM.HasBaseReg = true;
   }
   if (!Bad.empty()) {
-    BaseRegs.push_back(SE.getAddExpr(Bad));
+    const SCEV *Sum = SE.getAddExpr(Bad);
+    if (!Sum->isZero())
+      BaseRegs.push_back(Sum);
     AM.HasBaseReg = true;
   }
 }
@@ -781,10 +785,10 @@ struct LSRFixup {
   /// will be replaced.
   Value *OperandValToReplace;
 
-  /// PostIncLoop - If this user is to use the post-incremented value of an
+  /// PostIncLoops - If this user is to use the post-incremented value of an
   /// induction variable, this variable is non-null and holds the loop
   /// associated with the induction variable.
-  const Loop *PostIncLoop;
+  PostIncLoopSet PostIncLoops;
 
   /// LUIdx - The index of the LSRUse describing the expression which
   /// this fixup needs, minus an offset (below).
@@ -795,6 +799,8 @@ struct LSRFixup {
   /// offsets, for example in an unrolled loop.
   int64_t Offset;
 
+  bool isUseFullyOutsideLoop(const Loop *L) const;
+
   LSRFixup();
 
   void print(raw_ostream &OS) const;
@@ -804,8 +810,23 @@ struct LSRFixup {
 }
 
 LSRFixup::LSRFixup()
-  : UserInst(0), OperandValToReplace(0), PostIncLoop(0),
+  : UserInst(0), OperandValToReplace(0),
     LUIdx(~size_t(0)), Offset(0) {}
+
+/// isUseFullyOutsideLoop - Test whether this fixup always uses its
+/// value outside of the given loop.
+bool LSRFixup::isUseFullyOutsideLoop(const Loop *L) const {
+  // PHI nodes use their value in their incoming blocks.
+  if (const PHINode *PN = dyn_cast<PHINode>(UserInst)) {
+    for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
+      if (PN->getIncomingValue(i) == OperandValToReplace &&
+          L->contains(PN->getIncomingBlock(i)))
+        return false;
+    return true;
+  }
+
+  return !L->contains(UserInst);
+}
 
 void LSRFixup::print(raw_ostream &OS) const {
   OS << "UserInst=";
@@ -821,9 +842,10 @@ void LSRFixup::print(raw_ostream &OS) const {
   OS << ", OperandValToReplace=";
   WriteAsOperand(OS, OperandValToReplace, /*PrintType=*/false);
 
-  if (PostIncLoop) {
+  for (PostIncLoopSet::const_iterator I = PostIncLoops.begin(),
+       E = PostIncLoops.end(); I != E; ++I) {
     OS << ", PostIncLoop=";
-    WriteAsOperand(OS, PostIncLoop->getHeader(), /*PrintType=*/false);
+    WriteAsOperand(OS, (*I)->getHeader(), /*PrintType=*/false);
   }
 
   if (LUIdx != ~size_t(0))
@@ -1214,6 +1236,10 @@ public:
                     DenseSet<const SCEV *> &VisitedRegs) const;
   void Solve(SmallVectorImpl<const Formula *> &Solution) const;
 
+  BasicBlock::iterator AdjustInputPositionForExpand(BasicBlock::iterator IP,
+                                                    const LSRFixup &LF,
+                                                    const LSRUse &LU) const;
+
   Value *Expand(const LSRFixup &LF,
                 const Formula &F,
                 BasicBlock::iterator IP,
@@ -1545,8 +1571,9 @@ LSRInstance::OptimizeLoopTermCond() {
             !DT.properlyDominates(UI->getUser()->getParent(), ExitingBlock)) {
           // Conservatively assume there may be reuse if the quotient of their
           // strides could be a legal scale.
-          const SCEV *A = CondUse->getStride();
-          const SCEV *B = UI->getStride();
+          const SCEV *A = CondUse->getStride(L);
+          const SCEV *B = UI->getStride(L);
+          if (!A || !B) continue;
           if (SE.getTypeSizeInBits(A->getType()) !=
               SE.getTypeSizeInBits(B->getType())) {
             if (SE.getTypeSizeInBits(A->getType()) >
@@ -1598,7 +1625,7 @@ LSRInstance::OptimizeLoopTermCond() {
         ExitingBlock->getInstList().insert(TermBr, Cond);
 
         // Clone the IVUse, as the old use still exists!
-        CondUse = &IU.AddUser(CondUse->getStride(), CondUse->getOffset(),
+        CondUse = &IU.AddUser(CondUse->getExpr(),
                               Cond, CondUse->getOperandValToReplace());
         TermBr->replaceUsesOfWith(OldCond, Cond);
       }
@@ -1607,9 +1634,7 @@ LSRInstance::OptimizeLoopTermCond() {
     // If we get to here, we know that we can transform the setcc instruction to
     // use the post-incremented version of the IV, allowing us to coalesce the
     // live ranges for the IV correctly.
-    CondUse->setOffset(SE.getMinusSCEV(CondUse->getOffset(),
-                                       CondUse->getStride()));
-    CondUse->setIsUseOfPostIncrementedValue(true);
+    CondUse->transformToPostInc(L);
     Changed = true;
 
     PostIncs.insert(Cond);
@@ -1717,19 +1742,24 @@ void LSRInstance::CollectInterestingTypesAndFactors() {
   SmallSetVector<const SCEV *, 4> Strides;
 
   // Collect interesting types and strides.
+  SmallVector<const SCEV *, 4> Worklist;
   for (IVUsers::const_iterator UI = IU.begin(), E = IU.end(); UI != E; ++UI) {
-    const SCEV *Stride = UI->getStride();
+    const SCEV *Expr = UI->getExpr();
 
     // Collect interesting types.
-    Types.insert(SE.getEffectiveSCEVType(Stride->getType()));
+    Types.insert(SE.getEffectiveSCEVType(Expr->getType()));
 
-    // Add the stride for this loop.
-    Strides.insert(Stride);
-
-    // Add strides for other mentioned loops.
-    for (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(UI->getOffset());
-         AR; AR = dyn_cast<SCEVAddRecExpr>(AR->getStart()))
-      Strides.insert(AR->getStepRecurrence(SE));
+    // Add strides for mentioned loops.
+    Worklist.push_back(Expr);
+    do {
+      const SCEV *S = Worklist.pop_back_val();
+      if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(S)) {
+        Strides.insert(AR->getStepRecurrence(SE));
+        Worklist.push_back(AR->getStart());
+      } else if (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(S)) {
+        Worklist.insert(Worklist.end(), Add->op_begin(), Add->op_end());
+      }
+    } while (!Worklist.empty());
   }
 
   // Compute interesting factors from the set of interesting strides.
@@ -1776,8 +1806,7 @@ void LSRInstance::CollectFixupsAndInitialFormulae() {
     LSRFixup &LF = getNewFixup();
     LF.UserInst = UI->getUser();
     LF.OperandValToReplace = UI->getOperandValToReplace();
-    if (UI->isUseOfPostIncrementedValue())
-      LF.PostIncLoop = L;
+    LF.PostIncLoops = UI->getPostIncLoops();
 
     LSRUse::KindType Kind = LSRUse::Basic;
     const Type *AccessTy = 0;
@@ -1786,7 +1815,7 @@ void LSRInstance::CollectFixupsAndInitialFormulae() {
       AccessTy = getAccessType(LF.UserInst);
     }
 
-    const SCEV *S = IU.getCanonicalExpr(*UI);
+    const SCEV *S = UI->getExpr();
 
     // Equality (== and !=) ICmps are special. We can rewrite (i == N) as
     // (N - i == 0), and this allows (N - i) to be the expression that we work
@@ -1824,7 +1853,7 @@ void LSRInstance::CollectFixupsAndInitialFormulae() {
     LF.LUIdx = P.first;
     LF.Offset = P.second;
     LSRUse &LU = Uses[LF.LUIdx];
-    LU.AllFixupsOutsideLoop &= !L->contains(LF.UserInst);
+    LU.AllFixupsOutsideLoop &= LF.isUseFullyOutsideLoop(L);
 
     // If this is the first use of this LSRUse, give it a formula.
     if (LU.Formulae.empty()) {
@@ -1918,9 +1947,17 @@ LSRInstance::CollectLoopInvariantFixupsAndFormulae() {
           continue;
         // Ignore uses which are part of other SCEV expressions, to avoid
         // analyzing them multiple times.
-        if (SE.isSCEVable(UserInst->getType()) &&
-            !isa<SCEVUnknown>(SE.getSCEV(const_cast<Instruction *>(UserInst))))
-          continue;
+        if (SE.isSCEVable(UserInst->getType())) {
+          const SCEV *UserS = SE.getSCEV(const_cast<Instruction *>(UserInst));
+          // If the user is a no-op, look through to its uses.
+          if (!isa<SCEVUnknown>(UserS))
+            continue;
+          if (UserS == U) {
+            Worklist.push_back(
+              SE.getUnknown(const_cast<Instruction *>(UserInst)));
+            continue;
+          }
+        }
         // Ignore icmp instructions which are already being analyzed.
         if (const ICmpInst *ICI = dyn_cast<ICmpInst>(UserInst)) {
           unsigned OtherIdx = !UI.getOperandNo();
@@ -1936,7 +1973,7 @@ LSRInstance::CollectLoopInvariantFixupsAndFormulae() {
         LF.LUIdx = P.first;
         LF.Offset = P.second;
         LSRUse &LU = Uses[LF.LUIdx];
-        LU.AllFixupsOutsideLoop &= L->contains(LF.UserInst);
+        LU.AllFixupsOutsideLoop &= LF.isUseFullyOutsideLoop(L);
         InsertSupplementalFormula(U, LU, LF.LUIdx);
         CountRegisters(LU.Formulae.back(), Uses.size() - 1);
         break;
@@ -2426,7 +2463,7 @@ void LSRInstance::GenerateCrossUseConstantOffsets() {
           if (C->getValue()->getValue().isNegative() !=
                 (NewF.AM.BaseOffs < 0) &&
               (C->getValue()->getValue().abs() * APInt(BitWidth, F.AM.Scale))
-                .ule(APInt(BitWidth, NewF.AM.BaseOffs).abs()))
+                .ule(abs64(NewF.AM.BaseOffs)))
             continue;
 
         // OK, looks good.
@@ -2454,7 +2491,7 @@ void LSRInstance::GenerateCrossUseConstantOffsets() {
               if (C->getValue()->getValue().isNegative() !=
                     (NewF.AM.BaseOffs < 0) &&
                   C->getValue()->getValue().abs()
-                    .ule(APInt(BitWidth, NewF.AM.BaseOffs).abs()))
+                    .ule(abs64(NewF.AM.BaseOffs)))
                 goto skip_formula;
 
           // Ok, looks good.
@@ -2776,15 +2813,14 @@ static BasicBlock *getImmediateDominator(BasicBlock *BB, DominatorTree &DT) {
   return Node->getBlock();
 }
 
-Value *LSRInstance::Expand(const LSRFixup &LF,
-                           const Formula &F,
-                           BasicBlock::iterator IP,
-                           SCEVExpander &Rewriter,
-                           SmallVectorImpl<WeakVH> &DeadInsts) const {
-  const LSRUse &LU = Uses[LF.LUIdx];
-
-  // Then, collect some instructions which we will remain dominated by when
-  // expanding the replacement. These must be dominated by any operands that
+/// AdjustInputPositionForExpand - Determine an input position which will be
+/// dominated by the operands and which will dominate the result.
+BasicBlock::iterator
+LSRInstance::AdjustInputPositionForExpand(BasicBlock::iterator IP,
+                                          const LSRFixup &LF,
+                                          const LSRUse &LU) const {
+  // Collect some instructions which must be dominated by the
+  // expanding replacement. These must be dominated by any operands that
   // will be required in the expansion.
   SmallVector<Instruction *, 4> Inputs;
   if (Instruction *I = dyn_cast<Instruction>(LF.OperandValToReplace))
@@ -2793,11 +2829,27 @@ Value *LSRInstance::Expand(const LSRFixup &LF,
     if (Instruction *I =
           dyn_cast<Instruction>(cast<ICmpInst>(LF.UserInst)->getOperand(1)))
       Inputs.push_back(I);
-  if (LF.PostIncLoop) {
-    if (!L->contains(LF.UserInst))
+  if (LF.PostIncLoops.count(L)) {
+    if (LF.isUseFullyOutsideLoop(L))
       Inputs.push_back(L->getLoopLatch()->getTerminator());
     else
       Inputs.push_back(IVIncInsertPos);
+  }
+  // The expansion must also be dominated by the increment positions of any
+  // loops it for which it is using post-inc mode.
+  for (PostIncLoopSet::const_iterator I = LF.PostIncLoops.begin(),
+       E = LF.PostIncLoops.end(); I != E; ++I) {
+    const Loop *PIL = *I;
+    if (PIL == L) continue;
+
+    SmallVector<BasicBlock *, 4> ExitingBlocks;
+    PIL->getExitingBlocks(ExitingBlocks);
+    if (!ExitingBlocks.empty()) {
+      BasicBlock *BB = ExitingBlocks[0];
+      for (unsigned i = 1, e = ExitingBlocks.size(); i != e; ++i)
+        BB = DT.findNearestCommonDominator(BB, ExitingBlocks[i]);
+      Inputs.push_back(BB->getTerminator());
+    }
   }
 
   // Then, climb up the immediate dominator tree as far as we can go while
@@ -2826,12 +2878,30 @@ Value *LSRInstance::Expand(const LSRFixup &LF,
     else
       IP = Tentative;
   }
+
+  // Don't insert instructions before PHI nodes.
   while (isa<PHINode>(IP)) ++IP;
+
+  // Ignore debug intrinsics.
   while (isa<DbgInfoIntrinsic>(IP)) ++IP;
+
+  return IP;
+}
+
+Value *LSRInstance::Expand(const LSRFixup &LF,
+                           const Formula &F,
+                           BasicBlock::iterator IP,
+                           SCEVExpander &Rewriter,
+                           SmallVectorImpl<WeakVH> &DeadInsts) const {
+  const LSRUse &LU = Uses[LF.LUIdx];
+
+  // Determine an input position which will be dominated by the operands and
+  // which will dominate the result.
+  IP = AdjustInputPositionForExpand(IP, LF, LU);
 
   // Inform the Rewriter if we have a post-increment use, so that it can
   // perform an advantageous expansion.
-  Rewriter.setPostInc(LF.PostIncLoop);
+  Rewriter.setPostInc(LF.PostIncLoops);
 
   // This is the type that the user actually needs.
   const Type *OpTy = LF.OperandValToReplace->getType();
@@ -2855,24 +2925,11 @@ Value *LSRInstance::Expand(const LSRFixup &LF,
     const SCEV *Reg = *I;
     assert(!Reg->isZero() && "Zero allocated in a base register!");
 
-    // If we're expanding for a post-inc user for the add-rec's loop, make the
-    // post-inc adjustment.
-    const SCEV *Start = Reg;
-    while (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(Start)) {
-      if (AR->getLoop() == LF.PostIncLoop) {
-        Reg = SE.getAddExpr(Reg, AR->getStepRecurrence(SE));
-        // If the user is inside the loop, insert the code after the increment
-        // so that it is dominated by its operand. If the original insert point
-        // was already dominated by the increment, keep it, because there may
-        // be loop-variant operands that need to be respected also.
-        if (L->contains(LF.UserInst) && !DT.dominates(IVIncInsertPos, IP)) {
-          IP = IVIncInsertPos;
-          while (isa<DbgInfoIntrinsic>(IP)) ++IP;
-        }
-        break;
-      }
-      Start = AR->getStart();
-    }
+    // If we're expanding for a post-inc user, make the post-inc adjustment.
+    PostIncLoopSet &Loops = const_cast<PostIncLoopSet &>(LF.PostIncLoops);
+    Reg = TransformForPostIncUse(Denormalize, Reg,
+                                 LF.UserInst, LF.OperandValToReplace,
+                                 Loops, SE, DT);
 
     Ops.push_back(SE.getUnknown(Rewriter.expandCodeFor(Reg, 0, IP)));
   }
@@ -2889,11 +2946,11 @@ Value *LSRInstance::Expand(const LSRFixup &LF,
   if (F.AM.Scale != 0) {
     const SCEV *ScaledS = F.ScaledReg;
 
-    // If we're expanding for a post-inc user for the add-rec's loop, make the
-    // post-inc adjustment.
-    if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(ScaledS))
-      if (AR->getLoop() == LF.PostIncLoop)
-        ScaledS = SE.getAddExpr(ScaledS, AR->getStepRecurrence(SE));
+    // If we're expanding for a post-inc user, make the post-inc adjustment.
+    PostIncLoopSet &Loops = const_cast<PostIncLoopSet &>(LF.PostIncLoops);
+    ScaledS = TransformForPostIncUse(Denormalize, ScaledS,
+                                     LF.UserInst, LF.OperandValToReplace,
+                                     Loops, SE, DT);
 
     if (LU.Kind == LSRUse::ICmpZero) {
       // An interesting way of "folding" with an icmp is to use a negated
@@ -2954,7 +3011,7 @@ Value *LSRInstance::Expand(const LSRFixup &LF,
   Value *FullV = Rewriter.expandCodeFor(FullS, Ty, IP);
 
   // We're done expanding now, so reset the rewriter.
-  Rewriter.setPostInc(0);
+  Rewriter.clearPostInc();
 
   // An ICmpZero Formula represents an ICmp which we're handling as a
   // comparison against zero. Now that we've expanded an expression for that

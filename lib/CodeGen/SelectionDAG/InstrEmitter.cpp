@@ -517,8 +517,19 @@ MachineInstr *InstrEmitter::EmitDbgValue(SDDbgValue *SD,
   const TargetInstrDesc &II = TII->get(TargetOpcode::DBG_VALUE);
   MachineInstrBuilder MIB = BuildMI(*MF, DL, II);
   if (SD->getKind() == SDDbgValue::SDNODE) {
-    AddOperand(&*MIB, SDValue(SD->getSDNode(), SD->getResNo()),
-               (*MIB).getNumOperands(), &II, VRBaseMap, true /*IsDebug*/);
+    SDNode *Node = SD->getSDNode();
+    SDValue Op = SDValue(Node, SD->getResNo());
+    // It's possible we replaced this SDNode with other(s) and therefore
+    // didn't generate code for it.  It's better to catch these cases where
+    // they happen and transfer the debug info, but trying to guarantee that
+    // in all cases would be very fragile; this is a safeguard for any
+    // that were missed.
+    DenseMap<SDValue, unsigned>::iterator I = VRBaseMap.find(Op);
+    if (I==VRBaseMap.end())
+      MIB.addReg(0U);       // undef
+    else
+      AddOperand(&*MIB, Op, (*MIB).getNumOperands(), &II, VRBaseMap,
+                 true /*IsDebug*/);
   } else if (SD->getKind() == SDDbgValue::CONST) {
     Value *V = SD->getConst();
     if (ConstantInt *CI = dyn_cast<ConstantInt>(V)) {
@@ -720,12 +731,12 @@ EmitSpecialNode(SDNode *Node, bool IsClone, bool IsCloned,
                                TII->get(TargetOpcode::INLINEASM));
 
     // Add the asm string as an external symbol operand.
-    const char *AsmStr =
-      cast<ExternalSymbolSDNode>(Node->getOperand(1))->getSymbol();
+    SDValue AsmStrV = Node->getOperand(InlineAsm::Op_AsmString);
+    const char *AsmStr = cast<ExternalSymbolSDNode>(AsmStrV)->getSymbol();
     MI->addOperand(MachineOperand::CreateES(AsmStr));
       
     // Add all of the operand registers to the instruction.
-    for (unsigned i = 2; i != NumOps;) {
+    for (unsigned i = InlineAsm::Op_FirstOperand; i != NumOps;) {
       unsigned Flags =
         cast<ConstantSDNode>(Node->getOperand(i))->getZExtValue();
       unsigned NumVals = InlineAsm::getNumOperandRegisters(Flags);
@@ -733,24 +744,24 @@ EmitSpecialNode(SDNode *Node, bool IsClone, bool IsCloned,
       MI->addOperand(MachineOperand::CreateImm(Flags));
       ++i;  // Skip the ID value.
         
-      switch (Flags & 7) {
+      switch (InlineAsm::getKind(Flags)) {
       default: llvm_unreachable("Bad flags!");
-      case 2:   // Def of register.
+        case InlineAsm::Kind_RegDef:
         for (; NumVals; --NumVals, ++i) {
           unsigned Reg = cast<RegisterSDNode>(Node->getOperand(i))->getReg();
           MI->addOperand(MachineOperand::CreateReg(Reg, true));
         }
         break;
-      case 6:   // Def of earlyclobber register.
+      case InlineAsm::Kind_RegDefEarlyClobber:
         for (; NumVals; --NumVals, ++i) {
           unsigned Reg = cast<RegisterSDNode>(Node->getOperand(i))->getReg();
           MI->addOperand(MachineOperand::CreateReg(Reg, true, false, false, 
                                                    false, false, true));
         }
         break;
-      case 1:  // Use of register.
-      case 3:  // Immediate.
-      case 4:  // Addressing mode.
+      case InlineAsm::Kind_RegUse:  // Use of register.
+      case InlineAsm::Kind_Imm:  // Immediate.
+      case InlineAsm::Kind_Mem:  // Addressing mode.
         // The addressing mode has been selected, just add all of the
         // operands to the machine instruction.
         for (; NumVals; --NumVals, ++i)
@@ -758,6 +769,12 @@ EmitSpecialNode(SDNode *Node, bool IsClone, bool IsCloned,
         break;
       }
     }
+    
+    // Get the mdnode from the asm if it exists and add it to the instruction.
+    SDValue MDV = Node->getOperand(InlineAsm::Op_MDNode);
+    const MDNode *MD = cast<MDNodeSDNode>(MDV)->getMD();
+    MI->addOperand(MachineOperand::CreateMetadata(MD));
+    
     MBB->insert(InsertPos, MI);
     break;
   }

@@ -42,7 +42,12 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/Timer.h"
 using namespace llvm;
+
+static const char *DWARFGroupName = "DWARF Emission";
+static const char *DbgTimerName = "DWARF Debug Writer";
+static const char *EHTimerName = "DWARF Exception Writer";
 
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
@@ -347,8 +352,22 @@ void AsmPrinter::EmitFunctionHeader() {
   }
   
   // Emit pre-function debug and/or EH information.
-  if (DE) DE->BeginFunction(MF);
-  if (DD) DD->beginFunction(MF);
+  if (DE) {
+    if (TimePassesIsEnabled) {
+      NamedRegionTimer T(EHTimerName, DWARFGroupName);
+      DE->BeginFunction(MF);
+    } else {
+      DE->BeginFunction(MF);
+    }
+  }
+  if (DD) {
+    if (TimePassesIsEnabled) {
+      NamedRegionTimer T(DbgTimerName, DWARFGroupName);
+      DD->beginFunction(MF);
+    } else {
+      DD->beginFunction(MF);
+    }
+  }
 }
 
 /// EmitFunctionEntryLabel - Emit the label that is the entrypoint for the
@@ -434,7 +453,56 @@ static void EmitKill(const MachineInstr *MI, AsmPrinter &AP) {
   AP.OutStreamer.AddBlankLine();
 }
 
+/// EmitDebugValueComment - This method handles the target-independent form
+/// of DBG_VALUE, returning true if it was able to do so.  A false return
+/// means the target will need to handle MI in EmitInstruction.
+static bool EmitDebugValueComment(const MachineInstr *MI, AsmPrinter &AP) {
+  // This code handles only the 3-operand target-independent form.
+  if (MI->getNumOperands() != 3)
+    return false;
 
+  SmallString<128> Str;
+  raw_svector_ostream OS(Str);
+  OS << '\t' << AP.MAI->getCommentString() << "DEBUG_VALUE: ";
+
+  // cast away const; DIetc do not take const operands for some reason.
+  DIVariable V(const_cast<MDNode*>(MI->getOperand(2).getMetadata()));
+  OS << V.getName() << " <- ";
+
+  // Register or immediate value. Register 0 means undef.
+  if (MI->getOperand(0).isFPImm()) {
+    APFloat APF = APFloat(MI->getOperand(0).getFPImm()->getValueAPF());
+    if (MI->getOperand(0).getFPImm()->getType()->isFloatTy()) {
+      OS << (double)APF.convertToFloat();
+    } else if (MI->getOperand(0).getFPImm()->getType()->isDoubleTy()) {
+      OS << APF.convertToDouble();
+    } else {
+      // There is no good way to print long double.  Convert a copy to
+      // double.  Ah well, it's only a comment.
+      bool ignored;
+      APF.convert(APFloat::IEEEdouble, APFloat::rmNearestTiesToEven,
+                  &ignored);
+      OS << "(long double) " << APF.convertToDouble();
+    }
+  } else if (MI->getOperand(0).isImm()) {
+    OS << MI->getOperand(0).getImm();
+  } else {
+    assert(MI->getOperand(0).isReg() && "Unknown operand type");
+    if (MI->getOperand(0).getReg() == 0) {
+      // Suppress offset, it is not meaningful here.
+      OS << "undef";
+      // NOTE: Want this comment at start of line, don't emit with AddComment.
+      AP.OutStreamer.EmitRawText(OS.str());
+      return true;
+    }
+    OS << AP.TM.getRegisterInfo()->getName(MI->getOperand(0).getReg());
+  }
+  
+  OS << '+' << MI->getOperand(1).getImm();
+  // NOTE: Want this comment at start of line, don't emit with AddComment.
+  AP.OutStreamer.EmitRawText(OS.str());
+  return true;
+}
 
 /// EmitFunctionBody - This method emits the body and trailer for a
 /// function.
@@ -458,8 +526,14 @@ void AsmPrinter::EmitFunctionBody() {
       
       ++EmittedInsts;
       
-      if (ShouldPrintDebugScopes)
-        DD->beginScope(II);
+      if (ShouldPrintDebugScopes) {
+	if (TimePassesIsEnabled) {
+	  NamedRegionTimer T(DbgTimerName, DWARFGroupName);
+	  DD->beginScope(II);
+	} else {
+	  DD->beginScope(II);
+	}
+      }
       
       if (isVerbose())
         EmitComments(*II, OutStreamer.GetCommentOS());
@@ -473,6 +547,12 @@ void AsmPrinter::EmitFunctionBody() {
       case TargetOpcode::INLINEASM:
         EmitInlineAsm(II);
         break;
+      case TargetOpcode::DBG_VALUE:
+        if (isVerbose()) {
+          if (!EmitDebugValueComment(II, *this))
+            EmitInstruction(II);
+        }
+        break;
       case TargetOpcode::IMPLICIT_DEF:
         if (isVerbose()) EmitImplicitDef(II, *this);
         break;
@@ -484,8 +564,14 @@ void AsmPrinter::EmitFunctionBody() {
         break;
       }
       
-      if (ShouldPrintDebugScopes)
-        DD->endScope(II);
+      if (ShouldPrintDebugScopes) {
+	if (TimePassesIsEnabled) {
+	  NamedRegionTimer T(DbgTimerName, DWARFGroupName);
+	  DD->endScope(II);
+	} else {
+	  DD->endScope(II);
+	}
+      }
     }
   }
   
@@ -514,8 +600,22 @@ void AsmPrinter::EmitFunctionBody() {
   }
   
   // Emit post-function debug information.
-  if (DD) DD->endFunction(MF);
-  if (DE) DE->EndFunction();
+  if (DD) {
+    if (TimePassesIsEnabled) {
+      NamedRegionTimer T(DbgTimerName, DWARFGroupName);
+      DD->endFunction(MF);
+    } else {
+      DD->endFunction(MF);
+    }
+  }
+  if (DE) {
+    if (TimePassesIsEnabled) {
+      NamedRegionTimer T(EHTimerName, DWARFGroupName);
+      DE->EndFunction();
+    } else {
+      DE->EndFunction();
+    }
+  }
   MMI->EndFunction();
   
   // Print out jump tables referenced by the function.
@@ -533,11 +633,21 @@ bool AsmPrinter::doFinalization(Module &M) {
   
   // Finalize debug and EH information.
   if (DE) {
-    DE->EndModule();
+    if (TimePassesIsEnabled) {
+      NamedRegionTimer T(EHTimerName, DWARFGroupName);
+      DE->EndModule();
+    } else {
+      DE->EndModule();
+    }
     delete DE; DE = 0;
   }
   if (DD) {
-    DD->endModule();
+    if (TimePassesIsEnabled) {
+      NamedRegionTimer T(DbgTimerName, DWARFGroupName);
+      DD->endModule();
+    } else {
+      DD->endModule();
+    }
     delete DD; DD = 0;
   }
   
@@ -595,7 +705,7 @@ bool AsmPrinter::doFinalization(Module &M) {
   // to be executable. Some targets have a directive to declare this.
   Function *InitTrampolineIntrinsic = M.getFunction("llvm.init.trampoline");
   if (!InitTrampolineIntrinsic || InitTrampolineIntrinsic->use_empty())
-    if (MCSection *S = MAI->getNonexecutableStackSection(OutContext))
+    if (const MCSection *S = MAI->getNonexecutableStackSection(OutContext))
       OutStreamer.SwitchSection(S);
   
   // Allow the target to emit any magic that it wants at the end of the file,
@@ -1236,7 +1346,7 @@ static void EmitGlobalConstantFP(const ConstantFP *CFP, unsigned AddrSpace,
   
   if (CFP->getType()->isX86_FP80Ty()) {
     // all long double variants are printed as hex
-    // api needed to prevent premature destruction
+    // API needed to prevent premature destruction
     APInt API = CFP->getValueAPF().bitcastToAPInt();
     const uint64_t *p = API.getRawData();
     if (AP.isVerbose()) {
@@ -1266,8 +1376,8 @@ static void EmitGlobalConstantFP(const ConstantFP *CFP, unsigned AddrSpace,
   
   assert(CFP->getType()->isPPC_FP128Ty() &&
          "Floating point constant type not handled");
-  // All long double variants are printed as hex api needed to prevent
-  // premature destruction.
+  // All long double variants are printed as hex
+  // API needed to prevent premature destruction.
   APInt API = CFP->getValueAPF().bitcastToAPInt();
   const uint64_t *p = API.getRawData();
   if (AP.TM.getTargetData()->isBigEndian()) {
@@ -1613,7 +1723,7 @@ GCMetadataPrinter *AsmPrinter::GetOrCreateGCPrinter(GCStrategy *S) {
       return GMP;
     }
   
-  llvm_report_error("no GCMetadataPrinter registered for GC: " + Twine(Name));
+  report_fatal_error("no GCMetadataPrinter registered for GC: " + Twine(Name));
   return 0;
 }
 

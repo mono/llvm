@@ -3123,8 +3123,6 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
     return getConstant(CI);
   else if (isa<ConstantPointerNull>(V))
     return getIntegerSCEV(0, V->getType());
-  else if (isa<UndefValue>(V))
-    return getIntegerSCEV(0, V->getType());
   else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(V))
     return GA->mayBeOverridden() ? getUnknown(V) : getSCEV(GA->getAliasee());
   else
@@ -4067,7 +4065,7 @@ ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
   if (I != ConstantEvolutionLoopExitValue.end())
     return I->second;
 
-  if (BEs.ugt(APInt(BEs.getBitWidth(),MaxBruteForceIterations)))
+  if (BEs.ugt(MaxBruteForceIterations))
     return ConstantEvolutionLoopExitValue[PN] = 0;  // Not going to evaluate it.
 
   Constant *&RetVal = ConstantEvolutionLoopExitValue[PN];

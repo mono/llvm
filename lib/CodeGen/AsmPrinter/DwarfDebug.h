@@ -33,7 +33,6 @@ class MachineFrameInfo;
 class MachineLocation;
 class MachineModuleInfo;
 class MCAsmInfo;
-class Timer;
 class DIEAbbrev;
 class DIE;
 class DIEBlock;
@@ -179,25 +178,24 @@ class DwarfDebug {
   /// AbstractSubprogramDIEs - Collection of abstruct subprogram DIEs.
   SmallPtrSet<DIE *, 4> AbstractSubprogramDIEs;
 
-  /// TopLevelDIEs - Collection of top level DIEs. 
-  SmallPtrSet<DIE *, 4> TopLevelDIEs;
-  SmallVector<DIE *, 4> TopLevelDIEsVector;
-
   typedef SmallVector<DbgScope *, 2> ScopeVector;
-  typedef DenseMap<const MachineInstr *, ScopeVector>
-    InsnToDbgScopeMapTy;
 
-  /// DbgScopeBeginMap - Maps instruction with a list of DbgScopes it starts.
-  InsnToDbgScopeMapTy DbgScopeBeginMap;
-
-  /// DbgScopeEndMap - Maps instruction with a list DbgScopes it ends.
-  InsnToDbgScopeMapTy DbgScopeEndMap;
+  SmallPtrSet<const MachineInstr *, 8> InsnsBeginScopeSet;
+  SmallPtrSet<const MachineInstr *, 8> InsnsEndScopeSet;
 
   /// InlineInfo - Keep track of inlined functions and their location.  This
   /// information is used to populate debug_inlined section.
   typedef std::pair<MCSymbol*, DIE *> InlineInfoLabels;
   DenseMap<MDNode*, SmallVector<InlineInfoLabels, 4> > InlineInfo;
   SmallVector<MDNode *, 4> InlinedSPNodes;
+
+  /// InsnBeforeLabelMap - Maps instruction with label emitted before 
+  /// instruction.
+  DenseMap<const MachineInstr *, MCSymbol *> InsnBeforeLabelMap;
+
+  /// InsnAfterLabelMap - Maps instruction with label emitted after
+  /// instruction.
+  DenseMap<const MachineInstr *, MCSymbol *> InsnAfterLabelMap;
 
   /// CompileUnitOffsets - A vector of the offsets of the compile units. This is
   /// used when calculating the "origin" of a concrete instance of an inlined
@@ -208,9 +206,6 @@ class DwarfDebug {
   /// label location to indicate scope boundries in dwarf debug info.
   DebugLoc PrevInstLoc;
 
-  /// DebugTimer - Timer for the Dwarf debug writer.
-  Timer *DebugTimer;
-  
   struct FunctionDebugFrameInfo {
     unsigned Number;
     std::vector<MachineMove> Moves;
@@ -331,9 +326,6 @@ private:
 
   /// addToContextOwner - Add Die into the list of its context owner's children.
   void addToContextOwner(DIE *Die, DIDescriptor Context);
-
-  /// isFunctionContext - True if given Context is nested within a function. 
-  bool isFunctionContext(DIE *context);
 
   /// addType - Add a new type attribute to the specified entity.
   void addType(DIE *Entity, DIType Ty);
@@ -534,14 +526,10 @@ private:
     return Lines.size();
   }
   
-  /// getOrCreateSourceID - Public version of GetOrCreateSourceID. This can be
-  /// timed. Look up the source id with the given directory and source file
-  /// names. If none currently exists, create a new id and insert it in the
-  /// SourceIds map. This can update DirectoryNames and SourceFileNames maps as
-  /// well.
-  unsigned getOrCreateSourceID(const std::string &DirName,
-                               const std::string &FileName);
-  
+  /// identifyScopeMarkers() - Indentify instructions that are marking
+  /// beginning of or end of a scope.
+  void identifyScopeMarkers();
+
   /// extractScopeInformation - Scan machine instructions in this function
   /// and collect DbgScopes. Return true, if atleast one scope was found.
   bool extractScopeInformation();

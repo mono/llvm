@@ -1067,18 +1067,22 @@ unsigned X86TargetLowering::getByValTypeAlignment(const Type *Ty) const {
 }
 
 /// getOptimalMemOpType - Returns the target specific optimal type for load
-/// and store operations as a result of memset, memcpy, and memmove lowering.
-/// If DstAlign is zero that means it's safe to destination alignment can
-/// satisfy any constraint. Similarly if SrcAlign is zero it means there
-/// isn't a need to check it against alignment requirement, probably because
-/// the source does not need to be loaded. If 'NonScalarIntSafe' is true, that
-/// means it's safe to return a non-scalar-integer type, e.g. constant string
-/// source or loaded from memory. It returns EVT::Other if SelectionDAG should
-/// be responsible for determining it.
+/// and store operations as a result of memset, memcpy, and memmove
+/// lowering. If DstAlign is zero that means it's safe to destination
+/// alignment can satisfy any constraint. Similarly if SrcAlign is zero it
+/// means there isn't a need to check it against alignment requirement,
+/// probably because the source does not need to be loaded. If
+/// 'NonScalarIntSafe' is true, that means it's safe to return a
+/// non-scalar-integer type, e.g. empty string source, constant, or loaded
+/// from memory. 'MemcpyStrSrc' indicates whether the memcpy source is
+/// constant so it does not need to be loaded.
+/// It returns EVT::Other if SelectionDAG should be responsible for
+/// determining the type.
 EVT
 X86TargetLowering::getOptimalMemOpType(uint64_t Size,
                                        unsigned DstAlign, unsigned SrcAlign,
                                        bool NonScalarIntSafe,
+                                       bool MemcpyStrSrc,
                                        SelectionDAG &DAG) const {
   // FIXME: This turns off use of xmm stores for memset/memcpy on targets like
   // linux.  This is because the stack realignment code can't handle certain
@@ -1095,11 +1099,14 @@ X86TargetLowering::getOptimalMemOpType(uint64_t Size,
         return MVT::v4i32;
       if (Subtarget->hasSSE1())
         return MVT::v4f32;
-    } else if (Size >= 8 &&
+    } else if (!MemcpyStrSrc && Size >= 8 &&
                !Subtarget->is64Bit() &&
                Subtarget->getStackAlignment() >= 8 &&
-               Subtarget->hasSSE2())
+               Subtarget->hasSSE2()) {
+      // Do not use f64 to lower memcpy if source is string constant. It's
+      // better to use i32 to avoid the loads.
       return MVT::f64;
+    }
   }
   if (Subtarget->is64Bit() && Size >= 8)
     return MVT::i64;
@@ -1304,7 +1311,7 @@ X86TargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
     // If this is x86-64, and we disabled SSE, we can't return FP values
     if ((CopyVT == MVT::f32 || CopyVT == MVT::f64) &&
         ((Is64Bit || Ins[i].Flags.isInReg()) && !Subtarget->hasSSE1())) {
-      llvm_report_error("SSE register return with SSE disabled");
+      report_fatal_error("SSE register return with SSE disabled");
     }
 
     // If this is a call to a function that returns an fp value on the floating
@@ -3451,7 +3458,7 @@ unsigned getNumOfConsecutiveZeros(ShuffleVectorSDNode *SVOp, int NumElems,
 /// FIXME: split into pslldqi, psrldqi, palignr variants.
 static bool isVectorShift(ShuffleVectorSDNode *SVOp, SelectionDAG &DAG,
                           bool &isLeft, SDValue &ShVal, unsigned &ShAmt) {
-  int NumElems = SVOp->getValueType(0).getVectorNumElements();
+  unsigned NumElems = SVOp->getValueType(0).getVectorNumElements();
 
   isLeft = true;
   unsigned NumZeros = getNumOfConsecutiveZeros(SVOp, NumElems, true, DAG);
@@ -3463,11 +3470,12 @@ static bool isVectorShift(ShuffleVectorSDNode *SVOp, SelectionDAG &DAG,
   }
   bool SeenV1 = false;
   bool SeenV2 = false;
-  for (int i = NumZeros; i < NumElems; ++i) {
-    int Val = isLeft ? (i - NumZeros) : i;
-    int Idx = SVOp->getMaskElt(isLeft ? i : (i - NumZeros));
-    if (Idx < 0)
+  for (unsigned i = NumZeros; i < NumElems; ++i) {
+    unsigned Val = isLeft ? (i - NumZeros) : i;
+    int Idx_ = SVOp->getMaskElt(isLeft ? i : (i - NumZeros));
+    if (Idx_ < 0)
       continue;
+    unsigned Idx = (unsigned) Idx_;
     if (Idx < NumElems)
       SeenV1 = true;
     else {
@@ -6731,7 +6739,7 @@ X86TargetLowering::EmitTargetCodeForMemcpy(SelectionDAG &DAG, DebugLoc dl,
                             Count, InFlag);
   InFlag = Chain.getValue(1);
   Chain  = DAG.getCopyToReg(Chain, dl, Subtarget->is64Bit() ? X86::RDI :
-                                                             X86::EDI,
+                                                              X86::EDI,
                             Dst, InFlag);
   InFlag = Chain.getValue(1);
   Chain  = DAG.getCopyToReg(Chain, dl, Subtarget->is64Bit() ? X86::RSI :
@@ -6826,7 +6834,7 @@ SDValue X86TargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) {
   SDValue SrcPtr = Op.getOperand(1);
   SDValue SrcSV = Op.getOperand(2);
 
-  llvm_report_error("VAArgInst is not yet implemented for x86-64!");
+  report_fatal_error("VAArgInst is not yet implemented for x86-64!");
   return SDValue();
 }
 
@@ -7243,7 +7251,7 @@ SDValue X86TargetLowering::LowerTRAMPOLINE(SDValue Op,
             InRegCount += (TD->getTypeSizeInBits(*I) + 31) / 32;
 
         if (InRegCount > 2) {
-          llvm_report_error("Nest register in use - reduce number of inreg parameters!");
+          report_fatal_error("Nest register in use - reduce number of inreg parameters!");
         }
       }
       break;

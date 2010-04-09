@@ -93,7 +93,7 @@ namespace {  // Anonymous namespace for class
       }
 
       if (Broken)
-        llvm_report_error("Broken module, no Basic Block terminator!");
+        report_fatal_error("Broken module, no Basic Block terminator!");
 
       return false;
     }
@@ -1933,7 +1933,9 @@ FunctionPass *llvm::createVerifierPass(VerifierFailureAction action) {
 }
 
 
-// verifyFunction - Create
+/// verifyFunction - Check a function for errors, printing messages on stderr.
+/// Return true if the function is corrupt.
+///
 bool llvm::verifyFunction(const Function &f, VerifierFailureAction action) {
   Function &F = const_cast<Function&>(f);
   assert(!F.isDeclaration() && "Cannot verify external functions");

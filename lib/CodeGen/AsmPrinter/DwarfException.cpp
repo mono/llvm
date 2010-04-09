@@ -33,7 +33,6 @@
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Support/Timer.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
@@ -41,15 +40,9 @@ using namespace llvm;
 
 DwarfException::DwarfException(AsmPrinter *A)
   : Asm(A), MMI(Asm->MMI), shouldEmitTable(false), shouldEmitMoves(false),
-    shouldEmitTableModule(false), shouldEmitMovesModule(false),
-    ExceptionTimer(0) {
-  if (TimePassesIsEnabled)
-    ExceptionTimer = new Timer("DWARF Exception Writer");
-}
+    shouldEmitTableModule(false), shouldEmitMovesModule(false) {}
 
-DwarfException::~DwarfException() {
-  delete ExceptionTimer;
-}
+DwarfException::~DwarfException() {}
 
 /// EmitCIE - Emit a Common Information Entry (CIE). This holds information that
 /// is shared among many Frame Description Entries.  There is at least one CIE
@@ -905,8 +898,6 @@ void DwarfException::EndModule() {
   if (!shouldEmitMovesModule && !shouldEmitTableModule)
     return;
 
-  TimeRegion Timer(ExceptionTimer);
-
   const std::vector<Function *> Personalities = MMI->getPersonalities();
 
   for (unsigned I = 0, E = Personalities.size(); I < E; ++I)
@@ -920,7 +911,6 @@ void DwarfException::EndModule() {
 /// BeginFunction - Gather pre-function exception information. Assumes it's
 /// being emitted immediately after the function entry point.
 void DwarfException::BeginFunction(const MachineFunction *MF) {
-  TimeRegion Timer(ExceptionTimer);
   shouldEmitTable = shouldEmitMoves = false;
 
   // If any landing pads survive, we need an EH table.
@@ -944,7 +934,6 @@ void DwarfException::BeginFunction(const MachineFunction *MF) {
 void DwarfException::EndFunction() {
   if (!shouldEmitMoves && !shouldEmitTable) return;
 
-  TimeRegion Timer(ExceptionTimer);
   Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("eh_func_end",
                                                 Asm->getFunctionNumber()));
 
