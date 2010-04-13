@@ -17,8 +17,12 @@ BUILT_SOURCES = EDInfo.inc
 # early so we can set up LINK_COMPONENTS before including Makefile.rules
 include $(LEVEL)/Makefile.config
 
-LINK_LIBS_IN_SHARED = 1
-SHARED_LIBRARY = 1
+ifeq ($(ENABLE_PIC),1)
+    ifneq ($(TARGET_OS), $(filter $(TARGET_OS), Cygwin MingW))
+	LINK_LIBS_IN_SHARED = 1
+	SHARED_LIBRARY = 1
+    endif
+endif
 
 LINK_COMPONENTS := $(TARGETS_TO_BUILD) x86asmprinter x86disassembler
 
@@ -32,7 +36,7 @@ ifeq ($(HOST_OS),Darwin)
                          -Wl,-dead_strip
 
     ifdef EDIS_VERSION
-        LLVMLibsOptions    := -Wl,-current_version -Wl,$(EDIS_VERSION) \
+        LLVMLibsOptions    := $(LLVMLibsOptions) -Wl,-current_version -Wl,$(EDIS_VERSION) \
                               -Wl,-compatibility_version -Wl,1
     endif
 
@@ -44,6 +48,18 @@ ifeq ($(HOST_OS),Darwin)
                             -Wl,"@rpath/lib$(LIBRARYNAME)$(SHLIBEXT)"
     endif
 endif
+
+EDIS_DEFINES = 
+
+ifneq (,$(findstring X86,$(TARGETS_TO_BUILD)))
+	EDIS_DEFINES := $(EDIS_DEFINES) -DEDIS_X86
+endif
+
+ifneq (,$(findstring ARM,$(TARGETS_TO_BUILD)))
+	EDIS_DEFINES := $(EDIS_DEFINES) -DEDIS_ARM
+endif
+
+CXXFLAGS := $(CXXFLAGS) $(EDIS_DEFINES)
 
 EDInfo.inc:	$(TBLGEN)
 	$(Echo) "Building semantic information header"

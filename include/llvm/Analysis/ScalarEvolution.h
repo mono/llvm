@@ -380,6 +380,13 @@ namespace llvm {
     Constant *getConstantEvolutionLoopExitValue(PHINode *PN, const APInt& BEs,
                                                 const Loop *L);
 
+    /// isKnownPredicateWithRanges - Test if the given expression is known to
+    /// satisfy the condition described by Pred and the known constant ranges
+    /// of LHS and RHS.
+    ///
+    bool isKnownPredicateWithRanges(ICmpInst::Predicate Pred,
+                                    const SCEV *LHS, const SCEV *RHS);
+
   public:
     static char ID; // Pass identification, replacement for typeid
     ScalarEvolution();
@@ -554,11 +561,11 @@ namespace llvm {
     /// getSCEVAtScope(getSCEV(V), L).
     const SCEV *getSCEVAtScope(Value *V, const Loop *L);
 
-    /// isLoopGuardedByCond - Test whether entry to the loop is protected by
-    /// a conditional between LHS and RHS.  This is used to help avoid max
+    /// isLoopEntryGuardedByCond - Test whether entry to the loop is protected
+    /// by a conditional between LHS and RHS.  This is used to help avoid max
     /// expressions in loop trip counts, and to eliminate casts.
-    bool isLoopGuardedByCond(const Loop *L, ICmpInst::Predicate Pred,
-                             const SCEV *LHS, const SCEV *RHS);
+    bool isLoopEntryGuardedByCond(const Loop *L, ICmpInst::Predicate Pred,
+                                  const SCEV *LHS, const SCEV *RHS);
 
     /// isLoopBackedgeGuardedByCond - Test whether the backedge of the loop is
     /// protected by a conditional between LHS and RHS.  This is used to
@@ -636,7 +643,7 @@ namespace llvm {
     ///
     bool isKnownNonZero(const SCEV *S);
 
-    /// isKnownNonZero - Test if the given expression is known to satisfy
+    /// isKnownPredicate - Test if the given expression is known to satisfy
     /// the condition described by Pred, LHS, and RHS.
     ///
     bool isKnownPredicate(ICmpInst::Predicate Pred,

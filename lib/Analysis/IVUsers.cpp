@@ -36,32 +36,6 @@ Pass *llvm::createIVUsersPass() {
   return new IVUsers();
 }
 
-/// CollectSubexprs - Split S into subexpressions which can be pulled out into
-/// separate registers.
-static void CollectSubexprs(const SCEV *S,
-                            SmallVectorImpl<const SCEV *> &Ops,
-                            ScalarEvolution &SE) {
-  if (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(S)) {
-    // Break out add operands.
-    for (SCEVAddExpr::op_iterator I = Add->op_begin(), E = Add->op_end();
-         I != E; ++I)
-      CollectSubexprs(*I, Ops, SE);
-    return;
-  } else if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(S)) {
-    // Split a non-zero base out of an addrec.
-    if (!AR->getStart()->isZero()) {
-      CollectSubexprs(AR->getStart(), Ops, SE);
-      CollectSubexprs(SE.getAddRecExpr(SE.getIntegerSCEV(0, AR->getType()),
-                                       AR->getStepRecurrence(SE),
-                                       AR->getLoop()), Ops, SE);
-      return;
-    }
-  }
-
-  // Otherwise use the value itself.
-  Ops.push_back(S);
-}
-
 /// isInteresting - Test whether the given expression is "interesting" when
 /// used by the given expression, within the context of analyzing the
 /// given loop.
@@ -108,7 +82,6 @@ bool IVUsers::AddUsersIfInteresting(Instruction *I) {
 
   // Get the symbolic expression for this instruction.
   const SCEV *ISE = SE->getSCEV(I);
-  if (isa<SCEVCouldNotCompute>(ISE)) return false;
 
   // If we've come to an uninteresting expression, stop the traversal and
   // call this a user.
@@ -191,7 +164,7 @@ bool IVUsers::runOnLoop(Loop *l, LPPassManager &LPM) {
   // them by stride.  Start by finding all of the PHI nodes in the header for
   // this loop.  If they are induction variables, inspect their uses.
   for (BasicBlock::iterator I = L->getHeader()->begin(); isa<PHINode>(I); ++I)
-    AddUsersIfInteresting(I);
+    (void)AddUsersIfInteresting(I);
 
   return false;
 }
