@@ -1,4 +1,4 @@
-; RUN: llc < %s -mtriple=i386-apple-darwin10 | FileCheck %s
+; RUN: llc < %s -mtriple=i386-apple-darwin10 -mcpu=core2 | FileCheck %s
 ; rdar://7475489
 
 define i32 @test1(i32 %a, i32 %b) nounwind ssp {
@@ -46,7 +46,7 @@ return:                                           ; preds = %entry
 ; CHECK: test2:
 ; CHECK:	movl	4(%esp), %eax
 ; CHECK-NEXT:	orl	8(%esp), %eax
-; CHECK-NEXT:	jne	LBB2_2
+; CHECK-NEXT:	jne	LBB1_2
 }
 
 ; PR3351 - (P != 0) | (Q != 0) -> (P|Q) != 0
@@ -65,7 +65,7 @@ return:                                           ; preds = %entry
 ; CHECK: test3:
 ; CHECK:	movl	4(%esp), %eax
 ; CHECK-NEXT:	orl	8(%esp), %eax
-; CHECK-NEXT:	je	LBB3_2
+; CHECK-NEXT:	je	LBB2_2
 }
 
 ; <rdar://problem/7598384>:

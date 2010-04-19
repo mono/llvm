@@ -12,6 +12,8 @@ LIBRARYNAME = EnhancedDisassembly
 
 BUILT_SOURCES = EDInfo.inc
 
+EXPORTED_SYMBOL_FILE = $(PROJ_SRC_DIR)/EnhancedDisassembly.exports
+
 # Include this here so we can get the configuration of the targets
 # that have been configured for construction. We have to do this 
 # early so we can set up LINK_COMPONENTS before including Makefile.rules
@@ -32,7 +34,6 @@ ifeq ($(HOST_OS),Darwin)
     # extra options to override libtool defaults 
     LLVMLibsOptions    := $(LLVMLibsOptions)  \
                          -avoid-version \
-                         -Wl,-exported_symbols_list -Wl,$(PROJ_SRC_DIR)/EnhancedDisassembly.exports \
                          -Wl,-dead_strip
 
     ifdef EDIS_VERSION
@@ -48,18 +49,6 @@ ifeq ($(HOST_OS),Darwin)
                             -Wl,"@rpath/lib$(LIBRARYNAME)$(SHLIBEXT)"
     endif
 endif
-
-EDIS_DEFINES = 
-
-ifneq (,$(findstring X86,$(TARGETS_TO_BUILD)))
-	EDIS_DEFINES := $(EDIS_DEFINES) -DEDIS_X86
-endif
-
-ifneq (,$(findstring ARM,$(TARGETS_TO_BUILD)))
-	EDIS_DEFINES := $(EDIS_DEFINES) -DEDIS_ARM
-endif
-
-CXXFLAGS := $(CXXFLAGS) $(EDIS_DEFINES)
 
 EDInfo.inc:	$(TBLGEN)
 	$(Echo) "Building semantic information header"

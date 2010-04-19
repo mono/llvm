@@ -19,10 +19,7 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Constants.h"
-#include "llvm/CallingConv.h"
-#include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
-#include "llvm/GlobalVariable.h"
 #include "llvm/InlineAsm.h"
 #include "llvm/Instructions.h"
 #include "llvm/Intrinsics.h"
@@ -32,18 +29,13 @@
 #include "llvm/CodeGen/GCStrategy.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineFunctionAnalysis.h"
-#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/ScheduleHazardRecognizer.h"
 #include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/Target/TargetRegisterInfo.h"
-#include "llvm/Target/TargetData.h"
-#include "llvm/Target/TargetFrameInfo.h"
 #include "llvm/Target/TargetIntrinsicInfo.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetLowering.h"
@@ -52,7 +44,6 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/Statistic.h"
@@ -69,10 +60,6 @@ EnableFastISelVerbose("fast-isel-verbose", cl::Hidden,
 static cl::opt<bool>
 EnableFastISelAbort("fast-isel-abort", cl::Hidden,
           cl::desc("Enable abort calls when \"fast\" instruction fails"));
-static cl::opt<bool>
-SchedLiveInCopies("schedule-livein-copies", cl::Hidden,
-                  cl::desc("Schedule copies of livein registers"),
-                  cl::init(false));
 
 #ifndef NDEBUG
 static cl::opt<bool>
@@ -173,106 +160,6 @@ MachineBasicBlock *TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   return 0;
 }
 
-/// EmitLiveInCopy - Emit a copy for a live in physical register. If the
-/// physical register has only a single copy use, then coalesced the copy
-/// if possible.
-static void EmitLiveInCopy(MachineBasicBlock *MBB,
-                           MachineBasicBlock::iterator &InsertPos,
-                           unsigned VirtReg, unsigned PhysReg,
-                           const TargetRegisterClass *RC,
-                           DenseMap<MachineInstr*, unsigned> &CopyRegMap,
-                           const MachineRegisterInfo &MRI,
-                           const TargetRegisterInfo &TRI,
-                           const TargetInstrInfo &TII) {
-  unsigned NumUses = 0;
-  MachineInstr *UseMI = NULL;
-  for (MachineRegisterInfo::use_iterator UI = MRI.use_begin(VirtReg),
-         UE = MRI.use_end(); UI != UE; ++UI) {
-    UseMI = &*UI;
-    if (++NumUses > 1)
-      break;
-  }
-
-  // If the number of uses is not one, or the use is not a move instruction,
-  // don't coalesce. Also, only coalesce away a virtual register to virtual
-  // register copy.
-  bool Coalesced = false;
-  unsigned SrcReg, DstReg, SrcSubReg, DstSubReg;
-  if (NumUses == 1 &&
-      TII.isMoveInstr(*UseMI, SrcReg, DstReg, SrcSubReg, DstSubReg) &&
-      TargetRegisterInfo::isVirtualRegister(DstReg)) {
-    VirtReg = DstReg;
-    Coalesced = true;
-  }
-
-  // Now find an ideal location to insert the copy.
-  MachineBasicBlock::iterator Pos = InsertPos;
-  while (Pos != MBB->begin()) {
-    MachineInstr *PrevMI = prior(Pos);
-    DenseMap<MachineInstr*, unsigned>::iterator RI = CopyRegMap.find(PrevMI);
-    // copyRegToReg might emit multiple instructions to do a copy.
-    unsigned CopyDstReg = (RI == CopyRegMap.end()) ? 0 : RI->second;
-    if (CopyDstReg && !TRI.regsOverlap(CopyDstReg, PhysReg))
-      // This is what the BB looks like right now:
-      // r1024 = mov r0
-      // ...
-      // r1    = mov r1024
-      //
-      // We want to insert "r1025 = mov r1". Inserting this copy below the
-      // move to r1024 makes it impossible for that move to be coalesced.
-      //
-      // r1025 = mov r1
-      // r1024 = mov r0
-      // ...
-      // r1    = mov 1024
-      // r2    = mov 1025
-      break; // Woot! Found a good location.
-    --Pos;
-  }
-
-  bool Emitted = TII.copyRegToReg(*MBB, Pos, VirtReg, PhysReg, RC, RC);
-  assert(Emitted && "Unable to issue a live-in copy instruction!\n");
-  (void) Emitted;
-
-  CopyRegMap.insert(std::make_pair(prior(Pos), VirtReg));
-  if (Coalesced) {
-    if (&*InsertPos == UseMI) ++InsertPos;
-    MBB->erase(UseMI);
-  }
-}
-
-/// EmitLiveInCopies - If this is the first basic block in the function,
-/// and if it has live ins that need to be copied into vregs, emit the
-/// copies into the block.
-static void EmitLiveInCopies(MachineBasicBlock *EntryMBB,
-                             const MachineRegisterInfo &MRI,
-                             const TargetRegisterInfo &TRI,
-                             const TargetInstrInfo &TII) {
-  if (SchedLiveInCopies) {
-    // Emit the copies at a heuristically-determined location in the block.
-    DenseMap<MachineInstr*, unsigned> CopyRegMap;
-    MachineBasicBlock::iterator InsertPos = EntryMBB->begin();
-    for (MachineRegisterInfo::livein_iterator LI = MRI.livein_begin(),
-           E = MRI.livein_end(); LI != E; ++LI)
-      if (LI->second) {
-        const TargetRegisterClass *RC = MRI.getRegClass(LI->second);
-        EmitLiveInCopy(EntryMBB, InsertPos, LI->second, LI->first,
-                       RC, CopyRegMap, MRI, TRI, TII);
-      }
-  } else {
-    // Emit the copies into the top of the block.
-    for (MachineRegisterInfo::livein_iterator LI = MRI.livein_begin(),
-           E = MRI.livein_end(); LI != E; ++LI)
-      if (LI->second) {
-        const TargetRegisterClass *RC = MRI.getRegClass(LI->second);
-        bool Emitted = TII.copyRegToReg(*EntryMBB, EntryMBB->begin(),
-                                        LI->second, LI->first, RC, RC);
-        assert(Emitted && "Unable to issue a live-in copy instruction!\n");
-        (void) Emitted;
-      }
-  }
-}
-
 //===----------------------------------------------------------------------===//
 // SelectionDAGISel code
 //===----------------------------------------------------------------------===//
@@ -293,10 +180,6 @@ SelectionDAGISel::~SelectionDAGISel() {
   delete FuncInfo;
 }
 
-unsigned SelectionDAGISel::MakeReg(EVT VT) {
-  return RegInfo->createVirtualRegister(TLI.getRegClassFor(VT));
-}
-
 void SelectionDAGISel::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<AliasAnalysis>();
   AU.addPreserved<AliasAnalysis>();
@@ -306,62 +189,44 @@ void SelectionDAGISel::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
-  Function &Fn = *mf.getFunction();
-
   // Do some sanity-checking on the command-line options.
   assert((!EnableFastISelVerbose || EnableFastISel) &&
          "-fast-isel-verbose requires -fast-isel");
   assert((!EnableFastISelAbort || EnableFastISel) &&
          "-fast-isel-abort requires -fast-isel");
 
-  // Get alias analysis for load/store combining.
-  AA = &getAnalysis<AliasAnalysis>();
-
-  MF = &mf;
+  const Function &Fn = *mf.getFunction();
   const TargetInstrInfo &TII = *TM.getInstrInfo();
   const TargetRegisterInfo &TRI = *TM.getRegisterInfo();
 
-  if (Fn.hasGC())
-    GFI = &getAnalysis<GCModuleInfo>().getFunctionInfo(Fn);
-  else
-    GFI = 0;
+  MF = &mf;
   RegInfo = &MF->getRegInfo();
+  AA = &getAnalysis<AliasAnalysis>();
+  GFI = Fn.hasGC() ? &getAnalysis<GCModuleInfo>().getFunctionInfo(Fn) : 0;
+
   DEBUG(dbgs() << "\n\n\n=== " << Fn.getName() << "\n");
 
   CurDAG->init(*MF);
   FuncInfo->set(Fn, *MF, EnableFastISel);
   SDB->init(GFI, *AA);
 
-  for (Function::iterator I = Fn.begin(), E = Fn.end(); I != E; ++I)
-    if (InvokeInst *Invoke = dyn_cast<InvokeInst>(I->getTerminator()))
-      // Mark landing pad.
-      FuncInfo->MBBMap[Invoke->getSuccessor(1)]->setIsLandingPad();
+  SelectAllBasicBlocks(Fn);
 
-  SelectAllBasicBlocks(Fn, *MF, TII);
+  // Release function-specific state. SDB and CurDAG are already cleared
+  // at this point.
+  FuncInfo->clear();
 
   // If the first basic block in the function has live ins that need to be
   // copied into vregs, emit the copies into the top of the block before
   // emitting the code for the block.
-  EmitLiveInCopies(MF->begin(), *RegInfo, TRI, TII);
-
-  // Add function live-ins to entry block live-in set.
-  for (MachineRegisterInfo::livein_iterator I = RegInfo->livein_begin(),
-         E = RegInfo->livein_end(); I != E; ++I)
-    MF->begin()->addLiveIn(I->first);
-
-#ifndef NDEBUG
-  assert(FuncInfo->CatchInfoFound.size() == FuncInfo->CatchInfoLost.size() &&
-         "Not all catch info was assigned to a landing pad!");
-#endif
-
-  FuncInfo->clear();
+  RegInfo->EmitLiveInCopies(MF->begin(), TRI, TII);
 
   return true;
 }
 
 /// SetDebugLoc - Update MF's and SDB's DebugLocs if debug information is
 /// attached with this instruction.
-static void SetDebugLoc(Instruction *I, SelectionDAGBuilder *SDB,
+static void SetDebugLoc(const Instruction *I, SelectionDAGBuilder *SDB,
                         FastISel *FastIS, MachineFunction *MF) {
   DebugLoc DL = I->getDebugLoc();
   if (DL.isUnknown()) return;
@@ -372,7 +237,7 @@ static void SetDebugLoc(Instruction *I, SelectionDAGBuilder *SDB,
     FastIS->setCurDebugLoc(DL);
 
   // If the function doesn't have a default debug location yet, set
-  // it. This is kind of a hack.
+  // it. This is a total hack.
   if (MF->getDefaultDebugLoc().isUnknown())
     MF->setDefaultDebugLoc(DL);
 }
@@ -384,30 +249,27 @@ static void ResetDebugLoc(SelectionDAGBuilder *SDB, FastISel *FastIS) {
     FastIS->setCurDebugLoc(DebugLoc());
 }
 
-void SelectionDAGISel::SelectBasicBlock(BasicBlock *LLVMBB,
-                                        BasicBlock::iterator Begin,
-                                        BasicBlock::iterator End,
+void SelectionDAGISel::SelectBasicBlock(const BasicBlock *LLVMBB,
+                                        BasicBlock::const_iterator Begin,
+                                        BasicBlock::const_iterator End,
                                         bool &HadTailCall) {
   SDB->setCurrentBasicBlock(BB);
 
   // Lower all of the non-terminator instructions. If a call is emitted
-  // as a tail call, cease emitting nodes for this block.
-  for (BasicBlock::iterator I = Begin; I != End && !SDB->HasTailCall; ++I) {
+  // as a tail call, cease emitting nodes for this block. Terminators
+  // are handled below.
+  for (BasicBlock::const_iterator I = Begin;
+       I != End && !SDB->HasTailCall && !isa<TerminatorInst>(I);
+       ++I) {
     SetDebugLoc(I, SDB, 0, MF);
-
-    if (!isa<TerminatorInst>(I)) {
-      SDB->visit(*I);
-
-      // Set the current debug location back to "unknown" so that it doesn't
-      // spuriously apply to subsequent instructions.
-      ResetDebugLoc(SDB, 0);
-    }
+    SDB->visit(*I);
+    ResetDebugLoc(SDB, 0);
   }
 
   if (!SDB->HasTailCall) {
     // Ensure that all instructions which are used outside of their defining
     // blocks are available as virtual registers.  Invoke is handled elsewhere.
-    for (BasicBlock::iterator I = Begin; I != End; ++I)
+    for (BasicBlock::const_iterator I = Begin; I != End; ++I)
       if (!isa<PHINode>(I) && !isa<InvokeInst>(I))
         SDB->CopyToExportRegsIfNeeded(I);
 
@@ -493,7 +355,7 @@ void SelectionDAGISel::ShrinkDemandedOps() {
     InWorklist.insert(I);
   }
 
-  TargetLowering::TargetLoweringOpt TLO(*CurDAG, true);
+  TargetLowering::TargetLoweringOpt TLO(*CurDAG, true, true, true);
   while (!Worklist.empty()) {
     SDNode *N = Worklist.pop_back_val();
     InWorklist.erase(N);
@@ -836,14 +698,56 @@ void SelectionDAGISel::DoInstructionSelection() {
   PostprocessISelDAG();
 }
 
+/// PrepareEHLandingPad - Emit an EH_LABEL, set up live-in registers, and
+/// do other setup for EH landing-pad blocks.
+void SelectionDAGISel::PrepareEHLandingPad(MachineBasicBlock *BB) {
+  // Add a label to mark the beginning of the landing pad.  Deletion of the
+  // landing pad can thus be detected via the MachineModuleInfo.
+  MCSymbol *Label = MF->getMMI().addLandingPad(BB);
 
-void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
-                                            MachineFunction &MF,
-                                            const TargetInstrInfo &TII) {
+  const TargetInstrDesc &II =
+    TLI.getTargetMachine().getInstrInfo()->get(TargetOpcode::EH_LABEL);
+  BuildMI(BB, SDB->getCurDebugLoc(), II).addSym(Label);
+
+  // Mark exception register as live in.
+  unsigned Reg = TLI.getExceptionAddressRegister();
+  if (Reg) BB->addLiveIn(Reg);
+
+  // Mark exception selector register as live in.
+  Reg = TLI.getExceptionSelectorRegister();
+  if (Reg) BB->addLiveIn(Reg);
+
+  // FIXME: Hack around an exception handling flaw (PR1508): the personality
+  // function and list of typeids logically belong to the invoke (or, if you
+  // like, the basic block containing the invoke), and need to be associated
+  // with it in the dwarf exception handling tables.  Currently however the
+  // information is provided by an intrinsic (eh.selector) that can be moved
+  // to unexpected places by the optimizers: if the unwind edge is critical,
+  // then breaking it can result in the intrinsics being in the successor of
+  // the landing pad, not the landing pad itself.  This results
+  // in exceptions not being caught because no typeids are associated with
+  // the invoke.  This may not be the only way things can go wrong, but it
+  // is the only way we try to work around for the moment.
+  const BasicBlock *LLVMBB = BB->getBasicBlock();
+  const BranchInst *Br = dyn_cast<BranchInst>(LLVMBB->getTerminator());
+
+  if (Br && Br->isUnconditional()) { // Critical edge?
+    BasicBlock::const_iterator I, E;
+    for (I = LLVMBB->begin(), E = --LLVMBB->end(); I != E; ++I)
+      if (isa<EHSelectorInst>(I))
+        break;
+
+    if (I == E)
+      // No catch info found - try to extract some from the successor.
+      CopyCatchInfo(Br->getSuccessor(0), LLVMBB, &MF->getMMI(), *FuncInfo);
+  }
+}
+
+void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   // Initialize the Fast-ISel state, if needed.
   FastISel *FastIS = 0;
   if (EnableFastISel)
-    FastIS = TLI.createFastISel(MF, FuncInfo->ValueMap, FuncInfo->MBBMap,
+    FastIS = TLI.createFastISel(*MF, FuncInfo->ValueMap, FuncInfo->MBBMap,
                                 FuncInfo->StaticAllocaMap
 #ifndef NDEBUG
                                 , FuncInfo->CatchInfoLost
@@ -851,13 +755,13 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
                                 );
 
   // Iterate over all basic blocks in the function.
-  for (Function::iterator I = Fn.begin(), E = Fn.end(); I != E; ++I) {
-    BasicBlock *LLVMBB = &*I;
+  for (Function::const_iterator I = Fn.begin(), E = Fn.end(); I != E; ++I) {
+    const BasicBlock *LLVMBB = &*I;
     BB = FuncInfo->MBBMap[LLVMBB];
 
-    BasicBlock::iterator const Begin = LLVMBB->begin();
-    BasicBlock::iterator const End = LLVMBB->end();
-    BasicBlock::iterator BI = Begin;
+    BasicBlock::const_iterator const Begin = LLVMBB->begin();
+    BasicBlock::const_iterator const End = LLVMBB->end();
+    BasicBlock::const_iterator BI = Begin;
 
     // Lower any arguments needed in this block if this is the entry block.
     bool SuppressFastISel = false;
@@ -868,7 +772,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
       // fast-isel in the entry block.
       if (FastIS) {
         unsigned j = 1;
-        for (Function::arg_iterator I = Fn.arg_begin(), E = Fn.arg_end();
+        for (Function::const_arg_iterator I = Fn.arg_begin(), E = Fn.arg_end();
              I != E; ++I, ++j)
           if (Fn.paramHasAttr(j, Attribute::ByVal)) {
             if (EnableFastISelVerbose || EnableFastISelAbort)
@@ -879,47 +783,10 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
       }
     }
 
-    if (BB->isLandingPad()) {
-      // Add a label to mark the beginning of the landing pad.  Deletion of the
-      // landing pad can thus be detected via the MachineModuleInfo.
-      MCSymbol *Label = MF.getMMI().addLandingPad(BB);
-
-      const TargetInstrDesc &II = TII.get(TargetOpcode::EH_LABEL);
-      BuildMI(BB, SDB->getCurDebugLoc(), II).addSym(Label);
-
-      // Mark exception register as live in.
-      unsigned Reg = TLI.getExceptionAddressRegister();
-      if (Reg) BB->addLiveIn(Reg);
-
-      // Mark exception selector register as live in.
-      Reg = TLI.getExceptionSelectorRegister();
-      if (Reg) BB->addLiveIn(Reg);
-
-      // FIXME: Hack around an exception handling flaw (PR1508): the personality
-      // function and list of typeids logically belong to the invoke (or, if you
-      // like, the basic block containing the invoke), and need to be associated
-      // with it in the dwarf exception handling tables.  Currently however the
-      // information is provided by an intrinsic (eh.selector) that can be moved
-      // to unexpected places by the optimizers: if the unwind edge is critical,
-      // then breaking it can result in the intrinsics being in the successor of
-      // the landing pad, not the landing pad itself.  This results
-      // in exceptions not being caught because no typeids are associated with
-      // the invoke.  This may not be the only way things can go wrong, but it
-      // is the only way we try to work around for the moment.
-      BranchInst *Br = dyn_cast<BranchInst>(LLVMBB->getTerminator());
-
-      if (Br && Br->isUnconditional()) { // Critical edge?
-        BasicBlock::iterator I, E;
-        for (I = LLVMBB->begin(), E = --LLVMBB->end(); I != E; ++I)
-          if (isa<EHSelectorInst>(I))
-            break;
-
-        if (I == E)
-          // No catch info found - try to extract some from the successor.
-          CopyCatchInfo(Br->getSuccessor(0), LLVMBB, &MF.getMMI(), *FuncInfo);
-      }
-    }
-
+    // Setup an EH landing-pad block.
+    if (BB->isLandingPad())
+      PrepareEHLandingPad(BB);
+    
     // Before doing SelectionDAG ISel, see if FastISel has been requested.
     if (FastIS && !SuppressFastISel) {
       // Emit code for any incoming arguments. This must happen before
@@ -947,7 +814,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
             break;
           }
 
-        SetDebugLoc(BI, SDB, FastIS, &MF);
+        SetDebugLoc(BI, SDB, FastIS, MF);
 
         // Try to select the instruction with FastISel.
         if (FastIS->SelectInstruction(BI)) {
@@ -967,7 +834,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(Function &Fn,
             BI->dump();
           }
 
-          if (!BI->getType()->isVoidTy()) {
+          if (!BI->getType()->isVoidTy() && !BI->use_empty()) {
             unsigned &R = FuncInfo->ValueMap[BI];
             if (!R)
               R = FuncInfo->CreateRegForValue(BI);
@@ -1437,7 +1304,8 @@ bool SelectionDAGISel::IsProfitableToFold(SDValue N, SDNode *U,
 /// IsLegalToFold - Returns true if the specific operand node N of
 /// U can be folded during instruction selection that starts at Root.
 bool SelectionDAGISel::IsLegalToFold(SDValue N, SDNode *U, SDNode *Root,
-                                     bool IgnoreChains) const {
+                                     CodeGenOpt::Level OptLevel,
+                                     bool IgnoreChains) {
   if (OptLevel == CodeGenOpt::None) return false;
 
   // If Root use can somehow reach N through a path that that doesn't contain
@@ -2012,6 +1880,7 @@ static unsigned IsPredicateKnownToFail(const unsigned char *Table,
   }
 }
 
+namespace {
 
 struct MatchScope {
   /// FailIndex - If this match fails, this is the index to continue with.
@@ -2032,6 +1901,8 @@ struct MatchScope {
   /// HasChainNodesMatched - True if the ChainNodesMatched list is non-empty.
   bool HasChainNodesMatched, HasFlagResultNodesMatched;
 };
+
+}
 
 SDNode *SelectionDAGISel::
 SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
@@ -2385,7 +2256,8 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       if (!IsProfitableToFold(N, NodeStack[NodeStack.size()-2].getNode(),
                               NodeToMatch) ||
           !IsLegalToFold(N, NodeStack[NodeStack.size()-2].getNode(),
-                         NodeToMatch, true/*We validate our own chains*/))
+                         NodeToMatch, OptLevel,
+                         true/*We validate our own chains*/))
         break;
       
       continue;

@@ -18,6 +18,7 @@
 #include "ARMDisassembler.h"
 #include "ARMDisassemblerCore.h"
 
+#include "llvm/MC/EDInstInfo.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/Target/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
@@ -38,7 +39,9 @@
 ///
 #include "../ARMGenDecoderTables.inc"
 
-namespace llvm {
+#include "../ARMGenEDInfo.inc"
+
+using namespace llvm;
 
 /// showBitVector - Use the raw_ostream to log a diagnostic message describing
 /// the inidividual bits of the instruction.
@@ -404,7 +407,6 @@ bool ARMDisassembler::getInstruction(MCInst &MI,
     });
 
   ARMBasicMCBuilder *Builder = CreateMCBuilder(Opcode, Format);
-
   if (!Builder)
     return false;
 
@@ -492,10 +494,10 @@ bool ThumbDisassembler::getInstruction(MCInst &MI,
     });
 
   ARMBasicMCBuilder *Builder = CreateMCBuilder(Opcode, Format);
-  Builder->setSession(const_cast<Session *>(&SO));
-
   if (!Builder)
     return false;
+
+  Builder->SetSession(const_cast<Session *>(&SO));
 
   if (!Builder->Build(MI, insn))
     return false;
@@ -547,4 +549,10 @@ extern "C" void LLVMInitializeARMDisassembler() {
                                          createThumbDisassembler);
 }
 
-} // namespace llvm
+EDInstInfo *ARMDisassembler::getEDInfo() const {
+  return instInfoARM;
+}
+
+EDInstInfo *ThumbDisassembler::getEDInfo() const {
+  return instInfoARM;
+}

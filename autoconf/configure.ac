@@ -1022,6 +1022,9 @@ AC_LINK_USE_R
 dnl Determine whether the linker supports the -export-dynamic option.
 AC_LINK_EXPORT_DYNAMIC
 
+dnl Determine whether the linker supports the -retain-symbols-file option.
+AC_LINK_RETAIN_SYMBOLS_FILE
+
 dnl Check for libtool and the library that has dlopen function (which must come
 dnl before the AC_PROG_LIBTOOL check in order to enable dlopening libraries with
 dnl libtool).
@@ -1290,7 +1293,7 @@ AC_CHECK_FUNCS([backtrace ceilf floorf roundf rintf nearbyintf getcwd ])
 AC_CHECK_FUNCS([powf fmodf strtof round ])
 AC_CHECK_FUNCS([getpagesize getrusage getrlimit setrlimit gettimeofday ])
 AC_CHECK_FUNCS([isatty mkdtemp mkstemp ])
-AC_CHECK_FUNCS([mktemp realpath sbrk setrlimit strdup ])
+AC_CHECK_FUNCS([mktemp posix_spawn realpath sbrk setrlimit strdup ])
 AC_CHECK_FUNCS([strerror strerror_r strerror_s setenv ])
 AC_CHECK_FUNCS([strtoll strtoq sysconf malloc_zone_statistics ])
 AC_CHECK_FUNCS([setjmp longjmp sigsetjmp siglongjmp])

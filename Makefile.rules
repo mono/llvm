@@ -561,7 +561,7 @@ ifeq ($(HOST_OS),Darwin)
   # Get "4" out of 10.4 for later pieces in the makefile.
   DARWIN_MAJVERS := $(shell echo $(DARWIN_VERSION)| sed -E 's/10.([0-9]).*/\1/')
 
-  SharedLinkOptions=-Wl,-flat_namespace -Wl,-undefined -Wl,suppress \
+  SharedLinkOptions=-Wl,-flat_namespace -Wl,-undefined,suppress \
                     -dynamiclib
   ifneq ($(ARCH),ARM)
     SharedLinkOptions += -mmacosx-version-min=$(DARWIN_VERSION)
@@ -970,6 +970,36 @@ endif
 endif
 endif
 
+# Set up the library exports file.
+ifdef EXPORTED_SYMBOL_FILE
+
+# First, set up the native export file, which may differ from the source
+# export file.
+
+ifeq ($(HOST_OS),Darwin)
+# Darwin convention prefixes symbols with underscores.
+NativeExportsFile := $(ObjDir)/$(notdir $(EXPORTED_SYMBOL_FILE)).sed
+$(NativeExportsFile): $(EXPORTED_SYMBOL_FILE) $(ObjDir)/.dir
+	$(Verb) sed -e 's/[[:<:]]/_/' < $< > $@
+clean-local::
+	-$(Verb) $(RM) -f $(NativeExportsFile)
+else
+NativeExportsFile := $(EXPORTED_SYMBOL_FILE)
+endif
+
+# Now add the linker command-line options to use the native export file.
+
+ifeq ($(HOST_OS),Darwin)
+LLVMLibsOptions += -Wl,-exported_symbols_list,$(NativeExportsFile)
+endif
+
+# gold, bfd ld, etc.
+ifeq ($(HAVE_LINK_RETAIN_SYMBOLS_FILE),1)
+LLVMLibsOptions += -Wl,-retain-symbols-file,$(NativeExportsFile)
+endif
+
+endif
+
 ###############################################################################
 # Library Build Rules: Four ways to build a library
 ###############################################################################
@@ -1059,6 +1089,10 @@ LibName.BCA:= $(LibDir)/lib$(LIBRARYNAME).bca
 ifdef SHARED_LIBRARY
 
 all-local:: $(LibName.SO)
+
+ifdef EXPORTED_SYMBOL_FILE
+$(LibName.SO): $(NativeExportsFile)
+endif
 
 ifdef LINK_LIBS_IN_SHARED
 ifdef LOADABLE_MODULE
@@ -1262,7 +1296,7 @@ ifeq ($(HOST_OS),Darwin)
 
 # Tiger tools don't support this.
 ifneq ($(DARWIN_MAJVERS),4)
-LD.Flags += -Wl,-exported_symbol -Wl,_main
+LD.Flags += -Wl,-exported_symbol,_main
 endif
 endif
 

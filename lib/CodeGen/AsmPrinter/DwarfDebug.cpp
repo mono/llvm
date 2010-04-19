@@ -302,7 +302,7 @@ DbgScope::~DbgScope() {
 DwarfDebug::DwarfDebug(AsmPrinter *A, Module *M)
   : Asm(A), MMI(Asm->MMI), ModuleCU(0),
     AbbreviationsSet(InitAbbreviationsSetSize), 
-    CurrentFnDbgScope(0) {
+    CurrentFnDbgScope(0), PrevLabel(NULL) {
   NextStringPoolNumber = 0;
       
   DwarfFrameSectionSym = DwarfInfoSectionSym = DwarfAbbrevSectionSym = 0;
@@ -1331,7 +1331,7 @@ DbgScope *DwarfDebug::getOrCreateAbstractScope(MDNode *N) {
 
 /// isSubprogramContext - Return true if Context is either a subprogram
 /// or another context nested inside a subprogram.
-bool isSubprogramContext(MDNode *Context) {
+static bool isSubprogramContext(MDNode *Context) {
   if (!Context)
     return false;
   DIDescriptor D(Context);
@@ -1612,7 +1612,8 @@ void DwarfDebug::addPubTypes(DISubprogram SP) {
     if (!ATy.isValid())
       continue;
     DICompositeType CATy = getDICompositeType(ATy);
-    if (DIDescriptor(CATy.getNode()).Verify() && !CATy.getName().empty()) {
+    if (DIDescriptor(CATy.getNode()).Verify() && !CATy.getName().empty()
+        && !CATy.isForwardDecl()) {
       if (DIEEntry *Entry = ModuleCU->getDIEEntry(CATy.getNode()))
         ModuleCU->addGlobalType(CATy.getName(), Entry->getEntry());
     }
@@ -1804,7 +1805,8 @@ void DwarfDebug::constructGlobalVariableDIE(MDNode *N) {
   ModuleCU->addGlobal(DI_GV.getName(), VariableDie);
 
   DIType GTy = DI_GV.getType();
-  if (GTy.isCompositeType() && !GTy.getName().empty()) {
+  if (GTy.isCompositeType() && !GTy.getName().empty()
+      && !GTy.isForwardDecl()) {
     DIEEntry *Entry = ModuleCU->getDIEEntry(GTy.getNode());
     assert(Entry && "Missing global type!");
     ModuleCU->addGlobalType(GTy.getName(), Entry->getEntry());
@@ -2066,8 +2068,9 @@ void DwarfDebug::collectVariableInfo() {
       // FIXME : Lift this restriction.
       if (MInsn->getNumOperands() != 3)
         continue;
-      DIVariable DV((MDNode*)(MInsn->getOperand(MInsn->getNumOperands()
-                                                - 1).getMetadata()));
+      DIVariable DV(
+        const_cast<MDNode *>(MInsn->getOperand(MInsn->getNumOperands() - 1)
+                               .getMetadata()));
       if (DV.getTag() == dwarf::DW_TAG_arg_variable)  {
         // FIXME Handle inlined subroutine arguments.
         DbgVariable *ArgVar = new DbgVariable(DV, MInsn, NULL);
@@ -2349,7 +2352,10 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
   DeleteContainerSeconds(AbstractScopes);
   AbstractScopesList.clear();
   AbstractVariables.clear();
+  InsnBeforeLabelMap.clear();
+  InsnAfterLabelMap.clear();
   Lines.clear();
+  PrevLabel = NULL;
 }
 
 /// recordSourceLine - Register a source line with debug info. Returns the
@@ -2446,7 +2452,6 @@ void DwarfDebug::computeSizeAndOffsets() {
     sizeof(int8_t);   // Pointer Size (in bytes)
 
   computeSizeAndOffset(ModuleCU->getCUDie(), Offset, true);
-  CompileUnitOffsets[ModuleCU] = 0;
 }
 
 /// EmitSectionSym - Switch to the specified MCSection and emit an assembler
@@ -2487,7 +2492,8 @@ void DwarfDebug::EmitSectionLabels() {
   EmitSectionSym(Asm, TLOF.getDwarfPubTypesSection());
   DwarfStrSectionSym = 
     EmitSectionSym(Asm, TLOF.getDwarfStrSection(), "section_str");
-  EmitSectionSym(Asm, TLOF.getDwarfRangesSection());
+  DwarfDebugRangeSectionSym = EmitSectionSym(Asm, TLOF.getDwarfRangesSection(),
+                                             "debug_range");
 
   TextSectionSym = EmitSectionSym(Asm, TLOF.getTextSection(), "text_begin");
   EmitSectionSym(Asm, TLOF.getDataSection());
@@ -2529,6 +2535,15 @@ void DwarfDebug::emitDIE(DIE *Die) {
       DIE *Origin = E->getEntry();
       unsigned Addr = Origin->getOffset();
       Asm->EmitInt32(Addr);
+      break;
+    }
+    case dwarf::DW_AT_ranges: {
+      // DW_AT_range Value encodes offset in debug_range section.
+      DIEInteger *V = cast<DIEInteger>(Values[i]);
+      Asm->EmitLabelOffsetDifference(DwarfDebugRangeSectionSym,
+                                     V->getValue(),
+                                     DwarfDebugRangeSectionSym,
+                                     4);
       break;
     }
     default:
@@ -3052,7 +3067,16 @@ void DwarfDebug::EmitDebugARanges() {
 void DwarfDebug::emitDebugRanges() {
   // Start the dwarf ranges section.
   Asm->OutStreamer.SwitchSection(
-                            Asm->getObjFileLowering().getDwarfRangesSection());
+    Asm->getObjFileLowering().getDwarfRangesSection());
+  for (SmallVector<const MCSymbol *, 8>::const_iterator I = DebugRangeSymbols.begin(),
+         E = DebugRangeSymbols.end(); I != E; ++I) {
+    if (*I) 
+      Asm->EmitLabelDifference(*I, TextSectionSym,
+                               Asm->getTargetData().getPointerSize());
+    else
+      Asm->OutStreamer.EmitIntValue(0, Asm->getTargetData().getPointerSize(), 
+                                    /*addrspace*/0);
+  }
 }
 
 /// emitDebugMacInfo - Emit visible names into a debug macinfo section.

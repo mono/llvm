@@ -247,11 +247,13 @@ void SCEVSignExtendExpr::print(raw_ostream &OS) const {
 }
 
 void SCEVCommutativeExpr::print(raw_ostream &OS) const {
-  assert(NumOperands > 1 && "This plus expr shouldn't exist!");
   const char *OpStr = getOperationStr();
-  OS << "(" << *Operands[0];
-  for (unsigned i = 1, e = NumOperands; i != e; ++i)
-    OS << OpStr << *Operands[i];
+  OS << "(";
+  for (op_iterator I = op_begin(), E = op_end(); I != E; ++I) {
+    OS << **I;
+    if (next(I) != E)
+      OS << OpStr;
+  }
   OS << ")";
 }
 
@@ -1698,14 +1700,14 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
             return getAddExpr(NewOps);
         }
     }
+
+    if (Ops.size() == 1)
+      return Ops[0];
   }
 
   // Skip over the add expression until we get to a multiply.
   while (Idx < Ops.size() && Ops[Idx]->getSCEVType() < scMulExpr)
     ++Idx;
-
-  if (Ops.size() == 1)
-    return Ops[0];
 
   // If there are mul operands inline them all into this expression.
   if (Idx < Ops.size()) {
@@ -2091,9 +2093,9 @@ ScalarEvolution::getSMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
       // maximum-int.
       return Ops[0];
     }
-  }
 
-  if (Ops.size() == 1) return Ops[0];
+    if (Ops.size() == 1) return Ops[0];
+  }
 
   // Find the first SMax
   while (Idx < Ops.size() && Ops[Idx]->getSCEVType() < scSMaxExpr)
@@ -2117,7 +2119,13 @@ ScalarEvolution::getSMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   // so, delete one.  Since we sorted the list, these values are required to
   // be adjacent.
   for (unsigned i = 0, e = Ops.size()-1; i != e; ++i)
-    if (Ops[i] == Ops[i+1]) {      //  X smax Y smax Y  -->  X smax Y
+    //  X smax Y smax Y  -->  X smax Y
+    //  X smax Y         -->  X, if X is always greater than Y
+    if (Ops[i] == Ops[i+1] ||
+        isKnownPredicate(ICmpInst::ICMP_SGE, Ops[i], Ops[i+1])) {
+      Ops.erase(Ops.begin()+i+1, Ops.begin()+i+2);
+      --i; --e;
+    } else if (isKnownPredicate(ICmpInst::ICMP_SLE, Ops[i], Ops[i+1])) {
       Ops.erase(Ops.begin()+i, Ops.begin()+i+1);
       --i; --e;
     }
@@ -2190,9 +2198,9 @@ ScalarEvolution::getUMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
       // maximum-int.
       return Ops[0];
     }
-  }
 
-  if (Ops.size() == 1) return Ops[0];
+    if (Ops.size() == 1) return Ops[0];
+  }
 
   // Find the first UMax
   while (Idx < Ops.size() && Ops[Idx]->getSCEVType() < scUMaxExpr)
@@ -2216,7 +2224,13 @@ ScalarEvolution::getUMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   // so, delete one.  Since we sorted the list, these values are required to
   // be adjacent.
   for (unsigned i = 0, e = Ops.size()-1; i != e; ++i)
-    if (Ops[i] == Ops[i+1]) {      //  X umax Y umax Y  -->  X umax Y
+    //  X umax Y umax Y  -->  X umax Y
+    //  X umax Y         -->  X, if X is always greater than Y
+    if (Ops[i] == Ops[i+1] ||
+        isKnownPredicate(ICmpInst::ICMP_UGE, Ops[i], Ops[i+1])) {
+      Ops.erase(Ops.begin()+i+1, Ops.begin()+i+2);
+      --i; --e;
+    } else if (isKnownPredicate(ICmpInst::ICMP_ULE, Ops[i], Ops[i+1])) {
       Ops.erase(Ops.begin()+i, Ops.begin()+i+1);
       --i; --e;
     }
@@ -4622,6 +4636,8 @@ ScalarEvolution::HowFarToNonZero(const SCEV *V, const Loop *L) {
 
 /// getLoopPredecessor - If the given loop's header has exactly one unique
 /// predecessor outside the loop, return it. Otherwise return null.
+/// This is less strict that the loop "preheader" concept, which requires
+/// the predecessor to have only one single successor.
 ///
 BasicBlock *ScalarEvolution::getLoopPredecessor(const Loop *L) {
   BasicBlock *Header = L->getHeader();
@@ -4640,21 +4656,21 @@ BasicBlock *ScalarEvolution::getLoopPredecessor(const Loop *L) {
 /// successor from which BB is reachable, or null if no such block is
 /// found.
 ///
-BasicBlock *
+std::pair<BasicBlock *, BasicBlock *>
 ScalarEvolution::getPredecessorWithUniqueSuccessorForBB(BasicBlock *BB) {
   // If the block has a unique predecessor, then there is no path from the
   // predecessor to the block that does not go through the direct edge
   // from the predecessor to the block.
   if (BasicBlock *Pred = BB->getSinglePredecessor())
-    return Pred;
+    return std::make_pair(Pred, BB);
 
   // A loop's header is defined to be a block that dominates the loop.
   // If the header has a unique predecessor outside the loop, it must be
   // a block that has exactly one successor that can reach the loop.
   if (Loop *L = LI->getLoopFor(BB))
-    return getLoopPredecessor(L);
+    return std::make_pair(getLoopPredecessor(L), L->getHeader());
 
-  return 0;
+  return std::pair<BasicBlock *, BasicBlock *>();
 }
 
 /// HasSameValue - SCEV structural equivalence is usually sufficient for
@@ -4838,24 +4854,22 @@ ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
   // (interprocedural conditions notwithstanding).
   if (!L) return false;
 
-  BasicBlock *Predecessor = getLoopPredecessor(L);
-  BasicBlock *PredecessorDest = L->getHeader();
-
   // Starting at the loop predecessor, climb up the predecessor chain, as long
   // as there are predecessors that can be found that have unique successors
   // leading to the original header.
-  for (; Predecessor;
-       PredecessorDest = Predecessor,
-       Predecessor = getPredecessorWithUniqueSuccessorForBB(Predecessor)) {
+  for (std::pair<BasicBlock *, BasicBlock *>
+         Pair(getLoopPredecessor(L), L->getHeader());
+       Pair.first;
+       Pair = getPredecessorWithUniqueSuccessorForBB(Pair.first)) {
 
     BranchInst *LoopEntryPredicate =
-      dyn_cast<BranchInst>(Predecessor->getTerminator());
+      dyn_cast<BranchInst>(Pair.first->getTerminator());
     if (!LoopEntryPredicate ||
         LoopEntryPredicate->isUnconditional())
       continue;
 
     if (isImpliedCond(LoopEntryPredicate->getCondition(), Pred, LHS, RHS,
-                      LoopEntryPredicate->getSuccessor(0) != PredecessorDest))
+                      LoopEntryPredicate->getSuccessor(0) != Pair.second))
       return true;
   }
 

@@ -172,9 +172,7 @@ public:
   void compileProgram(Module *M, std::string *Error);
 
   /// executeProgram - This method runs "Program", capturing the output of the
-  /// program to a file.  The recommended filename will be filled in with the
-  /// name of the file with the captured output.  If there is a problem with
-  /// the code generator (e.g., llc crashes), this will throw an exception.
+  /// program to a file.  A recommended filename may be optionally specified.
   ///
   std::string executeProgram(std::string OutputFilename,
                              std::string Bitcode,

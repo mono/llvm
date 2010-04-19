@@ -1760,7 +1760,6 @@ bool X86InstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,
         BranchCode = GetOppositeBranchCondition(BranchCode);
         unsigned JNCC = GetCondBranchFromCond(BranchCode);
         MachineBasicBlock::iterator OldInst = I;
-        --I;
 
         BuildMI(MBB, UnCondBrIter, MBB.findDebugLoc(I), get(JNCC))
           .addMBB(UnCondBrIter->getOperand(0).getMBB());
@@ -1778,7 +1777,6 @@ bool X86InstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,
       }
 
       FBB = TBB;
-      TBB = TargetBB;
       TBB = I->getOperand(0).getMBB();
       Cond.push_back(MachineOperand::CreateImm(BranchCode));
       continue;
@@ -2631,7 +2629,7 @@ MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
       Ty = Type::getDoubleTy(MF.getFunction()->getContext());
     else
       Ty = VectorType::get(Type::getInt32Ty(MF.getFunction()->getContext()), 4);
-    Constant *C = LoadMI->getOpcode() == X86::V_SETALLONES ?
+    const Constant *C = LoadMI->getOpcode() == X86::V_SETALLONES ?
                     Constant::getAllOnesValue(Ty) :
                     Constant::getNullValue(Ty);
     unsigned CPI = MCP.getConstantPoolIndex(C, Alignment);

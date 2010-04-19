@@ -200,7 +200,7 @@ namespace {
       const MachineOperand &MO = MI->getOperand(OpNo);
       if (TM.getRelocationModel() != Reloc::Static) {
         if (MO.getType() == MachineOperand::MO_GlobalAddress) {
-          GlobalValue *GV = MO.getGlobal();
+          const GlobalValue *GV = MO.getGlobal();
           if (GV->isDeclaration() || GV->isWeakForLinker()) {
             // Dynamically-resolved functions need a stub for the function.
             MCSymbol *Sym = GetSymbolWithGlobalValueBase(GV, "$stub");
@@ -405,7 +405,7 @@ void PPCAsmPrinter::printOp(const MachineOperand &MO, raw_ostream &O) {
   }
   case MachineOperand::MO_GlobalAddress: {
     // Computing the address of a global symbol, not calling it.
-    GlobalValue *GV = MO.getGlobal();
+    const GlobalValue *GV = MO.getGlobal();
     MCSymbol *SymToPrint;
 
     // External or weakly linked global variables need non-lazily-resolved stubs
@@ -649,8 +649,8 @@ void PPCDarwinAsmPrinter::EmitStartOfAsmFile(Module &M) {
 
   // Prime text sections so they are adjacent.  This reduces the likelihood a
   // large data or debug section causes a branch to exceed 16M limit.
-  TargetLoweringObjectFileMachO &TLOFMacho = 
-    static_cast<TargetLoweringObjectFileMachO &>(getObjFileLowering());
+  const TargetLoweringObjectFileMachO &TLOFMacho = 
+    static_cast<const TargetLoweringObjectFileMachO &>(getObjFileLowering());
   OutStreamer.SwitchSection(TLOFMacho.getTextCoalSection());
   if (TM.getRelocationModel() == Reloc::PIC_) {
     OutStreamer.SwitchSection(
@@ -686,8 +686,8 @@ void PPCDarwinAsmPrinter::
 EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
   bool isPPC64 = TM.getTargetData()->getPointerSizeInBits() == 64;
   
-  TargetLoweringObjectFileMachO &TLOFMacho = 
-    static_cast<TargetLoweringObjectFileMachO &>(getObjFileLowering());
+  const TargetLoweringObjectFileMachO &TLOFMacho = 
+    static_cast<const TargetLoweringObjectFileMachO &>(getObjFileLowering());
 
   // .lazy_symbol_pointer
   const MCSection *LSPSection = TLOFMacho.getLazySymbolPointerSection();
@@ -782,8 +782,8 @@ bool PPCDarwinAsmPrinter::doFinalization(Module &M) {
   bool isPPC64 = TM.getTargetData()->getPointerSizeInBits() == 64;
 
   // Darwin/PPC always uses mach-o.
-  TargetLoweringObjectFileMachO &TLOFMacho = 
-    static_cast<TargetLoweringObjectFileMachO &>(getObjFileLowering());
+  const TargetLoweringObjectFileMachO &TLOFMacho = 
+    static_cast<const TargetLoweringObjectFileMachO &>(getObjFileLowering());
   MachineModuleInfoMachO &MMIMacho =
     MMI->getObjFileInfo<MachineModuleInfoMachO>();
   
@@ -794,8 +794,8 @@ bool PPCDarwinAsmPrinter::doFinalization(Module &M) {
   if (MAI->doesSupportExceptionHandling() && MMI) {
     // Add the (possibly multiple) personalities to the set of global values.
     // Only referenced functions get into the Personalities list.
-    const std::vector<Function *> &Personalities = MMI->getPersonalities();
-    for (std::vector<Function *>::const_iterator I = Personalities.begin(),
+    const std::vector<const Function*> &Personalities = MMI->getPersonalities();
+    for (std::vector<const Function*>::const_iterator I = Personalities.begin(),
          E = Personalities.end(); I != E; ++I) {
       if (*I) {
         MCSymbol *NLPSym = GetSymbolWithGlobalValueBase(*I, "$non_lazy_ptr");

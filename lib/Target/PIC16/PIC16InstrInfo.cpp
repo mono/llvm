@@ -71,7 +71,7 @@ void PIC16InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
                                          MachineBasicBlock::iterator I,
                                          unsigned SrcReg, bool isKill, int FI,
                                          const TargetRegisterClass *RC) const {
-  PIC16TargetLowering *PTLI = TM.getTargetLowering();
+  const PIC16TargetLowering *PTLI = TM.getTargetLowering();
   DebugLoc DL;
   if (I != MBB.end()) DL = I->getDebugLoc();
 
@@ -86,7 +86,7 @@ void PIC16InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     //MachineRegisterInfo &RI = MF.getRegInfo();
     BuildMI(MBB, I, DL, get(PIC16::movwf))
       .addReg(SrcReg, getKillRegState(isKill))
-      .addImm(PTLI->GetTmpOffsetForFI(FI, 1))
+      .addImm(PTLI->GetTmpOffsetForFI(FI, 1, *MBB.getParent()))
       .addExternalSymbol(tmpName)
       .addImm(1); // Emit banksel for it.
   }
@@ -101,7 +101,7 @@ void PIC16InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
                                                  : PIC16::save_fsr1;
     BuildMI(MBB, I, DL, get(opcode))
       .addReg(SrcReg, getKillRegState(isKill))
-      .addImm(PTLI->GetTmpOffsetForFI(FI, 3))
+      .addImm(PTLI->GetTmpOffsetForFI(FI, 3, *MBB.getParent()))
       .addExternalSymbol(tmpName)
       .addImm(1); // Emit banksel for it.
   }
@@ -113,7 +113,7 @@ void PIC16InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                           MachineBasicBlock::iterator I,
                                           unsigned DestReg, int FI,
                                           const TargetRegisterClass *RC) const {
-  PIC16TargetLowering *PTLI = TM.getTargetLowering();
+  const PIC16TargetLowering *PTLI = TM.getTargetLowering();
   DebugLoc DL;
   if (I != MBB.end()) DL = I->getDebugLoc();
 
@@ -127,7 +127,7 @@ void PIC16InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     //MachineFunction &MF = *MBB.getParent();
     //MachineRegisterInfo &RI = MF.getRegInfo();
     BuildMI(MBB, I, DL, get(PIC16::movf), DestReg)
-      .addImm(PTLI->GetTmpOffsetForFI(FI, 1))
+      .addImm(PTLI->GetTmpOffsetForFI(FI, 1, *MBB.getParent()))
       .addExternalSymbol(tmpName)
       .addImm(1); // Emit banksel for it.
   }
@@ -141,7 +141,7 @@ void PIC16InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     unsigned opcode = (DestReg == PIC16::FSR0) ? PIC16::restore_fsr0 
                                                  : PIC16::restore_fsr1;
     BuildMI(MBB, I, DL, get(opcode), DestReg)
-      .addImm(PTLI->GetTmpOffsetForFI(FI, 3))
+      .addImm(PTLI->GetTmpOffsetForFI(FI, 3, *MBB.getParent()))
       .addExternalSymbol(tmpName)
       .addImm(1); // Emit banksel for it.
   }

@@ -173,13 +173,12 @@ class DwarfDebug {
   /// (at the end of the module) as DW_AT_inline.
   SmallPtrSet<DIE *, 4> InlinedSubprogramDIEs;
 
+  /// ContainingTypeMap - This map is used to keep track of subprogram DIEs that
+  /// need DW_AT_containing_type attribute. This attribute points to a DIE that
+  /// corresponds to the MDNode mapped with the subprogram DIE.
   DenseMap<DIE *, MDNode *> ContainingTypeMap;
 
-  /// AbstractSubprogramDIEs - Collection of abstruct subprogram DIEs.
-  SmallPtrSet<DIE *, 4> AbstractSubprogramDIEs;
-
   typedef SmallVector<DbgScope *, 2> ScopeVector;
-
   SmallPtrSet<const MachineInstr *, 8> InsnsBeginScopeSet;
   SmallPtrSet<const MachineInstr *, 8> InsnsEndScopeSet;
 
@@ -197,14 +196,12 @@ class DwarfDebug {
   /// instruction.
   DenseMap<const MachineInstr *, MCSymbol *> InsnAfterLabelMap;
 
-  /// CompileUnitOffsets - A vector of the offsets of the compile units. This is
-  /// used when calculating the "origin" of a concrete instance of an inlined
-  /// function.
-  DenseMap<CompileUnit *, unsigned> CompileUnitOffsets;
+  SmallVector<const MCSymbol *, 8> DebugRangeSymbols;
 
   /// Previous instruction's location information. This is used to determine
   /// label location to indicate scope boundries in dwarf debug info.
   DebugLoc PrevInstLoc;
+  MCSymbol *PrevLabel;
 
   struct FunctionDebugFrameInfo {
     unsigned Number;
@@ -220,7 +217,7 @@ class DwarfDebug {
   // the beginning of each supported dwarf section.  These are used to form
   // section offsets and are created by EmitSectionLabels.
   MCSymbol *DwarfFrameSectionSym, *DwarfInfoSectionSym, *DwarfAbbrevSectionSym;
-  MCSymbol *DwarfStrSectionSym, *TextSectionSym;
+  MCSymbol *DwarfStrSectionSym, *TextSectionSym, *DwarfDebugRangeSectionSym;
   
 private:
   

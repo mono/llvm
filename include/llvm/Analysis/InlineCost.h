@@ -16,9 +16,9 @@
 
 #include <cassert>
 #include <climits>
-#include <map>
 #include <vector>
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/ValueMap.h"
 
 namespace llvm {
 
@@ -165,7 +165,9 @@ namespace llvm {
       void analyzeFunction(Function *F);
     };
 
-    std::map<const Function *, FunctionInfo> CachedFunctionInfo;
+    // The Function* for a function can be changed (by ArgumentPromotion);
+    // the ValueMap will update itself when this happens.
+    ValueMap<const Function *, FunctionInfo> CachedFunctionInfo;
 
   public:
 
@@ -189,6 +191,10 @@ namespace llvm {
     /// eliminated.
     void growCachedCostInfo(Function* Caller, Function* Callee);
   };
+
+  /// callIsSmall - If a call is likely to lower to a single target instruction,
+  /// or is otherwise deemed small return true.
+  bool callIsSmall(const Function *Callee);
 }
 
 #endif

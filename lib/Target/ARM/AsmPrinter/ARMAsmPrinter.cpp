@@ -239,7 +239,7 @@ namespace {
       } else if (ACPV->isBlockAddress()) {
         O << *GetBlockAddressSymbol(ACPV->getBlockAddress());
       } else if (ACPV->isGlobalValue()) {
-        GlobalValue *GV = ACPV->getGV();
+        const GlobalValue *GV = ACPV->getGV();
         bool isIndirect = Subtarget->isTargetDarwin() &&
           Subtarget->GVIsIndirectSymbol(GV, TM.getRelocationModel());
         if (!isIndirect)
@@ -352,7 +352,7 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
     return;
   case MachineOperand::MO_GlobalAddress: {
     bool isCallOp = Modifier && !strcmp(Modifier, "call");
-    GlobalValue *GV = MO.getGlobal();
+    const GlobalValue *GV = MO.getGlobal();
 
     if ((Modifier && strcmp(Modifier, "lo16") == 0) ||
         (TF & ARMII::MO_LO16))
@@ -504,7 +504,6 @@ void ARMAsmPrinter::printAddrMode2OffsetOperand(const MachineInstr *MI, int Op,
 
   if (!MO1.getReg()) {
     unsigned ImmOffs = ARM_AM::getAM2Offset(MO2.getImm());
-    assert(ImmOffs && "Malformed indexed load / store!");
     O << "#"
       << ARM_AM::getAddrOpcStr(ARM_AM::getAM2Op(MO2.getImm()))
       << ImmOffs;
@@ -556,7 +555,6 @@ void ARMAsmPrinter::printAddrMode3OffsetOperand(const MachineInstr *MI, int Op,
   }
 
   unsigned ImmOffs = ARM_AM::getAM3Offset(MO2.getImm());
-  assert(ImmOffs && "Malformed indexed load / store!");
   O << "#"
     << ARM_AM::getAddrOpcStr(ARM_AM::getAM3Op(MO2.getImm()))
     << ImmOffs;
@@ -1129,8 +1127,9 @@ void ARMAsmPrinter::EmitStartOfAsmFile(Module &M) {
       // avoid out-of-range branches that are due a fundamental limitation of
       // the way symbol offsets are encoded with the current Darwin ARM
       // relocations.
-      TargetLoweringObjectFileMachO &TLOFMacho = 
-        static_cast<TargetLoweringObjectFileMachO &>(getObjFileLowering());
+      const TargetLoweringObjectFileMachO &TLOFMacho = 
+        static_cast<const TargetLoweringObjectFileMachO &>(
+          getObjFileLowering());
       OutStreamer.SwitchSection(TLOFMacho.getTextSection());
       OutStreamer.SwitchSection(TLOFMacho.getTextCoalSection());
       OutStreamer.SwitchSection(TLOFMacho.getConstTextCoalSection());
@@ -1201,8 +1200,8 @@ void ARMAsmPrinter::EmitStartOfAsmFile(Module &M) {
 void ARMAsmPrinter::EmitEndOfAsmFile(Module &M) {
   if (Subtarget->isTargetDarwin()) {
     // All darwin targets use mach-o.
-    TargetLoweringObjectFileMachO &TLOFMacho =
-      static_cast<TargetLoweringObjectFileMachO &>(getObjFileLowering());
+    const TargetLoweringObjectFileMachO &TLOFMacho =
+      static_cast<const TargetLoweringObjectFileMachO &>(getObjFileLowering());
     MachineModuleInfoMachO &MMIMacho =
       MMI->getObjFileInfo<MachineModuleInfoMachO>();
 

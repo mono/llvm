@@ -15,6 +15,7 @@
 #include "SPUISelLowering.h"
 #include "SPUTargetMachine.h"
 #include "SPUFrameInfo.h"
+#include "SPUMachineFunction.h"
 #include "llvm/Constants.h"
 #include "llvm/Function.h"
 #include "llvm/Intrinsics.h"
@@ -88,7 +89,7 @@ namespace {
 
   SDValue
   ExpandLibCall(RTLIB::Libcall LC, SDValue Op, SelectionDAG &DAG,
-                bool isSigned, SDValue &Hi, SPUTargetLowering &TLI) {
+                bool isSigned, SDValue &Hi, const SPUTargetLowering &TLI) {
     // The input chain to this libcall is the entry node of the function.
     // Legalizing the call will automatically add the previous call to the
     // dependence.
@@ -893,7 +894,7 @@ static SDValue
 LowerConstantPool(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
   EVT PtrVT = Op.getValueType();
   ConstantPoolSDNode *CP = cast<ConstantPoolSDNode>(Op);
-  Constant *C = CP->getConstVal();
+  const Constant *C = CP->getConstVal();
   SDValue CPI = DAG.getTargetConstantPool(C, PtrVT, CP->getAlignment());
   SDValue Zero = DAG.getConstant(0, PtrVT);
   const TargetMachine &TM = DAG.getTarget();
@@ -951,7 +952,7 @@ static SDValue
 LowerGlobalAddress(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
   EVT PtrVT = Op.getValueType();
   GlobalAddressSDNode *GSDN = cast<GlobalAddressSDNode>(Op);
-  GlobalValue *GV = GSDN->getGlobal();
+  const GlobalValue *GV = GSDN->getGlobal();
   SDValue GA = DAG.getTargetGlobalAddress(GV, PtrVT, GSDN->getOffset());
   const TargetMachine &TM = DAG.getTarget();
   SDValue Zero = DAG.getConstant(0, PtrVT);
@@ -1004,11 +1005,13 @@ SPUTargetLowering::LowerFormalArguments(SDValue Chain,
                                         const SmallVectorImpl<ISD::InputArg>
                                           &Ins,
                                         DebugLoc dl, SelectionDAG &DAG,
-                                        SmallVectorImpl<SDValue> &InVals) {
+                                        SmallVectorImpl<SDValue> &InVals)
+                                          const {
 
   MachineFunction &MF = DAG.getMachineFunction();
   MachineFrameInfo *MFI = MF.getFrameInfo();
   MachineRegisterInfo &RegInfo = MF.getRegInfo();
+  SPUFunctionInfo *FuncInfo = MF.getInfo<SPUFunctionInfo>();
 
   const unsigned *ArgRegs = SPURegisterInfo::getArgRegs();
   const unsigned NumArgRegs = SPURegisterInfo::getNumArgRegs();
@@ -1091,9 +1094,10 @@ SPUTargetLowering::LowerFormalArguments(SDValue Chain,
     // Create the frame slot
 
     for (; ArgRegIdx != NumArgRegs; ++ArgRegIdx) {
-      VarArgsFrameIndex = MFI->CreateFixedObject(StackSlotSize, ArgOffset,
-                                                 true, false);
-      SDValue FIN = DAG.getFrameIndex(VarArgsFrameIndex, PtrVT);
+      FuncInfo->setVarArgsFrameIndex(
+        MFI->CreateFixedObject(StackSlotSize, ArgOffset,
+                               true, false));
+      SDValue FIN = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
       unsigned VReg = MF.addLiveIn(ArgRegs[ArgRegIdx], &SPU::R32CRegClass);
       SDValue ArgVal = DAG.getRegister(VReg, MVT::v16i8);
       SDValue Store = DAG.getStore(Chain, dl, ArgVal, FIN, NULL, 0,
@@ -1133,7 +1137,7 @@ SPUTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
                              const SmallVectorImpl<ISD::OutputArg> &Outs,
                              const SmallVectorImpl<ISD::InputArg> &Ins,
                              DebugLoc dl, SelectionDAG &DAG,
-                             SmallVectorImpl<SDValue> &InVals) {
+                             SmallVectorImpl<SDValue> &InVals) const {
   // CellSPU target does not yet support tail call optimization.
   isTailCall = false;
 
@@ -1242,7 +1246,7 @@ SPUTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   // direct call is) turn it into a TargetGlobalAddress/TargetExternalSymbol
   // node so that legalize doesn't hack it.
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
-    GlobalValue *GV = G->getGlobal();
+    const GlobalValue *GV = G->getGlobal();
     EVT CalleeVT = Callee.getValueType();
     SDValue Zero = DAG.getConstant(0, PtrVT);
     SDValue GA = DAG.getTargetGlobalAddress(GV, CalleeVT);
@@ -1361,7 +1365,7 @@ SDValue
 SPUTargetLowering::LowerReturn(SDValue Chain,
                                CallingConv::ID CallConv, bool isVarArg,
                                const SmallVectorImpl<ISD::OutputArg> &Outs,
-                               DebugLoc dl, SelectionDAG &DAG) {
+                               DebugLoc dl, SelectionDAG &DAG) const {
 
   SmallVector<CCValAssign, 16> RVLocs;
   CCState CCInfo(CallConv, isVarArg, getTargetMachine(),
@@ -2351,7 +2355,7 @@ static SDValue LowerCTPOP(SDValue Op, SelectionDAG &DAG) {
  All conversions to i64 are expanded to a libcall.
  */
 static SDValue LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG,
-                              SPUTargetLowering &TLI) {
+                              const SPUTargetLowering &TLI) {
   EVT OpVT = Op.getValueType();
   SDValue Op0 = Op.getOperand(0);
   EVT Op0VT = Op0.getValueType();
@@ -2377,7 +2381,7 @@ static SDValue LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG,
  All conversions from i64 are expanded to a libcall.
  */
 static SDValue LowerINT_TO_FP(SDValue Op, SelectionDAG &DAG,
-                              SPUTargetLowering &TLI) {
+                              const SPUTargetLowering &TLI) {
   EVT OpVT = Op.getValueType();
   SDValue Op0 = Op.getOperand(0);
   EVT Op0VT = Op0.getValueType();
@@ -2653,7 +2657,7 @@ static SDValue LowerSIGN_EXTEND(SDValue Op, SelectionDAG &DAG)
   lowering of nodes.
  */
 SDValue
-SPUTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG)
+SPUTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const
 {
   unsigned Opc = (unsigned) Op.getOpcode();
   EVT VT = Op.getValueType();
@@ -2749,7 +2753,7 @@ SPUTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG)
 
 void SPUTargetLowering::ReplaceNodeResults(SDNode *N,
                                            SmallVectorImpl<SDValue>&Results,
-                                           SelectionDAG &DAG)
+                                           SelectionDAG &DAG) const
 {
 #if 0
   unsigned Opc = (unsigned) N->getOpcode();

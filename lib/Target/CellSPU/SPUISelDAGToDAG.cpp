@@ -14,7 +14,6 @@
 
 #include "SPU.h"
 #include "SPUTargetMachine.h"
-#include "SPUISelLowering.h"
 #include "SPUHazardRecognizers.h"
 #include "SPUFrameInfo.h"
 #include "SPURegisterNames.h"
@@ -239,8 +238,8 @@ namespace {
   class SPUDAGToDAGISel :
     public SelectionDAGISel
   {
-    SPUTargetMachine &TM;
-    SPUTargetLowering &SPUtli;
+    const SPUTargetMachine &TM;
+    const SPUTargetLowering &SPUtli;
     unsigned GlobalBaseReg;
 
   public:
@@ -302,16 +301,15 @@ namespace {
       std::vector<Constant*> CV;
 
       for (size_t i = 0; i < bvNode->getNumOperands(); ++i) {
-        ConstantSDNode *V = dyn_cast<ConstantSDNode > (bvNode->getOperand(i));
+        ConstantSDNode *V = cast<ConstantSDNode > (bvNode->getOperand(i));
         CV.push_back(const_cast<ConstantInt *>(V->getConstantIntValue()));
       }
 
-      Constant *CP = ConstantVector::get(CV);
+      const Constant *CP = ConstantVector::get(CV);
       SDValue CPIdx = CurDAG->getConstantPool(CP, SPUtli.getPointerTy());
       unsigned Alignment = cast<ConstantPoolSDNode>(CPIdx)->getAlignment();
       SDValue CGPoolOffset =
-              SPU::LowerConstantPool(CPIdx, *CurDAG,
-                                     SPUtli.getSPUTargetMachine());
+              SPU::LowerConstantPool(CPIdx, *CurDAG, TM);
       
       HandleSDNode Dummy(CurDAG->getLoad(vecVT, dl,
                                          CurDAG->getEntryNode(), CGPoolOffset,
@@ -454,7 +452,7 @@ SPUDAGToDAGISel::SelectAFormAddr(SDNode *Op, SDValue N, SDValue &Base,
 
       case ISD::TargetGlobalAddress: {
         GlobalAddressSDNode *GSDN = cast<GlobalAddressSDNode>(Op0);
-        GlobalValue *GV = GSDN->getGlobal();
+        const GlobalValue *GV = GSDN->getGlobal();
         if (GV->getAlignment() == 16) {
           Base = Op0;
           Index = Zero;
@@ -507,7 +505,7 @@ SPUDAGToDAGISel::DFormAddressPredicate(SDNode *Op, SDValue N, SDValue &Base,
 
   if (Opc == ISD::FrameIndex) {
     // Stack frame index must be less than 512 (divided by 16):
-    FrameIndexSDNode *FIN = dyn_cast<FrameIndexSDNode>(N);
+    FrameIndexSDNode *FIN = cast<FrameIndexSDNode>(N);
     int FI = int(FIN->getIndex());
     DEBUG(errs() << "SelectDFormAddr: ISD::FrameIndex = "
                << FI << "\n");
@@ -528,11 +526,11 @@ SPUDAGToDAGISel::DFormAddressPredicate(SDNode *Op, SDValue N, SDValue &Base,
       return true;
     } else if (Op1.getOpcode() == ISD::Constant
                || Op1.getOpcode() == ISD::TargetConstant) {
-      ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Op1);
+      ConstantSDNode *CN = cast<ConstantSDNode>(Op1);
       int32_t offset = int32_t(CN->getSExtValue());
 
       if (Op0.getOpcode() == ISD::FrameIndex) {
-        FrameIndexSDNode *FIN = dyn_cast<FrameIndexSDNode>(Op0);
+        FrameIndexSDNode *FIN = cast<FrameIndexSDNode>(Op0);
         int FI = int(FIN->getIndex());
         DEBUG(errs() << "SelectDFormAddr: ISD::ADD offset = " << offset
                    << " frame index = " << FI << "\n");
@@ -549,11 +547,11 @@ SPUDAGToDAGISel::DFormAddressPredicate(SDNode *Op, SDValue N, SDValue &Base,
       }
     } else if (Op0.getOpcode() == ISD::Constant
                || Op0.getOpcode() == ISD::TargetConstant) {
-      ConstantSDNode *CN = dyn_cast<ConstantSDNode>(Op0);
+      ConstantSDNode *CN = cast<ConstantSDNode>(Op0);
       int32_t offset = int32_t(CN->getSExtValue());
 
       if (Op1.getOpcode() == ISD::FrameIndex) {
-        FrameIndexSDNode *FIN = dyn_cast<FrameIndexSDNode>(Op1);
+        FrameIndexSDNode *FIN = cast<FrameIndexSDNode>(Op1);
         int FI = int(FIN->getIndex());
         DEBUG(errs() << "SelectDFormAddr: ISD::ADD offset = " << offset
                    << " frame index = " << FI << "\n");

@@ -123,10 +123,11 @@ void llvm::ComputeValueVTs(const TargetLowering &TLI, const Type *Ty,
 /// isUsedOutsideOfDefiningBlock - Return true if this instruction is used by
 /// PHI nodes or outside of the basic block that defines it, or used by a
 /// switch or atomic instruction, which may expand to multiple basic blocks.
-static bool isUsedOutsideOfDefiningBlock(Instruction *I) {
+static bool isUsedOutsideOfDefiningBlock(const Instruction *I) {
   if (isa<PHINode>(I)) return true;
-  BasicBlock *BB = I->getParent();
-  for (Value::use_iterator UI = I->use_begin(), E = I->use_end(); UI != E; ++UI)
+  const BasicBlock *BB = I->getParent();
+  for (Value::const_use_iterator UI = I->use_begin(), E = I->use_end();
+        UI != E; ++UI)
     if (cast<Instruction>(*UI)->getParent() != BB || isa<PHINode>(*UI))
       return true;
   return false;
@@ -135,7 +136,7 @@ static bool isUsedOutsideOfDefiningBlock(Instruction *I) {
 /// isOnlyUsedInEntryBlock - If the specified argument is only used in the
 /// entry block, return true.  This includes arguments used by switches, since
 /// the switch may expand into multiple basic blocks.
-static bool isOnlyUsedInEntryBlock(Argument *A, bool EnableFastISel) {
+static bool isOnlyUsedInEntryBlock(const Argument *A, bool EnableFastISel) {
   // With FastISel active, we may be splitting blocks, so force creation
   // of virtual registers for all non-dead arguments.
   // Don't force virtual registers for byval arguments though, because
@@ -143,18 +144,19 @@ static bool isOnlyUsedInEntryBlock(Argument *A, bool EnableFastISel) {
   if (EnableFastISel && !A->hasByValAttr())
     return A->use_empty();
 
-  BasicBlock *Entry = A->getParent()->begin();
-  for (Value::use_iterator UI = A->use_begin(), E = A->use_end(); UI != E; ++UI)
+  const BasicBlock *Entry = A->getParent()->begin();
+  for (Value::const_use_iterator UI = A->use_begin(), E = A->use_end();
+       UI != E; ++UI)
     if (cast<Instruction>(*UI)->getParent() != Entry || isa<SwitchInst>(*UI))
       return false;  // Use not in entry block.
   return true;
 }
 
-FunctionLoweringInfo::FunctionLoweringInfo(TargetLowering &tli)
+FunctionLoweringInfo::FunctionLoweringInfo(const TargetLowering &tli)
   : TLI(tli) {
 }
 
-void FunctionLoweringInfo::set(Function &fn, MachineFunction &mf,
+void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
                                bool EnableFastISel) {
   Fn = &fn;
   MF = &mf;
@@ -162,7 +164,7 @@ void FunctionLoweringInfo::set(Function &fn, MachineFunction &mf,
 
   // Create a vreg for each argument register that is not dead and is used
   // outside of the entry block for the function.
-  for (Function::arg_iterator AI = Fn->arg_begin(), E = Fn->arg_end();
+  for (Function::const_arg_iterator AI = Fn->arg_begin(), E = Fn->arg_end();
        AI != E; ++AI)
     if (!isOnlyUsedInEntryBlock(AI, EnableFastISel))
       InitializeRegForValue(AI);
@@ -170,10 +172,10 @@ void FunctionLoweringInfo::set(Function &fn, MachineFunction &mf,
   // Initialize the mapping of values to registers.  This is only set up for
   // instruction values that are used outside of the block that defines
   // them.
-  Function::iterator BB = Fn->begin(), EB = Fn->end();
-  for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I)
-    if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
-      if (ConstantInt *CUI = dyn_cast<ConstantInt>(AI->getArraySize())) {
+  Function::const_iterator BB = Fn->begin(), EB = Fn->end();
+  for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I != E; ++I)
+    if (const AllocaInst *AI = dyn_cast<AllocaInst>(I))
+      if (const ConstantInt *CUI = dyn_cast<ConstantInt>(AI->getArraySize())) {
         const Type *Ty = AI->getAllocatedType();
         uint64_t TySize = TLI.getTargetData()->getTypeAllocSize(Ty);
         unsigned Align =
@@ -187,7 +189,7 @@ void FunctionLoweringInfo::set(Function &fn, MachineFunction &mf,
       }
 
   for (; BB != EB; ++BB)
-    for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I)
+    for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I != E; ++I)
       if (!I->use_empty() && isUsedOutsideOfDefiningBlock(I))
         if (!isa<AllocaInst>(I) ||
             !StaticAllocaMap.count(cast<AllocaInst>(I)))
@@ -196,7 +198,7 @@ void FunctionLoweringInfo::set(Function &fn, MachineFunction &mf,
   // Create an initial MachineBasicBlock for each LLVM BasicBlock in F.  This
   // also creates the initial PHI MachineInstrs, though none of the input
   // operands are populated.
-  for (BB = Fn->begin(), EB = Fn->end(); BB != EB; ++BB) {
+  for (BB = Fn->begin(); BB != EB; ++BB) {
     MachineBasicBlock *MBB = mf.CreateMachineBasicBlock(BB);
     MBBMap[BB] = MBB;
     MF->push_back(MBB);
@@ -209,9 +211,9 @@ void FunctionLoweringInfo::set(Function &fn, MachineFunction &mf,
 
     // Create Machine PHI nodes for LLVM PHI nodes, lowering them as
     // appropriate.
-    PHINode *PN;
+    const PHINode *PN;
     DebugLoc DL;
-    for (BasicBlock::iterator
+    for (BasicBlock::const_iterator
            I = BB->begin(), E = BB->end(); I != E; ++I) {
 
       PN = dyn_cast<PHINode>(I);
@@ -232,12 +234,20 @@ void FunctionLoweringInfo::set(Function &fn, MachineFunction &mf,
       }
     }
   }
+
+  // Mark landing pad blocks.
+  for (BB = Fn->begin(); BB != EB; ++BB)
+    if (const InvokeInst *Invoke = dyn_cast<InvokeInst>(BB->getTerminator()))
+      MBBMap[Invoke->getSuccessor(1)]->setIsLandingPad();
 }
 
 /// clear - Clear out all the function-specific state. This returns this
 /// FunctionLoweringInfo to an empty state, ready to be used for a
 /// different function.
 void FunctionLoweringInfo::clear() {
+  assert(CatchInfoFound.size() == CatchInfoLost.size() &&
+         "Not all catch info was assigned to a landing pad!");
+
   MBBMap.clear();
   ValueMap.clear();
   StaticAllocaMap.clear();
@@ -297,10 +307,10 @@ GlobalVariable *llvm::ExtractTypeInfo(Value *V) {
 
 /// AddCatchInfo - Extract the personality and type infos from an eh.selector
 /// call, and add them to the specified machine basic block.
-void llvm::AddCatchInfo(CallInst &I, MachineModuleInfo *MMI,
+void llvm::AddCatchInfo(const CallInst &I, MachineModuleInfo *MMI,
                         MachineBasicBlock *MBB) {
   // Inform the MachineModuleInfo of the personality for this landing pad.
-  ConstantExpr *CE = cast<ConstantExpr>(I.getOperand(2));
+  const ConstantExpr *CE = cast<ConstantExpr>(I.getOperand(2));
   assert(CE->getOpcode() == Instruction::BitCast &&
          isa<Function>(CE->getOperand(0)) &&
          "Personality should be a function");
@@ -308,11 +318,11 @@ void llvm::AddCatchInfo(CallInst &I, MachineModuleInfo *MMI,
 
   // Gather all the type infos for this landing pad and pass them along to
   // MachineModuleInfo.
-  std::vector<GlobalVariable *> TyInfo;
+  std::vector<const GlobalVariable *> TyInfo;
   unsigned N = I.getNumOperands();
 
   for (unsigned i = N - 1; i > 2; --i) {
-    if (ConstantInt *CI = dyn_cast<ConstantInt>(I.getOperand(i))) {
+    if (const ConstantInt *CI = dyn_cast<ConstantInt>(I.getOperand(i))) {
       unsigned FilterLength = CI->getZExtValue();
       unsigned FirstCatch = i + FilterLength + !FilterLength;
       assert (FirstCatch <= N && "Invalid filter length");
@@ -349,10 +359,11 @@ void llvm::AddCatchInfo(CallInst &I, MachineModuleInfo *MMI,
   }
 }
 
-void llvm::CopyCatchInfo(BasicBlock *SrcBB, BasicBlock *DestBB,
+void llvm::CopyCatchInfo(const BasicBlock *SrcBB, const BasicBlock *DestBB,
                          MachineModuleInfo *MMI, FunctionLoweringInfo &FLI) {
-  for (BasicBlock::iterator I = SrcBB->begin(), E = --SrcBB->end(); I != E; ++I)
-    if (EHSelectorInst *EHSel = dyn_cast<EHSelectorInst>(I)) {
+  for (BasicBlock::const_iterator I = SrcBB->begin(), E = --SrcBB->end();
+       I != E; ++I)
+    if (const EHSelectorInst *EHSel = dyn_cast<EHSelectorInst>(I)) {
       // Apply the catch info to DestBB.
       AddCatchInfo(*EHSel, MMI, FLI.MBBMap[DestBB]);
 #ifndef NDEBUG
@@ -360,4 +371,80 @@ void llvm::CopyCatchInfo(BasicBlock *SrcBB, BasicBlock *DestBB,
         FLI.CatchInfoFound.insert(EHSel);
 #endif
     }
+}
+
+/// hasInlineAsmMemConstraint - Return true if the inline asm instruction being
+/// processed uses a memory 'm' constraint.
+bool
+llvm::hasInlineAsmMemConstraint(std::vector<InlineAsm::ConstraintInfo> &CInfos,
+                                const TargetLowering &TLI) {
+  for (unsigned i = 0, e = CInfos.size(); i != e; ++i) {
+    InlineAsm::ConstraintInfo &CI = CInfos[i];
+    for (unsigned j = 0, ee = CI.Codes.size(); j != ee; ++j) {
+      TargetLowering::ConstraintType CType = TLI.getConstraintType(CI.Codes[j]);
+      if (CType == TargetLowering::C_Memory)
+        return true;
+    }
+
+    // Indirect operand accesses access memory.
+    if (CI.isIndirect)
+      return true;
+  }
+
+  return false;
+}
+
+/// getFCmpCondCode - Return the ISD condition code corresponding to
+/// the given LLVM IR floating-point condition code.  This includes
+/// consideration of global floating-point math flags.
+///
+ISD::CondCode llvm::getFCmpCondCode(FCmpInst::Predicate Pred) {
+  ISD::CondCode FPC, FOC;
+  switch (Pred) {
+  case FCmpInst::FCMP_FALSE: FOC = FPC = ISD::SETFALSE; break;
+  case FCmpInst::FCMP_OEQ:   FOC = ISD::SETEQ; FPC = ISD::SETOEQ; break;
+  case FCmpInst::FCMP_OGT:   FOC = ISD::SETGT; FPC = ISD::SETOGT; break;
+  case FCmpInst::FCMP_OGE:   FOC = ISD::SETGE; FPC = ISD::SETOGE; break;
+  case FCmpInst::FCMP_OLT:   FOC = ISD::SETLT; FPC = ISD::SETOLT; break;
+  case FCmpInst::FCMP_OLE:   FOC = ISD::SETLE; FPC = ISD::SETOLE; break;
+  case FCmpInst::FCMP_ONE:   FOC = ISD::SETNE; FPC = ISD::SETONE; break;
+  case FCmpInst::FCMP_ORD:   FOC = FPC = ISD::SETO;   break;
+  case FCmpInst::FCMP_UNO:   FOC = FPC = ISD::SETUO;  break;
+  case FCmpInst::FCMP_UEQ:   FOC = ISD::SETEQ; FPC = ISD::SETUEQ; break;
+  case FCmpInst::FCMP_UGT:   FOC = ISD::SETGT; FPC = ISD::SETUGT; break;
+  case FCmpInst::FCMP_UGE:   FOC = ISD::SETGE; FPC = ISD::SETUGE; break;
+  case FCmpInst::FCMP_ULT:   FOC = ISD::SETLT; FPC = ISD::SETULT; break;
+  case FCmpInst::FCMP_ULE:   FOC = ISD::SETLE; FPC = ISD::SETULE; break;
+  case FCmpInst::FCMP_UNE:   FOC = ISD::SETNE; FPC = ISD::SETUNE; break;
+  case FCmpInst::FCMP_TRUE:  FOC = FPC = ISD::SETTRUE; break;
+  default:
+    llvm_unreachable("Invalid FCmp predicate opcode!");
+    FOC = FPC = ISD::SETFALSE;
+    break;
+  }
+  if (FiniteOnlyFPMath())
+    return FOC;
+  else
+    return FPC;
+}
+
+/// getICmpCondCode - Return the ISD condition code corresponding to
+/// the given LLVM IR integer condition code.
+///
+ISD::CondCode llvm::getICmpCondCode(ICmpInst::Predicate Pred) {
+  switch (Pred) {
+  case ICmpInst::ICMP_EQ:  return ISD::SETEQ;
+  case ICmpInst::ICMP_NE:  return ISD::SETNE;
+  case ICmpInst::ICMP_SLE: return ISD::SETLE;
+  case ICmpInst::ICMP_ULE: return ISD::SETULE;
+  case ICmpInst::ICMP_SGE: return ISD::SETGE;
+  case ICmpInst::ICMP_UGE: return ISD::SETUGE;
+  case ICmpInst::ICMP_SLT: return ISD::SETLT;
+  case ICmpInst::ICMP_ULT: return ISD::SETULT;
+  case ICmpInst::ICMP_SGT: return ISD::SETGT;
+  case ICmpInst::ICMP_UGT: return ISD::SETUGT;
+  default:
+    llvm_unreachable("Invalid ICmp predicate opcode!");
+    return ISD::SETNE;
+  }
 }

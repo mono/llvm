@@ -17,7 +17,6 @@
 
 #include "llvm/BasicBlock.h"
 #include "llvm/Pass.h"
-#include "llvm/Constant.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 
@@ -41,7 +40,7 @@ namespace llvm {
 class SelectionDAGISel : public MachineFunctionPass {
 public:
   const TargetMachine &TM;
-  TargetLowering &TLI;
+  const TargetLowering &TLI;
   FunctionLoweringInfo *FuncInfo;
   MachineFunction *MF;
   MachineRegisterInfo *RegInfo;
@@ -57,15 +56,13 @@ public:
                             CodeGenOpt::Level OL = CodeGenOpt::Default);
   virtual ~SelectionDAGISel();
   
-  TargetLowering &getTargetLowering() { return TLI; }
+  const TargetLowering &getTargetLowering() { return TLI; }
 
   virtual void getAnalysisUsage(AnalysisUsage &AU) const;
 
   virtual bool runOnMachineFunction(MachineFunction &MF);
 
-  unsigned MakeReg(EVT VT);
-
-  virtual void EmitFunctionEntryCode(Function &Fn, MachineFunction &MF) {}
+  virtual void EmitFunctionEntryCode() {}
   
   /// PreprocessISelDAG - This hook allows targets to hack on the graph before
   /// instruction selection starts.
@@ -95,8 +92,11 @@ public:
 
   /// IsLegalToFold - Returns true if the specific operand node N of
   /// U can be folded during instruction selection that starts at Root.
-  bool IsLegalToFold(SDValue N, SDNode *U, SDNode *Root,
-                     bool IgnoreChains = false) const;
+  /// FIXME: This is a static member function because the PIC16 target,
+  /// which uses it during lowering.
+  static bool IsLegalToFold(SDValue N, SDNode *U, SDNode *Root,
+                            CodeGenOpt::Level OptLevel,
+                            bool IgnoreChains = false);
 
   /// CreateTargetHazardRecognizer - Return a newly allocated hazard recognizer
   /// to use for this target when scheduling the DAG.
@@ -281,23 +281,24 @@ private:
   SDNode *MorphNode(SDNode *Node, unsigned TargetOpc, SDVTList VTs,
                     const SDValue *Ops, unsigned NumOps, unsigned EmitNodeInfo);
   
-  void SelectAllBasicBlocks(Function &Fn, MachineFunction &MF,
-                            const TargetInstrInfo &TII);
+  void PrepareEHLandingPad(MachineBasicBlock *BB);
+  void SelectAllBasicBlocks(const Function &Fn);
   void FinishBasicBlock();
 
-  void SelectBasicBlock(BasicBlock *LLVMBB,
-                        BasicBlock::iterator Begin,
-                        BasicBlock::iterator End,
+  void SelectBasicBlock(const BasicBlock *LLVMBB,
+                        BasicBlock::const_iterator Begin,
+                        BasicBlock::const_iterator End,
                         bool &HadTailCall);
   void CodeGenAndEmitDAG();
-  void LowerArguments(BasicBlock *BB);
+  void LowerArguments(const BasicBlock *BB);
   
   void ShrinkDemandedOps();
   void ComputeLiveOutVRegInfo();
 
-  void HandlePHINodesInSuccessorBlocks(BasicBlock *LLVMBB);
+  void HandlePHINodesInSuccessorBlocks(const BasicBlock *LLVMBB);
 
-  bool HandlePHINodesInSuccessorBlocksFast(BasicBlock *LLVMBB, FastISel *F);
+  bool HandlePHINodesInSuccessorBlocksFast(const BasicBlock *LLVMBB,
+                                           FastISel *F);
 
   /// Create the scheduler. If a specific scheduler was specified
   /// via the SchedulerRegistry, use it, otherwise select the

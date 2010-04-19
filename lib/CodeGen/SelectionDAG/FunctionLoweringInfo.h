@@ -15,12 +15,15 @@
 #ifndef FUNCTIONLOWERINGINFO_H
 #define FUNCTIONLOWERINGINFO_H
 
+#include "llvm/InlineAsm.h"
+#include "llvm/Instructions.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #ifndef NDEBUG
 #include "llvm/ADT/SmallSet.h"
 #endif
 #include "llvm/CodeGen/ValueTypes.h"
+#include "llvm/CodeGen/ISDOpcodes.h"
 #include <vector>
 
 namespace llvm {
@@ -44,8 +47,8 @@ class Value;
 ///
 class FunctionLoweringInfo {
 public:
-  TargetLowering &TLI;
-  Function *Fn;
+  const TargetLowering &TLI;
+  const Function *Fn;
   MachineFunction *MF;
   MachineRegisterInfo *RegInfo;
 
@@ -56,13 +59,6 @@ public:
   /// DemoteRegister - if CanLowerReturn is false, DemoteRegister is a vreg
   /// allocated to hold a pointer to the hidden sret parameter.
   unsigned DemoteRegister;
-
-  explicit FunctionLoweringInfo(TargetLowering &TLI);
-
-  /// set - Initialize this FunctionLoweringInfo with the given Function
-  /// and its associated MachineFunction.
-  ///
-  void set(Function &Fn, MachineFunction &MF, bool EnableFastISel);
 
   /// MBBMap - A mapping from LLVM basic blocks to their machine code entry.
   DenseMap<const BasicBlock*, MachineBasicBlock *> MBBMap;
@@ -78,9 +74,31 @@ public:
   DenseMap<const AllocaInst*, int> StaticAllocaMap;
 
 #ifndef NDEBUG
-  SmallSet<Instruction*, 8> CatchInfoLost;
-  SmallSet<Instruction*, 8> CatchInfoFound;
+  SmallSet<const Instruction *, 8> CatchInfoLost;
+  SmallSet<const Instruction *, 8> CatchInfoFound;
 #endif
+
+  struct LiveOutInfo {
+    unsigned NumSignBits;
+    APInt KnownOne, KnownZero;
+    LiveOutInfo() : NumSignBits(0), KnownOne(1, 0), KnownZero(1, 0) {}
+  };
+  
+  /// LiveOutRegInfo - Information about live out vregs, indexed by their
+  /// register number offset by 'FirstVirtualRegister'.
+  std::vector<LiveOutInfo> LiveOutRegInfo;
+
+  explicit FunctionLoweringInfo(const TargetLowering &TLI);
+
+  /// set - Initialize this FunctionLoweringInfo with the given Function
+  /// and its associated MachineFunction.
+  ///
+  void set(const Function &Fn, MachineFunction &MF, bool EnableFastISel);
+
+  /// clear - Clear out all the function-specific state. This returns this
+  /// FunctionLoweringInfo to an empty state, ready to be used for a
+  /// different function.
+  void clear();
 
   unsigned MakeReg(EVT VT);
   
@@ -97,21 +115,6 @@ public:
     assert(R == 0 && "Already initialized this value register!");
     return R = CreateRegForValue(V);
   }
-  
-  struct LiveOutInfo {
-    unsigned NumSignBits;
-    APInt KnownOne, KnownZero;
-    LiveOutInfo() : NumSignBits(0), KnownOne(1, 0), KnownZero(1, 0) {}
-  };
-  
-  /// LiveOutRegInfo - Information about live out vregs, indexed by their
-  /// register number offset by 'FirstVirtualRegister'.
-  std::vector<LiveOutInfo> LiveOutRegInfo;
-
-  /// clear - Clear out all the function-specific state. This returns this
-  /// FunctionLoweringInfo to an empty state, ready to be used for a
-  /// different function.
-  void clear();
 };
 
 /// ComputeLinearIndex - Given an LLVM IR aggregate type and a sequence
@@ -140,11 +143,28 @@ GlobalVariable *ExtractTypeInfo(Value *V);
 
 /// AddCatchInfo - Extract the personality and type infos from an eh.selector
 /// call, and add them to the specified machine basic block.
-void AddCatchInfo(CallInst &I, MachineModuleInfo *MMI, MachineBasicBlock *MBB);
+void AddCatchInfo(const CallInst &I,
+                  MachineModuleInfo *MMI, MachineBasicBlock *MBB);
 
 /// CopyCatchInfo - Copy catch information from DestBB to SrcBB.
-void CopyCatchInfo(BasicBlock *SrcBB, BasicBlock *DestBB,
+void CopyCatchInfo(const BasicBlock *SrcBB, const BasicBlock *DestBB,
                    MachineModuleInfo *MMI, FunctionLoweringInfo &FLI);
+
+/// hasInlineAsmMemConstraint - Return true if the inline asm instruction being
+/// processed uses a memory 'm' constraint.
+bool hasInlineAsmMemConstraint(std::vector<InlineAsm::ConstraintInfo> &CInfos,
+                               const TargetLowering &TLI);
+
+/// getFCmpCondCode - Return the ISD condition code corresponding to
+/// the given LLVM IR floating-point condition code.  This includes
+/// consideration of global floating-point math flags.
+///
+ISD::CondCode getFCmpCondCode(FCmpInst::Predicate Pred);
+
+/// getICmpCondCode - Return the ISD condition code corresponding to
+/// the given LLVM IR integer condition code.
+///
+ISD::CondCode getICmpCondCode(ICmpInst::Predicate Pred);
 
 } // end namespace llvm
 

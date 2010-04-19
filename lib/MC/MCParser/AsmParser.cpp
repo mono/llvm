@@ -117,29 +117,6 @@ bool AsmParser::Run(bool NoInitialTextSection, bool NoFinalize) {
 
   // While we have input, parse each statement.
   while (Lexer.isNot(AsmToken::Eof)) {
-    // Handle conditional assembly here before calling ParseStatement()
-    if (Lexer.getKind() == AsmToken::Identifier) {
-      // If we have an identifier, handle it as the key symbol.
-      AsmToken ID = getTok();
-      SMLoc IDLoc = ID.getLoc();
-      StringRef IDVal = ID.getString();
-
-      if (IDVal == ".if" ||
-          IDVal == ".elseif" ||
-          IDVal == ".else" ||
-          IDVal == ".endif") {
-        if (!ParseConditionalAssemblyDirectives(IDVal, IDLoc))
-          continue;
-	HadError = true;
-	EatToEndOfStatement();
-	continue;
-      }
-    }
-    if (TheCondState.Ignore) {
-      EatToEndOfStatement();
-      continue;
-    }
-
     if (!ParseStatement()) continue;
   
     // We had an error, remember it and recover by skipping to the next line.
@@ -157,21 +134,6 @@ bool AsmParser::Run(bool NoInitialTextSection, bool NoFinalize) {
     Out.Finish();
 
   return HadError;
-}
-
-/// ParseConditionalAssemblyDirectives - parse the conditional assembly
-/// directives
-bool AsmParser::ParseConditionalAssemblyDirectives(StringRef Directive,
-                                                   SMLoc DirectiveLoc) {
-  if (Directive == ".if")
-    return ParseDirectiveIf(DirectiveLoc);
-  if (Directive == ".elseif")
-    return ParseDirectiveElseIf(DirectiveLoc);
-  if (Directive == ".else")
-    return ParseDirectiveElse(DirectiveLoc);
-  if (Directive == ".endif")
-    return ParseDirectiveEndIf(DirectiveLoc);
-  return true;
 }
 
 /// EatToEndOfStatement - Throw away the rest of the line for testing purposes.
@@ -209,6 +171,7 @@ MCSymbol *AsmParser::CreateSymbol(StringRef Name) {
 ///  primaryexpr ::= (parenexpr
 ///  primaryexpr ::= symbol
 ///  primaryexpr ::= number
+///  primaryexpr ::= '.'
 ///  primaryexpr ::= ~,+,- primaryexpr
 bool AsmParser::ParsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
   switch (Lexer.getKind()) {
@@ -253,6 +216,17 @@ bool AsmParser::ParsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
     EndLoc = Lexer.getLoc();
     Lex(); // Eat token.
     return false;
+  case AsmToken::Dot: {
+    // This is a '.' reference, which references the current PC.  Emit a
+    // temporary label to the streamer and refer to it.
+    MCSymbol *Sym = Ctx.CreateTempSymbol();
+    Out.EmitLabel(Sym);
+    Res = MCSymbolRefExpr::Create(Sym, MCSymbolRefExpr::VK_None, getContext());
+    EndLoc = Lexer.getLoc();
+    Lex(); // Eat identifier.
+    return false;
+  }
+      
   case AsmToken::LParen:
     Lex(); // Eat the '('.
     return ParseParenExpr(Res, EndLoc);
@@ -445,9 +419,30 @@ bool AsmParser::ParseStatement() {
   AsmToken ID = getTok();
   SMLoc IDLoc = ID.getLoc();
   StringRef IDVal;
-  if (ParseIdentifier(IDVal))
-    return TokError("unexpected token at start of statement");
+  if (ParseIdentifier(IDVal)) {
+    if (!TheCondState.Ignore)
+      return TokError("unexpected token at start of statement");
+    IDVal = "";
+  }
 
+  // Handle conditional assembly here before checking for skipping.  We
+  // have to do this so that .endif isn't skipped in a ".if 0" block for
+  // example.
+  if (IDVal == ".if")
+    return ParseDirectiveIf(IDLoc);
+  if (IDVal == ".elseif")
+    return ParseDirectiveElseIf(IDLoc);
+  if (IDVal == ".else")
+    return ParseDirectiveElse(IDLoc);
+  if (IDVal == ".endif")
+    return ParseDirectiveEndIf(IDLoc);
+    
+  // If we are in a ".if 0" block, ignore this statement.
+  if (TheCondState.Ignore) {
+    EatToEndOfStatement();
+    return false;
+  }
+  
   // FIXME: Recurse on local labels?
 
   // See what kind of statement we have.
@@ -1565,9 +1560,6 @@ bool AsmParser::ParseDirectiveDarwinDumpOrLoad(SMLoc IDLoc, bool IsDump) {
 /// ParseDirectiveIf
 /// ::= .if expression
 bool AsmParser::ParseDirectiveIf(SMLoc DirectiveLoc) {
-  // Consume the identifier that was the .if directive
-  Lex();
-
   TheCondStack.push_back(TheCondState);
   TheCondState.TheCond = AsmCond::IfCond;
   if(TheCondState.Ignore) {
@@ -1599,9 +1591,6 @@ bool AsmParser::ParseDirectiveElseIf(SMLoc DirectiveLoc) {
                           " an .elseif");
   TheCondState.TheCond = AsmCond::ElseIfCond;
 
-  // Consume the identifier that was the .elseif directive
-  Lex();
-
   bool LastIgnoreState = false;
   if (!TheCondStack.empty())
       LastIgnoreState = TheCondStack.back().Ignore;
@@ -1628,9 +1617,6 @@ bool AsmParser::ParseDirectiveElseIf(SMLoc DirectiveLoc) {
 /// ParseDirectiveElse
 /// ::= .else
 bool AsmParser::ParseDirectiveElse(SMLoc DirectiveLoc) {
-  // Consume the identifier that was the .else directive
-  Lex();
-
   if (Lexer.isNot(AsmToken::EndOfStatement))
     return TokError("unexpected token in '.else' directive");
   
@@ -1655,9 +1641,6 @@ bool AsmParser::ParseDirectiveElse(SMLoc DirectiveLoc) {
 /// ParseDirectiveEndIf
 /// ::= .endif
 bool AsmParser::ParseDirectiveEndIf(SMLoc DirectiveLoc) {
-  // Consume the identifier that was the .endif directive
-  Lex();
-
   if (Lexer.isNot(AsmToken::EndOfStatement))
     return TokError("unexpected token in '.endif' directive");
   

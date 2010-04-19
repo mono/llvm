@@ -15,12 +15,10 @@
 #define DEBUG_TYPE "x86-isel"
 #include "X86.h"
 #include "X86InstrBuilder.h"
-#include "X86ISelLowering.h"
 #include "X86MachineFunctionInfo.h"
 #include "X86RegisterInfo.h"
 #include "X86Subtarget.h"
 #include "X86TargetMachine.h"
-#include "llvm/GlobalValue.h"
 #include "llvm/Instructions.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/Support/CFG.h"
@@ -66,9 +64,9 @@ namespace {
     SDValue IndexReg; 
     int32_t Disp;
     SDValue Segment;
-    GlobalValue *GV;
-    Constant *CP;
-    BlockAddress *BlockAddr;
+    const GlobalValue *GV;
+    const Constant *CP;
+    const BlockAddress *BlockAddr;
     const char *ES;
     int JT;
     unsigned Align;    // CP alignment.
@@ -162,7 +160,7 @@ namespace {
   class X86DAGToDAGISel : public SelectionDAGISel {
     /// X86Lowering - This object fully describes how to lower LLVM code to an
     /// X86-specific SelectionDAG.
-    X86TargetLowering &X86Lowering;
+    const X86TargetLowering &X86Lowering;
 
     /// Subtarget - Keep a pointer to the X86Subtarget around so that we can
     /// make the right decision when generating code for different targets.
@@ -183,7 +181,7 @@ namespace {
       return "X86 DAG->DAG Instruction Selection";
     }
 
-    virtual void EmitFunctionEntryCode(Function &Fn, MachineFunction &MF);
+    virtual void EmitFunctionEntryCode();
 
     virtual bool IsProfitableToFold(SDValue N, SDNode *U, SDNode *Root) const;
 
@@ -546,11 +544,11 @@ void X86DAGToDAGISel::EmitSpecialCodeForMain(MachineBasicBlock *BB,
             TII->get(X86::CALLpcrel32)).addExternalSymbol("__main");
 }
 
-void X86DAGToDAGISel::EmitFunctionEntryCode(Function &Fn, MachineFunction &MF) {
+void X86DAGToDAGISel::EmitFunctionEntryCode() {
   // If this is main, emit special code for main.
-  MachineBasicBlock *BB = MF.begin();
-  if (Fn.hasExternalLinkage() && Fn.getName() == "main")
-    EmitSpecialCodeForMain(BB, MF.getFrameInfo());
+  if (const Function *Fn = MF->getFunction())
+    if (Fn->hasExternalLinkage() && Fn->getName() == "main")
+      EmitSpecialCodeForMain(MF->begin(), MF->getFrameInfo());
 }
 
 
@@ -1185,7 +1183,7 @@ bool X86DAGToDAGISel::SelectScalarSSELoad(SDNode *Root,
     if (ISD::isNON_EXTLoad(PatternNodeWithChain.getNode()) &&
         PatternNodeWithChain.hasOneUse() &&
         IsProfitableToFold(N.getOperand(0), N.getNode(), Root) &&
-        IsLegalToFold(N.getOperand(0), N.getNode(), Root)) {
+        IsLegalToFold(N.getOperand(0), N.getNode(), Root, OptLevel)) {
       LoadSDNode *LD = cast<LoadSDNode>(PatternNodeWithChain);
       if (!SelectAddr(Root, LD->getBasePtr(), Base, Scale, Index, Disp,Segment))
         return false;
@@ -1202,7 +1200,7 @@ bool X86DAGToDAGISel::SelectScalarSSELoad(SDNode *Root,
       ISD::isNON_EXTLoad(N.getOperand(0).getOperand(0).getNode()) &&
       N.getOperand(0).getOperand(0).hasOneUse() &&
       IsProfitableToFold(N.getOperand(0), N.getNode(), Root) &&
-      IsLegalToFold(N.getOperand(0), N.getNode(), Root)) {
+      IsLegalToFold(N.getOperand(0), N.getNode(), Root, OptLevel)) {
     // Okay, this is a zero extending load.  Fold it.
     LoadSDNode *LD = cast<LoadSDNode>(N.getOperand(0).getOperand(0));
     if (!SelectAddr(Root, LD->getBasePtr(), Base, Scale, Index, Disp, Segment))
@@ -1309,7 +1307,7 @@ bool X86DAGToDAGISel::TryFoldLoad(SDNode *P, SDValue N,
                                   SDValue &Segment) {
   if (!ISD::isNON_EXTLoad(N.getNode()) ||
       !IsProfitableToFold(N, P, P) ||
-      !IsLegalToFold(N, P, P))
+      !IsLegalToFold(N, P, P, OptLevel))
     return false;
   
   return SelectAddr(P, N.getOperand(1), Base, Scale, Index, Disp, Segment);
