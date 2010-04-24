@@ -164,11 +164,11 @@ MachineBasicBlock *TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
 // SelectionDAGISel code
 //===----------------------------------------------------------------------===//
 
-SelectionDAGISel::SelectionDAGISel(TargetMachine &tm, CodeGenOpt::Level OL) :
+SelectionDAGISel::SelectionDAGISel(const TargetMachine &tm, CodeGenOpt::Level OL) :
   MachineFunctionPass(&ID), TM(tm), TLI(*tm.getTargetLowering()),
   FuncInfo(new FunctionLoweringInfo(TLI)),
-  CurDAG(new SelectionDAG(TLI, *FuncInfo)),
-  SDB(new SelectionDAGBuilder(*CurDAG, TLI, *FuncInfo, OL)),
+  CurDAG(new SelectionDAG(tm, *FuncInfo)),
+  SDB(new SelectionDAGBuilder(*CurDAG, *FuncInfo, OL)),
   GFI(),
   OptLevel(OL),
   DAGSize(0)
@@ -224,63 +224,27 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
   return true;
 }
 
-/// SetDebugLoc - Update MF's and SDB's DebugLocs if debug information is
-/// attached with this instruction.
-static void SetDebugLoc(const Instruction *I, SelectionDAGBuilder *SDB,
-                        FastISel *FastIS, MachineFunction *MF) {
-  DebugLoc DL = I->getDebugLoc();
-  if (DL.isUnknown()) return;
-  
-  SDB->setCurDebugLoc(DL);
-
-  if (FastIS)
-    FastIS->setCurDebugLoc(DL);
-
-  // If the function doesn't have a default debug location yet, set
-  // it. This is a total hack.
-  if (MF->getDefaultDebugLoc().isUnknown())
-    MF->setDefaultDebugLoc(DL);
-}
-
-/// ResetDebugLoc - Set MF's and SDB's DebugLocs to Unknown.
-static void ResetDebugLoc(SelectionDAGBuilder *SDB, FastISel *FastIS) {
-  SDB->setCurDebugLoc(DebugLoc());
-  if (FastIS)
-    FastIS->setCurDebugLoc(DebugLoc());
-}
-
-void SelectionDAGISel::SelectBasicBlock(const BasicBlock *LLVMBB,
-                                        BasicBlock::const_iterator Begin,
-                                        BasicBlock::const_iterator End,
-                                        bool &HadTailCall) {
-  SDB->setCurrentBasicBlock(BB);
-
+MachineBasicBlock *
+SelectionDAGISel::SelectBasicBlock(MachineBasicBlock *BB,
+                                   const BasicBlock *LLVMBB,
+                                   BasicBlock::const_iterator Begin,
+                                   BasicBlock::const_iterator End,
+                                   bool &HadTailCall) {
   // Lower all of the non-terminator instructions. If a call is emitted
   // as a tail call, cease emitting nodes for this block. Terminators
   // are handled below.
   for (BasicBlock::const_iterator I = Begin;
        I != End && !SDB->HasTailCall && !isa<TerminatorInst>(I);
-       ++I) {
-    SetDebugLoc(I, SDB, 0, MF);
+       ++I)
     SDB->visit(*I);
-    ResetDebugLoc(SDB, 0);
-  }
 
   if (!SDB->HasTailCall) {
-    // Ensure that all instructions which are used outside of their defining
-    // blocks are available as virtual registers.  Invoke is handled elsewhere.
-    for (BasicBlock::const_iterator I = Begin; I != End; ++I)
-      if (!isa<PHINode>(I) && !isa<InvokeInst>(I))
-        SDB->CopyToExportRegsIfNeeded(I);
-
     // Handle PHI nodes in successor blocks.
     if (End == LLVMBB->end()) {
       HandlePHINodesInSuccessorBlocks(LLVMBB);
 
       // Lower the terminator after the copies are emitted.
-      SetDebugLoc(LLVMBB->getTerminator(), SDB, 0, MF);
       SDB->visit(*LLVMBB->getTerminator());
-      ResetDebugLoc(SDB, 0);
     }
   }
 
@@ -288,9 +252,10 @@ void SelectionDAGISel::SelectBasicBlock(const BasicBlock *LLVMBB,
   CurDAG->setRoot(SDB->getControlRoot());
 
   // Final step, emit the lowered DAG as machine code.
-  CodeGenAndEmitDAG();
+  BB = CodeGenAndEmitDAG(BB);
   HadTailCall = SDB->HasTailCall;
   SDB->clear();
+  return BB;
 }
 
 namespace {
@@ -475,7 +440,7 @@ void SelectionDAGISel::ComputeLiveOutVRegInfo() {
   } while (!Worklist.empty());
 }
 
-void SelectionDAGISel::CodeGenAndEmitDAG() {
+MachineBasicBlock *SelectionDAGISel::CodeGenAndEmitDAG(MachineBasicBlock *BB) {
   std::string GroupName;
   if (TimePassesIsEnabled)
     GroupName = "Instruction Selection and Scheduling";
@@ -638,8 +603,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
     delete Scheduler;
   }
 
-  DEBUG(dbgs() << "Selected machine code:\n");
-  DEBUG(BB->dump());
+  return BB;
 }
 
 void SelectionDAGISel::DoInstructionSelection() {
@@ -705,8 +669,7 @@ void SelectionDAGISel::PrepareEHLandingPad(MachineBasicBlock *BB) {
   // landing pad can thus be detected via the MachineModuleInfo.
   MCSymbol *Label = MF->getMMI().addLandingPad(BB);
 
-  const TargetInstrDesc &II =
-    TLI.getTargetMachine().getInstrInfo()->get(TargetOpcode::EH_LABEL);
+  const TargetInstrDesc &II = TM.getInstrInfo()->get(TargetOpcode::EH_LABEL);
   BuildMI(BB, SDB->getCurDebugLoc(), II).addSym(Label);
 
   // Mark exception register as live in.
@@ -757,9 +720,9 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   // Iterate over all basic blocks in the function.
   for (Function::const_iterator I = Fn.begin(), E = Fn.end(); I != E; ++I) {
     const BasicBlock *LLVMBB = &*I;
-    BB = FuncInfo->MBBMap[LLVMBB];
+    MachineBasicBlock *BB = FuncInfo->MBBMap[LLVMBB];
 
-    BasicBlock::const_iterator const Begin = LLVMBB->begin();
+    BasicBlock::const_iterator const Begin = LLVMBB->getFirstNonPHI();
     BasicBlock::const_iterator const End = LLVMBB->end();
     BasicBlock::const_iterator BI = Begin;
 
@@ -793,7 +756,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
       // beginning FastISel on the entry block.
       if (LLVMBB == &Fn.getEntryBlock()) {
         CurDAG->setRoot(SDB->getControlRoot());
-        CodeGenAndEmitDAG();
+        BB = CodeGenAndEmitDAG(BB);
         SDB->clear();
       }
       FastIS->startNewBlock(BB);
@@ -804,7 +767,6 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
         if (isa<TerminatorInst>(BI))
           if (!HandlePHINodesInSuccessorBlocksFast(LLVMBB, FastIS)) {
             ++NumFastIselFailures;
-            ResetDebugLoc(SDB, FastIS);
             if (EnableFastISelVerbose || EnableFastISelAbort) {
               dbgs() << "FastISel miss: ";
               BI->dump();
@@ -814,17 +776,9 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
             break;
           }
 
-        SetDebugLoc(BI, SDB, FastIS, MF);
-
         // Try to select the instruction with FastISel.
-        if (FastIS->SelectInstruction(BI)) {
-          ResetDebugLoc(SDB, FastIS);
+        if (FastIS->SelectInstruction(BI))
           continue;
-        }
-
-        // Clear out the debug location so that it doesn't carry over to
-        // unrelated instructions.
-        ResetDebugLoc(SDB, FastIS);
 
         // Then handle certain instructions as single-LLVM-Instruction blocks.
         if (isa<CallInst>(BI)) {
@@ -841,7 +795,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
           }
 
           bool HadTailCall = false;
-          SelectBasicBlock(LLVMBB, BI, llvm::next(BI), HadTailCall);
+          BB = SelectBasicBlock(BB, LLVMBB, BI, llvm::next(BI), HadTailCall);
 
           // If the call was emitted as a tail call, we're done with the block.
           if (HadTailCall) {
@@ -877,17 +831,17 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
     // block.
     if (BI != End) {
       bool HadTailCall;
-      SelectBasicBlock(LLVMBB, BI, End, HadTailCall);
+      BB = SelectBasicBlock(BB, LLVMBB, BI, End, HadTailCall);
     }
 
-    FinishBasicBlock();
+    FinishBasicBlock(BB);
   }
 
   delete FastIS;
 }
 
 void
-SelectionDAGISel::FinishBasicBlock() {
+SelectionDAGISel::FinishBasicBlock(MachineBasicBlock *BB) {
 
   DEBUG(dbgs() << "Target-post-processed machine code:\n");
   DEBUG(BB->dump());
@@ -923,31 +877,31 @@ SelectionDAGISel::FinishBasicBlock() {
     if (!SDB->BitTestCases[i].Emitted) {
       // Set the current basic block to the mbb we wish to insert the code into
       BB = SDB->BitTestCases[i].Parent;
-      SDB->setCurrentBasicBlock(BB);
       // Emit the code
-      SDB->visitBitTestHeader(SDB->BitTestCases[i]);
+      SDB->visitBitTestHeader(SDB->BitTestCases[i], BB);
       CurDAG->setRoot(SDB->getRoot());
-      CodeGenAndEmitDAG();
+      BB = CodeGenAndEmitDAG(BB);
       SDB->clear();
     }
 
     for (unsigned j = 0, ej = SDB->BitTestCases[i].Cases.size(); j != ej; ++j) {
       // Set the current basic block to the mbb we wish to insert the code into
       BB = SDB->BitTestCases[i].Cases[j].ThisBB;
-      SDB->setCurrentBasicBlock(BB);
       // Emit the code
       if (j+1 != ej)
         SDB->visitBitTestCase(SDB->BitTestCases[i].Cases[j+1].ThisBB,
                               SDB->BitTestCases[i].Reg,
-                              SDB->BitTestCases[i].Cases[j]);
+                              SDB->BitTestCases[i].Cases[j],
+                              BB);
       else
         SDB->visitBitTestCase(SDB->BitTestCases[i].Default,
                               SDB->BitTestCases[i].Reg,
-                              SDB->BitTestCases[i].Cases[j]);
+                              SDB->BitTestCases[i].Cases[j],
+                              BB);
 
 
       CurDAG->setRoot(SDB->getRoot());
-      CodeGenAndEmitDAG();
+      BB = CodeGenAndEmitDAG(BB);
       SDB->clear();
     }
 
@@ -990,21 +944,20 @@ SelectionDAGISel::FinishBasicBlock() {
     if (!SDB->JTCases[i].first.Emitted) {
       // Set the current basic block to the mbb we wish to insert the code into
       BB = SDB->JTCases[i].first.HeaderBB;
-      SDB->setCurrentBasicBlock(BB);
       // Emit the code
-      SDB->visitJumpTableHeader(SDB->JTCases[i].second, SDB->JTCases[i].first);
+      SDB->visitJumpTableHeader(SDB->JTCases[i].second, SDB->JTCases[i].first,
+                                BB);
       CurDAG->setRoot(SDB->getRoot());
-      CodeGenAndEmitDAG();
+      BB = CodeGenAndEmitDAG(BB);
       SDB->clear();
     }
 
     // Set the current basic block to the mbb we wish to insert the code into
     BB = SDB->JTCases[i].second.MBB;
-    SDB->setCurrentBasicBlock(BB);
     // Emit the code
     SDB->visitJumpTable(SDB->JTCases[i].second);
     CurDAG->setRoot(SDB->getRoot());
-    CodeGenAndEmitDAG();
+    BB = CodeGenAndEmitDAG(BB);
     SDB->clear();
 
     // Update PHI Nodes
@@ -1048,12 +1001,11 @@ SelectionDAGISel::FinishBasicBlock() {
   for (unsigned i = 0, e = SDB->SwitchCases.size(); i != e; ++i) {
     // Set the current basic block to the mbb we wish to insert the code into
     MachineBasicBlock *ThisBB = BB = SDB->SwitchCases[i].ThisBB;
-    SDB->setCurrentBasicBlock(BB);
 
     // Emit the code
-    SDB->visitSwitchCase(SDB->SwitchCases[i]);
+    SDB->visitSwitchCase(SDB->SwitchCases[i], BB);
     CurDAG->setRoot(SDB->getRoot());
-    CodeGenAndEmitDAG();
+    BB = CodeGenAndEmitDAG(BB);
 
     // Handle any PHI nodes in successors of this chunk, as if we were coming
     // from the original BB before switch expansion.  Note that PHI nodes can

@@ -14,19 +14,18 @@
 
 #define DEBUG_TYPE "function-lowering-info"
 #include "FunctionLoweringInfo.h"
-#include "llvm/CallingConv.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
 #include "llvm/Instructions.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
+#include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetFrameInfo.h"
@@ -34,96 +33,17 @@
 #include "llvm/Target/TargetIntrinsicInfo.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 using namespace llvm;
-
-/// ComputeLinearIndex - Given an LLVM IR aggregate type and a sequence
-/// of insertvalue or extractvalue indices that identify a member, return
-/// the linearized index of the start of the member.
-///
-unsigned llvm::ComputeLinearIndex(const TargetLowering &TLI, const Type *Ty,
-                                  const unsigned *Indices,
-                                  const unsigned *IndicesEnd,
-                                  unsigned CurIndex) {
-  // Base case: We're done.
-  if (Indices && Indices == IndicesEnd)
-    return CurIndex;
-
-  // Given a struct type, recursively traverse the elements.
-  if (const StructType *STy = dyn_cast<StructType>(Ty)) {
-    for (StructType::element_iterator EB = STy->element_begin(),
-                                      EI = EB,
-                                      EE = STy->element_end();
-        EI != EE; ++EI) {
-      if (Indices && *Indices == unsigned(EI - EB))
-        return ComputeLinearIndex(TLI, *EI, Indices+1, IndicesEnd, CurIndex);
-      CurIndex = ComputeLinearIndex(TLI, *EI, 0, 0, CurIndex);
-    }
-    return CurIndex;
-  }
-  // Given an array type, recursively traverse the elements.
-  else if (const ArrayType *ATy = dyn_cast<ArrayType>(Ty)) {
-    const Type *EltTy = ATy->getElementType();
-    for (unsigned i = 0, e = ATy->getNumElements(); i != e; ++i) {
-      if (Indices && *Indices == i)
-        return ComputeLinearIndex(TLI, EltTy, Indices+1, IndicesEnd, CurIndex);
-      CurIndex = ComputeLinearIndex(TLI, EltTy, 0, 0, CurIndex);
-    }
-    return CurIndex;
-  }
-  // We haven't found the type we're looking for, so keep searching.
-  return CurIndex + 1;
-}
-
-/// ComputeValueVTs - Given an LLVM IR type, compute a sequence of
-/// EVTs that represent all the individual underlying
-/// non-aggregate types that comprise it.
-///
-/// If Offsets is non-null, it points to a vector to be filled in
-/// with the in-memory offsets of each of the individual values.
-///
-void llvm::ComputeValueVTs(const TargetLowering &TLI, const Type *Ty,
-                           SmallVectorImpl<EVT> &ValueVTs,
-                           SmallVectorImpl<uint64_t> *Offsets,
-                           uint64_t StartingOffset) {
-  // Given a struct type, recursively traverse the elements.
-  if (const StructType *STy = dyn_cast<StructType>(Ty)) {
-    const StructLayout *SL = TLI.getTargetData()->getStructLayout(STy);
-    for (StructType::element_iterator EB = STy->element_begin(),
-                                      EI = EB,
-                                      EE = STy->element_end();
-         EI != EE; ++EI)
-      ComputeValueVTs(TLI, *EI, ValueVTs, Offsets,
-                      StartingOffset + SL->getElementOffset(EI - EB));
-    return;
-  }
-  // Given an array type, recursively traverse the elements.
-  if (const ArrayType *ATy = dyn_cast<ArrayType>(Ty)) {
-    const Type *EltTy = ATy->getElementType();
-    uint64_t EltSize = TLI.getTargetData()->getTypeAllocSize(EltTy);
-    for (unsigned i = 0, e = ATy->getNumElements(); i != e; ++i)
-      ComputeValueVTs(TLI, EltTy, ValueVTs, Offsets,
-                      StartingOffset + i * EltSize);
-    return;
-  }
-  // Interpret void as zero return values.
-  if (Ty->isVoidTy())
-    return;
-  // Base case: we can get an EVT for this LLVM IR type.
-  ValueVTs.push_back(TLI.getValueType(Ty));
-  if (Offsets)
-    Offsets->push_back(StartingOffset);
-}
 
 /// isUsedOutsideOfDefiningBlock - Return true if this instruction is used by
 /// PHI nodes or outside of the basic block that defines it, or used by a
 /// switch or atomic instruction, which may expand to multiple basic blocks.
 static bool isUsedOutsideOfDefiningBlock(const Instruction *I) {
+  if (I->use_empty()) return false;
   if (isa<PHINode>(I)) return true;
   const BasicBlock *BB = I->getParent();
   for (Value::const_use_iterator UI = I->use_begin(), E = I->use_end();
@@ -190,7 +110,7 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
 
   for (; BB != EB; ++BB)
     for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I != E; ++I)
-      if (!I->use_empty() && isUsedOutsideOfDefiningBlock(I))
+      if (isUsedOutsideOfDefiningBlock(I))
         if (!isa<AllocaInst>(I) ||
             !StaticAllocaMap.count(cast<AllocaInst>(I)))
           InitializeRegForValue(I);
@@ -211,14 +131,11 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
 
     // Create Machine PHI nodes for LLVM PHI nodes, lowering them as
     // appropriate.
-    const PHINode *PN;
-    DebugLoc DL;
-    for (BasicBlock::const_iterator
-           I = BB->begin(), E = BB->end(); I != E; ++I) {
+    for (BasicBlock::const_iterator I = BB->begin();
+         const PHINode *PN = dyn_cast<PHINode>(I); ++I) {
+      if (PN->use_empty()) continue;
 
-      PN = dyn_cast<PHINode>(I);
-      if (!PN || PN->use_empty()) continue;
-
+      DebugLoc DL = PN->getDebugLoc();
       unsigned PHIReg = ValueMap[PN];
       assert(PHIReg && "PHI node does not have an assigned virtual register!");
 
@@ -287,24 +204,6 @@ unsigned FunctionLoweringInfo::CreateRegForValue(const Value *V) {
   return FirstReg;
 }
 
-/// ExtractTypeInfo - Returns the type info, possibly bitcast, encoded in V.
-GlobalVariable *llvm::ExtractTypeInfo(Value *V) {
-  V = V->stripPointerCasts();
-  GlobalVariable *GV = dyn_cast<GlobalVariable>(V);
-
-  if (GV && GV->getName() == ".llvm.eh.catch.all.value") {
-    assert(GV->hasInitializer() &&
-           "The EH catch-all value must have an initializer");
-    Value *Init = GV->getInitializer();
-    GV = dyn_cast<GlobalVariable>(Init);
-    if (!GV) V = cast<ConstantPointerNull>(Init);
-  }
-
-  assert((GV || isa<ConstantPointerNull>(V)) &&
-         "TypeInfo must be a global variable or NULL");
-  return GV;
-}
-
 /// AddCatchInfo - Extract the personality and type infos from an eh.selector
 /// call, and add them to the specified machine basic block.
 void llvm::AddCatchInfo(const CallInst &I, MachineModuleInfo *MMI,
@@ -371,80 +270,4 @@ void llvm::CopyCatchInfo(const BasicBlock *SrcBB, const BasicBlock *DestBB,
         FLI.CatchInfoFound.insert(EHSel);
 #endif
     }
-}
-
-/// hasInlineAsmMemConstraint - Return true if the inline asm instruction being
-/// processed uses a memory 'm' constraint.
-bool
-llvm::hasInlineAsmMemConstraint(std::vector<InlineAsm::ConstraintInfo> &CInfos,
-                                const TargetLowering &TLI) {
-  for (unsigned i = 0, e = CInfos.size(); i != e; ++i) {
-    InlineAsm::ConstraintInfo &CI = CInfos[i];
-    for (unsigned j = 0, ee = CI.Codes.size(); j != ee; ++j) {
-      TargetLowering::ConstraintType CType = TLI.getConstraintType(CI.Codes[j]);
-      if (CType == TargetLowering::C_Memory)
-        return true;
-    }
-
-    // Indirect operand accesses access memory.
-    if (CI.isIndirect)
-      return true;
-  }
-
-  return false;
-}
-
-/// getFCmpCondCode - Return the ISD condition code corresponding to
-/// the given LLVM IR floating-point condition code.  This includes
-/// consideration of global floating-point math flags.
-///
-ISD::CondCode llvm::getFCmpCondCode(FCmpInst::Predicate Pred) {
-  ISD::CondCode FPC, FOC;
-  switch (Pred) {
-  case FCmpInst::FCMP_FALSE: FOC = FPC = ISD::SETFALSE; break;
-  case FCmpInst::FCMP_OEQ:   FOC = ISD::SETEQ; FPC = ISD::SETOEQ; break;
-  case FCmpInst::FCMP_OGT:   FOC = ISD::SETGT; FPC = ISD::SETOGT; break;
-  case FCmpInst::FCMP_OGE:   FOC = ISD::SETGE; FPC = ISD::SETOGE; break;
-  case FCmpInst::FCMP_OLT:   FOC = ISD::SETLT; FPC = ISD::SETOLT; break;
-  case FCmpInst::FCMP_OLE:   FOC = ISD::SETLE; FPC = ISD::SETOLE; break;
-  case FCmpInst::FCMP_ONE:   FOC = ISD::SETNE; FPC = ISD::SETONE; break;
-  case FCmpInst::FCMP_ORD:   FOC = FPC = ISD::SETO;   break;
-  case FCmpInst::FCMP_UNO:   FOC = FPC = ISD::SETUO;  break;
-  case FCmpInst::FCMP_UEQ:   FOC = ISD::SETEQ; FPC = ISD::SETUEQ; break;
-  case FCmpInst::FCMP_UGT:   FOC = ISD::SETGT; FPC = ISD::SETUGT; break;
-  case FCmpInst::FCMP_UGE:   FOC = ISD::SETGE; FPC = ISD::SETUGE; break;
-  case FCmpInst::FCMP_ULT:   FOC = ISD::SETLT; FPC = ISD::SETULT; break;
-  case FCmpInst::FCMP_ULE:   FOC = ISD::SETLE; FPC = ISD::SETULE; break;
-  case FCmpInst::FCMP_UNE:   FOC = ISD::SETNE; FPC = ISD::SETUNE; break;
-  case FCmpInst::FCMP_TRUE:  FOC = FPC = ISD::SETTRUE; break;
-  default:
-    llvm_unreachable("Invalid FCmp predicate opcode!");
-    FOC = FPC = ISD::SETFALSE;
-    break;
-  }
-  if (FiniteOnlyFPMath())
-    return FOC;
-  else
-    return FPC;
-}
-
-/// getICmpCondCode - Return the ISD condition code corresponding to
-/// the given LLVM IR integer condition code.
-///
-ISD::CondCode llvm::getICmpCondCode(ICmpInst::Predicate Pred) {
-  switch (Pred) {
-  case ICmpInst::ICMP_EQ:  return ISD::SETEQ;
-  case ICmpInst::ICMP_NE:  return ISD::SETNE;
-  case ICmpInst::ICMP_SLE: return ISD::SETLE;
-  case ICmpInst::ICMP_ULE: return ISD::SETULE;
-  case ICmpInst::ICMP_SGE: return ISD::SETGE;
-  case ICmpInst::ICMP_UGE: return ISD::SETUGE;
-  case ICmpInst::ICMP_SLT: return ISD::SETLT;
-  case ICmpInst::ICMP_ULT: return ISD::SETULT;
-  case ICmpInst::ICMP_SGT: return ISD::SETGT;
-  case ICmpInst::ICMP_UGT: return ISD::SETUGT;
-  default:
-    llvm_unreachable("Invalid ICmp predicate opcode!");
-    return ISD::SETNE;
-  }
 }

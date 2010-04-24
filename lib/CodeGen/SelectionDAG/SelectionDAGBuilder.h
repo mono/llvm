@@ -82,8 +82,6 @@ class ZExtInst;
 /// implementation that is parameterized by a TargetLowering object.
 ///
 class SelectionDAGBuilder {
-  MachineBasicBlock *CurMBB;
-
   /// CurDebugLoc - current file + line number.  Changes as we build the DAG.
   DebugLoc CurDebugLoc;
 
@@ -257,6 +255,7 @@ public:
   // TLI - This is information that describes the available target features we
   // need for lowering.  This indicates when operations are unavailable,
   // implemented with a libcall, etc.
+  const TargetMachine &TM;
   const TargetLowering &TLI;
   SelectionDAG &DAG;
   const TargetData *TD;
@@ -303,10 +302,10 @@ public:
 
   LLVMContext *Context;
 
-  SelectionDAGBuilder(SelectionDAG &dag, const TargetLowering &tli,
-                      FunctionLoweringInfo &funcinfo,
+  SelectionDAGBuilder(SelectionDAG &dag, FunctionLoweringInfo &funcinfo,
                       CodeGenOpt::Level ol)
-    : SDNodeOrder(0), TLI(tli), DAG(dag), FuncInfo(funcinfo), OptLevel(ol),
+    : SDNodeOrder(0), TM(dag.getTarget()), TLI(dag.getTargetLoweringInfo()),
+      DAG(dag), FuncInfo(funcinfo), OptLevel(ol),
       HasTailCall(false), Context(dag.getContext()) {
   }
 
@@ -334,7 +333,6 @@ public:
   SDValue getControlRoot();
 
   DebugLoc getCurDebugLoc() const { return CurDebugLoc; }
-  void setCurDebugLoc(DebugLoc dl) { CurDebugLoc = dl; }
 
   unsigned getSDNodeOrder() const { return SDNodeOrder; }
 
@@ -348,8 +346,6 @@ public:
   void visit(const Instruction &I);
 
   void visit(unsigned Opcode, const User &I);
-
-  void setCurrentBasicBlock(MachineBasicBlock *MBB) { CurMBB = MBB; }
 
   SDValue getValue(const Value *V);
 
@@ -365,10 +361,11 @@ public:
 
   void FindMergedConditions(const Value *Cond, MachineBasicBlock *TBB,
                             MachineBasicBlock *FBB, MachineBasicBlock *CurBB,
-                            unsigned Opc);
+                            MachineBasicBlock *SwitchBB, unsigned Opc);
   void EmitBranchForMergedCondition(const Value *Cond, MachineBasicBlock *TBB,
                                     MachineBasicBlock *FBB,
-                                    MachineBasicBlock *CurBB);
+                                    MachineBasicBlock *CurBB,
+                                    MachineBasicBlock *SwitchBB);
   bool ShouldEmitAsBranches(const std::vector<CaseBlock> &Cases);
   bool isExportableFromCurrentBlock(const Value *V, const BasicBlock *FromBB);
   void CopyToExportRegsIfNeeded(const Value *V);
@@ -388,27 +385,34 @@ private:
   bool handleSmallSwitchRange(CaseRec& CR,
                               CaseRecVector& WorkList,
                               const Value* SV,
-                              MachineBasicBlock* Default);
+                              MachineBasicBlock* Default,
+                              MachineBasicBlock *SwitchBB);
   bool handleJTSwitchCase(CaseRec& CR,
                           CaseRecVector& WorkList,
                           const Value* SV,
-                          MachineBasicBlock* Default);
+                          MachineBasicBlock* Default,
+                          MachineBasicBlock *SwitchBB);
   bool handleBTSplitSwitchCase(CaseRec& CR,
                                CaseRecVector& WorkList,
                                const Value* SV,
-                               MachineBasicBlock* Default);
+                               MachineBasicBlock* Default,
+                               MachineBasicBlock *SwitchBB);
   bool handleBitTestsSwitchCase(CaseRec& CR,
                                 CaseRecVector& WorkList,
                                 const Value* SV,
-                                MachineBasicBlock* Default);  
+                                MachineBasicBlock* Default,
+                                MachineBasicBlock *SwitchBB);
 public:
-  void visitSwitchCase(CaseBlock &CB);
-  void visitBitTestHeader(BitTestBlock &B);
+  void visitSwitchCase(CaseBlock &CB,
+                       MachineBasicBlock *SwitchBB);
+  void visitBitTestHeader(BitTestBlock &B, MachineBasicBlock *SwitchBB);
   void visitBitTestCase(MachineBasicBlock* NextMBB,
                         unsigned Reg,
-                        BitTestCase &B);
+                        BitTestCase &B,
+                        MachineBasicBlock *SwitchBB);
   void visitJumpTable(JumpTable &JT);
-  void visitJumpTableHeader(JumpTable &JT, JumpTableHeader &JTH);
+  void visitJumpTableHeader(JumpTable &JT, JumpTableHeader &JTH,
+                            MachineBasicBlock *SwitchBB);
   
 private:
   // These all get lowered before this pass.
@@ -464,7 +468,7 @@ private:
   void visitAlloca(const AllocaInst &I);
   void visitLoad(const LoadInst &I);
   void visitStore(const StoreInst &I);
-  void visitPHI(const PHINode &I) { } // PHI nodes are handled specially.
+  void visitPHI(const PHINode &I);
   void visitCall(const CallInst &I);
   bool visitMemCmpCall(const CallInst &I);
   

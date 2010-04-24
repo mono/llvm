@@ -304,10 +304,6 @@ ISD::CondCode ISD::getSetCCAndOperation(ISD::CondCode Op1, ISD::CondCode Op2,
   return Result;
 }
 
-const TargetMachine &SelectionDAG::getTarget() const {
-  return MF->getTarget();
-}
-
 //===----------------------------------------------------------------------===//
 //                           SDNode Profile Support
 //===----------------------------------------------------------------------===//
@@ -792,8 +788,8 @@ unsigned SelectionDAG::getEVTAlignment(EVT VT) const {
 }
 
 // EntryNode could meaningfully have debug info if we can find it...
-SelectionDAG::SelectionDAG(const TargetLowering &tli, FunctionLoweringInfo &fli)
-  : TLI(tli), FLI(fli),
+SelectionDAG::SelectionDAG(const TargetMachine &tm, FunctionLoweringInfo &fli)
+  : TM(tm), TLI(*tm.getTargetLowering()), FLI(fli),
     EntryNode(ISD::EntryToken, DebugLoc(), getVTList(MVT::Other)),
     Root(getEntryNode()), Ordering(0) {
   AllNodes.push_back(&EntryNode);
@@ -1921,7 +1917,8 @@ void SelectionDAG::ComputeMaskedBits(SDValue Op, const APInt &Mask,
     // Output known-0 bits are known if clear or set in both the low clear bits
     // common to both LHS & RHS.  For example, 8+(X<<3) is known to have the
     // low 3 bits clear.
-    APInt Mask2 = APInt::getLowBitsSet(BitWidth, Mask.countTrailingOnes());
+    APInt Mask2 = APInt::getLowBitsSet(BitWidth,
+                                       BitWidth - Mask.countLeadingZeros());
     ComputeMaskedBits(Op.getOperand(0), Mask2, KnownZero2, KnownOne2, Depth+1);
     assert((KnownZero2 & KnownOne2) == 0 && "Bits known to be one AND zero?");
     unsigned KnownZeroOut = KnownZero2.countTrailingOnes();

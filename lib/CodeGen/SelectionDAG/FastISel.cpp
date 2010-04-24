@@ -52,6 +52,7 @@
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "FunctionLoweringInfo.h"
 using namespace llvm;
 
@@ -552,14 +553,21 @@ bool FastISel::SelectBitCast(const User *I) {
 
 bool
 FastISel::SelectInstruction(const Instruction *I) {
+  DL = I->getDebugLoc();
+
   // First, try doing target-independent selection.
-  if (SelectOperator(I, I->getOpcode()))
+  if (SelectOperator(I, I->getOpcode())) {
+    DL = DebugLoc();
     return true;
+  }
 
   // Next, try calling the target to attempt to handle the instruction.
-  if (TargetSelectInstruction(I))
+  if (TargetSelectInstruction(I)) {
+    DL = DebugLoc();
     return true;
+  }
 
+  DL = DebugLoc();
   return false;
 }
 
@@ -685,10 +693,6 @@ FastISel::SelectOperator(const User *I, unsigned Opcode) {
     // Nothing to emit.
     return true;
 
-  case Instruction::PHI:
-    // PHI nodes are already emitted.
-    return true;
-
   case Instruction::Alloca:
     // FunctionLowering has the static-sized case covered.
     if (StaticAllocaMap.count(cast<AllocaInst>(I)))
@@ -727,6 +731,9 @@ FastISel::SelectOperator(const User *I, unsigned Opcode) {
     UpdateValueMap(I, Reg);
     return true;
   }
+
+  case Instruction::PHI:
+    llvm_unreachable("FastISel shouldn't visit PHI nodes!");
 
   default:
     // Unhandled instruction. Halt "fast" selection and bail.

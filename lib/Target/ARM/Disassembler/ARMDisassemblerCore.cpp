@@ -2232,6 +2232,22 @@ static unsigned decodeN3VImm(uint32_t insn) {
   return (insn >> 8) & 0xF;
 }
 
+static bool UseDRegPair(unsigned Opcode) {
+  switch (Opcode) {
+  default:
+    return false;
+  case ARM::VLD1q8_UPD:
+  case ARM::VLD1q16_UPD:
+  case ARM::VLD1q32_UPD:
+  case ARM::VLD1q64_UPD:
+  case ARM::VST1q8_UPD:
+  case ARM::VST1q16_UPD:
+  case ARM::VST1q32_UPD:
+  case ARM::VST1q64_UPD:
+    return true;
+  }
+}
+
 // VLD*
 //   D[d] D[d2] ... Rn [TIED_TO Rn] align [Rm]
 // VLD*LN*
@@ -2305,11 +2321,9 @@ static bool DisassembleNLdSt0(MCInst &MI, unsigned Opcode, uint32_t insn,
 
     RegClass = OpInfo[OpIdx].RegClass;
     while (OpIdx < NumOps && OpInfo[OpIdx].RegClass == RegClass) {
-      if (Opcode >= ARM::VST1q16 && Opcode <= ARM::VST1q8)
-        MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RegClass, Rd,
-                                                           true)));
-      else
-        MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RegClass,Rd)));
+      MI.addOperand(MCOperand::CreateReg(
+                      getRegisterEnum(B, RegClass, Rd,
+                                      UseDRegPair(Opcode))));
       Rd += Inc;
       ++OpIdx;
     }
@@ -2327,11 +2341,9 @@ static bool DisassembleNLdSt0(MCInst &MI, unsigned Opcode, uint32_t insn,
     RegClass = OpInfo[0].RegClass;
 
     while (OpIdx < NumOps && OpInfo[OpIdx].RegClass == RegClass) {
-      if (Opcode >= ARM::VLD1q16 && Opcode <= ARM::VLD1q8)
-        MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RegClass, Rd,
-                                                           true)));
-      else
-        MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RegClass, Rd)));
+      MI.addOperand(MCOperand::CreateReg(
+                      getRegisterEnum(B, RegClass, Rd,
+                                      UseDRegPair(Opcode))));
       Rd += Inc;
       ++OpIdx;
     }
@@ -3197,6 +3209,49 @@ bool ARMBasicMCBuilder::BuildIt(MCInst &MI, uint32_t insn) {
   return TryPredicateAndSBitModifier(MI, Opcode, insn, NumOps - NumOpsAdded);
 }
 
+// A8.3 Conditional execution
+// A8.3.1 Pseudocode details of conditional execution
+// Condition bits '111x' indicate the instruction is always executed.
+static uint32_t CondCode(uint32_t CondField) {
+  if (CondField == 0xF)
+    return ARMCC::AL;
+  return CondField;
+}
+
+/// DoPredicateOperands - DoPredicateOperands process the predicate operands
+/// of some Thumb instructions which come before the reglist operands.  It
+/// returns true if the two predicate operands have been processed.
+bool ARMBasicMCBuilder::DoPredicateOperands(MCInst& MI, unsigned Opcode,
+    uint32_t /* insn */, unsigned short NumOpsRemaining) {
+
+  assert(NumOpsRemaining > 0 && "Invalid argument");
+
+  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  unsigned Idx = MI.getNumOperands();
+
+  // First, we check whether this instr specifies the PredicateOperand through
+  // a pair of TargetOperandInfos with isPredicate() property.
+  if (NumOpsRemaining >= 2 &&
+      OpInfo[Idx].isPredicate() && OpInfo[Idx+1].isPredicate() &&
+      OpInfo[Idx].RegClass == 0 && OpInfo[Idx+1].RegClass == ARM::CCRRegClassID)
+  {
+    // If we are inside an IT block, get the IT condition bits maintained via
+    // ARMBasicMCBuilder::ITState[7:0], through ARMBasicMCBuilder::GetITCond().
+    // See also A2.5.2.
+    if (InITBlock())
+      MI.addOperand(MCOperand::CreateImm(GetITCond()));
+    else
+      MI.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    MI.addOperand(MCOperand::CreateReg(ARM::CPSR));
+    return true;
+  }
+
+  return false;
+}
+  
+/// TryPredicateAndSBitModifier - TryPredicateAndSBitModifier tries to process
+/// the possible Predicate and SBitModifier, to build the remaining MCOperand
+/// constituents.
 bool ARMBasicMCBuilder::TryPredicateAndSBitModifier(MCInst& MI, unsigned Opcode,
     uint32_t insn, unsigned short NumOpsRemaining) {
 
@@ -3224,26 +3279,23 @@ bool ARMBasicMCBuilder::TryPredicateAndSBitModifier(MCInst& MI, unsigned Opcode,
         //
         // A8.6.16 B
         if (Name == "t2Bcc")
-          MI.addOperand(MCOperand::CreateImm(slice(insn, 25, 22)));
+          MI.addOperand(MCOperand::CreateImm(CondCode(slice(insn, 25, 22))));
         else if (Name == "tBcc")
-          MI.addOperand(MCOperand::CreateImm(slice(insn, 11, 8)));
+          MI.addOperand(MCOperand::CreateImm(CondCode(slice(insn, 11, 8))));
         else
           MI.addOperand(MCOperand::CreateImm(ARMCC::AL));
       } else {
-        // ARM Instructions.  Check condition field.
-        int64_t CondVal = getCondField(insn);
-        if (CondVal == 0xF)
-          MI.addOperand(MCOperand::CreateImm(ARMCC::AL));
-        else
-          MI.addOperand(MCOperand::CreateImm(CondVal));
+        // ARM instructions get their condition field from Inst{31-28}.
+        MI.addOperand(MCOperand::CreateImm(CondCode(getCondField(insn))));
       }
     }
     MI.addOperand(MCOperand::CreateReg(ARM::CPSR));
     Idx += 2;
     NumOpsRemaining -= 2;
-    if (NumOpsRemaining == 0)
-      return true;
   }
+
+  if (NumOpsRemaining == 0)
+    return true;
 
   // Next, if OptionalDefOperand exists, we check whether the 'S' bit is set.
   if (OpInfo[Idx].isOptionalDef() && OpInfo[Idx].RegClass==ARM::CCRRegClassID) {
@@ -3265,7 +3317,7 @@ bool ARMBasicMCBuilder::RunBuildAfterHook(bool Status, MCInst &MI,
   if (!SP) return Status;
 
   if (Opcode == ARM::t2IT)
-    SP->InitIT(slice(insn, 7, 0));
+    Status = SP->InitIT(slice(insn, 7, 0)) ? Status : false;
   else if (InITBlock())
     SP->UpdateIT();
 

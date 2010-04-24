@@ -193,14 +193,18 @@ static inline unsigned getShiftAmtBits(uint32_t insn) {
 // A8.6.17 BFC
 // Encoding T1 ARMv6T2, ARMv7
 // LLVM-specific encoding for #<lsb> and #<width>
-static inline uint32_t getBitfieldInvMask(uint32_t insn) {
+static inline bool getBitfieldInvMask(uint32_t insn, uint32_t &mask) {
   uint32_t lsb = getImm3(insn) << 2 | getImm2(insn);
   uint32_t msb = getMsb(insn);
   uint32_t Val = 0;
-  assert(lsb <= msb && "Encoding error: lsb > msb");
+  if (msb < lsb) {
+    DEBUG(errs() << "Encoding error: msb < lsb\n");
+    return false;
+  }
   for (uint32_t i = lsb; i <= msb; ++i)
     Val |= (1 << i);
-  return ~Val;
+  mask = ~Val;
+  return true;
 }
 
 // A8.4 Shifts applied to a register
@@ -620,7 +624,7 @@ static bool DisassembleThumb1LdStSP(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
   assert((Opcode == ARM::tLDRspi || Opcode == ARM::tSTRspi)
-         && "Invalid opcode");
+         && "Unexpected opcode");
 
   const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
@@ -648,7 +652,7 @@ static bool DisassembleThumb1LdStSP(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb1AddPCi(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  assert(Opcode == ARM::tADDrPCi && "Invalid opcode");
+  assert(Opcode == ARM::tADDrPCi && "Unexpected opcode");
 
   const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
@@ -673,7 +677,7 @@ static bool DisassembleThumb1AddPCi(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb1AddSPi(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  assert(Opcode == ARM::tADDrSPi && "Invalid opcode");
+  assert(Opcode == ARM::tADDrSPi && "Unexpected opcode");
 
   const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
@@ -704,18 +708,22 @@ static bool DisassembleThumb1AddSPi(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb1PushPop(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  assert((Opcode == ARM::tPUSH || Opcode == ARM::tPOP) && "Invalid opcode");
+  assert((Opcode == ARM::tPUSH || Opcode == ARM::tPOP) && "Unexpected opcode");
 
   unsigned &OpIdx = NumOpsAdded;
 
   // Handling the two predicate operands before the reglist.
-  MI.addOperand(MCOperand::CreateImm(ARMCC::AL));
-  MI.addOperand(MCOperand::CreateReg(ARM::CPSR));
-  OpIdx = 2;
+  if (B->DoPredicateOperands(MI, Opcode, insn, NumOps))
+    OpIdx += 2;
+  else {
+    DEBUG(errs() << "Expected predicate operands not found.\n");
+    return false;
+  }
 
-  // Fill the variadic part of reglist.
   unsigned RegListBits = slice(insn, 8, 8) << (Opcode == ARM::tPUSH ? 14 : 15)
     | slice(insn, 7, 0);
+
+  // Fill the variadic part of reglist.
   for (unsigned i = 0; i < 16; ++i) {
     if ((RegListBits >> i) & 1) {
       MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
@@ -813,7 +821,7 @@ static bool DisassembleThumb1Misc(MCInst &MI, unsigned Opcode, uint32_t insn,
                                                        getT1tRn(insn))));
   } else {
     // CBNZ, CBZ
-    assert((Opcode == ARM::tCBNZ || Opcode == ARM::tCBZ) && "Invalid opcode");
+    assert((Opcode == ARM::tCBNZ || Opcode == ARM::tCBZ) &&"Unexpected opcode");
     MI.addOperand(MCOperand::CreateImm(getT1Imm6(insn) * 2));
   }
 
@@ -831,12 +839,11 @@ static bool DisassembleThumb1LdStMul(bool Ld, MCInst &MI, unsigned Opcode,
     uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
   assert((Opcode == ARM::tLDM || Opcode == ARM::tLDM_UPD ||
-          Opcode == ARM::tSTM_UPD) && "Invalid opcode");
+          Opcode == ARM::tSTM_UPD) && "Unexpected opcode");
 
   unsigned &OpIdx = NumOpsAdded;
 
   unsigned tRt = getT1tRt(insn);
-  unsigned RegListBits = slice(insn, 7, 0);
 
   OpIdx = 0;
 
@@ -852,13 +859,19 @@ static bool DisassembleThumb1LdStMul(bool Ld, MCInst &MI, unsigned Opcode,
   ++OpIdx;
 
   // A8.6.53 LDM / LDMIA / LDMFD - Encoding T1
+  // A8.6.53 STM / STMIA / STMEA - Encoding T1
   MI.addOperand(MCOperand::CreateImm(ARM_AM::getAM4ModeImm(ARM_AM::ia)));
   ++OpIdx;
 
   // Handling the two predicate operands before the reglist.
-  MI.addOperand(MCOperand::CreateImm(ARMCC::AL));
-  MI.addOperand(MCOperand::CreateReg(ARM::CPSR));
-  OpIdx += 2;
+  if (B->DoPredicateOperands(MI, Opcode, insn, NumOps))
+    OpIdx += 2;
+  else {
+    DEBUG(errs() << "Expected predicate operands not found.\n");
+    return false;
+  }
+
+  unsigned RegListBits = slice(insn, 7, 0);
 
   // Fill the variadic part of reglist.
   for (unsigned i = 0; i < 8; ++i) {
@@ -1110,7 +1123,7 @@ static bool DisassembleThumb2LdStMul(MCInst &MI, unsigned Opcode, uint32_t insn,
 
   assert((Opcode == ARM::t2LDM || Opcode == ARM::t2LDM_UPD ||
           Opcode == ARM::t2STM || Opcode == ARM::t2STM_UPD)
-         && "Invalid opcode");
+         && "Unexpected opcode");
   assert(NumOps >= 5 && "Thumb2 LdStMul expects NumOps >= 5");
 
   unsigned &OpIdx = NumOpsAdded;
@@ -1133,12 +1146,16 @@ static bool DisassembleThumb2LdStMul(MCInst &MI, unsigned Opcode, uint32_t insn,
   ++OpIdx;
 
   // Handling the two predicate operands before the reglist.
-  MI.addOperand(MCOperand::CreateImm(ARMCC::AL));
-  MI.addOperand(MCOperand::CreateReg(ARM::CPSR));
-  OpIdx += 2;
+  if (B->DoPredicateOperands(MI, Opcode, insn, NumOps))
+    OpIdx += 2;
+  else {
+    DEBUG(errs() << "Expected predicate operands not found.\n");
+    return false;
+  }
+
+  unsigned RegListBits = insn & ((1 << 16) - 1);
 
   // Fill the variadic part of reglist.
-  unsigned RegListBits = insn & ((1 << 16) - 1);
   for (unsigned i = 0; i < 16; ++i) {
     if ((RegListBits >> i) & 1) {
       MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
@@ -1340,12 +1357,15 @@ static bool DisassembleThumb2DPSoReg(MCInst &MI, unsigned Opcode, uint32_t insn,
     if ((Idx = TID.getOperandConstraint(OpIdx, TOI::TIED_TO)) != -1) {
       // Process tied_to operand constraint.
       MI.addOperand(MI.getOperand(Idx));
-    } else {
-      assert(!NoDstReg && "Internal error");
+      ++OpIdx;
+    } else if (!NoDstReg) {
       MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
                                                          decodeRn(insn))));
+      ++OpIdx;
+    } else {
+      DEBUG(errs() << "Thumb2 encoding error: d==15 for three-reg operands.\n");
+      return false;
     }
-    ++OpIdx;
   }
 
   MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
@@ -1410,7 +1430,10 @@ static bool DisassembleThumb2DPModImm(MCInst &MI, unsigned Opcode,
   ++OpIdx;
 
   if (TwoReg) {
-    assert(!NoDstReg && "Internal error");
+    if (NoDstReg) {
+      DEBUG(errs()<<"Thumb2 encoding error: d==15 for DPModImm 2-reg instr.\n");
+      return false;
+    }
     MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
                                                        decodeRn(insn))));
     ++OpIdx;
@@ -1453,7 +1476,7 @@ static inline unsigned decodeThumb2SaturatePos(unsigned Opcode, uint32_t insn) {
   case ARM::t2USAT16:
     return slice(insn, 3, 0);
   default:
-    assert(0 && "Invalid opcode passed in");
+    assert(0 && "Unexpected opcode");
     return 0;
   }
 }
@@ -1544,12 +1567,16 @@ static bool DisassembleThumb2DPBinImm(MCInst &MI, unsigned Opcode,
     MI.addOperand(MCOperand::CreateImm(getIImm3Imm8(insn)));
   else if (Opcode == ARM::t2MOVi16 || Opcode == ARM::t2MOVTi16)
     MI.addOperand(MCOperand::CreateImm(getImm16(insn)));
-  else if (Opcode == ARM::t2BFC)
-    MI.addOperand(MCOperand::CreateImm(getBitfieldInvMask(insn)));
-  else {
+  else if (Opcode == ARM::t2BFC) {
+    uint32_t mask = 0;
+    if (getBitfieldInvMask(insn, mask))
+      MI.addOperand(MCOperand::CreateImm(mask));
+    else
+      return false;
+  } else {
     // Handle the case of: lsb width
     assert((Opcode == ARM::t2SBFX || Opcode == ARM::t2UBFX ||
-            Opcode == ARM::t2BFI) && "Invalid opcode");
+            Opcode == ARM::t2BFI) && "Unexpected opcode");
     MI.addOperand(MCOperand::CreateImm(getLsb(insn)));
     if (Opcode == ARM::t2BFI) {
       if (getMsb(insn) < getLsb(insn)) {
@@ -1678,7 +1705,7 @@ static bool DisassembleThumb2BrMiscCtrl(MCInst &MI, unsigned Opcode,
 
   switch (Opcode) {
   default:
-    assert(0 && "Unreachable code");
+    assert(0 && "Unexpected opcode");
     return false;
   case ARM::t2B:
     Offset = decodeImm32_B_EncodingT4(insn);
@@ -2095,7 +2122,7 @@ static bool DisassembleThumb2(uint16_t op1, uint16_t op2, uint16_t op,
       }
 
       // Load/store dual, load/store exclusive, table branch, otherwise.
-      assert(slice(op2, 2, 2) == 1 && "Encoding error");
+      assert(slice(op2, 2, 2) == 1 && "Thumb2 encoding error!");
       if ((ARM::t2LDREX <= Opcode && Opcode <= ARM::t2LDREXH) ||
           (ARM::t2STREX <= Opcode && Opcode <= ARM::t2STREXH)) {
         // Load/store exclusive.
@@ -2182,7 +2209,7 @@ static bool DisassembleThumb2(uint16_t op1, uint16_t op2, uint16_t op,
 
     break;
   default:
-    assert(0 && "Encoding error for Thumb2 instruction!");
+    assert(0 && "Thumb2 encoding error!");
     break;
   }
 

@@ -64,9 +64,6 @@ DisableMMX("disable-mmx", cl::Hidden, cl::desc("Disable use of MMX"));
 static cl::opt<bool>
 Disable16Bit("disable-16bit", cl::Hidden,
              cl::desc("Disable use of 16-bit instructions"));
-static cl::opt<bool>
-Promote16Bit("promote-16bit", cl::Hidden,
-             cl::desc("Promote 16-bit instructions"));
 
 // Forward declarations.
 static SDValue getMOVL(SelectionDAG &DAG, DebugLoc dl, EVT VT, SDValue V1,
@@ -626,11 +623,11 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   // FIXME: In order to prevent SSE instructions being expanded to MMX ones
   // with -msoft-float, disable use of MMX as well.
   if (!UseSoftFloat && !DisableMMX && Subtarget->hasMMX()) {
-    addRegisterClass(MVT::v8i8,  X86::VR64RegisterClass);
-    addRegisterClass(MVT::v4i16, X86::VR64RegisterClass);
-    addRegisterClass(MVT::v2i32, X86::VR64RegisterClass);
-    addRegisterClass(MVT::v2f32, X86::VR64RegisterClass);
-    addRegisterClass(MVT::v1i64, X86::VR64RegisterClass);
+    addRegisterClass(MVT::v8i8,  X86::VR64RegisterClass, false);
+    addRegisterClass(MVT::v4i16, X86::VR64RegisterClass, false);
+    addRegisterClass(MVT::v2i32, X86::VR64RegisterClass, false);
+    addRegisterClass(MVT::v2f32, X86::VR64RegisterClass, false);
+    addRegisterClass(MVT::v1i64, X86::VR64RegisterClass, false);
 
     setOperationAction(ISD::ADD,                MVT::v8i8,  Legal);
     setOperationAction(ISD::ADD,                MVT::v4i16, Legal);
@@ -6027,7 +6024,7 @@ SDValue X86TargetLowering::EmitTest(SDValue Op, unsigned X86CC,
   }
 
   // Otherwise just emit a CMP with 0, which is the TEST pattern.
-  if (Promote16Bit && Op.getValueType() == MVT::i16)
+  if (Subtarget->shouldPromote16Bit() && Op.getValueType() == MVT::i16)
     Op = DAG.getNode(ISD::ANY_EXTEND, Op.getDebugLoc(), MVT::i32, Op);
   return DAG.getNode(X86ISD::CMP, dl, MVT::i32, Op,
                      DAG.getConstant(0, Op.getValueType()));
@@ -6042,7 +6039,7 @@ SDValue X86TargetLowering::EmitCmp(SDValue Op0, SDValue Op1, unsigned X86CC,
       return EmitTest(Op0, X86CC, DAG);
 
   DebugLoc dl = Op0.getDebugLoc();
-  if (Promote16Bit && Op0.getValueType() == MVT::i16) {
+  if (Subtarget->shouldPromote16Bit() && Op0.getValueType() == MVT::i16) {
     Op0 = DAG.getNode(ISD::ANY_EXTEND, Op0.getDebugLoc(), MVT::i32, Op0);
     Op1 = DAG.getNode(ISD::ANY_EXTEND, Op1.getDebugLoc(), MVT::i32, Op1);
   }
@@ -6051,8 +6048,8 @@ SDValue X86TargetLowering::EmitCmp(SDValue Op0, SDValue Op1, unsigned X86CC,
 
 /// LowerToBT - Result of 'and' is compared against zero. Turn it into a BT node
 /// if it's possible.
-static SDValue LowerToBT(SDValue And, ISD::CondCode CC,
-                         DebugLoc dl, SelectionDAG &DAG) {
+SDValue X86TargetLowering::LowerToBT(SDValue And, ISD::CondCode CC,
+                                     DebugLoc dl, SelectionDAG &DAG) const {
   SDValue Op0 = And.getOperand(0);
   SDValue Op1 = And.getOperand(1);
   if (Op0.getOpcode() == ISD::TRUNCATE)
@@ -6089,7 +6086,7 @@ static SDValue LowerToBT(SDValue And, ISD::CondCode CC,
     // the encoding for the i16 version is larger than the i32 version.
     // Also promote i16 to i32 for performance / code size reason.
     if (LHS.getValueType() == MVT::i8 ||
-        (Promote16Bit && LHS.getValueType() == MVT::i16))
+        (Subtarget->shouldPromote16Bit() && LHS.getValueType() == MVT::i16))
       LHS = DAG.getNode(ISD::ANY_EXTEND, dl, MVT::i32, LHS);
 
     // If the operand types disagree, extend the shift amount to match.  Since
@@ -9971,15 +9968,21 @@ SDValue X86TargetLowering::PerformDAGCombine(SDNode *N,
 bool X86TargetLowering::isTypeDesirableForOp(unsigned Opc, EVT VT) const {
   if (!isTypeLegal(VT))
     return false;
-  if (!Promote16Bit || VT != MVT::i16)
+  if (!Subtarget->shouldPromote16Bit() || VT != MVT::i16)
     return true;
 
   switch (Opc) {
   default:
     return true;
+  case ISD::LOAD:
+  case ISD::SIGN_EXTEND:
+  case ISD::ZERO_EXTEND:
+  case ISD::ANY_EXTEND:
   case ISD::SHL:
   case ISD::SRA:
   case ISD::SRL:
+  case ISD::ROTL:
+  case ISD::ROTR:
   case ISD::SUB:
   case ISD::ADD:
   case ISD::MUL:
@@ -9994,34 +9997,54 @@ bool X86TargetLowering::isTypeDesirableForOp(unsigned Opc, EVT VT) const {
 /// beneficial for dag combiner to promote the specified node. If true, it
 /// should return the desired promotion type by reference.
 bool X86TargetLowering::IsDesirableToPromoteOp(SDValue Op, EVT &PVT) const {
-  if (!Promote16Bit)
+  if (!Subtarget->shouldPromote16Bit())
     return false;
 
   EVT VT = Op.getValueType();
   if (VT != MVT::i16)
     return false;
 
-  bool Commute = true;
+  bool Promote = false;
+  bool Commute = false;
   switch (Op.getOpcode()) {
-  default: return false;
+  default: break;
+  case ISD::LOAD: {
+    LoadSDNode *LD = cast<LoadSDNode>(Op);
+    // If the non-extending load has a single use and it's not live out, then it
+    // might be folded.
+    if (LD->getExtensionType() == ISD::NON_EXTLOAD &&
+        Op.hasOneUse() &&
+        Op.getNode()->use_begin()->getOpcode() != ISD::CopyToReg)
+      return false;
+    Promote = true;
+    break;
+  }
+  case ISD::SIGN_EXTEND:
+  case ISD::ZERO_EXTEND:
+  case ISD::ANY_EXTEND:
+    Promote = true;
+    break;
   case ISD::SHL:
   case ISD::SRA:
-  case ISD::SRL: {
+  case ISD::SRL:
+  case ISD::ROTL:
+  case ISD::ROTR: {
     SDValue N0 = Op.getOperand(0);
     // Look out for (store (shl (load), x)).
     if (isa<LoadSDNode>(N0) && N0.hasOneUse() &&
         Op.hasOneUse() && Op.getNode()->use_begin()->getOpcode() == ISD::STORE)
       return false;
+    Promote = true;
     break;
   }
-  case ISD::SUB:
-    Commute = false;
-    // fallthrough
   case ISD::ADD:
   case ISD::MUL:
   case ISD::AND:
   case ISD::OR:
-  case ISD::XOR: {
+  case ISD::XOR:
+    Commute = true;
+    // fallthrough
+  case ISD::SUB: {
     SDValue N0 = Op.getOperand(0);
     SDValue N1 = Op.getOperand(1);
     if (!Commute && isa<LoadSDNode>(N1))
@@ -10031,11 +10054,12 @@ bool X86TargetLowering::IsDesirableToPromoteOp(SDValue Op, EVT &PVT) const {
       return false;
     if ((isa<LoadSDNode>(N1) && N1.hasOneUse()) && !isa<ConstantSDNode>(N0))
       return false;
+    Promote = true;
   }
   }
 
   PVT = MVT::i32;
-  return true;
+  return Promote;
 }
 
 //===----------------------------------------------------------------------===//

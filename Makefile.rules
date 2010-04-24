@@ -581,13 +581,6 @@ ifeq ($(TARGET_OS),Darwin)
   endif
 endif
 
-# Adjust LD.Flags depending on the kind of library that is to be built. Note
-# that if LOADABLE_MODULE is specified then the resulting shared library can
-# be opened with dlopen.
-ifdef LOADABLE_MODULE
-  LD.Flags += -module
-endif
-
 ifdef SHARED_LIBRARY
 ifneq ($(DARWIN_MAJVERS),4)
   LD.Flags += $(RPATH) -Wl,$(LibDir)
@@ -640,6 +633,8 @@ CompileCommonOpts += -pedantic -Wno-long-long
 endif
 CompileCommonOpts += -Wall -W -Wno-unused-parameter -Wwrite-strings \
                      $(EXTRA_OPTIONS)
+# Enable cast-qual for C++; the workaround is to use const_cast.
+CXX.Flags += -Wcast-qual
 
 ifeq ($(HOST_OS),HP-UX)
   CompileCommonOpts := -D_REENTRANT -D_HPUX_SOURCE
