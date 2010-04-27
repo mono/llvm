@@ -2076,7 +2076,7 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     //
     if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
       unsigned char OpFlags = 0;
-      GlobalValue *GV = G->getGlobal();
+      const GlobalValue *GV = G->getGlobal();
       Callee = DAG.getTargetGlobalAddress(GV, getPointerTy(),
                                           G->getOffset(), OpFlags);
     }
