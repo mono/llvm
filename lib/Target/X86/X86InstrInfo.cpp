@@ -27,6 +27,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -2319,6 +2320,19 @@ bool X86InstrInfo::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
   return true;
 }
 
+MachineInstr*
+X86InstrInfo::emitFrameIndexDebugValue(MachineFunction &MF,
+                                       unsigned FrameIx, uint64_t Offset,
+                                       const MDNode *MDPtr,
+                                       DebugLoc DL) const {
+  X86AddressMode AM;
+  AM.BaseType = X86AddressMode::FrameIndexBase;
+  AM.Base.FrameIndex = FrameIx;
+  MachineInstrBuilder MIB = BuildMI(MF, DL, get(X86::DBG_VALUE));
+  addFullAddress(MIB, AM).addImm(Offset).addMetadata(MDPtr);
+  return &*MIB;
+}
+
 static MachineInstr *FuseTwoAddrInst(MachineFunction &MF, unsigned Opcode,
                                      const SmallVectorImpl<MachineOperand> &MOs,
                                      MachineInstr *MI,
@@ -3753,3 +3767,9 @@ void X86InstrInfo::SetSSEDomain(MachineInstr *MI, unsigned Domain) const {
   assert(table && "Cannot change domain");
   MI->setDesc(get(table[Domain-1]));
 }
+
+/// getNoopForMachoTarget - Return the noop instruction to use for a noop.
+void X86InstrInfo::getNoopForMachoTarget(MCInst &NopInst) const {
+  NopInst.setOpcode(X86::NOOP);
+}
+

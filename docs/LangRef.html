@@ -50,6 +50,7 @@
       <li><a href="#moduleasm">Module-Level Inline Assembly</a></li>
       <li><a href="#datalayout">Data Layout</a></li>
       <li><a href="#pointeraliasing">Pointer Aliasing Rules</a></li>
+      <li><a href="#volatile">Volatile Memory Accesses</a></li>
     </ol>
   </li>
   <li><a href="#typesystem">Type System</a>
@@ -89,6 +90,7 @@
       <li><a href="#complexconstants">Complex Constants</a></li>
       <li><a href="#globalconstants">Global Variable and Function Addresses</a></li>
       <li><a href="#undefvalues">Undefined Values</a></li>
+      <li><a href="#trapvalues">Trap Values</a></li>
       <li><a href="#blockaddress">Addresses of Basic Blocks</a></li>
       <li><a href="#constantexprs">Constant Expressions</a></li>
     </ol>
@@ -1393,6 +1395,24 @@ to implement type-based alias analysis.</p>
 
 </div>
 
+<!-- ======================================================================= -->
+<div class="doc_subsection">
+  <a name="volatile">Volatile Memory Accesses</a>
+</div>
+
+<div class="doc_text">
+
+<p>Certain memory accesses, such as <a href="#i_load"><tt>load</tt></a>s, <a
+href="#i_store"><tt>store</tt></a>s, and <a
+href="#int_memcpy"><tt>llvm.memcpy</tt></a>s may be marked <tt>volatile</tt>.
+The optimizers must not change the number of volatile operations or change their
+order of execution relative to other volatile operations.  The optimizers
+<i>may</i> change the order of volatile operations relative to non-volatile
+operations.  This is not Java's "volatile" and has no cross-thread
+synchronization behavior.</p>
+
+</div>
+
 <!-- *********************************************************************** -->
 <div class="doc_section"> <a name="typesystem">Type System</a> </div>
 <!-- *********************************************************************** -->
@@ -2303,6 +2323,92 @@ has undefined behavior.</p>
 </div>
 
 <!-- ======================================================================= -->
+<div class="doc_subsection"><a name="trapvalues">Trap Values</a></div>
+<div class="doc_text">
+
+<p>Trap values are similar to <a href="#undefvalues">undef values</a>, however
+   instead of representing an unspecified bit pattern, they represent the
+   fact that an instruction or constant expression which cannot evoke side
+   effects has nevertheless detected a condition which results in undefined
+   behavior.</p>
+
+<p>Any value other than a non-intrinsic call, invoke, or phi with a trap
+   operand has trap as its result value.  Any instruction with
+   a trap operand which may have side effects emits those side effects as
+   if it had an undef operand instead. If the side effects are externally
+   visible, the behavior is undefined.</p>
+
+<p>Trap values may be stored to memory; a load from memory including any
+   part of a trap value results in a (full) trap value.</p>
+   
+<p>For example:</p>
+
+<!-- FIXME: In the case of multiple threads, this only applies to loads from
+     the same thread as the store, or loads which are sequenced after the
+     store by synchronization. -->
+
+<div class="doc_code">
+<pre>
+%trap = sub nuw i32 0, 1           ; Results in a trap value.
+%still_trap = and i32 %trap, 0     ; Whereas (and i32 undef, 0) would return 0.
+%trap_yet_again = getelementptr i32* @h, i32 %still_trap
+store i32 0, i32* %trap_yet_again  ; undefined behavior
+
+volatile store i32 %trap, i32* @g  ; External observation; undefined behavior.
+%trap2 = load i32* @g              ; Returns a trap value, not just undef.
+%narrowaddr = bitcast i32* @g to i16*
+%wideaddr = bitcast i32* @g to i64*
+%trap3 = load 16* %narrowaddr      ; Returns a trap value
+%trap4 = load i64* %widaddr        ; Returns a trap value, not partial trap.
+</pre>
+</div>
+
+<p>If a <a href="#i_br"><tt>br</tt></a> or
+   <a href="#i_switch"><tt>switch</tt></a> instruction has a trap value
+   operand, all non-phi non-void instructions which control-depend on it
+   have trap as their result value. A <a href="#i_phi"><tt>phi</tt></a>
+   node with an incoming value associated with a control edge which is
+   control-dependent on it has trap as its result value when control is
+   transferred from that block.  If any instruction which control-depends
+   on the <tt>br</tt> or <tt>switch</tt> invokes externally visible side
+   effects, the behavior of the program is undefined. For example:</p>
+
+<!-- FIXME: What about exceptions thrown from control-dependent instrs? -->
+
+<div class="doc_code">
+<pre>
+entry:
+  %trap = sub nuw i32 0, 1           ; Results in a trap value.
+  %cmp = icmp i32 slt %trap, 0       ; Still trap.
+  %br i1 %cmp, %true, %end           ; Branch to either destination.
+
+true:
+  volatile store i32 0, i32* @g      ; Externally visible side effects
+                                     ; control-dependent on %cmp.
+                                     ; Undefined behavior.
+  br label %end
+
+end:
+  %p = phi i32 [ 0, %entry ], [ 1, %true ]
+                                     ; Both edges into this PHI are
+                                     ; control-dependent on %cmp, so this
+                                     ; results in a trap value.
+
+  volatile store i32 0, i32* @g      ; %end is control-equivalent to %entry
+                                     ; so this is defined (ignoring earlier
+                                     ; undefined behavior in this example).
+
+</pre>
+</div>
+
+<p>There is currently no way of representing a trap constant in the IR; they
+   only exist when produced by certain instructions, such as an
+   <a href="#i_add"><tt>add</tt></a> with the <tt>nsw</tt> flag
+   set, when overflow occurs.</p>
+
+</div>
+
+<!-- ======================================================================= -->
 <div class="doc_subsection"><a name="blockaddress">Addresses of Basic
     Blocks</a></div>
 <div class="doc_text">
@@ -3104,7 +3210,8 @@ Instruction</a> </div>
 <p><tt>nuw</tt> and <tt>nsw</tt> stand for &quot;No Unsigned Wrap&quot;
    and &quot;No Signed Wrap&quot;, respectively. If the <tt>nuw</tt> and/or
    <tt>nsw</tt> keywords are present, the result value of the <tt>add</tt>
-   is undefined if unsigned and/or signed overflow, respectively, occurs.</p>
+   is a <a href="#trapvalues">trap value</a> if unsigned and/or signed overflow,
+   respectively, occurs.</p>
 
 <h5>Example:</h5>
 <pre>
@@ -3184,7 +3291,8 @@ Instruction</a> </div>
 <p><tt>nuw</tt> and <tt>nsw</tt> stand for &quot;No Unsigned Wrap&quot;
    and &quot;No Signed Wrap&quot;, respectively. If the <tt>nuw</tt> and/or
    <tt>nsw</tt> keywords are present, the result value of the <tt>sub</tt>
-   is undefined if unsigned and/or signed overflow, respectively, occurs.</p>
+   is a <a href="#trapvalues">trap value</a> if unsigned and/or signed overflow,
+   respectively, occurs.</p>
 
 <h5>Example:</h5>
 <pre>
@@ -3270,7 +3378,8 @@ Instruction</a> </div>
 <p><tt>nuw</tt> and <tt>nsw</tt> stand for &quot;No Unsigned Wrap&quot;
    and &quot;No Signed Wrap&quot;, respectively. If the <tt>nuw</tt> and/or
    <tt>nsw</tt> keywords are present, the result value of the <tt>mul</tt>
-   is undefined if unsigned and/or signed overflow, respectively, occurs.</p>
+   is a <a href="#trapvalues">trap value</a> if unsigned and/or signed overflow,
+   respectively, occurs.</p>
 
 <h5>Example:</h5>
 <pre>
@@ -3375,8 +3484,8 @@ Instruction</a> </div>
    a 32-bit division of -2147483648 by -1.</p>
 
 <p>If the <tt>exact</tt> keyword is present, the result value of the
-   <tt>sdiv</tt> is undefined if the result would be rounded or if overflow
-   would occur.</p>
+   <tt>sdiv</tt> is a <a href="#trapvalues">trap value</a> if the result would
+   be rounded or if overflow would occur.</p>
 
 <h5>Example:</h5>
 <pre>
@@ -4158,9 +4267,8 @@ Instruction</a> </div>
    from which to load.  The pointer must point to
    a <a href="#t_firstclass">first class</a> type.  If the <tt>load</tt> is
    marked as <tt>volatile</tt>, then the optimizer is not allowed to modify the
-   number or order of execution of this <tt>load</tt> with other
-   volatile <tt>load</tt> and <tt><a href="#i_store">store</a></tt>
-   instructions.</p>
+   number or order of execution of this <tt>load</tt> with other <a
+   href="#volatile">volatile operations</a>.</p>
 
 <p>The optional constant <tt>align</tt> argument specifies the alignment of the
    operation (that is, the alignment of the memory address). A value of 0 or an
@@ -4216,11 +4324,10 @@ Instruction</a> </div>
    and an address at which to store it.  The type of the
    '<tt>&lt;pointer&gt;</tt>' operand must be a pointer to
    the <a href="#t_firstclass">first class</a> type of the
-   '<tt>&lt;value&gt;</tt>' operand. If the <tt>store</tt> is marked
-   as <tt>volatile</tt>, then the optimizer is not allowed to modify the number
-   or order of execution of this <tt>store</tt> with other
-   volatile <tt>load</tt> and <tt><a href="#i_store">store</a></tt>
-   instructions.</p>
+   '<tt>&lt;value&gt;</tt>' operand. If the <tt>store</tt> is marked as
+   <tt>volatile</tt>, then the optimizer is not allowed to modify the number or
+   order of execution of this <tt>store</tt> with other <a
+   href="#volatile">volatile operations</a>.</p>
 
 <p>The optional constant "align" argument specifies the alignment of the
    operation (that is, the alignment of the memory address). A value of 0 or an
@@ -4359,13 +4466,14 @@ entry:
 </pre>
 
 <p>If the <tt>inbounds</tt> keyword is present, the result value of the
-   <tt>getelementptr</tt> is undefined if the base pointer is not an
-   <i>in bounds</i> address of an allocated object, or if any of the addresses
-   that would be formed by successive addition of the offsets implied by the
-   indices to the base address with infinitely precise arithmetic are not an
-   <i>in bounds</i> address of that allocated object.
-   The <i>in bounds</i> addresses for an allocated object are all the addresses
-   that point into the object, plus the address one byte past the end.</p>
+   <tt>getelementptr</tt> is a <a href="#trapvalues">trap value</a> if the
+   base pointer is not an <i>in bounds</i> address of an allocated object,
+   or if any of the addresses that would be formed by successive addition of
+   the offsets implied by the indices to the base address with infinitely
+   precise arithmetic are not an <i>in bounds</i> address of that allocated
+   object. The <i>in bounds</i> addresses for an allocated object are all
+   the addresses that point into the object, plus the address one byte past
+   the end.</p>
 
 <p>If the <tt>inbounds</tt> keyword is not present, the offsets are added to
    the base address with silently-wrapping two's complement arithmetic, and
@@ -5920,8 +6028,10 @@ LLVM</a>.</p>
    then the caller guarantees that both the source and destination pointers are
    aligned to that boundary.</p>
 
-<p>Volatile accesses should not be deleted if dead, but the access behavior is
-   not very cleanly specified and it is unwise to depend on it.</p>
+<p>If the <tt>isvolatile</tt> parameter is <tt>true</tt>, the
+   <tt>llvm.memcpy</tt> call is a <a href="#volatile">volatile operation</a>.
+   The detailed access behavior is not very cleanly specified and it is unwise
+   to depend on it.</p>
 
 <h5>Semantics:</h5>
 
@@ -5974,8 +6084,10 @@ LLVM</a>.</p>
    then the caller guarantees that the source and destination pointers are
    aligned to that boundary.</p>
 
-<p>Volatile accesses should not be deleted if dead, but the access behavior is
-   not very cleanly specified and it is unwise to depend on it.</p>
+<p>If the <tt>isvolatile</tt> parameter is <tt>true</tt>, the
+   <tt>llvm.memmove</tt> call is a <a href="#volatile">volatile operation</a>.
+   The detailed access behavior is not very cleanly specified and it is unwise
+   to depend on it.</p>
 
 <h5>Semantics:</h5>
 
@@ -6024,8 +6136,10 @@ LLVM</a>.</p>
    then the caller guarantees that the destination pointer is aligned to that
    boundary.</p>
 
-<p>Volatile accesses should not be deleted if dead, but the access behavior is
-   not very cleanly specified and it is unwise to depend on it.</p>
+<p>If the <tt>isvolatile</tt> parameter is <tt>true</tt>, the
+   <tt>llvm.memset</tt> call is a <a href="#volatile">volatile operation</a>.
+   The detailed access behavior is not very cleanly specified and it is unwise
+   to depend on it.</p>
 
 <h5>Semantics:</h5>
 <p>The '<tt>llvm.memset.*</tt>' intrinsics fill "len" bytes of memory starting

@@ -507,13 +507,19 @@ InstrEmitter::EmitCopyToRegClassNode(SDNode *Node,
 /// EmitDbgValue - Generate machine instruction for a dbg_value node.
 ///
 MachineInstr *InstrEmitter::EmitDbgValue(SDDbgValue *SD,
-                                         MachineBasicBlock *InsertBB,
                                          DenseMap<SDValue, unsigned> &VRBaseMap,
                          DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) {
   uint64_t Offset = SD->getOffset();
   MDNode* MDPtr = SD->getMDPtr();
   DebugLoc DL = SD->getDebugLoc();
 
+  if (SD->getKind() == SDDbgValue::FRAMEIX) {
+    // Stack address; this needs to be lowered in target-dependent fashion.
+    // EmitTargetCodeForFrameDebugValue is responsible for allocation.
+    unsigned FrameIx = SD->getFrameIx();
+    return TII->emitFrameIndexDebugValue(*MF, FrameIx, Offset, MDPtr, DL);
+  }
+  // Otherwise, we're going to create an instruction here.
   const TargetInstrDesc &II = TII->get(TargetOpcode::DBG_VALUE);
   MachineInstrBuilder MIB = BuildMI(*MF, DL, II);
   if (SD->getKind() == SDDbgValue::SDNODE) {
@@ -541,15 +547,6 @@ MachineInstr *InstrEmitter::EmitDbgValue(SDDbgValue *SD,
       // dropped.
       MIB.addReg(0U);
     }
-  } else if (SD->getKind() == SDDbgValue::FRAMEIX) {
-    unsigned FrameIx = SD->getFrameIx();
-    // Stack address; this needs to be lowered in target-dependent fashion.
-    // FIXME test that the target supports this somehow; if not emit Undef.
-    // Create a pseudo for EmitInstrWithCustomInserter's consumption.
-    MIB.addImm(FrameIx).addImm(Offset).addMetadata(MDPtr);
-    abort();
-    TLI->EmitInstrWithCustomInserter(&*MIB, InsertBB, EM);
-    return 0;
   } else {
     // Insert an Undef so we can see what we dropped.
     MIB.addReg(0U);
@@ -772,7 +769,8 @@ EmitSpecialNode(SDNode *Node, bool IsClone, bool IsCloned,
     // Get the mdnode from the asm if it exists and add it to the instruction.
     SDValue MDV = Node->getOperand(InlineAsm::Op_MDNode);
     const MDNode *MD = cast<MDNodeSDNode>(MDV)->getMD();
-    MI->addOperand(MachineOperand::CreateMetadata(MD));
+    if (MD)
+      MI->addOperand(MachineOperand::CreateMetadata(MD));
     
     MBB->insert(InsertPos, MI);
     break;

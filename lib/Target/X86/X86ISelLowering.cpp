@@ -2430,12 +2430,13 @@ FastISel *
 X86TargetLowering::createFastISel(MachineFunction &mf,
                             DenseMap<const Value *, unsigned> &vm,
                             DenseMap<const BasicBlock*, MachineBasicBlock*> &bm,
-                            DenseMap<const AllocaInst *, int> &am
+                            DenseMap<const AllocaInst *, int> &am,
+                            std::vector<std::pair<MachineInstr*, unsigned> > &pn
 #ifndef NDEBUG
                           , SmallSet<const Instruction *, 8> &cil
 #endif
                                   ) const {
-  return X86::createFastISel(mf, vm, bm, am
+  return X86::createFastISel(mf, vm, bm, am, pn
 #ifndef NDEBUG
                              , cil
 #endif
@@ -6024,8 +6025,6 @@ SDValue X86TargetLowering::EmitTest(SDValue Op, unsigned X86CC,
   }
 
   // Otherwise just emit a CMP with 0, which is the TEST pattern.
-  if (Subtarget->shouldPromote16Bit() && Op.getValueType() == MVT::i16)
-    Op = DAG.getNode(ISD::ANY_EXTEND, Op.getDebugLoc(), MVT::i32, Op);
   return DAG.getNode(X86ISD::CMP, dl, MVT::i32, Op,
                      DAG.getConstant(0, Op.getValueType()));
 }
@@ -6039,10 +6038,6 @@ SDValue X86TargetLowering::EmitCmp(SDValue Op0, SDValue Op1, unsigned X86CC,
       return EmitTest(Op0, X86CC, DAG);
 
   DebugLoc dl = Op0.getDebugLoc();
-  if (Subtarget->shouldPromote16Bit() && Op0.getValueType() == MVT::i16) {
-    Op0 = DAG.getNode(ISD::ANY_EXTEND, Op0.getDebugLoc(), MVT::i32, Op0);
-    Op1 = DAG.getNode(ISD::ANY_EXTEND, Op1.getDebugLoc(), MVT::i32, Op1);
-  }
   return DAG.getNode(X86ISD::CMP, dl, MVT::i32, Op0, Op1);
 }
 
@@ -8700,21 +8695,6 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     F->DeleteMachineInstr(MI);   // The pseudo instruction is gone now.
     return BB;
   }
-    // DBG_VALUE.  Only the frame index case is done here.
-  case X86::DBG_VALUE: {
-    const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
-    DebugLoc DL = MI->getDebugLoc();
-    X86AddressMode AM;
-    MachineFunction *F = BB->getParent();
-    AM.BaseType = X86AddressMode::FrameIndexBase;
-    AM.Base.FrameIndex = MI->getOperand(0).getImm();
-    addFullAddress(BuildMI(BB, DL, TII->get(X86::DBG_VALUE)), AM).
-      addImm(MI->getOperand(1).getImm()).
-      addMetadata(MI->getOperand(2).getMetadata());
-    F->DeleteMachineInstr(MI);      // Remove pseudo.
-    return BB;
-  }
-
     // String/text processing lowering.
   case X86::PCMPISTRM128REG:
     return EmitPCMP(MI, BB, 3, false /* in-mem */);
@@ -9981,8 +9961,6 @@ bool X86TargetLowering::isTypeDesirableForOp(unsigned Opc, EVT VT) const {
   case ISD::SHL:
   case ISD::SRA:
   case ISD::SRL:
-  case ISD::ROTL:
-  case ISD::ROTR:
   case ISD::SUB:
   case ISD::ADD:
   case ISD::MUL:
@@ -9991,6 +9969,14 @@ bool X86TargetLowering::isTypeDesirableForOp(unsigned Opc, EVT VT) const {
   case ISD::XOR:
     return false;
   }
+}
+
+static bool MayFoldLoad(SDValue Op) {
+  return Op.hasOneUse() && ISD::isNormalLoad(Op.getNode());
+}
+
+static bool MayFoldIntoStore(SDValue Op) {
+  return Op.hasOneUse() && ISD::isNormalStore(*Op.getNode()->use_begin());
 }
 
 /// IsDesirableToPromoteOp - This method query the target whether it is
@@ -10026,13 +10012,10 @@ bool X86TargetLowering::IsDesirableToPromoteOp(SDValue Op, EVT &PVT) const {
     break;
   case ISD::SHL:
   case ISD::SRA:
-  case ISD::SRL:
-  case ISD::ROTL:
-  case ISD::ROTR: {
+  case ISD::SRL: {
     SDValue N0 = Op.getOperand(0);
     // Look out for (store (shl (load), x)).
-    if (isa<LoadSDNode>(N0) && N0.hasOneUse() &&
-        Op.hasOneUse() && Op.getNode()->use_begin()->getOpcode() == ISD::STORE)
+    if (MayFoldLoad(N0) && MayFoldIntoStore(Op))
       return false;
     Promote = true;
     break;
@@ -10047,12 +10030,12 @@ bool X86TargetLowering::IsDesirableToPromoteOp(SDValue Op, EVT &PVT) const {
   case ISD::SUB: {
     SDValue N0 = Op.getOperand(0);
     SDValue N1 = Op.getOperand(1);
-    if (!Commute && isa<LoadSDNode>(N1))
+    if (!Commute && MayFoldLoad(N1))
       return false;
     // Avoid disabling potential load folding opportunities.
-    if ((isa<LoadSDNode>(N0) && N0.hasOneUse()) && !isa<ConstantSDNode>(N1))
+    if (MayFoldLoad(N0) && (!isa<ConstantSDNode>(N1) || MayFoldIntoStore(Op)))
       return false;
-    if ((isa<LoadSDNode>(N1) && N1.hasOneUse()) && !isa<ConstantSDNode>(N0))
+    if (MayFoldLoad(N1) && (!isa<ConstantSDNode>(N0) || MayFoldIntoStore(Op)))
       return false;
     Promote = true;
   }

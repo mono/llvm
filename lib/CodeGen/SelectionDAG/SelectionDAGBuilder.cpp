@@ -615,6 +615,10 @@ void SelectionDAGBuilder::AssignOrderingToNode(const SDNode *Node) {
 }
 
 void SelectionDAGBuilder::visit(const Instruction &I) {
+  // Set up outgoing PHI node register values before emitting the terminator.
+  if (isa<TerminatorInst>(&I))
+    HandlePHINodesInSuccessorBlocks(I.getParent());
+
   CurDebugLoc = I.getDebugLoc();
 
   visit(I.getOpcode(), I);
@@ -3769,34 +3773,77 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     return 0;
   }
   case Intrinsic::dbg_declare: {
-    // FIXME: currently, we get here only if OptLevel != CodeGenOpt::None.
-    // The real handling of this intrinsic is in FastISel.
-    if (OptLevel != CodeGenOpt::None)
-      // FIXME: Variable debug info is not supported here.
-      return 0;
     const DbgDeclareInst &DI = cast<DbgDeclareInst>(I);
     if (!DIDescriptor::ValidDebugInfo(DI.getVariable(), CodeGenOpt::None))
       return 0;
 
     MDNode *Variable = DI.getVariable();
+    // Parameters are handled specially.
+    bool isParameter = false;
+    ConstantInt *CI = dyn_cast_or_null<ConstantInt>(Variable->getOperand(0));
+    if (CI) {
+      unsigned Val = CI->getZExtValue();
+      unsigned Tag = Val & ~LLVMDebugVersionMask;
+      if (Tag == dwarf::DW_TAG_arg_variable)
+        isParameter = true;
+    }
     const Value *Address = DI.getAddress();
     if (!Address)
       return 0;
     if (const BitCastInst *BCI = dyn_cast<BitCastInst>(Address))
       Address = BCI->getOperand(0);
     const AllocaInst *AI = dyn_cast<AllocaInst>(Address);
-    // Don't handle byval struct arguments or VLAs, for example.
-    if (!AI)
-      return 0;
-    DenseMap<const AllocaInst*, int>::iterator SI =
-      FuncInfo.StaticAllocaMap.find(AI);
-    if (SI == FuncInfo.StaticAllocaMap.end())
-      return 0; // VLAs.
-    int FI = SI->second;
+    if (AI) {
+      // Don't handle byval arguments or VLAs, for example.
+      // Non-byval arguments are handled here (they refer to the stack temporary
+      // alloca at this point).
+      DenseMap<const AllocaInst*, int>::iterator SI =
+        FuncInfo.StaticAllocaMap.find(AI);
+      if (SI == FuncInfo.StaticAllocaMap.end())
+        return 0; // VLAs.
+      int FI = SI->second;
 
-    MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
-    if (!DI.getDebugLoc().isUnknown() && MMI.hasDebugInfo())
-      MMI.setVariableDbgInfo(Variable, FI, DI.getDebugLoc());
+      MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
+      if (!DI.getDebugLoc().isUnknown() && MMI.hasDebugInfo())
+        MMI.setVariableDbgInfo(Variable, FI, DI.getDebugLoc());
+    }
+
+    // Build an entry in DbgOrdering.  Debug info input nodes get an SDNodeOrder
+    // but do not always have a corresponding SDNode built.  The SDNodeOrder
+    // absolute, but not relative, values are different depending on whether
+    // debug info exists.
+    ++SDNodeOrder;
+    SDValue &N = NodeMap[Address];
+    SDDbgValue *SDV;
+    if (N.getNode()) {
+      if (isParameter && !AI) {
+        FrameIndexSDNode *FINode = dyn_cast<FrameIndexSDNode>(N.getNode());
+        if (FINode)
+          // Byval parameter.  We have a frame index at this point.
+          SDV = DAG.getDbgValue(Variable, FINode->getIndex(),
+                                0, dl, SDNodeOrder);
+        else
+          // Can't do anything with other non-AI cases yet.  This might be a
+          // parameter of a callee function that got inlined, for example.
+          return 0;
+      } else if (AI)
+        SDV = DAG.getDbgValue(Variable, N.getNode(), N.getResNo(),
+                              0, dl, SDNodeOrder);
+      else
+        // Can't do anything with other non-AI cases yet.
+        return 0;
+      DAG.AddDbgValue(SDV, N.getNode(), isParameter);
+    } else {
+      // Generating Undefs here seems to be actively harmful because it
+      // affects the line numbers.
+      return 0;
+#if 0
+      // This isn't useful, but it shows what we're missing.
+      SDV = DAG.getDbgValue(Variable, UndefValue::get(Address->getType()),
+                            0, dl, SDNodeOrder);
+      DAG.AddDbgValue(SDV, 0, isParameter);
+#endif
+    }
     return 0;
   }
   case Intrinsic::dbg_value: {
@@ -3815,20 +3862,23 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     // absolute, but not relative, values are different depending on whether
     // debug info exists.
     ++SDNodeOrder;
+    SDDbgValue *SDV;
     if (isa<ConstantInt>(V) || isa<ConstantFP>(V)) {
-      DAG.AddDbgValue(DAG.getDbgValue(Variable, V, Offset, dl, SDNodeOrder));
+      SDV = DAG.getDbgValue(Variable, V, Offset, dl, SDNodeOrder);
+      DAG.AddDbgValue(SDV, 0, false);
     } else {
       SDValue &N = NodeMap[V];
-      if (N.getNode())
-        DAG.AddDbgValue(DAG.getDbgValue(Variable, N.getNode(),
-                                        N.getResNo(), Offset, dl, SDNodeOrder),
-                        N.getNode());
-      else
+      if (N.getNode()) {
+        SDV = DAG.getDbgValue(Variable, N.getNode(),
+                              N.getResNo(), Offset, dl, SDNodeOrder);
+        DAG.AddDbgValue(SDV, N.getNode(), false);
+      } else {
         // We may expand this to cover more cases.  One case where we have no
         // data available is an unreferenced parameter; we need this fallback.
-        DAG.AddDbgValue(DAG.getDbgValue(Variable, 
-                                        UndefValue::get(V->getType()),
-                                        Offset, dl, SDNodeOrder));
+        SDV = DAG.getDbgValue(Variable, UndefValue::get(V->getType()),
+                              Offset, dl, SDNodeOrder);
+        DAG.AddDbgValue(SDV, 0, false);
+      }
     }
 
     // Build a debug info table entry.
@@ -5801,7 +5851,7 @@ void SelectionDAGISel::LowerArguments(const BasicBlock *LLVMBB) {
     // or one register.
     ISD::ArgFlagsTy Flags;
     Flags.setSRet();
-    EVT RegisterVT = TLI.getRegisterType(*CurDAG->getContext(), ValueVTs[0]);
+    EVT RegisterVT = TLI.getRegisterType(*DAG.getContext(), ValueVTs[0]);
     ISD::InputArg RetArg(Flags, RegisterVT, true);
     Ins.push_back(RetArg);
   }
@@ -5964,7 +6014,7 @@ void SelectionDAGISel::LowerArguments(const BasicBlock *LLVMBB) {
 /// the end.
 ///
 void
-SelectionDAGISel::HandlePHINodesInSuccessorBlocks(const BasicBlock *LLVMBB) {
+SelectionDAGBuilder::HandlePHINodesInSuccessorBlocks(const BasicBlock *LLVMBB) {
   const TerminatorInst *TI = LLVMBB->getTerminator();
 
   SmallPtrSet<MachineBasicBlock *, 4> SuccsHandled;
@@ -5974,7 +6024,7 @@ SelectionDAGISel::HandlePHINodesInSuccessorBlocks(const BasicBlock *LLVMBB) {
   for (unsigned succ = 0, e = TI->getNumSuccessors(); succ != e; ++succ) {
     const BasicBlock *SuccBB = TI->getSuccessor(succ);
     if (!isa<PHINode>(SuccBB->begin())) continue;
-    MachineBasicBlock *SuccMBB = FuncInfo->MBBMap[SuccBB];
+    MachineBasicBlock *SuccMBB = FuncInfo.MBBMap[SuccBB];
 
     // If this terminator has multiple identical successors (common for
     // switches), only handle each succ once.
@@ -5994,20 +6044,20 @@ SelectionDAGISel::HandlePHINodesInSuccessorBlocks(const BasicBlock *LLVMBB) {
       const Value *PHIOp = PN->getIncomingValueForBlock(LLVMBB);
 
       if (const Constant *C = dyn_cast<Constant>(PHIOp)) {
-        unsigned &RegOut = SDB->ConstantsOut[C];
+        unsigned &RegOut = ConstantsOut[C];
         if (RegOut == 0) {
-          RegOut = FuncInfo->CreateRegForValue(C);
-          SDB->CopyValueToVirtualRegister(C, RegOut);
+          RegOut = FuncInfo.CreateRegForValue(C);
+          CopyValueToVirtualRegister(C, RegOut);
         }
         Reg = RegOut;
       } else {
-        Reg = FuncInfo->ValueMap[PHIOp];
+        Reg = FuncInfo.ValueMap[PHIOp];
         if (Reg == 0) {
           assert(isa<AllocaInst>(PHIOp) &&
-                 FuncInfo->StaticAllocaMap.count(cast<AllocaInst>(PHIOp)) &&
+                 FuncInfo.StaticAllocaMap.count(cast<AllocaInst>(PHIOp)) &&
                  "Didn't codegen value into a register!??");
-          Reg = FuncInfo->CreateRegForValue(PHIOp);
-          SDB->CopyValueToVirtualRegister(PHIOp, Reg);
+          Reg = FuncInfo.CreateRegForValue(PHIOp);
+          CopyValueToVirtualRegister(PHIOp, Reg);
         }
       }
 
@@ -6017,76 +6067,12 @@ SelectionDAGISel::HandlePHINodesInSuccessorBlocks(const BasicBlock *LLVMBB) {
       ComputeValueVTs(TLI, PN->getType(), ValueVTs);
       for (unsigned vti = 0, vte = ValueVTs.size(); vti != vte; ++vti) {
         EVT VT = ValueVTs[vti];
-        unsigned NumRegisters = TLI.getNumRegisters(*CurDAG->getContext(), VT);
+        unsigned NumRegisters = TLI.getNumRegisters(*DAG.getContext(), VT);
         for (unsigned i = 0, e = NumRegisters; i != e; ++i)
-          SDB->PHINodesToUpdate.push_back(std::make_pair(MBBI++, Reg+i));
+          FuncInfo.PHINodesToUpdate.push_back(std::make_pair(MBBI++, Reg+i));
         Reg += NumRegisters;
       }
     }
   }
-  SDB->ConstantsOut.clear();
-}
-
-/// This is the Fast-ISel version of HandlePHINodesInSuccessorBlocks. It only
-/// supports legal types, and it emits MachineInstrs directly instead of
-/// creating SelectionDAG nodes.
-///
-bool
-SelectionDAGISel::HandlePHINodesInSuccessorBlocksFast(const BasicBlock *LLVMBB,
-                                                      FastISel *F) {
-  const TerminatorInst *TI = LLVMBB->getTerminator();
-
-  SmallPtrSet<MachineBasicBlock *, 4> SuccsHandled;
-  unsigned OrigNumPHINodesToUpdate = SDB->PHINodesToUpdate.size();
-
-  // Check successor nodes' PHI nodes that expect a constant to be available
-  // from this block.
-  for (unsigned succ = 0, e = TI->getNumSuccessors(); succ != e; ++succ) {
-    const BasicBlock *SuccBB = TI->getSuccessor(succ);
-    if (!isa<PHINode>(SuccBB->begin())) continue;
-    MachineBasicBlock *SuccMBB = FuncInfo->MBBMap[SuccBB];
-
-    // If this terminator has multiple identical successors (common for
-    // switches), only handle each succ once.
-    if (!SuccsHandled.insert(SuccMBB)) continue;
-
-    MachineBasicBlock::iterator MBBI = SuccMBB->begin();
-
-    // At this point we know that there is a 1-1 correspondence between LLVM PHI
-    // nodes and Machine PHI nodes, but the incoming operands have not been
-    // emitted yet.
-    for (BasicBlock::const_iterator I = SuccBB->begin();
-         const PHINode *PN = dyn_cast<PHINode>(I); ++I) {
-      // Ignore dead phi's.
-      if (PN->use_empty()) continue;
-
-      // Only handle legal types. Two interesting things to note here. First,
-      // by bailing out early, we may leave behind some dead instructions,
-      // since SelectionDAG's HandlePHINodesInSuccessorBlocks will insert its
-      // own moves. Second, this check is necessary becuase FastISel doesn't
-      // use CreateRegForValue to create registers, so it always creates
-      // exactly one register for each non-void instruction.
-      EVT VT = TLI.getValueType(PN->getType(), /*AllowUnknown=*/true);
-      if (VT == MVT::Other || !TLI.isTypeLegal(VT)) {
-        // Promote MVT::i1.
-        if (VT == MVT::i1)
-          VT = TLI.getTypeToTransformTo(*CurDAG->getContext(), VT);
-        else {
-          SDB->PHINodesToUpdate.resize(OrigNumPHINodesToUpdate);
-          return false;
-        }
-      }
-
-      const Value *PHIOp = PN->getIncomingValueForBlock(LLVMBB);
-
-      unsigned Reg = F->getRegForValue(PHIOp);
-      if (Reg == 0) {
-        SDB->PHINodesToUpdate.resize(OrigNumPHINodesToUpdate);
-        return false;
-      }
-      SDB->PHINodesToUpdate.push_back(std::make_pair(MBBI++, Reg));
-    }
-  }
-
-  return true;
+  ConstantsOut.clear();
 }

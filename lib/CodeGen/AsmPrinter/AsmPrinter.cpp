@@ -228,7 +228,15 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
 
   const TargetData *TD = TM.getTargetData();
   unsigned Size = TD->getTypeAllocSize(GV->getType()->getElementType());
-  unsigned AlignLog = TD->getPreferredAlignmentLog(GV);
+  
+  // If the alignment is specified, we *must* obey it.  Overaligning a global
+  // with a specified alignment is a prompt way to break globals emitted to
+  // sections and expected to be contiguous (e.g. ObjC metadata).
+  unsigned AlignLog;
+  if (unsigned GVAlign = GV->getAlignment())
+    AlignLog = Log2_32(GVAlign);
+  else
+    AlignLog = TD->getPreferredAlignmentLog(GV);
   
   // Handle common and BSS local symbols (.lcomm).
   if (GVKind.isCommon() || GVKind.isBSSLocal()) {
@@ -275,6 +283,8 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
   // Handle the zerofill directive on darwin, which is a special form of BSS
   // emission.
   if (GVKind.isBSSExtern() && MAI->hasMachoZeroFillDirective()) {
+    if (Size == 0) Size = 1;  // zerofill of 0 bytes is undefined.
+    
     // .globl _foo
     OutStreamer.EmitSymbolAttribute(GVSym, MCSA_Global);
     // .zerofill __DATA, __common, _foo, 400, 5
@@ -577,9 +587,16 @@ void AsmPrinter::EmitFunctionBody() {
   
   // If the function is empty and the object file uses .subsections_via_symbols,
   // then we need to emit *something* to the function body to prevent the
-  // labels from collapsing together.  Just emit a 0 byte.
-  if (MAI->hasSubsectionsViaSymbols() && !HasAnyRealCode)
-    OutStreamer.EmitIntValue(0, 1, 0/*addrspace*/);
+  // labels from collapsing together.  Just emit a noop.
+  if (MAI->hasSubsectionsViaSymbols() && !HasAnyRealCode) {
+    MCInst Noop;
+    TM.getInstrInfo()->getNoopForMachoTarget(Noop);
+    if (Noop.getOpcode()) {
+      OutStreamer.AddComment("avoids zero-length function");
+      OutStreamer.EmitInstruction(Noop);
+    } else  // Target not mc-ized yet.
+      OutStreamer.EmitRawText(StringRef("\tnop\n"));
+  }
   
   // Emit target-specific gunk after the function body.
   EmitFunctionBodyEnd();

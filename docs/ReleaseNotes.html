@@ -83,11 +83,7 @@ Almost dead code.
 
  <!-- for announcement email:
  Logo web page.
- llvm devmtg
- compiler_rt
- KLEE web page at klee.llvm.org
  Many new papers added to /pubs/
- Mention gcc plugin.
    -->
 
 <!-- *********************************************************************** -->
@@ -115,15 +111,39 @@ development.  Here we include updates on these subprojects.
 
 <div class="doc_text">
 
-<p>The <a href="http://clang.llvm.org/">Clang project</a> is ...</p>
+<p><a href="http://clang.llvm.org/">Clang</a> is an LLVM front end for the C,
+C++, and Objective-C languages. Clang aims to provide a better user experience
+through expressive diagnostics, a high level of conformance to language
+standards, fast compilation, and low memory use. Like LLVM, Clang provides a
+modular, library-based architecture that makes it suitable for creating or
+integrating with other development tools. Clang is considered a
+production-quality compiler for C and Objective-C on x86 (32- and 64-bit).</p>
 
 <p>In the LLVM 2.7 time-frame, the Clang team has made many improvements:</p>
 
 <ul>
-<li>FIXME: C++! Include a link to cxx_compatibility.html</li>
+ 
+<li>C++ Support: Clang is now capable of self-hosting! While still
+alpha-quality, Clang's C++ support has matured enough to build LLVM and Clang,
+and C++ is now enabled by default. See the <a
+href="http://clang.llvm.org/cxx_compatibility.html">Clang C++ compatibility
+page</a> for common C++ migration issues.</li>
+
+<li>Objective-C: Clang now includes experimental support for an updated
+Objective-C ABI on non-Darwin platforms.  This includes support for non-fragile
+instance variables and accelerated proxies, as well as greater potential for
+future optimisations.  The new ABI is used when compiling with the
+-fobjc-nonfragile-abi and -fgnu-runtime options.  Code compiled with these
+options may be mixed with code compiled with GCC or clang using the old GNU ABI,
+but requires the libobjc2 runtime from the GNUstep project.</li>
+
+<li>New warnings: Clang contains a number of new warnings, including
+control-flow warnings (unreachable code, missing return statements in a
+non-<code>void</code> function, etc.), sign-comparison warnings, and improved
+format-string warnings.</li>
 
 <li>CIndex API and Python bindings: Clang now includes a C API as part of the
-CIndex library. Although we make make some changes to the API in the future, it
+CIndex library. Although we may make some changes to the API in the future, it
 is intended to be stable and has been designed for use by external projects. See
 the Clang
 doxygen <a href="http://clang.llvm.org/doxygen/group__CINDEX.html">CIndex</a>
@@ -132,7 +152,8 @@ set of Python bindings.</li>
 
 <li>ARM Support: Clang now has ABI support for both the Darwin and Linux ARM
 ABIs. Coupled with many improvements to the LLVM ARM backend, Clang is now
-suitable for use as a a beta quality ARM compiler.</li>
+suitable for use as a beta quality ARM compiler.</li>
+
 </ul>
 </div>
 
@@ -270,7 +291,7 @@ LLVM MC Project Blog Post</a>.
 
 <p>2.7 includes major parts of the work required by the new MC Project.  A few
    targets have been refactored to support it, and work is underway to support a
-   native assembler in LLVM.  This work is not complete in LLVM 2.7, but you has
+   native assembler in LLVM.  This work is not complete in LLVM 2.7, but it has
    made substantially more progress on LLVM mainline.</p>
 
 <p>One minor example of what MC can do is to transcode an AT&amp;T syntax
@@ -379,6 +400,78 @@ code to ensure that memory accesses and array indexing operations are safe, and
 instruments the code with run-time checks when safety cannot be proven
 statically.
 </p>
+</div>
+
+<!--=========================================================================-->
+<div class="doc_subsection">
+<a name="icedtea">IcedTea Java Virtual Machine Implementation</a>
+</div>
+
+<div class="doc_text">
+<p>
+<a href="http://icedtea.classpath.org/wiki/Main_Page">IcedTea</a> provides a
+harness to build OpenJDK using only free software build tools and to provide
+replacements for the not-yet free parts of OpenJDK.  One of the extensions that
+IcedTea provides is a new JIT compiler named <a
+href="http://icedtea.classpath.org/wiki/ZeroSharkFaq">Shark</a> which uses LLVM
+to provide native code generation without introducing processor-dependent
+code.
+</p>
+<p>Icedtea6 1.8 and later have been tested and are known to work with
+LLVM 2.7 (and continue to work with older LLVM releases >= 2.6 as well).
+</p>
+</div>
+
+<!--=========================================================================-->
+<div class="doc_subsection">
+<a name="llvm-lua">LLVM-Lua</a>
+</div>
+
+<div class="doc_text">
+<p>
+<a href="http://code.google.com/p/llvm-lua/">LLVM-Lua</a> uses LLVM
+ to add JIT and static compiling support to the Lua VM. Lua 
+bytecode is analyzed to remove type checks, then LLVM is used to compile the 
+bytecode down to machine code.
+</p>
+<p>LLVM-Lua 1.2.0  have been tested and is known to work with LLVM 2.7.
+</p>
+</div>
+
+<!--=========================================================================-->
+<div class="doc_subsection">
+<a name="MacRuby">MacRuby</a>
+</div>
+
+<div class="doc_text">
+<p>
+<a href="http://macruby.org">MacRuby</a> is an implementation of Ruby based on
+core Mac OS technologies, sponsored by Apple Inc.  It uses LLVM at runtime for
+optimization passes, JIT compilation and exception handling. It also allows
+static (ahead-of-time) compilation of Ruby code straight to machine code. 
+</p>
+<p>The upcoming MacRuby 0.6 release works with LLVM 2.7.
+</p>
+</div>
+
+<!--=========================================================================-->
+<div class="doc_subsection">
+<a name="GHC">Glasgow Haskell Compiler (GHC)</a>
+</div>
+
+<div class="doc_text">
+<p>
+<a href="http://www.haskell.org/ghc/">GHC</a> is an open source,
+state-of-the-art programming suite for Haskell, a standard lazy
+functional programming language. It includes an optimizing static
+compiler generating good code for a variety of platforms, together
+with an interactive system for convenient, quick development.</p>
+
+<p>In addition to the existing C and native code generators, GHC now
+supports an <a
+href="http://hackage.haskell.org/trac/ghc/wiki/Commentary/Compiler/Backends/LLVM">LLVM
+code generator</a>. GHC supports LLVM 2.7.</p>
+
 </div>
 
 
@@ -528,7 +621,7 @@ release includes a few major enhancements and additions to the optimizers:</p>
 
 <ul>
 
-<li>The inliner reuses now merges arrays stack objects in different callees when
+<li>The inliner now merges arrays stack objects in different callees when
     inlining multiple call sites into one function.  This reduces the stack size
     of the resultant function.</li>
 <li>The -basicaa alias analysis pass (which is the default) has been improved to
@@ -620,7 +713,8 @@ it run faster:</p>
     understand assembly files.  This is wired up in llvm-gcc and clang to
     the <tt>-fverbose-asm</tt> option.</li>
 
-<li>New LSR with "full strength reduction" mode.  FIXME: Description?</li>
+<li>New LSR with "full strength reduction" mode, which can reduce address
+    register pressure in loops where address generation is important.</li>
 
 <li>A new codegen level Common Subexpression Elimination pass (MachineCSE)
     is available and enabled by default.  It catches redundancies exposed by
@@ -675,8 +769,6 @@ it run faster:</p>
     registers, making the code generator more aggressive in cases where scalars
     and vector types are mixed.</li>
 
-<li>PostRA scheduler for X86? FIXME: is this on by default in 2.7?</li>
-
 </ul>
 
 </div>
@@ -702,11 +794,18 @@ href="http://blog.llvm.org/2010/04/arm-advanced-simd-neon-intrinsics-and.html">
   helpful information if migrating code from GCC to LLVM-GCC.</li>
   
 <li>The ARM and Thumb code generators now use register scavenging for stack
-    object address materialization.(FIXME: WHAT BENEFIT DOES THIS PROVIDE?)</li>
-    
+    object address materialization. This allows the use of R3 as a general
+    purpose register in Thumb1 code, as it was previous reserved for use in
+    stack address materialization. Secondly, sequential uses of the same
+    value will now re-use the materialized constant.</li>
+
 <li>The ARM backend now has good support for ARMv4 targets and has been tested
     on StrongARM hardware.  Previously, LLVM only supported ARMv4T and
     newer chips.</li>
+
+<li>Atomic builtins are now supported for ARMv6 and ARMv7 (__sync_synchronize,
+    __sync_fetch_and_add, etc.).</li>
+
 </ul>
 
 
@@ -725,8 +824,8 @@ href="http://blog.llvm.org/2010/04/arm-advanced-simd-neon-intrinsics-and.html">
 
 <ul>
 <li>The optimizer uses the new CodeMetrics class to measure the size of code.
-    Various passes that use thing (like the inliner, loop unswitcher, etc) all
-    use this to make more accurate estimates of the code size impact of various
+    Various passes (like the inliner, loop unswitcher, etc) all use this to make
+    more accurate estimates of the code size impact of various
     optimizations.</li>
 <li>A new <a href="http://llvm.org/doxygen/InstructionSimplify_8h-source.html">
     llvm/Analysis/InstructionSimplify.h</a> interface is available for doing
@@ -826,12 +925,13 @@ configure with <tt>--enable-libffi</tt>.</li>
 API changes are:</p>
 
 <ul>
-<li>Just about everything has been converted to use raw_ostream instead of
-    std::ostream.</li>
-<li>llvm/ADT/iterator.h has been removed, just use &lt;iterator&gt;
+<li>Just about everything has been converted to use <tt>raw_ostream</tt> instead of
+    <tt>std::ostream</tt>.</li>
+<li><tt>llvm/ADT/iterator.h</tt> has been removed, just use <tt>&lt;iterator&gt;</tt>
  instead.</li>
-<li>The Streams.h file and "DOUT" got removed, use "DEBUG(errs() &lt;&lt; ...);"
+<li>The <tt>Streams.h</tt> file and <tt>DOUT</tt> got removed, use <tt>DEBUG(errs() &lt;&lt; ...);</tt>
    instead.</li>
+<li>The <tt>TargetAsmInfo</tt> interface was renamed to <tt>MCAsmInfo</tt>.</li>
 <li><tt>ModuleProvider</tt> has been <a
 href="http://llvm.org/viewvc/llvm-project?view=rev&amp;revision=94686">removed</a>
 and its methods moved to <tt>Module</tt> and <tt>GlobalValue</tt>.
@@ -851,13 +951,24 @@ Clients must replace calls to
 <tt>GlobalValue::hasNotBeenReadFromBitcode</tt> with
 <tt>GlobalValue::isMaterializable</tt>.</li>
 
-<li>The <tt>llvm/Support/DataTypes.h</tt> header has moved
-to <tt>llvm/System/DataTypes.h</tt>.</li>
-
 <li>The <tt>isInteger</tt>, <tt>isIntOrIntVector</tt>, <tt>isFloatingPoint</tt>,
 <tt>isFPOrFPVector</tt> and <tt>isFPOrFPVector</tt> methods have been renamed
 <tt>isIntegerTy</tt>, <tt>isIntOrIntVectorTy</tt>, <tt>isFloatingPointTy</tt>, 
 <tt>isFPOrFPVectorTy</tt> and <tt>isFPOrFPVectorTy</tt> respectively.</li>
+
+<li><tt>llvm::Instruction::clone()</tt> no longer takes argument.</li>
+<li><tt>raw_fd_ostream</tt>'s constructor now takes a flag argument, not individual
+  booleans (see <tt>include/llvm/Support/raw_ostream.h</tt> for details).</li>
+<li>Some header files have been renamed:
+<ul>
+  <li><tt>llvm/Support/AIXDataTypesFix.h</tt> to
+      <tt>llvm/System/AIXDataTypesFix.h</tt></li>
+  <li><tt>llvm/Support/DataTypes.h</tt> to <tt>llvm/System/DataTypes.h</tt></li>
+  <li><tt>llvm/Transforms/Utils/InlineCost.h</tt> to
+      <tt>llvm/Analysis/InlineCost.h</tt></li>
+  <li><tt>llvm/Support/Mangler.h</tt> to <tt>llvm/Target/Mangler.h</tt></li>
+  <li><tt>llvm/Analysis/Passes.h</tt> to <tt>llvm/CodeGen/Passes.h</tt></li>
+</ul></li>
 </ul>
 
 </div>

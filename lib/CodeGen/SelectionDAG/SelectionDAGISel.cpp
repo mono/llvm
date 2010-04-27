@@ -233,20 +233,8 @@ SelectionDAGISel::SelectBasicBlock(MachineBasicBlock *BB,
   // Lower all of the non-terminator instructions. If a call is emitted
   // as a tail call, cease emitting nodes for this block. Terminators
   // are handled below.
-  for (BasicBlock::const_iterator I = Begin;
-       I != End && !SDB->HasTailCall && !isa<TerminatorInst>(I);
-       ++I)
+  for (BasicBlock::const_iterator I = Begin; I != End && !SDB->HasTailCall; ++I)
     SDB->visit(*I);
-
-  if (!SDB->HasTailCall) {
-    // Handle PHI nodes in successor blocks.
-    if (End == LLVMBB->end()) {
-      HandlePHINodesInSuccessorBlocks(LLVMBB);
-
-      // Lower the terminator after the copies are emitted.
-      SDB->visit(*LLVMBB->getTerminator());
-    }
-  }
 
   // Make sure the root of the DAG is up-to-date.
   CurDAG->setRoot(SDB->getControlRoot());
@@ -711,7 +699,8 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   FastISel *FastIS = 0;
   if (EnableFastISel)
     FastIS = TLI.createFastISel(*MF, FuncInfo->ValueMap, FuncInfo->MBBMap,
-                                FuncInfo->StaticAllocaMap
+                                FuncInfo->StaticAllocaMap,
+                                FuncInfo->PHINodesToUpdate
 #ifndef NDEBUG
                                 , FuncInfo->CatchInfoLost
 #endif
@@ -762,20 +751,6 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
       FastIS->startNewBlock(BB);
       // Do FastISel on as many instructions as possible.
       for (; BI != End; ++BI) {
-        // Just before the terminator instruction, insert instructions to
-        // feed PHI nodes in successor blocks.
-        if (isa<TerminatorInst>(BI))
-          if (!HandlePHINodesInSuccessorBlocksFast(LLVMBB, FastIS)) {
-            ++NumFastIselFailures;
-            if (EnableFastISelVerbose || EnableFastISelAbort) {
-              dbgs() << "FastISel miss: ";
-              BI->dump();
-            }
-            assert(!EnableFastISelAbort &&
-                   "FastISel didn't handle a PHI in a successor");
-            break;
-          }
-
         // Try to select the instruction with FastISel.
         if (FastIS->SelectInstruction(BI))
           continue;
@@ -835,6 +810,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
     }
 
     FinishBasicBlock(BB);
+    FuncInfo->PHINodesToUpdate.clear();
   }
 
   delete FastIS;
@@ -847,28 +823,27 @@ SelectionDAGISel::FinishBasicBlock(MachineBasicBlock *BB) {
   DEBUG(BB->dump());
 
   DEBUG(dbgs() << "Total amount of phi nodes to update: "
-               << SDB->PHINodesToUpdate.size() << "\n");
-  DEBUG(for (unsigned i = 0, e = SDB->PHINodesToUpdate.size(); i != e; ++i)
+               << FuncInfo->PHINodesToUpdate.size() << "\n");
+  DEBUG(for (unsigned i = 0, e = FuncInfo->PHINodesToUpdate.size(); i != e; ++i)
           dbgs() << "Node " << i << " : ("
-                 << SDB->PHINodesToUpdate[i].first
-                 << ", " << SDB->PHINodesToUpdate[i].second << ")\n");
+                 << FuncInfo->PHINodesToUpdate[i].first
+                 << ", " << FuncInfo->PHINodesToUpdate[i].second << ")\n");
 
   // Next, now that we know what the last MBB the LLVM BB expanded is, update
   // PHI nodes in successors.
   if (SDB->SwitchCases.empty() &&
       SDB->JTCases.empty() &&
       SDB->BitTestCases.empty()) {
-    for (unsigned i = 0, e = SDB->PHINodesToUpdate.size(); i != e; ++i) {
-      MachineInstr *PHI = SDB->PHINodesToUpdate[i].first;
+    for (unsigned i = 0, e = FuncInfo->PHINodesToUpdate.size(); i != e; ++i) {
+      MachineInstr *PHI = FuncInfo->PHINodesToUpdate[i].first;
       assert(PHI->isPHI() &&
              "This is not a machine PHI node that we are updating!");
       if (!BB->isSuccessor(PHI->getParent()))
         continue;
-      PHI->addOperand(MachineOperand::CreateReg(SDB->PHINodesToUpdate[i].second,
-                                                false));
+      PHI->addOperand(
+        MachineOperand::CreateReg(FuncInfo->PHINodesToUpdate[i].second, false));
       PHI->addOperand(MachineOperand::CreateMBB(BB));
     }
-    SDB->PHINodesToUpdate.clear();
     return;
   }
 
@@ -906,8 +881,9 @@ SelectionDAGISel::FinishBasicBlock(MachineBasicBlock *BB) {
     }
 
     // Update PHI Nodes
-    for (unsigned pi = 0, pe = SDB->PHINodesToUpdate.size(); pi != pe; ++pi) {
-      MachineInstr *PHI = SDB->PHINodesToUpdate[pi].first;
+    for (unsigned pi = 0, pe = FuncInfo->PHINodesToUpdate.size();
+         pi != pe; ++pi) {
+      MachineInstr *PHI = FuncInfo->PHINodesToUpdate[pi].first;
       MachineBasicBlock *PHIBB = PHI->getParent();
       assert(PHI->isPHI() &&
              "This is not a machine PHI node that we are updating!");
@@ -915,10 +891,12 @@ SelectionDAGISel::FinishBasicBlock(MachineBasicBlock *BB) {
       // from last "case" BB.
       if (PHIBB == SDB->BitTestCases[i].Default) {
         PHI->addOperand(MachineOperand::
-                        CreateReg(SDB->PHINodesToUpdate[pi].second, false));
+                        CreateReg(FuncInfo->PHINodesToUpdate[pi].second,
+                                  false));
         PHI->addOperand(MachineOperand::CreateMBB(SDB->BitTestCases[i].Parent));
         PHI->addOperand(MachineOperand::
-                        CreateReg(SDB->PHINodesToUpdate[pi].second, false));
+                        CreateReg(FuncInfo->PHINodesToUpdate[pi].second,
+                                  false));
         PHI->addOperand(MachineOperand::CreateMBB(SDB->BitTestCases[i].Cases.
                                                   back().ThisBB));
       }
@@ -928,7 +906,8 @@ SelectionDAGISel::FinishBasicBlock(MachineBasicBlock *BB) {
         MachineBasicBlock* cBB = SDB->BitTestCases[i].Cases[j].ThisBB;
         if (cBB->isSuccessor(PHIBB)) {
           PHI->addOperand(MachineOperand::
-                          CreateReg(SDB->PHINodesToUpdate[pi].second, false));
+                          CreateReg(FuncInfo->PHINodesToUpdate[pi].second,
+                                    false));
           PHI->addOperand(MachineOperand::CreateMBB(cBB));
         }
       }
@@ -961,22 +940,25 @@ SelectionDAGISel::FinishBasicBlock(MachineBasicBlock *BB) {
     SDB->clear();
 
     // Update PHI Nodes
-    for (unsigned pi = 0, pe = SDB->PHINodesToUpdate.size(); pi != pe; ++pi) {
-      MachineInstr *PHI = SDB->PHINodesToUpdate[pi].first;
+    for (unsigned pi = 0, pe = FuncInfo->PHINodesToUpdate.size();
+         pi != pe; ++pi) {
+      MachineInstr *PHI = FuncInfo->PHINodesToUpdate[pi].first;
       MachineBasicBlock *PHIBB = PHI->getParent();
       assert(PHI->isPHI() &&
              "This is not a machine PHI node that we are updating!");
       // "default" BB. We can go there only from header BB.
       if (PHIBB == SDB->JTCases[i].second.Default) {
         PHI->addOperand
-          (MachineOperand::CreateReg(SDB->PHINodesToUpdate[pi].second, false));
+          (MachineOperand::CreateReg(FuncInfo->PHINodesToUpdate[pi].second,
+                                     false));
         PHI->addOperand
           (MachineOperand::CreateMBB(SDB->JTCases[i].first.HeaderBB));
       }
       // JT BB. Just iterate over successors here
       if (BB->isSuccessor(PHIBB)) {
         PHI->addOperand
-          (MachineOperand::CreateReg(SDB->PHINodesToUpdate[pi].second, false));
+          (MachineOperand::CreateReg(FuncInfo->PHINodesToUpdate[pi].second,
+                                     false));
         PHI->addOperand(MachineOperand::CreateMBB(BB));
       }
     }
@@ -985,13 +967,13 @@ SelectionDAGISel::FinishBasicBlock(MachineBasicBlock *BB) {
 
   // If the switch block involved a branch to one of the actual successors, we
   // need to update PHI nodes in that block.
-  for (unsigned i = 0, e = SDB->PHINodesToUpdate.size(); i != e; ++i) {
-    MachineInstr *PHI = SDB->PHINodesToUpdate[i].first;
+  for (unsigned i = 0, e = FuncInfo->PHINodesToUpdate.size(); i != e; ++i) {
+    MachineInstr *PHI = FuncInfo->PHINodesToUpdate[i].first;
     assert(PHI->isPHI() &&
            "This is not a machine PHI node that we are updating!");
     if (BB->isSuccessor(PHI->getParent())) {
-      PHI->addOperand(MachineOperand::CreateReg(SDB->PHINodesToUpdate[i].second,
-                                                false));
+      PHI->addOperand(
+        MachineOperand::CreateReg(FuncInfo->PHINodesToUpdate[i].second, false));
       PHI->addOperand(MachineOperand::CreateMBB(BB));
     }
   }
@@ -1027,11 +1009,11 @@ SelectionDAGISel::FinishBasicBlock(MachineBasicBlock *BB) {
              ++Phi) {
           // This value for this PHI node is recorded in PHINodesToUpdate.
           for (unsigned pn = 0; ; ++pn) {
-            assert(pn != SDB->PHINodesToUpdate.size() &&
+            assert(pn != FuncInfo->PHINodesToUpdate.size() &&
                    "Didn't find PHI entry!");
-            if (SDB->PHINodesToUpdate[pn].first == Phi) {
+            if (FuncInfo->PHINodesToUpdate[pn].first == Phi) {
               Phi->addOperand(MachineOperand::
-                              CreateReg(SDB->PHINodesToUpdate[pn].second,
+                              CreateReg(FuncInfo->PHINodesToUpdate[pn].second,
                                         false));
               Phi->addOperand(MachineOperand::CreateMBB(ThisBB));
               break;
@@ -1052,8 +1034,6 @@ SelectionDAGISel::FinishBasicBlock(MachineBasicBlock *BB) {
     SDB->clear();
   }
   SDB->SwitchCases.clear();
-
-  SDB->PHINodesToUpdate.clear();
 }
 
 
