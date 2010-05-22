@@ -20,7 +20,6 @@
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Target/TargetRegisterInfo.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include <map>
 
@@ -33,7 +32,7 @@ namespace llvm {
   /// For example, loop induction variable increments should be
   /// scheduled as soon as possible after the variable's last use.
   ///
-  class VISIBILITY_HIDDEN LoopDependencies {
+  class LLVM_LIBRARY_VISIBILITY LoopDependencies {
     const MachineLoopInfo &MLI;
     const MachineDominatorTree &MDT;
 
@@ -95,7 +94,7 @@ namespace llvm {
 
   /// ScheduleDAGInstrs - A ScheduleDAG subclass for scheduling lists of
   /// MachineInstrs.
-  class VISIBILITY_HIDDEN ScheduleDAGInstrs : public ScheduleDAG {
+  class LLVM_LIBRARY_VISIBILITY ScheduleDAGInstrs : public ScheduleDAG {
     const MachineLoopInfo &MLI;
     const MachineDominatorTree &MDT;
     const MachineFrameInfo *MFI;
@@ -171,8 +170,7 @@ namespace llvm {
     virtual void ComputeOperandLatency(SUnit *Def, SUnit *Use,
                                        SDep& dep) const;
 
-    virtual MachineBasicBlock*
-    EmitSchedule(DenseMap<MachineBasicBlock*, MachineBasicBlock*>*);
+    virtual MachineBasicBlock *EmitSchedule();
 
     /// StartBlock - Prepare to perform scheduling in the given block.
     ///

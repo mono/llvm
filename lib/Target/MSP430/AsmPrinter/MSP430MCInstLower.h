@@ -26,7 +26,7 @@ namespace llvm {
 
   /// MSP430MCInstLower - This class is used to lower an MachineInstr
   /// into an MCInst.
-class VISIBILITY_HIDDEN MSP430MCInstLower {
+class LLVM_LIBRARY_VISIBILITY MSP430MCInstLower {
   MCContext &Ctx;
   Mangler &Mang;
 
@@ -42,6 +42,7 @@ public:
   MCSymbol *GetExternalSymbolSymbol(const MachineOperand &MO) const;
   MCSymbol *GetJumpTableSymbol(const MachineOperand &MO) const;
   MCSymbol *GetConstantPoolIndexSymbol(const MachineOperand &MO) const;
+  MCSymbol *GetBlockAddressSymbol(const MachineOperand &MO) const;
 };
 
 }

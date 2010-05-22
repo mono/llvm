@@ -545,8 +545,6 @@ void SelectionDAGBuilder::clear() {
   NodeMap.clear();
   PendingLoads.clear();
   PendingExports.clear();
-  EdgeMapping.clear();
-  DAG.clear();
   CurDebugLoc = DebugLoc();
   HasTailCall = false;
 }
@@ -3681,6 +3679,58 @@ static SDValue ExpandPowI(DebugLoc DL, SDValue LHS, SDValue RHS,
   return DAG.getNode(ISD::FPOWI, DL, LHS.getValueType(), LHS, RHS);
 }
 
+/// EmitFuncArgumentDbgValue - If the DbgValueInst is a dbg_value of a function
+/// argument, create the corresponding DBG_VALUE machine instruction for it now.
+/// At the end of instruction selection, they will be inserted to the entry BB.
+bool
+SelectionDAGBuilder::EmitFuncArgumentDbgValue(const DbgValueInst &DI,
+                                              const Value *V, MDNode *Variable,
+                                              uint64_t Offset,
+                                              const SDValue &N) {
+  if (!isa<Argument>(V))
+    return false;
+
+  MachineFunction &MF = DAG.getMachineFunction();
+  // Ignore inlined function arguments here.
+  DIVariable DV(Variable);
+  if (DV.isInlinedFnArgument(MF.getFunction()))
+    return false;
+
+  MachineBasicBlock *MBB = FuncInfo.MBBMap[DI.getParent()];
+  if (MBB != &MF.front())
+    return false;
+
+  unsigned Reg = 0;
+  if (N.getOpcode() == ISD::CopyFromReg) {
+    Reg = cast<RegisterSDNode>(N.getOperand(1))->getReg();
+    if (Reg && TargetRegisterInfo::isVirtualRegister(Reg)) {
+      MachineRegisterInfo &RegInfo = MF.getRegInfo();
+      unsigned PR = RegInfo.getLiveInPhysReg(Reg);
+      if (PR)
+        Reg = PR;
+    }
+  }
+
+  if (!Reg) {
+    DenseMap<const Value *, unsigned>::iterator VMI = FuncInfo.ValueMap.find(V);
+    if (VMI == FuncInfo.ValueMap.end())
+      return false;
+    Reg = VMI->second;
+  }
+
+  const TargetInstrInfo *TII = DAG.getTarget().getInstrInfo();
+  MachineInstrBuilder MIB = BuildMI(MF, getCurDebugLoc(),
+                                    TII->get(TargetOpcode::DBG_VALUE))
+    .addReg(Reg, RegState::Debug).addImm(Offset).addMetadata(Variable);
+  FuncInfo.ArgDbgValues.push_back(&*MIB);
+  return true;
+}
+
+// VisualStudio defines setjmp as _setjmp
+#if defined(_MSC_VER) && defined(setjmp)
+#define setjmp_undefined_for_visual_studio
+#undef setjmp
+#endif
 
 /// visitIntrinsicCall - Lower the call to the specified intrinsic function.  If
 /// we want to emit this as a call to a named external function, return the name
@@ -3774,19 +3824,13 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   }
   case Intrinsic::dbg_declare: {
     const DbgDeclareInst &DI = cast<DbgDeclareInst>(I);
-    if (!DIDescriptor::ValidDebugInfo(DI.getVariable(), CodeGenOpt::None))
+    if (!DIVariable(DI.getVariable()).Verify())
       return 0;
 
     MDNode *Variable = DI.getVariable();
     // Parameters are handled specially.
-    bool isParameter = false;
-    ConstantInt *CI = dyn_cast_or_null<ConstantInt>(Variable->getOperand(0));
-    if (CI) {
-      unsigned Val = CI->getZExtValue();
-      unsigned Tag = Val & ~LLVMDebugVersionMask;
-      if (Tag == dwarf::DW_TAG_arg_variable)
-        isParameter = true;
-    }
+    bool isParameter = 
+      DIVariable(Variable).getTag() == dwarf::DW_TAG_arg_variable;
     const Value *Address = DI.getAddress();
     if (!Address)
       return 0;
@@ -3834,21 +3878,16 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
         return 0;
       DAG.AddDbgValue(SDV, N.getNode(), isParameter);
     } else {
-      // Generating Undefs here seems to be actively harmful because it
-      // affects the line numbers.
-      return 0;
-#if 0
       // This isn't useful, but it shows what we're missing.
       SDV = DAG.getDbgValue(Variable, UndefValue::get(Address->getType()),
                             0, dl, SDNodeOrder);
       DAG.AddDbgValue(SDV, 0, isParameter);
-#endif
     }
     return 0;
   }
   case Intrinsic::dbg_value: {
     const DbgValueInst &DI = cast<DbgValueInst>(I);
-    if (!DIDescriptor::ValidDebugInfo(DI.getVariable(), CodeGenOpt::None))
+    if (!DIVariable(DI.getVariable()).Verify())
       return 0;
 
     MDNode *Variable = DI.getVariable();
@@ -3867,12 +3906,28 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
       SDV = DAG.getDbgValue(Variable, V, Offset, dl, SDNodeOrder);
       DAG.AddDbgValue(SDV, 0, false);
     } else {
+      bool createUndef = false;
+      // FIXME : Why not use getValue() directly ?
       SDValue &N = NodeMap[V];
       if (N.getNode()) {
-        SDV = DAG.getDbgValue(Variable, N.getNode(),
-                              N.getResNo(), Offset, dl, SDNodeOrder);
-        DAG.AddDbgValue(SDV, N.getNode(), false);
-      } else {
+        if (!EmitFuncArgumentDbgValue(DI, V, Variable, Offset, N)) {
+          SDV = DAG.getDbgValue(Variable, N.getNode(),
+                                N.getResNo(), Offset, dl, SDNodeOrder);
+          DAG.AddDbgValue(SDV, N.getNode(), false);
+        }
+      } else if (isa<PHINode>(V) && !V->use_empty()) {
+        SDValue N = getValue(V);
+        if (N.getNode()) {
+          if (!EmitFuncArgumentDbgValue(DI, V, Variable, Offset, N)) {
+            SDV = DAG.getDbgValue(Variable, N.getNode(),
+                                  N.getResNo(), Offset, dl, SDNodeOrder);
+            DAG.AddDbgValue(SDV, N.getNode(), false);
+          }
+        } else
+          createUndef = true;
+      } else
+        createUndef = true;
+      if (createUndef) {
         // We may expand this to cover more cases.  One case where we have no
         // data available is an unreferenced parameter; we need this fallback.
         SDV = DAG.getDbgValue(Variable, UndefValue::get(V->getType()),
@@ -4889,7 +4944,7 @@ isAllocatableRegister(unsigned Reg, MachineFunction &MF,
 namespace llvm {
 /// AsmOperandInfo - This contains information for each constraint that we are
 /// lowering.
-class VISIBILITY_HIDDEN SDISelAsmOperandInfo :
+class LLVM_LIBRARY_VISIBILITY SDISelAsmOperandInfo :
     public TargetLowering::AsmOperandInfo {
 public:
   /// CallOperand - If this is the result output operand or a clobber

@@ -51,10 +51,13 @@ private:
   void InstructionCleanup(MCInst &Inst);
 
   /// @name Auto-generated Match Functions
-  /// {  
+  /// {
 
   bool MatchInstruction(const SmallVectorImpl<MCParsedAsmOperand*> &Operands,
                         MCInst &Inst);
+
+  bool MatchInstructionImpl(
+    const SmallVectorImpl<MCParsedAsmOperand*> &Operands, MCInst &Inst);
 
   /// }
 
@@ -132,7 +135,7 @@ struct X86Operand : public MCParsedAsmOperand {
 
   X86Operand(KindTy K, SMLoc Start, SMLoc End)
     : Kind(K), StartLoc(Start), EndLoc(End) {}
-  
+
   /// getStartLoc - Get the location of the first token of this operand.
   SMLoc getStartLoc() const { return StartLoc; }
   /// getEndLoc - Get the location of the last token of this operand.
@@ -141,6 +144,11 @@ struct X86Operand : public MCParsedAsmOperand {
   StringRef getToken() const {
     assert(Kind == Token && "Invalid access!");
     return StringRef(Tok.Data, Tok.Length);
+  }
+  void setTokenValue(StringRef Value) {
+    assert(Kind == Token && "Invalid access!");
+    Tok.Data = Value.data();
+    Tok.Length = Value.size();
   }
 
   unsigned getReg() const {
@@ -192,6 +200,20 @@ struct X86Operand : public MCParsedAsmOperand {
     return true;
   }
   
+  bool isImmSExt32() const {
+    // Accept immediates which fit in 32 bits when sign extended, and
+    // non-absolute immediates.
+    if (!isImm())
+      return false;
+
+    if (const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm())) {
+      int64_t Value = CE->getValue();
+      return Value == (int64_t) (int32_t) Value;
+    }
+
+    return true;
+  }
+
   bool isMem() const { return Kind == Memory; }
 
   bool isAbsMem() const {
@@ -224,6 +246,12 @@ struct X86Operand : public MCParsedAsmOperand {
   }
 
   void addImmSExt8Operands(MCInst &Inst, unsigned N) const {
+    // FIXME: Support user customization of the render method.
+    assert(N == 1 && "Invalid number of operands!");
+    addExpr(Inst, getImm());
+  }
+
+  void addImmSExt32Operands(MCInst &Inst, unsigned N) const {
     // FIXME: Support user customization of the render method.
     assert(N == 1 && "Invalid number of operands!");
     addExpr(Inst, getImm());
@@ -527,6 +555,21 @@ X86Operand *X86ATTAsmParser::ParseMemOperand(unsigned SegReg, SMLoc MemStart) {
 bool X86ATTAsmParser::
 ParseInstruction(const StringRef &Name, SMLoc NameLoc,
                  SmallVectorImpl<MCParsedAsmOperand*> &Operands) {
+  // The various flavors of pushf and popf use Requires<In32BitMode> and
+  // Requires<In64BitMode>, but the assembler doesn't yet implement that.
+  // For now, just do a manual check to prevent silent misencoding.
+  if (Is64Bit) {
+    if (Name == "popfl")
+      return Error(NameLoc, "popfl cannot be encoded in 64-bit mode");
+    else if (Name == "pushfl")
+      return Error(NameLoc, "pushfl cannot be encoded in 64-bit mode");
+  } else {
+    if (Name == "popfq")
+      return Error(NameLoc, "popfq cannot be encoded in 32-bit mode");
+    else if (Name == "pushfq")
+      return Error(NameLoc, "pushfq cannot be encoded in 32-bit mode");
+  }
+
   // FIXME: Hack to recognize "sal..." and "rep..." for now. We need a way to
   // represent alternative syntaxes in the .td file, without requiring
   // instruction duplication.
@@ -539,6 +582,10 @@ ParseInstruction(const StringRef &Name, SMLoc NameLoc,
     .Case("repe", "rep")
     .Case("repz", "rep")
     .Case("repnz", "repne")
+    .Case("pushf", Is64Bit ? "pushfq" : "pushfl")
+    .Case("popf",  Is64Bit ? "popfq"  : "popfl")
+    .Case("retl", Is64Bit ? "retl" : "ret")
+    .Case("retq", Is64Bit ? "ret" : "retq")
     .Default(Name);
   Operands.push_back(X86Operand::CreateToken(PatchedName, NameLoc));
 
@@ -614,6 +661,31 @@ bool X86ATTAsmParser::ParseDirectiveWord(unsigned Size, SMLoc L) {
   return false;
 }
 
+/// LowerMOffset - Lower an 'moffset' form of an instruction, which just has a
+/// imm operand, to having "rm" or "mr" operands with the offset in the disp
+/// field.
+static void LowerMOffset(MCInst &Inst, unsigned Opc, unsigned RegNo,
+                         bool isMR) {
+  MCOperand Disp = Inst.getOperand(0);
+
+  // Start over with an empty instruction.
+  Inst = MCInst();
+  Inst.setOpcode(Opc);
+  
+  if (!isMR)
+    Inst.addOperand(MCOperand::CreateReg(RegNo));
+  
+  // Add the mem operand.
+  Inst.addOperand(MCOperand::CreateReg(0));  // Segment
+  Inst.addOperand(MCOperand::CreateImm(1));  // Scale
+  Inst.addOperand(MCOperand::CreateReg(0));  // IndexReg
+  Inst.addOperand(Disp);                     // Displacement
+  Inst.addOperand(MCOperand::CreateReg(0));  // BaseReg
+ 
+  if (isMR)
+    Inst.addOperand(MCOperand::CreateReg(RegNo));
+}
+
 // FIXME: Custom X86 cleanup function to implement a temporary hack to handle
 // matching INCL/DECL correctly for x86_64. This needs to be replaced by a
 // proper mechanism for supporting (ambiguous) feature dependent instructions.
@@ -629,8 +701,66 @@ void X86ATTAsmParser::InstructionCleanup(MCInst &Inst) {
   case X86::INC16m: Inst.setOpcode(X86::INC64_16m); break;
   case X86::INC32r: Inst.setOpcode(X86::INC64_32r); break;
   case X86::INC32m: Inst.setOpcode(X86::INC64_32m); break;
+      
+  // moffset instructions are x86-32 only.
+  case X86::MOV8o8a:   LowerMOffset(Inst, X86::MOV8rm , X86::AL , false); break;
+  case X86::MOV16o16a: LowerMOffset(Inst, X86::MOV16rm, X86::AX , false); break;
+  case X86::MOV32o32a: LowerMOffset(Inst, X86::MOV32rm, X86::EAX, false); break;
+  case X86::MOV8ao8:   LowerMOffset(Inst, X86::MOV8mr , X86::AL , true); break;
+  case X86::MOV16ao16: LowerMOffset(Inst, X86::MOV16mr, X86::AX , true); break;
+  case X86::MOV32ao32: LowerMOffset(Inst, X86::MOV32mr, X86::EAX, true); break;
   }
 }
+
+bool
+X86ATTAsmParser::MatchInstruction(const SmallVectorImpl<MCParsedAsmOperand*>
+                                    &Operands,
+                                  MCInst &Inst) {
+  // First, try a direct match.
+  if (!MatchInstructionImpl(Operands, Inst))
+    return false;
+
+  // Ignore anything which is obviously not a suffix match.
+  if (Operands.size() == 0)
+    return true;
+  X86Operand *Op = static_cast<X86Operand*>(Operands[0]);
+  if (!Op->isToken() || Op->getToken().size() > 15)
+    return true;
+
+  // FIXME: Ideally, we would only attempt suffix matches for things which are
+  // valid prefixes, and we could just infer the right unambiguous
+  // type. However, that requires substantially more matcher support than the
+  // following hack.
+
+  // Change the operand to point to a temporary token.
+  char Tmp[16];
+  StringRef Base = Op->getToken();
+  memcpy(Tmp, Base.data(), Base.size());
+  Op->setTokenValue(StringRef(Tmp, Base.size() + 1));
+
+  // Check for the various suffix matches.
+  Tmp[Base.size()] = 'b';
+  bool MatchB = MatchInstructionImpl(Operands, Inst);
+  Tmp[Base.size()] = 'w';
+  bool MatchW = MatchInstructionImpl(Operands, Inst);
+  Tmp[Base.size()] = 'l';
+  bool MatchL = MatchInstructionImpl(Operands, Inst);
+  Tmp[Base.size()] = 'q';
+  bool MatchQ = MatchInstructionImpl(Operands, Inst);
+
+  // Restore the old token.
+  Op->setTokenValue(Base);
+
+  // If exactly one matched, then we treat that as a successful match (and the
+  // instruction will already have been filled in correctly, since the failing
+  // matches won't have modified it).
+  if (MatchB + MatchW + MatchL + MatchQ == 3)
+    return false;
+
+  // Otherwise, the match failed.
+  return true;
+}
+
 
 extern "C" void LLVMInitializeX86AsmLexer();
 

@@ -27,7 +27,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include <algorithm>
@@ -52,22 +51,22 @@ void llvm::PHIElimination::getAnalysisUsage(AnalysisUsage &AU) const {
   MachineFunctionPass::getAnalysisUsage(AU);
 }
 
-bool llvm::PHIElimination::runOnMachineFunction(MachineFunction &Fn) {
-  MRI = &Fn.getRegInfo();
+bool llvm::PHIElimination::runOnMachineFunction(MachineFunction &MF) {
+  MRI = &MF.getRegInfo();
 
   bool Changed = false;
 
   // Split critical edges to help the coalescer
   if (LiveVariables *LV = getAnalysisIfAvailable<LiveVariables>())
-    for (MachineFunction::iterator I = Fn.begin(), E = Fn.end(); I != E; ++I)
-      Changed |= SplitPHIEdges(Fn, *I, *LV);
+    for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E; ++I)
+      Changed |= SplitPHIEdges(MF, *I, *LV);
 
   // Populate VRegPHIUseCount
-  analyzePHINodes(Fn);
+  analyzePHINodes(MF);
 
   // Eliminate PHI instructions by inserting copies into predecessor blocks.
-  for (MachineFunction::iterator I = Fn.begin(), E = Fn.end(); I != E; ++I)
-    Changed |= EliminatePHINodes(Fn, *I);
+  for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E; ++I)
+    Changed |= EliminatePHINodes(MF, *I);
 
   // Remove dead IMPLICIT_DEF instructions.
   for (SmallPtrSet<MachineInstr*, 4>::iterator I = ImpDefs.begin(),
@@ -81,11 +80,12 @@ bool llvm::PHIElimination::runOnMachineFunction(MachineFunction &Fn) {
   // Clean up the lowered PHI instructions.
   for (LoweredPHIMap::iterator I = LoweredPHIs.begin(), E = LoweredPHIs.end();
        I != E; ++I)
-    Fn.DeleteMachineInstr(I->first);
+    MF.DeleteMachineInstr(I->first);
 
   LoweredPHIs.clear();
   ImpDefs.clear();
   VRegPHIUseCount.clear();
+
   return Changed;
 }
 
@@ -210,7 +210,8 @@ void llvm::PHIElimination::LowerAtomicPHINode(
     } else {
       entry = IncomingReg = MF.getRegInfo().createVirtualRegister(RC);
     }
-    TII->copyRegToReg(MBB, AfterPHIsIt, DestReg, IncomingReg, RC, RC);
+    TII->copyRegToReg(MBB, AfterPHIsIt, DestReg, IncomingReg, RC, RC,
+                      MPhi->getDebugLoc());
   }
 
   // Update live variable information if there is any.
@@ -292,7 +293,8 @@ void llvm::PHIElimination::LowerAtomicPHINode(
 
     // Insert the copy.
     if (!reusedIncoming && IncomingReg)
-      TII->copyRegToReg(opBlock, InsertPos, IncomingReg, SrcReg, RC, RC);
+      TII->copyRegToReg(opBlock, InsertPos, IncomingReg, SrcReg, RC, RC,
+                        MPhi->getDebugLoc());
 
     // Now update live variable information if we have it.  Otherwise we're done
     if (!LV) continue;
@@ -364,8 +366,8 @@ void llvm::PHIElimination::LowerAtomicPHINode(
 /// used in a PHI node. We map that to the BB the vreg is coming from. This is
 /// used later to determine when the vreg is killed in the BB.
 ///
-void llvm::PHIElimination::analyzePHINodes(const MachineFunction& Fn) {
-  for (MachineFunction::const_iterator I = Fn.begin(), E = Fn.end();
+void llvm::PHIElimination::analyzePHINodes(const MachineFunction& MF) {
+  for (MachineFunction::const_iterator I = MF.begin(), E = MF.end();
        I != E; ++I)
     for (MachineBasicBlock::const_iterator BBI = I->begin(), BBE = I->end();
          BBI != BBE && BBI->isPHI(); ++BBI)

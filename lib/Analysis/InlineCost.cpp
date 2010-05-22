@@ -159,10 +159,18 @@ void CodeMetrics::analyzeBasicBlock(const BasicBlock *BB) {
       // it.  This is a hack because we depend on the user marking their local
       // variables as volatile if they are live across a setjmp call, and they
       // probably won't do this in callers.
-      if (Function *F = CS.getCalledFunction())
+      if (Function *F = CS.getCalledFunction()) {
         if (F->isDeclaration() && 
             (F->getName() == "setjmp" || F->getName() == "_setjmp"))
           NeverInline = true;
+       
+        // If this call is to function itself, then the function is recursive.
+        // Inlining it into other functions is a bad idea, because this is
+        // basically just a form of loop peeling, and our metrics aren't useful
+        // for that case.
+        if (F == BB->getParent())
+          NeverInline = true;
+      }
 
       if (!isa<IntrinsicInst>(II) && !callIsSmall(CS.getCalledFunction())) {
         // Each argument to a call takes on average one instruction to set up.
@@ -251,9 +259,15 @@ void InlineCostAnalyzer::FunctionInfo::analyzeFunction(Function *F) {
 //
 InlineCost InlineCostAnalyzer::getInlineCost(CallSite CS,
                                SmallPtrSet<const Function*, 16> &NeverInline) {
+  return getInlineCost(CS, CS.getCalledFunction(), NeverInline);
+}
+
+InlineCost InlineCostAnalyzer::getInlineCost(CallSite CS,
+                               Function *Callee,
+                               SmallPtrSet<const Function*, 16> &NeverInline) {
   Instruction *TheCall = CS.getInstruction();
-  Function *Callee = CS.getCalledFunction();
   Function *Caller = TheCall->getParent()->getParent();
+  bool isDirectCall = CS.getCalledFunction() == Callee;
 
   // Don't inline functions which can be redefined at link-time to mean
   // something else.  Don't inline functions marked noinline or call sites
@@ -268,11 +282,11 @@ InlineCost InlineCostAnalyzer::getInlineCost(CallSite CS,
   // be inlined.  This value may go negative.
   //
   int InlineCost = 0;
-  
+
   // If there is only one call of the function, and it has internal linkage,
   // make it almost guaranteed to be inlined.
   //
-  if (Callee->hasLocalLinkage() && Callee->hasOneUse())
+  if (Callee->hasLocalLinkage() && Callee->hasOneUse() && isDirectCall)
     InlineCost += InlineConstants::LastCallToStaticBonus;
   
   // If this function uses the coldcc calling convention, prefer not to inline
@@ -441,6 +455,11 @@ InlineCostAnalyzer::growCachedCostInfo(Function *Caller, Function *Callee) {
   else
     CallerMetrics.NumInsts = 0;
   
-  // We are not updating the argumentweights. We have already determined that
+  // We are not updating the argument weights. We have already determined that
   // Caller is a fairly large function, so we accept the loss of precision.
+}
+
+/// clear - empty the cache of inline costs
+void InlineCostAnalyzer::clear() {
+  CachedFunctionInfo.clear();
 }

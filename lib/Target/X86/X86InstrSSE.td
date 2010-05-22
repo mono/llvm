@@ -1102,7 +1102,8 @@ def MOVNTI_64mr : RI<0xC3, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src),
 }
 
 // Load, store, and memory fence
-def SFENCE : PSI<0xAE, MRM7r, (outs), (ins), "sfence", [(int_x86_sse_sfence)]>;
+def SFENCE : I<0xAE, MRM_F8, (outs), (ins), "sfence", [(int_x86_sse_sfence)]>,
+             TB, Requires<[HasSSE1]>;
 
 // MXCSR register
 def LDMXCSR : PSI<0xAE, MRM2m, (outs), (ins i32mem:$src),
@@ -2415,6 +2416,10 @@ def LFENCE : I<0xAE, MRM_E8, (outs), (ins),
                "lfence", [(int_x86_sse2_lfence)]>, TB, Requires<[HasSSE2]>;
 def MFENCE : I<0xAE, MRM_F0, (outs), (ins),
                "mfence", [(int_x86_sse2_mfence)]>, TB, Requires<[HasSSE2]>;
+
+// Pause. This "instruction" is encoded as "rep; nop", so even though it
+// was introduced with SSE2, it's backward compabitle.
+def PAUSE : I<0x90, RawFrm, (outs), (ins), "pause", []>, REP;
 
 //TODO: custom lower this so as to never even generate the noop
 def : Pat<(membarrier (i8 imm), (i8 imm), (i8 imm), (i8 imm),

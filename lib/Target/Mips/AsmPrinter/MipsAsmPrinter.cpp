@@ -145,7 +145,7 @@ void MipsAsmPrinter::printSavedRegsBitmask(raw_ostream &O) {
     CPUBitmask |= (1 << MipsRegisterInfo::
                 getRegisterNumbering(RI.getFrameRegister(*MF)));
   
-  if (MFI->hasCalls()) 
+  if (MFI->adjustsStack()) 
     CPUBitmask |= (1 << MipsRegisterInfo::
                 getRegisterNumbering(RI.getRARegister()));
 
@@ -306,7 +306,7 @@ void MipsAsmPrinter::printOperand(const MachineInstr *MI, int opNum,
 void MipsAsmPrinter::printUnsignedImm(const MachineInstr *MI, int opNum,
                                       raw_ostream &O) {
   const MachineOperand &MO = MI->getOperand(opNum);
-  if (MO.getType() == MachineOperand::MO_Immediate)
+  if (MO.isImm())
     O << (unsigned short int)MO.getImm();
   else 
     printOperand(MI, opNum, O);

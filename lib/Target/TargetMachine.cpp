@@ -36,8 +36,7 @@ namespace llvm {
   FloatABI::ABIType FloatABIType;
   bool NoImplicitFloat;
   bool NoZerosInBSS;
-  bool DwarfExceptionHandling;
-  bool SjLjExceptionHandling;
+  bool JITExceptionHandling;
   bool JITEmitDebugInfo;
   bool JITEmitDebugInfoToDisk;
   bool UnwindTablesMandatory;
@@ -115,14 +114,9 @@ DontPlaceZerosInBSS("nozero-initialized-in-bss",
   cl::location(NoZerosInBSS),
   cl::init(false));
 static cl::opt<bool, true>
-EnableDwarfExceptionHandling("enable-eh",
-  cl::desc("Emit DWARF exception handling (default if target supports)"),
-  cl::location(DwarfExceptionHandling),
-  cl::init(false));
-static cl::opt<bool, true>
-EnableSjLjExceptionHandling("enable-sjlj-eh",
-  cl::desc("Emit SJLJ exception handling (default if target supports)"),
-  cl::location(SjLjExceptionHandling),
+EnableJITExceptionHandling("jit-enable-eh",
+  cl::desc("Emit exception handling information"),
+  cl::location(JITExceptionHandling),
   cl::init(false));
 // In debug builds, make this default to true.
 #ifdef NDEBUG
@@ -279,13 +273,14 @@ namespace llvm {
   /// DisableFramePointerElim - This returns true if frame pointer elimination
   /// optimization should be disabled for the given machine function.
   bool DisableFramePointerElim(const MachineFunction &MF) {
-    if (NoFramePointerElim)
-      return true;
-    if (NoFramePointerElimNonLeaf) {
+    // Check to see if we should eliminate non-leaf frame pointers and then
+    // check to see if we should eliminate all frame pointers.
+    if (NoFramePointerElimNonLeaf && !NoFramePointerElim) {
       const MachineFrameInfo *MFI = MF.getFrameInfo();
       return MFI->hasCalls();
     }
-    return false;
+
+    return NoFramePointerElim;
   }
 
   /// LessPreciseFPMAD - This flag return true when -enable-fp-mad option

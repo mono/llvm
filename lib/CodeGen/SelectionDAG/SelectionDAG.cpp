@@ -15,6 +15,7 @@
 #include "SDNodeOrdering.h"
 #include "SDNodeDbgValue.h"
 #include "llvm/Constants.h"
+#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Function.h"
 #include "llvm/GlobalAlias.h"
@@ -32,6 +33,7 @@
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetFrameInfo.h"
 #include "llvm/Target/TargetLowering.h"
+#include "llvm/Target/TargetSelectionDAGInfo.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetIntrinsicInfo.h"
@@ -789,7 +791,8 @@ unsigned SelectionDAG::getEVTAlignment(EVT VT) const {
 
 // EntryNode could meaningfully have debug info if we can find it...
 SelectionDAG::SelectionDAG(const TargetMachine &tm, FunctionLoweringInfo &fli)
-  : TM(tm), TLI(*tm.getTargetLowering()), FLI(fli),
+  : TM(tm), TLI(*tm.getTargetLowering()), TSI(*tm.getSelectionDAGInfo()),
+    FLI(fli),
     EntryNode(ISD::EntryToken, DebugLoc(), getVTList(MVT::Other)),
     Root(getEntryNode()), Ordering(0) {
   AllNodes.push_back(&EntryNode);
@@ -963,8 +966,18 @@ SDValue SelectionDAG::getConstantFP(double Val, EVT VT, bool isTarget) {
   EVT EltVT = VT.getScalarType();
   if (EltVT==MVT::f32)
     return getConstantFP(APFloat((float)Val), VT, isTarget);
-  else
+  else if (EltVT==MVT::f64)
     return getConstantFP(APFloat(Val), VT, isTarget);
+  else if (EltVT==MVT::f80 || EltVT==MVT::f128) {
+    bool ignored;
+    APFloat apf = APFloat(Val);
+    apf.convert(*EVTToAPFloatSemantics(EltVT), APFloat::rmNearestTiesToEven,
+                &ignored);
+    return getConstantFP(apf, VT, isTarget);
+  } else {
+    assert(0 && "Unsupported type in getConstantFP");
+    return SDValue();
+  }
 }
 
 SDValue SelectionDAG::getGlobalAddress(const GlobalValue *GV,
@@ -2614,7 +2627,8 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
     }
     break;
   case ISD::AND:
-    assert(VT.isInteger() && N1.getValueType() == N2.getValueType() &&
+    assert(VT.isInteger() && "This operator does not apply to FP types!");
+    assert(N1.getValueType() == N2.getValueType() &&
            N1.getValueType() == VT && "Binary operator types must match!");
     // (X & 0) -> 0.  This commonly occurs when legalizing i64 values, so it's
     // worth handling here.
@@ -2627,7 +2641,8 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
   case ISD::XOR:
   case ISD::ADD:
   case ISD::SUB:
-    assert(VT.isInteger() && N1.getValueType() == N2.getValueType() &&
+    assert(VT.isInteger() && "This operator does not apply to FP types!");
+    assert(N1.getValueType() == N2.getValueType() &&
            N1.getValueType() == VT && "Binary operator types must match!");
     // (X ^|+- 0) -> X.  This commonly occurs when legalizing i64 values, so
     // it's worth handling here.
@@ -2642,7 +2657,9 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
   case ISD::SDIV:
   case ISD::SREM:
     assert(VT.isInteger() && "This operator does not apply to FP types!");
-    // fall through
+    assert(N1.getValueType() == N2.getValueType() &&
+           N1.getValueType() == VT && "Binary operator types must match!");
+    break;
   case ISD::FADD:
   case ISD::FSUB:
   case ISD::FMUL:
@@ -2665,6 +2682,7 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
             return N1;
       }
     }
+    assert(VT.isFloatingPoint() && "This operator only applies to FP types!");
     assert(N1.getValueType() == N2.getValueType() &&
            N1.getValueType() == VT && "Binary operator types must match!");
     break;
@@ -2792,14 +2810,19 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
       // If the indices are the same, return the inserted element else
       // if the indices are known different, extract the element from
       // the original vector.
-      if (N1.getOperand(2) == N2) {
-        if (VT == N1.getOperand(1).getValueType())
-          return N1.getOperand(1);
-        else
-          return getSExtOrTrunc(N1.getOperand(1), DL, VT);
-      } else if (isa<ConstantSDNode>(N1.getOperand(2)) &&
-                 isa<ConstantSDNode>(N2))
+      SDValue N1Op2 = N1.getOperand(2);
+      ConstantSDNode *N1Op2C = dyn_cast<ConstantSDNode>(N1Op2.getNode());
+
+      if (N1Op2C && N2C) {
+        if (N1Op2C->getZExtValue() == N2C->getZExtValue()) {
+          if (VT == N1.getOperand(1).getValueType())
+            return N1.getOperand(1);
+          else
+            return getSExtOrTrunc(N1.getOperand(1), DL, VT);
+        }
+
         return getNode(ISD::EXTRACT_VECTOR_ELT, DL, VT, N1.getOperand(0), N2);
+      }
     }
     break;
   case ISD::EXTRACT_ELEMENT:
@@ -3520,7 +3543,7 @@ SDValue SelectionDAG::getMemcpy(SDValue Chain, DebugLoc dl, SDValue Dst,
   // Then check to see if we should lower the memcpy with target-specific
   // code. If the target chooses to do this, this is the next best.
   SDValue Result =
-    TLI.EmitTargetCodeForMemcpy(*this, dl, Chain, Dst, Src, Size, Align,
+    TSI.EmitTargetCodeForMemcpy(*this, dl, Chain, Dst, Src, Size, Align,
                                 isVol, AlwaysInline,
                                 DstSV, DstSVOff, SrcSV, SrcSVOff);
   if (Result.getNode())
@@ -3585,7 +3608,7 @@ SDValue SelectionDAG::getMemmove(SDValue Chain, DebugLoc dl, SDValue Dst,
   // Then check to see if we should lower the memmove with target-specific
   // code. If the target chooses to do this, this is the next best.
   SDValue Result =
-    TLI.EmitTargetCodeForMemmove(*this, dl, Chain, Dst, Src, Size, Align, isVol,
+    TSI.EmitTargetCodeForMemmove(*this, dl, Chain, Dst, Src, Size, Align, isVol,
                                  DstSV, DstSVOff, SrcSV, SrcSVOff);
   if (Result.getNode())
     return Result;
@@ -3636,7 +3659,7 @@ SDValue SelectionDAG::getMemset(SDValue Chain, DebugLoc dl, SDValue Dst,
   // Then check to see if we should lower the memset with target-specific
   // code. If the target chooses to do this, this is the next best.
   SDValue Result =
-    TLI.EmitTargetCodeForMemset(*this, dl, Chain, Dst, Src, Size, Align, isVol,
+    TSI.EmitTargetCodeForMemset(*this, dl, Chain, Dst, Src, Size, Align, isVol,
                                 DstSV, DstSVOff);
   if (Result.getNode())
     return Result;
@@ -5412,6 +5435,8 @@ const EVT *SDNode::getValueTypeList(EVT VT) {
     sys::SmartScopedLock<true> Lock(*VTMutex);
     return &(*EVTs->insert(VT).first);
   } else {
+    assert(VT.getSimpleVT().SimpleTy < MVT::LAST_VALUETYPE &&
+           "Value type out of range!");
     return &SimpleVTArray->VTs[VT.getSimpleVT().SimpleTy];
   }
 }
@@ -6003,6 +6028,21 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
 
   if (getNodeId() != -1)
     OS << " [ID=" << getNodeId() << ']';
+
+  DebugLoc dl = getDebugLoc();
+  if (G && !dl.isUnknown()) {
+    DIScope
+      Scope(dl.getScope(G->getMachineFunction().getFunction()->getContext()));
+    OS << " dbg:";
+    // Omit the directory, since it's usually long and uninteresting.
+    if (Scope.Verify())
+      OS << Scope.getFilename();
+    else
+      OS << "<unknown>";
+    OS << ':' << dl.getLine();
+    if (dl.getCol() != 0)
+      OS << ':' << dl.getCol();
+  }
 }
 
 void SDNode::print(raw_ostream &OS, const SelectionDAG *G) const {
@@ -6089,7 +6129,7 @@ SDValue SelectionDAG::UnrollVectorOp(SDNode *N, unsigned ResNE) {
 
   unsigned i;
   for (i= 0; i != NE; ++i) {
-    for (unsigned j = 0; j != N->getNumOperands(); ++j) {
+    for (unsigned j = 0, e = N->getNumOperands(); j != e; ++j) {
       SDValue Operand = N->getOperand(j);
       EVT OperandVT = Operand.getValueType();
       if (OperandVT.isVector()) {

@@ -413,7 +413,6 @@ int LLC::ExecuteProgram(const std::string &Bitcode,
 
   std::vector<std::string> GCCArgs(ArgsForGCC);
   GCCArgs.insert(GCCArgs.end(), SharedLibs.begin(), SharedLibs.end());
-  GCCArgs.insert(GCCArgs.end(), gccArgs.begin(), gccArgs.end());
 
   // Assuming LLC worked, compile the result with GCC and run it.
   return gcc->ExecuteProgram(OutputAsmFile.str(), Args, FileKind,
@@ -425,6 +424,7 @@ int LLC::ExecuteProgram(const std::string &Bitcode,
 ///
 LLC *AbstractInterpreter::createLLC(const char *Argv0,
                                     std::string &Message,
+                                    const std::string &GCCBinary,
                                     const std::vector<std::string> *Args,
                                     const std::vector<std::string> *GCCArgs,
                                     bool UseIntegratedAssembler) {
@@ -436,12 +436,12 @@ LLC *AbstractInterpreter::createLLC(const char *Argv0,
   }
 
   Message = "Found llc: " + LLCPath + "\n";
-  GCC *gcc = GCC::create(Message, GCCArgs);
+  GCC *gcc = GCC::create(Message, GCCBinary, GCCArgs);
   if (!gcc) {
     errs() << Message << "\n";
     exit(1);
   }
-  return new LLC(LLCPath, gcc, Args, GCCArgs, UseIntegratedAssembler);
+  return new LLC(LLCPath, gcc, Args, UseIntegratedAssembler);
 }
 
 //===---------------------------------------------------------------------===//
@@ -546,7 +546,6 @@ GCC::FileType CBE::OutputCode(const std::string &Bitcode,
   LLCArgs.push_back("-o");
   LLCArgs.push_back(OutputCFile.c_str());   // Output to the C file
   LLCArgs.push_back("-march=c");            // Output C language
-  LLCArgs.push_back("-f");                  // Overwrite as necessary...
   LLCArgs.push_back(Bitcode.c_str());      // This is the input bitcode
   LLCArgs.push_back(0);
 
@@ -594,6 +593,7 @@ int CBE::ExecuteProgram(const std::string &Bitcode,
 ///
 CBE *AbstractInterpreter::createCBE(const char *Argv0,
                                     std::string &Message,
+                                    const std::string &GCCBinary, 
                                     const std::vector<std::string> *Args,
                                     const std::vector<std::string> *GCCArgs) {
   sys::Path LLCPath =
@@ -605,7 +605,7 @@ CBE *AbstractInterpreter::createCBE(const char *Argv0,
   }
 
   Message = "Found llc: " + LLCPath.str() + "\n";
-  GCC *gcc = GCC::create(Message, GCCArgs);
+  GCC *gcc = GCC::create(Message, GCCBinary, GCCArgs);
   if (!gcc) {
     errs() << Message << "\n";
     exit(1);
@@ -620,10 +620,9 @@ CBE *AbstractInterpreter::createCBE(const char *Argv0,
 static bool IsARMArchitecture(std::vector<std::string> Args) {
   for (std::vector<std::string>::const_iterator
          I = Args.begin(), E = Args.end(); I != E; ++I) {
-    StringRef S(*I);
-    if (!S.equals_lower("-arch")) {
+    if (StringRef(*I).equals_lower("-arch")) {
       ++I;
-      if (I != E && !S.substr(0, strlen("arm")).equals_lower("arm"))
+      if (I != E && StringRef(*I).substr(0, strlen("arm")).equals_lower("arm"))
         return true;
     }
   }
@@ -853,10 +852,11 @@ int GCC::MakeSharedObject(const std::string &InputFile, FileType fileType,
 /// create - Try to find the `gcc' executable
 ///
 GCC *GCC::create(std::string &Message,
+                 const std::string &GCCBinary,
                  const std::vector<std::string> *Args) {
-  sys::Path GCCPath = sys::Program::FindProgramByName("gcc");
+  sys::Path GCCPath = sys::Program::FindProgramByName(GCCBinary);
   if (GCCPath.isEmpty()) {
-    Message = "Cannot find `gcc' in executable directory or PATH!\n";
+    Message = "Cannot find `"+ GCCBinary +"' in executable directory or PATH!\n";
     return 0;
   }
 

@@ -19,6 +19,7 @@
 #include "llvm/Instructions.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #ifndef NDEBUG
 #include "llvm/ADT/SmallSet.h"
 #endif
@@ -74,6 +75,10 @@ public:
   /// the entry block.  This allows the allocas to be efficiently referenced
   /// anywhere in the function.
   DenseMap<const AllocaInst*, int> StaticAllocaMap;
+
+  /// ArgDbgValues - A list of DBG_VALUE instructions created during isel for
+  /// function arguments that are inserted after scheduling is completed.
+  SmallVector<MachineInstr*, 8> ArgDbgValues;
 
 #ifndef NDEBUG
   SmallSet<const Instruction *, 8> CatchInfoLost;

@@ -243,6 +243,9 @@ bool DAE::DeleteDeadVarargs(Function &Fn) {
       if (cast<CallInst>(Call)->isTailCall())
         cast<CallInst>(New)->setTailCall();
     }
+    if (MDNode *N = Call->getDbgMetadata())
+      New->setDbgMetadata(N);
+
     Args.clear();
 
     if (!Call->use_empty())
@@ -532,14 +535,14 @@ void DAE::MarkValue(const RetOrArg &RA, Liveness L,
 /// values (according to Uses) live as well.
 void DAE::MarkLive(const Function &F) {
   DEBUG(dbgs() << "DAE - Intrinsically live fn: " << F.getName() << "\n");
-    // Mark the function as live.
-    LiveFunctions.insert(&F);
-    // Mark all arguments as live.
-    for (unsigned i = 0, e = F.arg_size(); i != e; ++i)
-      PropagateLiveness(CreateArg(&F, i));
-    // Mark all return values as live.
-    for (unsigned i = 0, e = NumRetVals(&F); i != e; ++i)
-      PropagateLiveness(CreateRet(&F, i));
+  // Mark the function as live.
+  LiveFunctions.insert(&F);
+  // Mark all arguments as live.
+  for (unsigned i = 0, e = F.arg_size(); i != e; ++i)
+    PropagateLiveness(CreateArg(&F, i));
+  // Mark all return values as live.
+  for (unsigned i = 0, e = NumRetVals(&F); i != e; ++i)
+    PropagateLiveness(CreateRet(&F, i));
 }
 
 /// MarkLive - Mark the given return value or argument as live. Additionally,
@@ -770,6 +773,9 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
       if (cast<CallInst>(Call)->isTailCall())
         cast<CallInst>(New)->setTailCall();
     }
+    if (MDNode *N = Call->getDbgMetadata())
+      New->setDbgMetadata(N);
+
     Args.clear();
 
     if (!Call->use_empty()) {
@@ -853,7 +859,7 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
       if (ReturnInst *RI = dyn_cast<ReturnInst>(BB->getTerminator())) {
         Value *RetVal;
 
-        if (NFTy->getReturnType() == Type::getVoidTy(F->getContext())) {
+        if (NFTy->getReturnType()->isVoidTy()) {
           RetVal = 0;
         } else {
           assert (RetTy->isStructTy());

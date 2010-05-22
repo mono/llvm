@@ -61,6 +61,35 @@ static gcp_map_type &getGCMap(void *&P) {
 }
 
 
+/// getGVAlignmentLog2 - Return the alignment to use for the specified global
+/// value in log2 form.  This rounds up to the preferred alignment if possible
+/// and legal.
+static unsigned getGVAlignmentLog2(const GlobalValue *GV, const TargetData &TD,
+                                   unsigned InBits = 0) {
+  unsigned NumBits = 0;
+  if (const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GV))
+    NumBits = TD.getPreferredAlignmentLog(GVar);
+  
+  // If InBits is specified, round it to it.
+  if (InBits > NumBits)
+    NumBits = InBits;
+  
+  // If the GV has a specified alignment, take it into account.
+  if (GV->getAlignment() == 0)
+    return NumBits;
+  
+  unsigned GVAlign = Log2_32(GV->getAlignment());
+  
+  // If the GVAlign is larger than NumBits, or if we are required to obey
+  // NumBits because the GV has an assigned section, obey it.
+  if (GVAlign > NumBits || GV->hasSection())
+    NumBits = GVAlign;
+  return NumBits;
+}
+
+
+
+
 AsmPrinter::AsmPrinter(TargetMachine &tm, MCStreamer &Streamer)
   : MachineFunctionPass(&ID),
     TM(tm), MAI(tm.getMCAsmInfo()),
@@ -176,16 +205,10 @@ void AsmPrinter::EmitLinkage(unsigned Linkage, MCSymbol *GVSym) const {
       OutStreamer.EmitSymbolAttribute(GVSym, MCSA_Global);
       // .weak_definition _foo
       OutStreamer.EmitSymbolAttribute(GVSym, MCSA_WeakDefinition);
-    } else if (const char *LinkOnce = MAI->getLinkOnceDirective()) {
+    } else if (MAI->getLinkOnceDirective() != 0) {
       // .globl _foo
       OutStreamer.EmitSymbolAttribute(GVSym, MCSA_Global);
-      // FIXME: linkonce should be a section attribute, handled by COFF Section
-      // assignment.
-      // http://sourceware.org/binutils/docs-2.20/as/Linkonce.html#Linkonce
-      // .linkonce discard
-      // FIXME: It would be nice to use .linkonce samesize for non-common
-      // globals.
-      OutStreamer.EmitRawText(StringRef(LinkOnce));
+      //NOTE: linkonce is handled by the section the symbol was assigned to.
     } else {
       // .weak _foo
       OutStreamer.EmitSymbolAttribute(GVSym, MCSA_Weak);
@@ -227,16 +250,12 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
   SectionKind GVKind = TargetLoweringObjectFile::getKindForGlobal(GV, TM);
 
   const TargetData *TD = TM.getTargetData();
-  unsigned Size = TD->getTypeAllocSize(GV->getType()->getElementType());
+  uint64_t Size = TD->getTypeAllocSize(GV->getType()->getElementType());
   
   // If the alignment is specified, we *must* obey it.  Overaligning a global
   // with a specified alignment is a prompt way to break globals emitted to
   // sections and expected to be contiguous (e.g. ObjC metadata).
-  unsigned AlignLog;
-  if (unsigned GVAlign = GV->getAlignment())
-    AlignLog = Log2_32(GVAlign);
-  else
-    AlignLog = TD->getPreferredAlignmentLog(GV);
+  unsigned AlignLog = getGVAlignmentLog2(GV, *TD);
   
   // Handle common and BSS local symbols (.lcomm).
   if (GVKind.isCommon() || GVKind.isBSSLocal()) {
@@ -289,6 +308,38 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
     OutStreamer.EmitSymbolAttribute(GVSym, MCSA_Global);
     // .zerofill __DATA, __common, _foo, 400, 5
     OutStreamer.EmitZerofill(TheSection, GVSym, Size, 1 << AlignLog);
+    return;
+  }
+  
+  // Handle the tbss directive on darwin which is a thread local bss directive
+  // like zerofill.
+  if (GVKind.isThreadBSS() && MAI->hasMachoTBSSDirective()) {
+    // Emit the .tbss symbol
+    MCSymbol *MangSym = 
+      OutContext.GetOrCreateSymbol(GVSym->getName() + Twine("$tlv$init"));
+    OutStreamer.EmitTBSSSymbol(TheSection, MangSym, Size, 1 << AlignLog);
+    OutStreamer.AddBlankLine();
+    
+    // Emit the variable struct for the runtime.
+    const MCSection *TLVSect 
+      = getObjFileLowering().getTLSExtraDataSection();
+      
+    OutStreamer.SwitchSection(TLVSect);
+    // Emit the linkage here.
+    EmitLinkage(GV->getLinkage(), GVSym);
+    OutStreamer.EmitLabel(GVSym);
+    
+    // Three pointers in size:
+    //   - __tlv_bootstrap - used to make sure support exists
+    //   - spare pointer, used when mapped by the runtime
+    //   - pointer to mangled symbol above with initializer
+    unsigned PtrSize = TD->getPointerSizeInBits()/8;
+    OutStreamer.EmitSymbolValue(GetExternalSymbolSymbol("__tlv_bootstrap"),
+                          PtrSize, 0);
+    OutStreamer.EmitIntValue(0, PtrSize, 0);
+    OutStreamer.EmitSymbolValue(MangSym, PtrSize, 0);
+    
+    OutStreamer.AddBlankLine();
     return;
   }
 
@@ -383,7 +434,13 @@ void AsmPrinter::EmitFunctionHeader() {
 /// EmitFunctionEntryLabel - Emit the label that is the entrypoint for the
 /// function.  This can be overridden by targets as required to do custom stuff.
 void AsmPrinter::EmitFunctionEntryLabel() {
-  OutStreamer.EmitLabel(CurrentFnSym);
+  // The function label could have already been emitted if two symbols end up
+  // conflicting due to asm renaming.  Detect this and emit an error.
+  if (CurrentFnSym->isUndefined())
+    return OutStreamer.EmitLabel(CurrentFnSym);
+
+  report_fatal_error("'" + Twine(CurrentFnSym->getName()) +
+                     "' label emitted multiple times to assembly file");
 }
 
 
@@ -477,6 +534,8 @@ static bool EmitDebugValueComment(const MachineInstr *MI, AsmPrinter &AP) {
 
   // cast away const; DIetc do not take const operands for some reason.
   DIVariable V(const_cast<MDNode*>(MI->getOperand(2).getMetadata()));
+  if (V.getContext().isSubprogram())
+    OS << DISubprogram(V.getContext()).getDisplayName() << ":";
   OS << V.getName() << " <- ";
 
   // Register or immediate value. Register 0 means undef.
@@ -531,11 +590,12 @@ void AsmPrinter::EmitFunctionBody() {
     for (MachineBasicBlock::const_iterator II = I->begin(), IE = I->end();
          II != IE; ++II) {
       // Print the assembly for the instruction.
-      if (!II->isLabel())
+      if (!II->isLabel() && !II->isImplicitDef() && !II->isKill() &&
+          !II->isDebugValue()) {
         HasAnyRealCode = true;
-      
-      ++EmittedInsts;
-      
+        ++EmittedInsts;
+      }
+
       if (ShouldPrintDebugScopes) {
 	if (TimePassesIsEnabled) {
 	  NamedRegionTimer T(DbgTimerName, DWARFGroupName);
@@ -641,6 +701,12 @@ void AsmPrinter::EmitFunctionBody() {
   OutStreamer.AddBlankLine();
 }
 
+/// getDebugValueLocation - Get location information encoded by DBG_VALUE
+/// operands.
+MachineLocation AsmPrinter::getDebugValueLocation(const MachineInstr *MI) const {
+  // Target specific DBG_VALUE instructions are handled by each target.
+  return MachineLocation();
+}
 
 bool AsmPrinter::doFinalization(Module &M) {
   // Emit global variables.
@@ -1004,7 +1070,7 @@ bool AsmPrinter::EmitSpecialLLVMGlobal(const GlobalVariable *GV) {
   unsigned Align = Log2_32(TD->getPointerPrefAlignment());
   if (GV->getName() == "llvm.global_ctors") {
     OutStreamer.SwitchSection(getObjFileLowering().getStaticCtorSection());
-    EmitAlignment(Align, 0);
+    EmitAlignment(Align);
     EmitXXStructorList(GV->getInitializer());
     
     if (TM.getRelocationModel() == Reloc::Static &&
@@ -1018,7 +1084,7 @@ bool AsmPrinter::EmitSpecialLLVMGlobal(const GlobalVariable *GV) {
   
   if (GV->getName() == "llvm.global_dtors") {
     OutStreamer.SwitchSection(getObjFileLowering().getStaticDtorSection());
-    EmitAlignment(Align, 0);
+    EmitAlignment(Align);
     EmitXXStructorList(GV->getInitializer());
 
     if (TM.getRelocationModel() == Reloc::Static &&
@@ -1147,24 +1213,13 @@ void AsmPrinter::EmitLabelOffsetDifference(const MCSymbol *Hi, uint64_t Offset,
 // EmitAlignment - Emit an alignment directive to the specified power of
 // two boundary.  For example, if you pass in 3 here, you will get an 8
 // byte alignment.  If a global value is specified, and if that global has
-// an explicit alignment requested, it will unconditionally override the
-// alignment request.  However, if ForcedAlignBits is specified, this value
-// has final say: the ultimate alignment will be the max of ForcedAlignBits
-// and the alignment computed with NumBits and the global.
+// an explicit alignment requested, it will override the alignment request
+// if required for correctness.
 //
-// The algorithm is:
-//     Align = NumBits;
-//     if (GV && GV->hasalignment) Align = GV->getalignment();
-//     Align = std::max(Align, ForcedAlignBits);
-//
-void AsmPrinter::EmitAlignment(unsigned NumBits, const GlobalValue *GV,
-                               unsigned ForcedAlignBits,
-                               bool UseFillExpr) const {
-  if (GV && GV->getAlignment())
-    NumBits = Log2_32(GV->getAlignment());
-  NumBits = std::max(NumBits, ForcedAlignBits);
+void AsmPrinter::EmitAlignment(unsigned NumBits, const GlobalValue *GV) const {
+  if (GV) NumBits = getGVAlignmentLog2(GV, *TM.getTargetData(), NumBits);
   
-  if (NumBits == 0) return;   // No need to emit alignment.
+  if (NumBits == 0) return;   // 1-byte aligned: no need to emit alignment.
   
   if (getCurrentSection()->getKind().isText())
     OutStreamer.EmitCodeAlignment(1 << NumBits);

@@ -12,6 +12,7 @@
 #include "X86FixupKinds.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAssembler.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
@@ -75,6 +76,7 @@ static unsigned getRelaxedOpcode(unsigned Op) {
   case X86::JG_1:  return X86::JG_4;
   case X86::JLE_1: return X86::JLE_4;
   case X86::JL_1:  return X86::JL_4;
+  case X86::TAILJMP_1:
   case X86::JMP_1: return X86::JMP_4;
   case X86::JNE_1: return X86::JNE_4;
   case X86::JNO_1: return X86::JNO_4;
@@ -88,9 +90,20 @@ static unsigned getRelaxedOpcode(unsigned Op) {
 
 bool X86AsmBackend::MayNeedRelaxation(const MCInst &Inst,
                               const SmallVectorImpl<MCAsmFixup> &Fixups) const {
-  // Check for a 1byte pcrel fixup, and enforce that we would know how to relax
-  // this instruction.
   for (unsigned i = 0, e = Fixups.size(); i != e; ++i) {
+    // We don't support relaxing anything else currently. Make sure we error out
+    // if we see a non-constant 1 or 2 byte fixup.
+    //
+    // FIXME: We should need to check this here, this is better checked in the
+    // object writer which should be verifying that any final relocations match
+    // the expected fixup. However, that code is more complicated and hasn't
+    // been written yet. See the FIXMEs in MachObjectWriter.cpp.
+    if ((Fixups[i].Kind == FK_Data_1 || Fixups[i].Kind == FK_Data_2) &&
+        !isa<MCConstantExpr>(Fixups[i].Value))
+      report_fatal_error("unexpected small fixup with a non-constant operand!");
+
+    // Check for a 1byte pcrel fixup, and enforce that we would know how to
+    // relax this instruction.
     if (unsigned(Fixups[i].Kind) == X86::reloc_pcrel_1byte) {
       assert(getRelaxedOpcode(Inst.getOpcode()) != Inst.getOpcode());
       return true;
@@ -199,6 +212,18 @@ public:
   }
 };
 
+class ELFX86_32AsmBackend : public ELFX86AsmBackend {
+public:
+  ELFX86_32AsmBackend(const Target &T)
+    : ELFX86AsmBackend(T) {}
+};
+
+class ELFX86_64AsmBackend : public ELFX86AsmBackend {
+public:
+  ELFX86_64AsmBackend(const Target &T)
+    : ELFX86AsmBackend(T) {}
+};
+
 class DarwinX86AsmBackend : public X86AsmBackend {
 public:
   DarwinX86AsmBackend(const Target &T)
@@ -210,7 +235,8 @@ public:
   bool isVirtualSection(const MCSection &Section) const {
     const MCSectionMachO &SMO = static_cast<const MCSectionMachO&>(Section);
     return (SMO.getType() == MCSectionMachO::S_ZEROFILL ||
-            SMO.getType() == MCSectionMachO::S_GB_ZEROFILL);
+            SMO.getType() == MCSectionMachO::S_GB_ZEROFILL ||
+            SMO.getType() == MCSectionMachO::S_THREAD_LOCAL_ZEROFILL);
   }
 };
 
@@ -247,6 +273,26 @@ public:
     const MCSectionMachO &SMO = static_cast<const MCSectionMachO&>(Section);
     return SMO.getType() == MCSectionMachO::S_CSTRING_LITERALS;
   }
+
+  virtual bool isSectionAtomizable(const MCSection &Section) const {
+    const MCSectionMachO &SMO = static_cast<const MCSectionMachO&>(Section);
+    // Fixed sized data sections are uniqued, they cannot be diced into atoms.
+    switch (SMO.getType()) {
+    default:
+      return true;
+
+    case MCSectionMachO::S_4BYTE_LITERALS:
+    case MCSectionMachO::S_8BYTE_LITERALS:
+    case MCSectionMachO::S_16BYTE_LITERALS:
+    case MCSectionMachO::S_LITERAL_POINTERS:
+    case MCSectionMachO::S_NON_LAZY_SYMBOL_POINTERS:
+    case MCSectionMachO::S_LAZY_SYMBOL_POINTERS:
+    case MCSectionMachO::S_MOD_INIT_FUNC_POINTERS:
+    case MCSectionMachO::S_MOD_TERM_FUNC_POINTERS:
+    case MCSectionMachO::S_INTERPOSING:
+      return false;
+    }
+  }
 };
 
 }
@@ -257,7 +303,7 @@ TargetAsmBackend *llvm::createX86_32AsmBackend(const Target &T,
   case Triple::Darwin:
     return new DarwinX86_32AsmBackend(T);
   default:
-    return new ELFX86AsmBackend(T);
+    return new ELFX86_32AsmBackend(T);
   }
 }
 
@@ -267,6 +313,6 @@ TargetAsmBackend *llvm::createX86_64AsmBackend(const Target &T,
   case Triple::Darwin:
     return new DarwinX86_64AsmBackend(T);
   default:
-    return new ELFX86AsmBackend(T);
+    return new ELFX86_64AsmBackend(T);
   }
 }

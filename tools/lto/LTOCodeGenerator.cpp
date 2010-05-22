@@ -300,8 +300,9 @@ bool LTOCodeGenerator::determineTarget(std::string& errMsg)
         }
 
         // construct LTModule, hand over ownership of module and target
-        const std::string FeatureStr =
-           SubtargetFeatures::getDefaultSubtargetFeatures(llvm::Triple(Triple));
+        SubtargetFeatures Features;
+        Features.getDefaultSubtargetFeatures("" /* cpu */, llvm::Triple(Triple));
+        std::string FeatureStr = Features.getString();
         _target = march->createTargetMachine(Triple, FeatureStr);
     }
     return false;
@@ -352,20 +353,6 @@ bool LTOCodeGenerator::generateAssemblyCode(formatted_raw_ostream& out,
     this->applyScopeRestrictions();
 
     Module* mergedModule = _linker.getModule();
-
-    // If target supports exception handling then enable it now.
-    switch (_target->getMCAsmInfo()->getExceptionHandlingType()) {
-    case ExceptionHandling::Dwarf:
-      llvm::DwarfExceptionHandling = true;
-      break;
-    case ExceptionHandling::SjLj:
-      llvm::SjLjExceptionHandling = true;
-      break;
-    case ExceptionHandling::None:
-      break;
-    default:
-      assert (0 && "Unknown exception handling model!");
-    }
 
     // if options were requested, set them
     if ( !_codegenOptions.empty() )

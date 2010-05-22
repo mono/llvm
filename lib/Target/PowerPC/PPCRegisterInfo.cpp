@@ -409,6 +409,9 @@ PPCRegisterInfo::getCalleeSavedRegClasses(const MachineFunction *MF) const {
 //
 static bool needsFP(const MachineFunction &MF) {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
+  // Naked functions have no stack frame pushed, so we don't have a frame pointer.
+  if (MF.getFunction()->hasFnAttr(Attribute::Naked))
+    return false;
   return DisableFramePointerElim(MF) || MFI->hasVarSizedObjects() ||
     (GuaranteedTailCallOpt && MF.getInfo<PPCFunctionInfo>()->hasFastCall());
 }
@@ -686,19 +689,15 @@ void PPCRegisterInfo::lowerCRSpilling(MachineBasicBlock::iterator II,
   const TargetRegisterClass *GPRC = &PPC::GPRCRegClass;
   const TargetRegisterClass *RC = Subtarget.isPPC64() ? G8RC : GPRC;
   unsigned Reg = findScratchRegister(II, RS, RC, SPAdj);
+  unsigned SrcReg = MI.getOperand(0).getReg();
 
   // We need to store the CR in the low 4-bits of the saved value. First, issue
-  // an MFCR to save all of the CRBits. Add an implicit kill of the CR.
-  if (!MI.getOperand(0).isKill())
-    BuildMI(MBB, II, dl, TII.get(PPC::MFCR), Reg);
-  else
-    // Implicitly kill the CR register.
-    BuildMI(MBB, II, dl, TII.get(PPC::MFCR), Reg)
-      .addReg(MI.getOperand(0).getReg(), RegState::ImplicitKill);
+  // an MFCRpsued to save all of the CRBits and, if needed, kill the SrcReg.
+  BuildMI(MBB, II, dl, TII.get(PPC::MFCRpseud), Reg)
+          .addReg(SrcReg, getKillRegState(MI.getOperand(0).isKill()));
     
   // If the saved register wasn't CR0, shift the bits left so that they are in
   // CR0's slot.
-  unsigned SrcReg = MI.getOperand(0).getReg();
   if (SrcReg != PPC::CR0)
     // rlwinm rA, rA, ShiftBits, 0, 31.
     BuildMI(MBB, II, dl, TII.get(PPC::RLWINM), Reg)
@@ -794,7 +793,10 @@ PPCRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // If we're not using a Frame Pointer that has been set to the value of the
   // SP before having the stack size subtracted from it, then add the stack size
   // to Offset to get the correct offset.
-  Offset += MFI->getStackSize();
+  // Naked functions have stack size 0, although getStackSize may not reflect that
+  // because we didn't call all the pieces that compute it for naked functions.
+  if (!MF.getFunction()->hasFnAttr(Attribute::Naked))
+    Offset += MFI->getStackSize();
 
   // If we can, encode the offset directly into the instruction.  If this is a
   // normal PPC "ri" instruction, any 16-bit value can be safely encoded.  If
@@ -1003,7 +1005,7 @@ void PPCRegisterInfo::determineFrameLayout(MachineFunction &MF) const {
   if (!DisableRedZone &&
       FrameSize <= 224 &&                          // Fits in red zone.
       !MFI->hasVarSizedObjects() &&                // No dynamic alloca.
-      !MFI->hasCalls() &&                          // No calls.
+      !MFI->adjustsStack() &&                      // No calls.
       (!ALIGN_STACK || MaxAlign <= TargetAlign)) { // No special alignment.
     // No need for frame
     MFI->setStackSize(0);

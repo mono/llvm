@@ -32,6 +32,7 @@ class MCObjectWriter;
 class MCSection;
 class MCSectionData;
 class MCSymbol;
+class MCSymbolData;
 class MCValue;
 class TargetAsmBackend;
 
@@ -68,8 +69,7 @@ public:
     FT_Data,
     FT_Fill,
     FT_Inst,
-    FT_Org,
-    FT_ZeroFill
+    FT_Org
   };
 
 private:
@@ -77,6 +77,11 @@ private:
 
   /// Parent - The data for the section this fragment is in.
   MCSectionData *Parent;
+
+  /// Atom - The atom this fragment is in, as represented by it's defining
+  /// symbol. Atom's are only used by backends which set
+  /// \see MCAsmBackend::hasReliableSymbolDifference().
+  MCSymbolData *Atom;
 
   /// @name Assembler Backend Data
   /// @{
@@ -91,9 +96,9 @@ private:
   /// initialized.
   uint64_t EffectiveSize;
 
-  /// Ordinal - The global index of this fragment. This is the index across all
-  /// sections, not just the parent section.
-  unsigned Ordinal;
+  /// LayoutOrder - The global layout order of this fragment. This is the index
+  /// across all fragments in the file, not just within the section.
+  unsigned LayoutOrder;
 
   /// @}
 
@@ -110,8 +115,11 @@ public:
   MCSectionData *getParent() const { return Parent; }
   void setParent(MCSectionData *Value) { Parent = Value; }
 
-  unsigned getOrdinal() const { return Ordinal; }
-  void setOrdinal(unsigned Value) { Ordinal = Value; }
+  MCSymbolData *getAtom() const { return Atom; }
+  void setAtom(MCSymbolData *Value) { Atom = Value; }
+
+  unsigned getLayoutOrder() const { return LayoutOrder; }
+  void setLayoutOrder(unsigned Value) { LayoutOrder = Value; }
 
   static bool classof(const MCFragment *O) { return true; }
 
@@ -245,17 +253,24 @@ class MCAlignFragment : public MCFragment {
   /// cannot be satisfied in this width then this fragment is ignored.
   unsigned MaxBytesToEmit;
 
-  /// EmitNops - true when aligning code and optimal nops to be used for
-  /// filling.
-  bool EmitNops;
+  /// EmitNops - Flag to indicate that (optimal) NOPs should be emitted instead
+  /// of using the provided value. The exact interpretation of this flag is
+  /// target dependent.
+  bool EmitNops : 1;
+
+  /// OnlyAlignAddress - Flag to indicate that this align is only used to adjust
+  /// the address space size of a section and that it should not be included as
+  /// part of the section size. This flag can only be used on the last fragment
+  /// in a section.
+  bool OnlyAlignAddress : 1;
 
 public:
   MCAlignFragment(unsigned _Alignment, int64_t _Value, unsigned _ValueSize,
-                  unsigned _MaxBytesToEmit, bool _EmitNops,
-		  MCSectionData *SD = 0)
+                  unsigned _MaxBytesToEmit, MCSectionData *SD = 0)
     : MCFragment(FT_Align, SD), Alignment(_Alignment),
       Value(_Value),ValueSize(_ValueSize),
-      MaxBytesToEmit(_MaxBytesToEmit), EmitNops(_EmitNops) {}
+      MaxBytesToEmit(_MaxBytesToEmit), EmitNops(false),
+      OnlyAlignAddress(false) {}
 
   /// @name Accessors
   /// @{
@@ -268,7 +283,11 @@ public:
 
   unsigned getMaxBytesToEmit() const { return MaxBytesToEmit; }
 
-  unsigned getEmitNops() const { return EmitNops; }
+  bool hasEmitNops() const { return EmitNops; }
+  void setEmitNops(bool Value) { EmitNops = Value; }
+
+  bool hasOnlyAlignAddress() const { return OnlyAlignAddress; }
+  void setOnlyAlignAddress(bool Value) { OnlyAlignAddress = Value; }
 
   /// @}
 
@@ -284,17 +303,21 @@ class MCFillFragment : public MCFragment {
   /// Value - Value to use for filling bytes.
   int64_t Value;
 
-  /// ValueSize - The size (in bytes) of \arg Value to use when filling.
+  /// ValueSize - The size (in bytes) of \arg Value to use when filling, or 0 if
+  /// this is a virtual fill fragment.
   unsigned ValueSize;
 
-  /// Count - The number of copies of \arg Value to insert.
-  uint64_t Count;
+  /// Size - The number of bytes to insert.
+  uint64_t Size;
 
 public:
-  MCFillFragment(int64_t _Value, unsigned _ValueSize, uint64_t _Count,
+  MCFillFragment(int64_t _Value, unsigned _ValueSize, uint64_t _Size,
                  MCSectionData *SD = 0)
     : MCFragment(FT_Fill, SD),
-      Value(_Value), ValueSize(_ValueSize), Count(_Count) {}
+      Value(_Value), ValueSize(_ValueSize), Size(_Size) {
+    assert((!ValueSize || (Size % ValueSize) == 0) &&
+           "Fill size must be a multiple of the value size!");
+  }
 
   /// @name Accessors
   /// @{
@@ -303,7 +326,7 @@ public:
 
   unsigned getValueSize() const { return ValueSize; }
 
-  uint64_t getCount() const { return Count; }
+  uint64_t getSize() const { return Size; }
 
   /// @}
 
@@ -344,37 +367,6 @@ public:
   virtual void dump();
 };
 
-/// MCZeroFillFragment - Represent data which has a fixed size and alignment,
-/// but requires no physical space in the object file.
-class MCZeroFillFragment : public MCFragment {
-  /// Size - The size of this fragment.
-  uint64_t Size;
-
-  /// Alignment - The alignment for this fragment.
-  unsigned Alignment;
-
-public:
-  MCZeroFillFragment(uint64_t _Size, unsigned _Alignment, MCSectionData *SD = 0)
-    : MCFragment(FT_ZeroFill, SD),
-      Size(_Size), Alignment(_Alignment) {}
-
-  /// @name Accessors
-  /// @{
-
-  uint64_t getSize() const { return Size; }
-
-  unsigned getAlignment() const { return Alignment; }
-
-  /// @}
-
-  static bool classof(const MCFragment *F) {
-    return F->getKind() == MCFragment::FT_ZeroFill;
-  }
-  static bool classof(const MCZeroFillFragment *) { return true; }
-
-  virtual void dump();
-};
-
 // FIXME: Should this be a separate class, or just merged into MCSection? Since
 // we anticipate the fast path being through an MCAssembler, the only reason to
 // keep it out is for API abstraction.
@@ -400,6 +392,9 @@ private:
   /// Ordinal - The section index in the assemblers section list.
   unsigned Ordinal;
 
+  /// LayoutOrder - The index of this section in the layout order.
+  unsigned LayoutOrder;
+
   /// Alignment - The maximum alignment seen in this section.
   unsigned Alignment;
 
@@ -411,13 +406,6 @@ private:
   /// Address - The computed address of this section. This is ~0 until
   /// initialized.
   uint64_t Address;
-
-  /// Size - The content size of this section. This is ~0 until initialized.
-  uint64_t Size;
-
-  /// FileSize - The size of this section in the object file. This is ~0 until
-  /// initialized.
-  uint64_t FileSize;
 
   /// HasInstructions - Whether this section has had instructions emitted into
   /// it.
@@ -440,6 +428,9 @@ public:
 
   unsigned getOrdinal() const { return Ordinal; }
   void setOrdinal(unsigned Value) { Ordinal = Value; }
+
+  unsigned getLayoutOrder() const { return LayoutOrder; }
+  void setLayoutOrder(unsigned Value) { LayoutOrder = Value; }
 
   /// @name Fragment Access
   /// @{
@@ -562,6 +553,11 @@ public:
   /// setFlags - Set the (implementation defined) symbol flags.
   void setFlags(uint32_t Value) { Flags = Value; }
 
+  /// modifyFlags - Modify the flags via a mask
+  void modifyFlags(uint32_t Value, uint32_t Mask) {
+    Flags = (Flags & ~Mask) | Value;
+  }
+
   /// getIndex - Get the (implementation defined) index.
   uint64_t getIndex() const { return Index; }
 
@@ -654,14 +650,11 @@ private:
   bool FragmentNeedsRelaxation(const MCInstFragment *IF,
                                const MCAsmLayout &Layout) const;
 
-  /// LayoutSection - Assign the section the given \arg StartAddress, and then
-  /// assign offsets and sizes to the fragments in the section \arg SD, and
-  /// update the section size.
-  ///
-  /// \return The address at the end of the section, for use in laying out the
-  /// succeeding section.
-  uint64_t LayoutSection(MCSectionData &SD, MCAsmLayout &Layout,
-                         uint64_t StartAddress);
+  /// Compute the effective fragment size assuming it is layed out at the given
+  /// \arg SectionAddress and \arg FragmentOffset.
+  uint64_t ComputeFragmentSize(MCAsmLayout &Layout, const MCFragment &F,
+                               uint64_t SectionAddress,
+                               uint64_t FragmentOffset) const;
 
   /// LayoutOnce - Perform one layout iteration and return true if any offsets
   /// were adjusted.
@@ -671,18 +664,8 @@ private:
   void FinishLayout(MCAsmLayout &Layout);
 
 public:
-  /// Find the symbol which defines the atom containing given address, inside
-  /// the given section, or null if there is no such symbol.
-  //
-  // FIXME-PERF: Eliminate this, it is very slow.
-  const MCSymbolData *getAtomForAddress(const MCAsmLayout &Layout,
-                                        const MCSectionData *Section,
-                                        uint64_t Address) const;
-
   /// Find the symbol which defines the atom containing the given symbol, or
   /// null if there is no such symbol.
-  //
-  // FIXME-PERF: Eliminate this, it is very slow.
   const MCSymbolData *getAtom(const MCAsmLayout &Layout,
                               const MCSymbolData *Symbol) const;
 

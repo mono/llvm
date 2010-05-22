@@ -41,6 +41,10 @@ namespace llvm {
     /// the macho-specific .zerofill directive for emitting BSS Symbols.
     bool HasMachoZeroFillDirective;               // Default is false.
     
+    /// HasMachoTBSSDirective - True if this is a MachO target that supports
+    /// the macho-specific .tbss directive for emitting thread local BSS Symbols
+    bool HasMachoTBSSDirective;                 // Default is false.
+    
     /// HasStaticCtorDtorReferenceInStaticMode - True if the compiler should
     /// emit a ".reference .constructors_used" or ".reference .destructors_used"
     /// directive after the a static ctor/dtor list.  This directive is only
@@ -97,7 +101,11 @@ namespace llvm {
     /// AllowNameToStartWithDigit - This is true if the assembler allows symbol
     /// names to start with a digit (e.g., "0x0021").  This defaults to false.
     bool AllowNameToStartWithDigit;
-    
+
+    /// AllowPeriodsInName - This is true if the assembler allows periods in
+    /// symbol names.  This defaults to true.
+    bool AllowPeriodsInName;
+
     //===--- Data Emission Directives -------------------------------------===//
 
     /// ZeroDirective - this should be set to the directive used to get some
@@ -299,6 +307,7 @@ namespace llvm {
     // Accessors.
     //
     bool hasMachoZeroFillDirective() const { return HasMachoZeroFillDirective; }
+    bool hasMachoTBSSDirective() const { return HasMachoTBSSDirective; }
     bool hasStaticCtorDtorReferenceInStaticMode() const {
       return HasStaticCtorDtorReferenceInStaticMode;
     }
@@ -340,6 +349,9 @@ namespace llvm {
     }
     bool doesAllowNameToStartWithDigit() const {
       return AllowNameToStartWithDigit;
+    }
+    bool doesAllowPeriodsInName() const {
+      return AllowPeriodsInName;
     }
     const char *getZeroDirective() const {
       return ZeroDirective;

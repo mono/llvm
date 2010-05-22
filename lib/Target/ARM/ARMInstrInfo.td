@@ -128,6 +128,8 @@ def NoVFP     : Predicate<"!Subtarget->hasVFP2()">;
 def HasVFP2   : Predicate<"Subtarget->hasVFP2()">;
 def HasVFP3   : Predicate<"Subtarget->hasVFP3()">;
 def HasNEON   : Predicate<"Subtarget->hasNEON()">;
+def HasDivide : Predicate<"Subtarget->hasDivide()">;
+def HasT2ExtractPack : Predicate<"Subtarget->hasT2ExtractPack()">;
 def UseNEONForFP : Predicate<"Subtarget->useNEONForSinglePrecisionFP()">;
 def DontUseNEONForFP : Predicate<"!Subtarget->useNEONForSinglePrecisionFP()">;
 def IsThumb   : Predicate<"Subtarget->isThumb()">;
@@ -654,12 +656,12 @@ PseudoInst<(outs), (ins cpinst_operand:$instid, cpinst_operand:$cpidx,
 let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
 def ADJCALLSTACKUP :
 PseudoInst<(outs), (ins i32imm:$amt1, i32imm:$amt2, pred:$p), NoItinerary,
-           "@ ADJCALLSTACKUP $amt1",
+           "${:comment} ADJCALLSTACKUP $amt1",
            [(ARMcallseq_end timm:$amt1, timm:$amt2)]>;
 
 def ADJCALLSTACKDOWN :
 PseudoInst<(outs), (ins i32imm:$amt, pred:$p), NoItinerary,
-           "@ ADJCALLSTACKDOWN $amt",
+           "${:comment} ADJCALLSTACKDOWN $amt",
            [(ARMcallseq_start timm:$amt)]>;
 }
 
@@ -789,8 +791,11 @@ def DBG : AI<(outs), (ins i32imm:$opt), MiscFrm, NoItinerary, "dbg", "\t$opt",
 }
 
 // A5.4 Permanently UNDEFINED instructions.
-def TRAP : AI<(outs), (ins), MiscFrm, NoItinerary, "trap", "",
-              [/* For disassembly only; pattern left blank */]>,
+// FIXME: Temporary emitted as raw bytes until this pseudo-op will be added to
+// binutils
+let isBarrier = 1, isTerminator = 1 in
+def TRAP : AXI<(outs), (ins), MiscFrm, NoItinerary, 
+               ".long 0xe7ffdefe ${:comment} trap", [(trap)]>,
            Requires<[IsARM]> {
   let Inst{27-25} = 0b011;
   let Inst{24-20} = 0b11111;
@@ -843,25 +848,19 @@ def PICSTRB : AXI2stb<(outs), (ins GPR:$src, addrmodepc:$addr, pred:$p),
 
 // LEApcrel - Load a pc-relative address into a register without offending the
 // assembler.
+let neverHasSideEffects = 1 in {
+let isReMaterializable = 1 in
 def LEApcrel : AXI1<0x0, (outs GPR:$dst), (ins i32imm:$label, pred:$p),
                     Pseudo, IIC_iALUi,
-           !strconcat(!strconcat(".set ${:private}PCRELV${:uid}, ($label-(",
-                                 "${:private}PCRELL${:uid}+8))\n"),
-                      !strconcat("${:private}PCRELL${:uid}:\n\t",
-                                 "add$p\t$dst, pc, #${:private}PCRELV${:uid}")),
-                   []>;
+                    "adr$p\t$dst, #$label", []>;
 
 def LEApcrelJT : AXI1<0x0, (outs GPR:$dst),
                            (ins i32imm:$label, nohash_imm:$id, pred:$p),
-          Pseudo, IIC_iALUi,
-   !strconcat(!strconcat(".set ${:private}PCRELV${:uid}, "
-                         "(${label}_${id}-(",
-                                  "${:private}PCRELL${:uid}+8))\n"),
-                       !strconcat("${:private}PCRELL${:uid}:\n\t",
-                                 "add$p\t$dst, pc, #${:private}PCRELV${:uid}")),
-                   []> {
+                      Pseudo, IIC_iALUi,
+                      "adr$p\t$dst, #${label}_${id}", []> {
     let Inst{25} = 1;
 }
+} // neverHasSideEffects
 
 //===----------------------------------------------------------------------===//
 //  Control Flow Instructions.
@@ -1134,7 +1133,8 @@ def LDR  : AI2ldw<(outs GPR:$dst), (ins addrmode2:$addr), LdFrm, IIC_iLoadr,
                [(set GPR:$dst, (load addrmode2:$addr))]>;
 
 // Special LDR for loads from non-pc-relative constpools.
-let canFoldAsLoad = 1, mayLoad = 1, isReMaterializable = 1 in
+let canFoldAsLoad = 1, mayLoad = 1, neverHasSideEffects = 1,
+    isReMaterializable = 1 in
 def LDRcp : AI2ldw<(outs GPR:$dst), (ins addrmode2:$addr), LdFrm, IIC_iLoadr,
                  "ldr", "\t$dst, $addr", []>;
 
@@ -1156,7 +1156,7 @@ def LDRSB : AI3ldsb<(outs GPR:$dst), (ins addrmode3:$addr), LdMiscFrm,
                    IIC_iLoadr, "ldrsb", "\t$dst, $addr",
                    [(set GPR:$dst, (sextloadi8 addrmode3:$addr))]>;
 
-let mayLoad = 1, hasExtraDefRegAllocReq = 1 in {
+let mayLoad = 1, neverHasSideEffects = 1, hasExtraDefRegAllocReq = 1 in {
 // Load doubleword
 def LDRD : AI3ldd<(outs GPR:$dst1, GPR:$dst2), (ins addrmode3:$addr), LdMiscFrm,
                  IIC_iLoadr, "ldrd", "\t$dst1, $addr",
@@ -1215,7 +1215,7 @@ def LDRD_POST : AI3lddpo<(outs GPR:$dst1, GPR:$dst2, GPR:$base_wb),
             "ldrd", "\t$dst1, $dst2, [$base], $offset", "$base = $base_wb", []>,
                 Requires<[IsARM, HasV5TE]>;
 
-}
+} // mayLoad = 1, neverHasSideEffects = 1, hasExtraDefRegAllocReq = 1
 
 // LDRT, LDRBT, LDRSBT, LDRHT, LDRSHT are for disassembly only.
 
@@ -1264,7 +1264,7 @@ def STRB : AI2stb<(outs), (ins GPR:$src, addrmode2:$addr), StFrm, IIC_iStorer,
                [(truncstorei8 GPR:$src, addrmode2:$addr)]>;
 
 // Store doubleword
-let mayStore = 1, hasExtraSrcRegAllocReq = 1 in
+let mayStore = 1, neverHasSideEffects = 1, hasExtraSrcRegAllocReq = 1 in
 def STRD : AI3std<(outs), (ins GPR:$src1, GPR:$src2, addrmode3:$addr),
                StMiscFrm, IIC_iStorer,
                "strd", "\t$src1, $addr", []>, Requires<[IsARM, HasV5TE]>;
@@ -1356,7 +1356,7 @@ def STRHT: AI3sthpo<(outs GPR:$base_wb),
 //  Load / store multiple Instructions.
 //
 
-let mayLoad = 1, hasExtraDefRegAllocReq = 1 in {
+let mayLoad = 1, neverHasSideEffects = 1, hasExtraDefRegAllocReq = 1 in {
 def LDM : AXI4ld<(outs), (ins addrmode4:$addr, pred:$p,
                           reglist:$dsts, variable_ops),
                  IndexModeNone, LdStMulFrm, IIC_iLoadm,
@@ -1367,9 +1367,9 @@ def LDM_UPD : AXI4ld<(outs GPR:$wb), (ins addrmode4:$addr, pred:$p,
                      IndexModeUpd, LdStMulFrm, IIC_iLoadm,
                      "ldm${addr:submode}${p}\t$addr!, $dsts",
                      "$addr.addr = $wb", []>;
-} // mayLoad, hasExtraDefRegAllocReq
+} // mayLoad, neverHasSideEffects, hasExtraDefRegAllocReq
 
-let mayStore = 1, hasExtraSrcRegAllocReq = 1 in {
+let mayStore = 1, neverHasSideEffects = 1, hasExtraSrcRegAllocReq = 1 in {
 def STM : AXI4st<(outs), (ins addrmode4:$addr, pred:$p,
                           reglist:$srcs, variable_ops),
                  IndexModeNone, LdStMulFrm, IIC_iStorem,
@@ -1380,7 +1380,7 @@ def STM_UPD : AXI4st<(outs GPR:$wb), (ins addrmode4:$addr, pred:$p,
                      IndexModeUpd, LdStMulFrm, IIC_iStorem,
                      "stm${addr:submode}${p}\t$addr!, $srcs",
                      "$addr.addr = $wb", []>;
-} // mayStore, hasExtraSrcRegAllocReq
+} // mayStore, neverHasSideEffects, hasExtraSrcRegAllocReq
 
 //===----------------------------------------------------------------------===//
 //  Move Instructions.
@@ -2198,6 +2198,7 @@ def : ARMPat<(ARMcmpZ GPR:$src, so_imm_neg:$imm),
 // Conditional moves
 // FIXME: should be able to write a pattern for ARMcmov, but can't use
 // a two-value operand where a dag node expects two operands. :(
+let neverHasSideEffects = 1 in {
 def MOVCCr : AI1<0b1101, (outs GPR:$dst), (ins GPR:$false, GPR:$true), DPFrm,
                 IIC_iCMOVr, "mov", "\t$dst, $true",
       [/*(set GPR:$dst, (ARMcmov GPR:$false, GPR:$true, imm:$cc, CCR:$ccr))*/]>,
@@ -2221,6 +2222,7 @@ def MOVCCi : AI1<0b1101, (outs GPR:$dst),
                 RegConstraint<"$false = $dst">, UnaryDP {
   let Inst{25} = 1;
 }
+} // neverHasSideEffects
 
 //===----------------------------------------------------------------------===//
 // Atomic operations intrinsics
@@ -2528,12 +2530,12 @@ let Defs =
   def Int_eh_sjlj_setjmp : XI<(outs), (ins GPR:$src, GPR:$val),
                                AddrModeNone, SizeSpecial, IndexModeNone,
                                Pseudo, NoItinerary,
-                               "str\tsp, [$src, #+8] @ eh_setjmp begin\n\t"
+                               "str\tsp, [$src, #+8] ${:comment} eh_setjmp begin\n\t"
                                "add\t$val, pc, #8\n\t"
                                "str\t$val, [$src, #+4]\n\t"
                                "mov\tr0, #0\n\t"
                                "add\tpc, pc, #0\n\t"
-                               "mov\tr0, #1 @ eh_setjmp end", "",
+                               "mov\tr0, #1 ${:comment} eh_setjmp end", "",
                          [(set R0, (ARMeh_sjlj_setjmp GPR:$src, GPR:$val))]>,
                            Requires<[IsARM, HasVFP2]>;
 }
@@ -2543,12 +2545,12 @@ let Defs =
   def Int_eh_sjlj_setjmp_nofp : XI<(outs), (ins GPR:$src, GPR:$val),
                                    AddrModeNone, SizeSpecial, IndexModeNone,
                                    Pseudo, NoItinerary,
-                                   "str\tsp, [$src, #+8] @ eh_setjmp begin\n\t"
+                                   "str\tsp, [$src, #+8] ${:comment} eh_setjmp begin\n\t"
                                    "add\t$val, pc, #8\n\t"
                                    "str\t$val, [$src, #+4]\n\t"
                                    "mov\tr0, #0\n\t"
                                    "add\tpc, pc, #0\n\t"
-                                   "mov\tr0, #1 @ eh_setjmp end", "",
+                                   "mov\tr0, #1 ${:comment} eh_setjmp end", "",
                          [(set R0, (ARMeh_sjlj_setjmp GPR:$src, GPR:$val))]>,
                                 Requires<[IsARM, NoVFP]>;
 }

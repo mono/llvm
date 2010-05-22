@@ -123,7 +123,7 @@ struct OperandsSignature {
   void PrintParameters(raw_ostream &OS) const {
     for (unsigned i = 0, e = Operands.size(); i != e; ++i) {
       if (Operands[i] == "r") {
-        OS << "unsigned Op" << i;
+        OS << "unsigned Op" << i << ", bool Op" << i << "IsKill";
       } else if (Operands[i] == "i") {
         OS << "uint64_t imm" << i;
       } else if (Operands[i] == "f") {
@@ -149,7 +149,7 @@ struct OperandsSignature {
       if (PrintedArg)
         OS << ", ";
       if (Operands[i] == "r") {
-        OS << "Op" << i;
+        OS << "Op" << i << ", Op" << i << "IsKill";
         PrintedArg = true;
       } else if (Operands[i] == "i") {
         OS << "imm" << i;
@@ -167,7 +167,7 @@ struct OperandsSignature {
   void PrintArguments(raw_ostream &OS) const {
     for (unsigned i = 0, e = Operands.size(); i != e; ++i) {
       if (Operands[i] == "r") {
-        OS << "Op" << i;
+        OS << "Op" << i << ", Op" << i << "IsKill";
       } else if (Operands[i] == "i") {
         OS << "imm" << i;
       } else if (Operands[i] == "f") {
@@ -433,7 +433,7 @@ void FastISelMap::PrintFunctionDefinitions(raw_ostream &OS) {
                      << (*Memo.PhysRegs)[i] << ", Op" << i << ", "
                      << "TM.getRegisterInfo()->getPhysicalRegisterRegClass("
                      << (*Memo.PhysRegs)[i] << "), "
-                     << "MRI.getRegClass(Op" << i << "));\n";
+                     << "MRI.getRegClass(Op" << i << "), DL);\n";
               }
               
               OS << "  return FastEmitInst_";
@@ -447,7 +447,7 @@ void FastISelMap::PrintFunctionDefinitions(raw_ostream &OS) {
                 OS << ");\n";
               } else {
                 OS << "extractsubreg(" << getName(RetVT);
-                OS << ", Op0, ";
+                OS << ", Op0, Op0IsKill, ";
                 OS << (unsigned)Memo.SubRegNo;
                 OS << ");\n";
               }
@@ -527,7 +527,7 @@ void FastISelMap::PrintFunctionDefinitions(raw_ostream &OS) {
                      << (*Memo.PhysRegs)[i] << ", Op" << i << ", "
                      << "TM.getRegisterInfo()->getPhysicalRegisterRegClass("
                      << (*Memo.PhysRegs)[i] << "), "
-                     << "MRI.getRegClass(Op" << i << "));\n";
+                     << "MRI.getRegClass(Op" << i << "), DL);\n";
               }
             
             OS << "  return FastEmitInst_";
@@ -541,7 +541,7 @@ void FastISelMap::PrintFunctionDefinitions(raw_ostream &OS) {
               Operands.PrintArguments(OS, *Memo.PhysRegs);
               OS << ");\n";
             } else {
-              OS << "extractsubreg(RetVT, Op0, ";
+              OS << "extractsubreg(RetVT, Op0, Op0IsKill, ";
               OS << (unsigned)Memo.SubRegNo;
               OS << ");\n";
             }

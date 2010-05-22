@@ -453,9 +453,9 @@ namespace llvm {
     /// and some i16 instructions are slow.
     virtual bool IsDesirableToPromoteOp(SDValue Op, EVT &PVT) const;
 
-    virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                         MachineBasicBlock *MBB,
-                    DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const;
+    virtual MachineBasicBlock *
+      EmitInstrWithCustomInserter(MachineInstr *MI,
+                                  MachineBasicBlock *MBB) const;
 
  
     /// getTargetNodeName - This method returns the name of a target specific
@@ -563,7 +563,7 @@ namespace llvm {
       return !X86ScalarSSEf64 || VT == MVT::f80;
     }
     
-    virtual const X86Subtarget* getSubtarget() const {
+    const X86Subtarget* getSubtarget() const {
       return Subtarget;
     }
 
@@ -677,6 +677,7 @@ namespace llvm {
     SDValue LowerShift(SDValue Op, SelectionDAG &DAG) const;
     SDValue BuildFILD(SDValue Op, EVT SrcVT, SDValue Chain, SDValue StackSlot,
                       SelectionDAG &DAG) const;
+    SDValue LowerBIT_CONVERT(SDValue op, SelectionDAG &DAG) const;
     SDValue LowerSINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerUINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerUINT_TO_FP_i64(SDValue Op, SelectionDAG &DAG) const;
@@ -743,23 +744,6 @@ namespace llvm {
     void ReplaceATOMIC_BINARY_64(SDNode *N, SmallVectorImpl<SDValue> &Results,
                                  SelectionDAG &DAG, unsigned NewOp) const;
 
-    SDValue EmitTargetCodeForMemset(SelectionDAG &DAG, DebugLoc dl,
-                                    SDValue Chain,
-                                    SDValue Dst, SDValue Src,
-                                    SDValue Size, unsigned Align,
-                                    bool isVolatile,
-                                    const Value *DstSV,
-                                    uint64_t DstSVOff) const;
-    SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG, DebugLoc dl,
-                                    SDValue Chain,
-                                    SDValue Dst, SDValue Src,
-                                    SDValue Size, unsigned Align,
-                                    bool isVolatile, bool AlwaysInline,
-                                    const Value *DstSV,
-                                    uint64_t DstSVOff,
-                                    const Value *SrcSV,
-                                    uint64_t SrcSVOff) const;
-    
     /// Utility function to emit string processing sse4.2 instructions
     /// that return in xmm0.
     /// This takes the instruction to expand, the associated machine basic
@@ -806,12 +790,10 @@ namespace llvm {
                                                    MachineBasicBlock *BB) const;
 
     MachineBasicBlock *EmitLoweredSelect(MachineInstr *I,
-                                         MachineBasicBlock *BB,
-                    DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const;
+                                         MachineBasicBlock *BB) const;
 
     MachineBasicBlock *EmitLoweredMingwAlloca(MachineInstr *MI,
-                                              MachineBasicBlock *BB,
-                    DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) const;
+                                              MachineBasicBlock *BB) const;
 
     /// Emit nodes that will be selected as "test Op0,Op0", or something
     /// equivalent, for use with the given x86 condition code.

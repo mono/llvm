@@ -176,6 +176,10 @@ namespace {
     /// Types - keep track of the types that have been checked already.
     TypeSet Types;
 
+    /// MDNodes - keep track of the metadata nodes that have been checked
+    /// already.
+    SmallPtrSet<MDNode *, 32> MDNodes;
+
     Verifier()
       : FunctionPass(&ID), 
       Broken(false), RealPass(true), action(AbortProcessAction),
@@ -244,6 +248,10 @@ namespace {
            I != E; ++I)
         visitGlobalAlias(*I);
 
+      for (Module::named_metadata_iterator I = M.named_metadata_begin(),
+           E = M.named_metadata_end(); I != E; ++I)
+        visitNamedMDNode(*I);
+
       // If the module is broken, abort at this time.
       return abortIfBroken();
     }
@@ -284,6 +292,8 @@ namespace {
     void visitGlobalValue(GlobalValue &GV);
     void visitGlobalVariable(GlobalVariable &GV);
     void visitGlobalAlias(GlobalAlias &GA);
+    void visitNamedMDNode(NamedMDNode &NMD);
+    void visitMDNode(MDNode &MD, Function *F);
     void visitFunction(Function &F);
     void visitBasicBlock(BasicBlock &BB);
     using InstVisitor<Verifier>::visit;
@@ -333,8 +343,6 @@ namespace {
                           int VT, unsigned ArgNo, std::string &Suffix);
     void VerifyIntrinsicPrototype(Intrinsic::ID ID, Function *F,
                                   unsigned RetNum, unsigned ParamNum, ...);
-    void VerifyFunctionLocalMetadata(MDNode *N, Function *F,
-                                     SmallPtrSet<MDNode *, 32> &Visited);
     void VerifyParameterAttrs(Attributes Attrs, const Type *Ty,
                               bool isReturnValue, const Value *V);
     void VerifyFunctionAttrs(const FunctionType *FT, const AttrListPtr &Attrs,
@@ -489,6 +497,54 @@ void Verifier::visitGlobalAlias(GlobalAlias &GA) {
   visitGlobalValue(GA);
 }
 
+void Verifier::visitNamedMDNode(NamedMDNode &NMD) {
+  for (unsigned i = 0, e = NMD.getNumOperands(); i != e; ++i) {
+    MDNode *MD = NMD.getOperand(i);
+    if (!MD)
+      continue;
+
+    Assert2(!MD->isFunctionLocal(),
+            "Named metadata operand cannot be function local!", &NMD, MD);
+    visitMDNode(*MD, 0);
+  }
+}
+
+void Verifier::visitMDNode(MDNode &MD, Function *F) {
+  // Only visit each node once.  Metadata can be mutually recursive, so this
+  // avoids infinite recursion here, as well as being an optimization.
+  if (!MDNodes.insert(&MD))
+    return;
+
+  for (unsigned i = 0, e = MD.getNumOperands(); i != e; ++i) {
+    Value *Op = MD.getOperand(i);
+    if (!Op)
+      continue;
+    if (isa<Constant>(Op) || isa<MDString>(Op) || isa<NamedMDNode>(Op))
+      continue;
+    if (MDNode *N = dyn_cast<MDNode>(Op)) {
+      Assert2(MD.isFunctionLocal() || !N->isFunctionLocal(),
+              "Global metadata operand cannot be function local!", &MD, N);
+      visitMDNode(*N, F);
+      continue;
+    }
+    Assert2(MD.isFunctionLocal(), "Invalid operand for global metadata!", &MD, Op);
+
+    // If this was an instruction, bb, or argument, verify that it is in the
+    // function that we expect.
+    Function *ActualF = 0;
+    if (Instruction *I = dyn_cast<Instruction>(Op))
+      ActualF = I->getParent()->getParent();
+    else if (BasicBlock *BB = dyn_cast<BasicBlock>(Op))
+      ActualF = BB->getParent();
+    else if (Argument *A = dyn_cast<Argument>(Op))
+      ActualF = A->getParent();
+    assert(ActualF && "Unimplemented function local metadata case!");
+
+    Assert2(ActualF == F, "function-local metadata used in wrong function",
+            &MD, Op);
+  }
+}
+
 void Verifier::verifyTypeSymbolTable(TypeSymbolTable &ST) {
   for (TypeSymbolTable::iterator I = ST.begin(), E = ST.end(); I != E; ++I)
     VerifyType(I->second);
@@ -632,6 +688,7 @@ void Verifier::visitFunction(Function &F) {
   case CallingConv::Fast:
   case CallingConv::Cold:
   case CallingConv::X86_FastCall:
+  case CallingConv::X86_ThisCall:
     Assert1(!F.isVarArg(),
             "Varargs functions must have C calling conventions!", &F);
     break;
@@ -1096,7 +1153,7 @@ void Verifier::VerifyCallSite(CallSite CS) {
     Assert1(CS.arg_size() == FTy->getNumParams(),
             "Incorrect number of arguments passed to called function!", I);
 
-  // Verify that all arguments to the call match the function type...
+  // Verify that all arguments to the call match the function type.
   for (unsigned i = 0, e = FTy->getNumParams(); i != e; ++i)
     Assert3(CS.getArgument(i)->getType() == FTy->getParamType(i),
             "Call parameter type does not match function signature!",
@@ -1123,8 +1180,8 @@ void Verifier::VerifyCallSite(CallSite CS) {
     }
 
   // Verify that there's no metadata unless it's a direct call to an intrinsic.
-  if (!CS.getCalledFunction() || CS.getCalledFunction()->getName().size() < 5 ||
-      CS.getCalledFunction()->getName().substr(0, 5) != "llvm.") {
+  if (!CS.getCalledFunction() ||
+      !CS.getCalledFunction()->getName().startswith("llvm.")) {
     for (FunctionType::param_iterator PI = FTy->param_begin(),
            PE = FTy->param_end(); PI != PE; ++PI)
       Assert1(!PI->get()->isMetadataTy(),
@@ -1553,38 +1610,6 @@ void Verifier::VerifyType(const Type *Ty) {
   }
 }
 
-/// VerifyFunctionLocalMetadata - Verify that the specified MDNode is local to
-/// specified Function.
-void Verifier::VerifyFunctionLocalMetadata(MDNode *N, Function *F,
-                                           SmallPtrSet<MDNode *, 32> &Visited) {
-  assert(N->isFunctionLocal() && "Should only be called on function-local MD");
-
-  // Only visit each node once.
-  if (!Visited.insert(N))
-    return;
-  
-  for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i) {
-    Value *V = N->getOperand(i);
-    if (!V) continue;
-    
-    Function *ActualF = 0;
-    if (Instruction *I = dyn_cast<Instruction>(V))
-      ActualF = I->getParent()->getParent();
-    else if (BasicBlock *BB = dyn_cast<BasicBlock>(V))
-      ActualF = BB->getParent();
-    else if (Argument *A = dyn_cast<Argument>(V))
-      ActualF = A->getParent();
-    else if (MDNode *MD = dyn_cast<MDNode>(V))
-      if (MD->isFunctionLocal())
-        VerifyFunctionLocalMetadata(MD, F, Visited);
-
-    // If this was an instruction, bb, or argument, verify that it is in the
-    // function that we expect.
-    Assert1(ActualF == 0 || ActualF == F,
-            "function-local metadata used in wrong function", N);
-  }
-}
-
 // Flags used by TableGen to mark intrinsic parameters with the
 // LLVMExtendedElementVectorType and LLVMTruncatedElementVectorType classes.
 static const unsigned ExtendedElementVectorType = 0x40000000;
@@ -1604,11 +1629,8 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
   // If the intrinsic takes MDNode arguments, verify that they are either global
   // or are local to *this* function.
   for (unsigned i = 1, e = CI.getNumOperands(); i != e; ++i)
-    if (MDNode *MD = dyn_cast<MDNode>(CI.getOperand(i))) {
-      if (!MD->isFunctionLocal()) continue;
-      SmallPtrSet<MDNode *, 32> Visited;
-      VerifyFunctionLocalMetadata(MD, CI.getParent()->getParent(), Visited);
-    }
+    if (MDNode *MD = dyn_cast<MDNode>(CI.getOperand(i)))
+      visitMDNode(*MD, CI.getParent()->getParent());
 
   switch (ID) {
   default:

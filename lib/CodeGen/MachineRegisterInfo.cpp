@@ -133,6 +133,15 @@ bool MachineRegisterInfo::hasOneNonDBGUse(unsigned RegNo) const {
   return ++UI == use_nodbg_end();
 }
 
+/// clearKillFlags - Iterate over all the uses of the given register and
+/// clear the kill flag from the MachineOperand. This function is used by
+/// optimization passes which extend register lifetimes and need only
+/// preserve conservative kill flag information.
+void MachineRegisterInfo::clearKillFlags(unsigned Reg) const {
+  for (use_iterator UI = use_begin(Reg), UE = use_end(); UI != UE; ++UI)
+    UI.getOperand().setIsKill(false);
+}
+
 bool MachineRegisterInfo::isLiveIn(unsigned Reg) const {
   for (livein_iterator I = livein_begin(), E = livein_end(); I != E; ++I)
     if (I->first == Reg || I->second == Reg)
@@ -145,6 +154,15 @@ bool MachineRegisterInfo::isLiveOut(unsigned Reg) const {
     if (*I == Reg)
       return true;
   return false;
+}
+
+/// getLiveInPhysReg - If VReg is a live-in virtual register, return the
+/// corresponding live-in physical register.
+unsigned MachineRegisterInfo::getLiveInPhysReg(unsigned VReg) const {
+  for (livein_iterator I = livein_begin(), E = livein_end(); I != E; ++I)
+    if (I->second == VReg)
+      return I->first;
+  return 0;
 }
 
 static cl::opt<bool>
@@ -209,7 +227,8 @@ static void EmitLiveInCopy(MachineBasicBlock *MBB,
     --Pos;
   }
 
-  bool Emitted = TII.copyRegToReg(*MBB, Pos, VirtReg, PhysReg, RC, RC);
+  bool Emitted = TII.copyRegToReg(*MBB, Pos, VirtReg, PhysReg, RC, RC,
+                                  DebugLoc());
   assert(Emitted && "Unable to issue a live-in copy instruction!\n");
   (void) Emitted;
 
@@ -217,30 +236,6 @@ static void EmitLiveInCopy(MachineBasicBlock *MBB,
   if (Coalesced) {
     if (&*InsertPos == UseMI) ++InsertPos;
     MBB->erase(UseMI);
-  }
-}
-
-/// InsertLiveInDbgValue - Insert a DBG_VALUE instruction for each live-in
-/// register that has a corresponding source information metadata. e.g.
-/// function parameters.
-static void InsertLiveInDbgValue(MachineBasicBlock *MBB,
-                                 MachineBasicBlock::iterator InsertPos,
-                                 unsigned LiveInReg, unsigned VirtReg,
-                                 const MachineRegisterInfo &MRI,
-                                 const TargetInstrInfo &TII) {
-  for (MachineRegisterInfo::use_iterator UI = MRI.use_begin(VirtReg),
-         UE = MRI.use_end(); UI != UE; ++UI) {
-    MachineInstr *UseMI = &*UI;
-    if (!UseMI->isDebugValue() || UseMI->getParent() != MBB)
-      continue;
-    // Found local dbg_value. FIXME: Verify it's not possible to have multiple
-    // dbg_value's which reference the vr in the same mbb.
-    uint64_t Offset = UseMI->getOperand(1).getImm();
-    const MDNode *MDPtr = UseMI->getOperand(2).getMetadata();    
-    BuildMI(*MBB, InsertPos, InsertPos->getDebugLoc(),
-            TII.get(TargetOpcode::DBG_VALUE))
-      .addReg(LiveInReg).addImm(Offset).addMetadata(MDPtr);
-    return;
   }
 }
 
@@ -260,8 +255,6 @@ MachineRegisterInfo::EmitLiveInCopies(MachineBasicBlock *EntryMBB,
         const TargetRegisterClass *RC = getRegClass(LI->second);
         EmitLiveInCopy(EntryMBB, InsertPos, LI->second, LI->first,
                        RC, CopyRegMap, *this, TRI, TII);
-        InsertLiveInDbgValue(EntryMBB, InsertPos,
-                             LI->first, LI->second, *this, TII);
       }
   } else {
     // Emit the copies into the top of the block.
@@ -270,11 +263,10 @@ MachineRegisterInfo::EmitLiveInCopies(MachineBasicBlock *EntryMBB,
       if (LI->second) {
         const TargetRegisterClass *RC = getRegClass(LI->second);
         bool Emitted = TII.copyRegToReg(*EntryMBB, EntryMBB->begin(),
-                                        LI->second, LI->first, RC, RC);
+                                        LI->second, LI->first, RC, RC,
+                                        DebugLoc());
         assert(Emitted && "Unable to issue a live-in copy instruction!\n");
         (void) Emitted;
-        InsertLiveInDbgValue(EntryMBB, EntryMBB->begin(),
-                             LI->first, LI->second, *this, TII);
       }
   }
 
@@ -282,6 +274,15 @@ MachineRegisterInfo::EmitLiveInCopies(MachineBasicBlock *EntryMBB,
   for (MachineRegisterInfo::livein_iterator I = livein_begin(),
        E = livein_end(); I != E; ++I)
     EntryMBB->addLiveIn(I->first);
+}
+
+void MachineRegisterInfo::closePhysRegsUsed(const TargetRegisterInfo &TRI) {
+  for (int i = UsedPhysRegs.find_first(); i >= 0;
+       i = UsedPhysRegs.find_next(i))
+         for (const unsigned *SS = TRI.getSubRegisters(i);
+              unsigned SubReg = *SS; ++SS)
+           if (SubReg > unsigned(i))
+             UsedPhysRegs.set(SubReg);
 }
 
 #ifndef NDEBUG

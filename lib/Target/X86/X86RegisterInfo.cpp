@@ -37,7 +37,6 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 using namespace llvm;
 
@@ -518,6 +517,30 @@ X86RegisterInfo::getFrameIndexOffset(const MachineFunction &MF, int FI) const {
   return Offset;
 }
 
+static unsigned getSUBriOpcode(unsigned is64Bit, int64_t Imm) {
+  if (is64Bit) {
+    if (isInt<8>(Imm))
+      return X86::SUB64ri8;
+    return X86::SUB64ri32;
+  } else {
+    if (isInt<8>(Imm))
+      return X86::SUB32ri8;
+    return X86::SUB32ri;
+  }
+}
+
+static unsigned getADDriOpcode(unsigned is64Bit, int64_t Imm) {
+  if (is64Bit) {
+    if (isInt<8>(Imm))
+      return X86::ADD64ri8;
+    return X86::ADD64ri32;
+  } else {
+    if (isInt<8>(Imm))
+      return X86::ADD32ri8;
+    return X86::ADD32ri;
+  }
+}
+
 void X86RegisterInfo::
 eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
                               MachineBasicBlock::iterator I) const {
@@ -537,7 +560,7 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
       MachineInstr *New = 0;
       if (Old->getOpcode() == getCallFrameSetupOpcode()) {
         New = BuildMI(MF, Old->getDebugLoc(),
-                      TII.get(Is64Bit ? X86::SUB64ri32 : X86::SUB32ri),
+                      TII.get(getSUBriOpcode(Is64Bit, Amount)),
                       StackPtr)
           .addReg(StackPtr)
           .addImm(Amount);
@@ -549,9 +572,7 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
         Amount -= CalleeAmt;
   
       if (Amount) {
-          unsigned Opc = (Amount < 128) ?
-            (Is64Bit ? X86::ADD64ri8 : X86::ADD32ri8) :
-            (Is64Bit ? X86::ADD64ri32 : X86::ADD32ri);
+          unsigned Opc = getADDriOpcode(Is64Bit, Amount);
           New = BuildMI(MF, Old->getDebugLoc(), TII.get(Opc), StackPtr)
             .addReg(StackPtr)
             .addImm(Amount);
@@ -571,9 +592,7 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
     // something off the stack pointer, add it back.  We do this until we have
     // more advanced stack pointer tracking ability.
     if (uint64_t CalleeAmt = I->getOperand(1).getImm()) {
-      unsigned Opc = (CalleeAmt < 128) ?
-        (Is64Bit ? X86::SUB64ri8 : X86::SUB32ri8) :
-        (Is64Bit ? X86::SUB64ri32 : X86::SUB32ri);
+      unsigned Opc = getSUBriOpcode(Is64Bit, CalleeAmt);
       MachineInstr *Old = I;
       MachineInstr *New =
         BuildMI(MF, Old->getDebugLoc(), TII.get(Opc), 
@@ -608,8 +627,12 @@ X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   int FrameIndex = MI.getOperand(i).getIndex();
   unsigned BasePtr;
 
+  unsigned Opc = MI.getOpcode();
+  bool AfterFPPop = Opc == X86::TAILJMPm64 || Opc == X86::TAILJMPm;
   if (needsStackRealignment(MF))
     BasePtr = (FrameIndex < 0 ? FramePtr : StackPtr);
+  else if (AfterFPPop)
+    BasePtr = StackPtr;
   else
     BasePtr = (hasFP(MF) ? FramePtr : StackPtr);
 
@@ -618,16 +641,22 @@ X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   MI.getOperand(i).ChangeToRegister(BasePtr, false);
 
   // Now add the frame object offset to the offset from EBP.
+  int FIOffset;
+  if (AfterFPPop) {
+    // Tail call jmp happens after FP is popped.
+    const TargetFrameInfo &TFI = *MF.getTarget().getFrameInfo();
+    const MachineFrameInfo *MFI = MF.getFrameInfo();
+    FIOffset = MFI->getObjectOffset(FrameIndex) - TFI.getOffsetOfLocalArea();
+  } else
+    FIOffset = getFrameIndexOffset(MF, FrameIndex);
+
   if (MI.getOperand(i+3).isImm()) {
     // Offset is a 32-bit integer.
-    int Offset = getFrameIndexOffset(MF, FrameIndex) +
-      (int)(MI.getOperand(i + 3).getImm());
-
+    int Offset = FIOffset + (int)(MI.getOperand(i + 3).getImm());
     MI.getOperand(i + 3).ChangeToImmediate(Offset);
   } else {
     // Offset is symbolic. This is extremely rare.
-    uint64_t Offset = getFrameIndexOffset(MF, FrameIndex) +
-                      (uint64_t)MI.getOperand(i+3).getOffset();
+    uint64_t Offset = FIOffset + (uint64_t)MI.getOperand(i+3).getOffset();
     MI.getOperand(i+3).setOffset(Offset);
   }
   return 0;
@@ -681,13 +710,9 @@ void emitSPUpdate(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
                   const TargetInstrInfo &TII) {
   bool isSub = NumBytes < 0;
   uint64_t Offset = isSub ? -NumBytes : NumBytes;
-  unsigned Opc = isSub
-    ? ((Offset < 128) ?
-       (Is64Bit ? X86::SUB64ri8 : X86::SUB32ri8) :
-       (Is64Bit ? X86::SUB64ri32 : X86::SUB32ri))
-    : ((Offset < 128) ?
-       (Is64Bit ? X86::ADD64ri8 : X86::ADD32ri8) :
-       (Is64Bit ? X86::ADD64ri32 : X86::ADD32ri));
+  unsigned Opc = isSub ?
+    getSUBriOpcode(Is64Bit, Offset) :
+    getADDriOpcode(Is64Bit, Offset);
   uint64_t Chunk = (1LL << 31) - 1;
   DebugLoc DL = MBB.findDebugLoc(MBBI);
 
@@ -889,7 +914,7 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
   if (Is64Bit && !Fn->hasFnAttr(Attribute::NoRedZone) &&
       !needsStackRealignment(MF) &&
       !MFI->hasVarSizedObjects() &&                // No dynamic alloca.
-      !MFI->hasCalls() &&                          // No calls.
+      !MFI->adjustsStack() &&                      // No calls.
       !Subtarget->isTargetWin64()) {               // Win64 has no Red Zone
     uint64_t MinSize = X86FI->getCalleeSavedFrameSize();
     if (HasFP) MinSize += SlotSize;
@@ -907,7 +932,8 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
   // size is bigger than the callers.
   if (TailCallReturnAddrDelta < 0) {
     MachineInstr *MI =
-      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit? X86::SUB64ri32 : X86::SUB32ri),
+      BuildMI(MBB, MBBI, DL,
+              TII.get(getSUBriOpcode(Is64Bit, -TailCallReturnAddrDelta)),
               StackPtr)
         .addReg(StackPtr)
         .addImm(-TailCallReturnAddrDelta);
@@ -1297,7 +1323,7 @@ X86RegisterInfo::getInitialFrameState(std::vector<MachineMove> &Moves) const {
   // Calculate amount of bytes used for return address storing
   int stackGrowth = (Is64Bit ? -8 : -4);
 
-  // Initial state of the frame pointer is esp+4.
+  // Initial state of the frame pointer is esp+stackGrowth.
   MachineLocation Dst(MachineLocation::VirtualFP);
   MachineLocation Src(StackPtr, stackGrowth);
   Moves.push_back(MachineMove(0, Dst, Src));

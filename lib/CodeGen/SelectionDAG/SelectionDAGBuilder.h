@@ -36,6 +36,7 @@ class BasicBlock;
 class BitCastInst;
 class BranchInst;
 class CallInst;
+class DbgValueInst;
 class ExtractElementInst;
 class ExtractValueInst;
 class FCmpInst;
@@ -58,6 +59,7 @@ class LoadInst;
 class MachineBasicBlock;
 class MachineInstr;
 class MachineRegisterInfo;
+class MDNode;
 class PHINode;
 class PtrToIntInst;
 class ReturnInst;
@@ -270,10 +272,6 @@ public:
   /// BitTestCases - Vector of BitTestBlock structures used to communicate
   /// SwitchInst code generation information.
   std::vector<BitTestBlock> BitTestCases;
-
-  /// EdgeMapping - If an edge from CurMBB to any MBB is changed (e.g. due to
-  /// scheduler custom lowering), track the change here.
-  DenseMap<MachineBasicBlock*, MachineBasicBlock*> EdgeMapping;
 
   // Emit PHI-node-operand constants only once even if used by multiple
   // PHI nodes.
@@ -495,6 +493,14 @@ private:
   const char *implVisitAluOverflow(const CallInst &I, ISD::NodeType Op);
 
   void HandlePHINodesInSuccessorBlocks(const BasicBlock *LLVMBB);
+
+  /// EmitFuncArgumentDbgValue - If the DbgValueInst is a dbg_value of a
+  /// function argument, create the corresponding DBG_VALUE machine instruction
+  /// for it now. At the end of instruction selection, they will be inserted to
+  /// the entry BB.
+  bool EmitFuncArgumentDbgValue(const DbgValueInst &DI,
+                                const Value *V, MDNode *Variable,
+                                uint64_t Offset, const SDValue &N);
 };
 
 } // end namespace llvm

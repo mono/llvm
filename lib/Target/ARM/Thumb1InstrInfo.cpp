@@ -36,10 +36,8 @@ bool Thumb1InstrInfo::copyRegToReg(MachineBasicBlock &MBB,
                                    MachineBasicBlock::iterator I,
                                    unsigned DestReg, unsigned SrcReg,
                                    const TargetRegisterClass *DestRC,
-                                   const TargetRegisterClass *SrcRC) const {
-  DebugLoc DL;
-  if (I != MBB.end()) DL = I->getDebugLoc();
-
+                                   const TargetRegisterClass *SrcRC,
+                                   DebugLoc DL) const {
   if (DestRC == ARM::GPRRegisterClass) {
     if (SrcRC == ARM::GPRRegisterClass) {
       BuildMI(MBB, I, DL, get(ARM::tMOVgpr2gpr), DestReg).addReg(SrcReg);
@@ -97,10 +95,8 @@ canFoldMemoryOperand(const MachineInstr *MI,
 void Thumb1InstrInfo::
 storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
                     unsigned SrcReg, bool isKill, int FI,
-                    const TargetRegisterClass *RC) const {
-  DebugLoc DL;
-  if (I != MBB.end()) DL = I->getDebugLoc();
-
+                    const TargetRegisterClass *RC,
+                    const TargetRegisterInfo *TRI) const {
   assert((RC == ARM::tGPRRegisterClass ||
           (TargetRegisterInfo::isPhysicalRegister(SrcReg) &&
            isARMLowRegister(SrcReg))) && "Unknown regclass!");
@@ -108,6 +104,9 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
   if (RC == ARM::tGPRRegisterClass ||
       (TargetRegisterInfo::isPhysicalRegister(SrcReg) &&
        isARMLowRegister(SrcReg))) {
+    DebugLoc DL;
+    if (I != MBB.end()) DL = I->getDebugLoc();
+
     MachineFunction &MF = *MBB.getParent();
     MachineFrameInfo &MFI = *MF.getFrameInfo();
     MachineMemOperand *MMO =
@@ -124,10 +123,8 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
 void Thumb1InstrInfo::
 loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
                      unsigned DestReg, int FI,
-                     const TargetRegisterClass *RC) const {
-  DebugLoc DL;
-  if (I != MBB.end()) DL = I->getDebugLoc();
-
+                     const TargetRegisterClass *RC,
+                     const TargetRegisterInfo *TRI) const {
   assert((RC == ARM::tGPRRegisterClass ||
           (TargetRegisterInfo::isPhysicalRegister(DestReg) &&
            isARMLowRegister(DestReg))) && "Unknown regclass!");
@@ -135,6 +132,9 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
   if (RC == ARM::tGPRRegisterClass ||
       (TargetRegisterInfo::isPhysicalRegister(DestReg) &&
        isARMLowRegister(DestReg))) {
+    DebugLoc DL;
+    if (I != MBB.end()) DL = I->getDebugLoc();
+
     MachineFunction &MF = *MBB.getParent();
     MachineFrameInfo &MFI = *MF.getFrameInfo();
     MachineMemOperand *MMO =

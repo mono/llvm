@@ -1833,5 +1833,33 @@ entry:
 We should use DSE + llvm.lifetime.end to delete dead vtable pointer updates.
 See GCC PR34949
 
+Another interesting case is that something related could be used for variables
+that go const after their ctor has finished.  In these cases, globalopt (which
+can statically run the constructor) could mark the global const (so it gets put
+in the readonly section).  A testcase would be:
+
+#include <complex>
+using namespace std;
+const complex<char> should_be_in_rodata (42,-42);
+complex<char> should_be_in_data (42,-42);
+complex<char> should_be_in_bss;
+
+Where we currently evaluate the ctors but the globals don't become const because
+the optimizer doesn't know they "become const" after the ctor is done.  See
+GCC PR4131 for more examples.
+
 //===---------------------------------------------------------------------===//
 
+In this code:
+
+long foo(long x) {
+  return x > 1 ? x : 1;
+}
+
+LLVM emits a comparison with 1 instead of 0. 0 would be equivalent
+and cheaper on most targets.
+
+LLVM prefers comparisons with zero over non-zero in general, but in this
+case it choses instead to keep the max operation obvious.
+
+//===---------------------------------------------------------------------===//

@@ -18,7 +18,6 @@
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
-#include "llvm/Target/TargetSubtarget.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -544,7 +543,7 @@ TargetLowering::TargetLowering(const TargetMachine &tm,
   ExceptionPointerRegister = 0;
   ExceptionSelectorRegister = 0;
   BooleanContents = UndefinedBooleanContent;
-  SchedPreferenceInfo = SchedulingForLatency;
+  SchedPreferenceInfo = Sched::Latency;
   JumpBufSize = 0;
   JumpBufAlignment = 0;
   IfCvtBlockSizeLimit = 2;
@@ -1882,10 +1881,15 @@ TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
                 isa<ConstantSDNode>(Op0.getOperand(1)) &&
                 cast<ConstantSDNode>(Op0.getOperand(1))->getAPIntValue() == 1) {
           // If this is (X&1) == / != 1, normalize it to (X&1) != / == 0.
-          if (Op0.getValueType() != VT)
+          if (Op0.getValueType().bitsGT(VT))
             Op0 = DAG.getNode(ISD::AND, dl, VT,
                           DAG.getNode(ISD::TRUNCATE, dl, VT, Op0.getOperand(0)),
                           DAG.getConstant(1, VT));
+          else if (Op0.getValueType().bitsLT(VT))
+            Op0 = DAG.getNode(ISD::AND, dl, VT,
+                        DAG.getNode(ISD::ANY_EXTEND, dl, VT, Op0.getOperand(0)),
+                        DAG.getConstant(1, VT));
+
           return DAG.getSetCC(dl, VT, Op0,
                               DAG.getConstant(0, Op0.getValueType()),
                               Cond == ISD::SETEQ ? ISD::SETNE : ISD::SETEQ);
@@ -2412,7 +2416,7 @@ std::pair<unsigned, const TargetRegisterClass*> TargetLowering::
 getRegForInlineAsmConstraint(const std::string &Constraint,
                              EVT VT) const {
   if (Constraint[0] != '{')
-    return std::pair<unsigned, const TargetRegisterClass*>(0, 0);
+    return std::make_pair(0u, static_cast<TargetRegisterClass*>(0));
   assert(*(Constraint.end()-1) == '}' && "Not a brace enclosed constraint?");
 
   // Remove the braces from around the name.
@@ -2444,7 +2448,7 @@ getRegForInlineAsmConstraint(const std::string &Constraint,
     }
   }
   
-  return std::pair<unsigned, const TargetRegisterClass*>(0, 0);
+  return std::make_pair(0u, static_cast<const TargetRegisterClass*>(0));
 }
 
 //===----------------------------------------------------------------------===//

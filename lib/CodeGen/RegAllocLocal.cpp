@@ -37,6 +37,7 @@ using namespace llvm;
 
 STATISTIC(NumStores, "Number of stores added");
 STATISTIC(NumLoads , "Number of loads added");
+STATISTIC(NumCopies, "Number of copies coalesced");
 
 static RegisterRegAlloc
   localRegAlloc("local", "local register allocator",
@@ -50,6 +51,7 @@ namespace {
   private:
     const TargetMachine *TM;
     MachineFunction *MF;
+    MachineRegisterInfo *MRI;
     const TargetRegisterInfo *TRI;
     const TargetInstrInfo *TII;
 
@@ -189,6 +191,9 @@ namespace {
     ///
     void removePhysReg(unsigned PhysReg);
 
+    void storeVirtReg(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
+                      unsigned VirtReg, unsigned PhysReg, bool isKill);
+
     /// spillVirtReg - This method spills the value specified by PhysReg into
     /// the virtual register slot specified by VirtReg.  It then updates the RA
     /// data structures to indicate the fact that PhysReg is now available.
@@ -286,6 +291,27 @@ void RALocal::removePhysReg(unsigned PhysReg) {
     PhysRegsUseOrder.erase(It);
 }
 
+/// storeVirtReg - Store a virtual register to its assigned stack slot.
+void RALocal::storeVirtReg(MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator I,
+                           unsigned VirtReg, unsigned PhysReg,
+                           bool isKill) {
+  const TargetRegisterClass *RC = MF->getRegInfo().getRegClass(VirtReg);
+  int FrameIndex = getStackSpaceFor(VirtReg, RC);
+  DEBUG(dbgs() << " to stack slot #" << FrameIndex);
+  TII->storeRegToStackSlot(MBB, I, PhysReg, isKill, FrameIndex, RC, TRI);
+  ++NumStores;   // Update statistics
+
+  // Mark the spill instruction as last use if we're not killing the register.
+  if (!isKill) {
+    MachineInstr *Spill = llvm::prior(I);
+    int OpNum = Spill->findRegisterUseOperandIdx(PhysReg);
+    if (OpNum < 0)
+      getVirtRegLastUse(VirtReg) = std::make_pair((MachineInstr*)0, 0);
+    else
+      getVirtRegLastUse(VirtReg) = std::make_pair(Spill, OpNum);
+  }
+}
 
 /// spillVirtReg - This method spills the value specified by PhysReg into the
 /// virtual register slot specified by VirtReg.  It then updates the RA data
@@ -309,15 +335,11 @@ void RALocal::spillVirtReg(MachineBasicBlock &MBB,
     // Otherwise, there is a virtual register corresponding to this physical
     // register.  We only need to spill it into its stack slot if it has been
     // modified.
-    const TargetRegisterClass *RC = MF->getRegInfo().getRegClass(VirtReg);
-    int FrameIndex = getStackSpaceFor(VirtReg, RC);
-    DEBUG(dbgs() << " to stack slot #" << FrameIndex);
     // If the instruction reads the register that's spilled, (e.g. this can
     // happen if it is a move to a physical register), then the spill
     // instruction is not a kill.
     bool isKill = !(I != MBB.end() && I->readsRegister(PhysReg));
-    TII->storeRegToStackSlot(MBB, I, PhysReg, isKill, FrameIndex, RC);
-    ++NumStores;   // Update statistics
+    storeVirtReg(MBB, I, VirtReg, PhysReg, isKill);
   }
 
   getVirt2PhysRegMapSlot(VirtReg) = 0;   // VirtReg no longer available
@@ -496,10 +518,15 @@ MachineInstr *RALocal::reloadVirtReg(MachineBasicBlock &MBB, MachineInstr *MI,
                                      SmallSet<unsigned, 4> &ReloadedRegs,
                                      unsigned PhysReg) {
   unsigned VirtReg = MI->getOperand(OpNum).getReg();
+  unsigned SubIdx = MI->getOperand(OpNum).getSubReg();
 
   // If the virtual register is already available, just update the instruction
   // and return.
   if (unsigned PR = getVirt2PhysRegMapSlot(VirtReg)) {
+    if (SubIdx) {
+      PR = TRI->getSubReg(PR, SubIdx);
+      MI->getOperand(OpNum).setSubReg(0);
+    }
     MI->getOperand(OpNum).setReg(PR);  // Assign the input register
     if (!MI->isDebugValue()) {
       // Do not do these for DBG_VALUE as they can affect codegen.
@@ -533,11 +560,16 @@ MachineInstr *RALocal::reloadVirtReg(MachineBasicBlock &MBB, MachineInstr *MI,
                << TRI->getName(PhysReg) << "\n");
 
   // Add move instruction(s)
-  TII->loadRegFromStackSlot(MBB, MI, PhysReg, FrameIndex, RC);
+  TII->loadRegFromStackSlot(MBB, MI, PhysReg, FrameIndex, RC, TRI);
   ++NumLoads;    // Update statistics
 
   MF->getRegInfo().setPhysRegUsed(PhysReg);
-  MI->getOperand(OpNum).setReg(PhysReg);  // Assign the input register
+  // Assign the input register.
+  if (SubIdx) {
+    MI->getOperand(OpNum).setSubReg(0);
+    MI->getOperand(OpNum).setReg(TRI->getSubReg(PhysReg, SubIdx));
+  } else
+    MI->getOperand(OpNum).setReg(PhysReg);  // Assign the input register
   getVirtRegLastUse(VirtReg) = std::make_pair(MI, OpNum);
 
   if (!ReloadedRegs.insert(PhysReg)) {
@@ -616,7 +648,6 @@ static bool precedes(MachineBasicBlock::iterator A,
 /// ComputeLocalLiveness - Computes liveness of registers within a basic
 /// block, setting the killed/dead flags as appropriate.
 void RALocal::ComputeLocalLiveness(MachineBasicBlock& MBB) {
-  MachineRegisterInfo &MRI = MBB.getParent()->getRegInfo();
   // Keep track of the most recently seen previous use or def of each reg, 
   // so that we can update them with dead/kill markers.
   DenseMap<unsigned, std::pair<MachineInstr*, unsigned> > LastUseDef;
@@ -633,7 +664,10 @@ void RALocal::ComputeLocalLiveness(MachineBasicBlock& MBB) {
       // uses regs before it defs them.
       if (!MO.isReg() || !MO.getReg() || !MO.isUse())
         continue;
-      
+
+      // Ignore helpful kill flags from earlier passes.
+      MO.setIsKill(false);
+
       LastUseDef[MO.getReg()] = std::make_pair(I, i);
       
       if (TargetRegisterInfo::isVirtualRegister(MO.getReg())) continue;
@@ -659,18 +693,26 @@ void RALocal::ComputeLocalLiveness(MachineBasicBlock& MBB) {
       //   - A def followed by a def is dead
       //   - A use followed by a def is a kill
       if (!MO.isReg() || !MO.getReg() || !MO.isDef()) continue;
-      
+
+      unsigned SubIdx = MO.getSubReg();
       DenseMap<unsigned, std::pair<MachineInstr*, unsigned> >::iterator
         last = LastUseDef.find(MO.getReg());
       if (last != LastUseDef.end()) {
         // Check if this is a two address instruction.  If so, then
         // the def does not kill the use.
-        if (last->second.first == I &&
-            I->isRegTiedToUseOperand(i))
+        if (last->second.first == I && I->isRegTiedToUseOperand(i))
           continue;
         
         MachineOperand &lastUD =
                     last->second.first->getOperand(last->second.second);
+        if (SubIdx && lastUD.getSubReg() != SubIdx)
+          // Partial re-def, the last def is not dead.
+          // %reg1024:5<def> =
+          // %reg1024:6<def> =
+          // or 
+          // %reg1024:5<def> = op %reg1024, 5
+          continue;
+
         if (lastUD.isDef())
           lastUD.setIsDead(true);
         else
@@ -719,8 +761,8 @@ void RALocal::ComputeLocalLiveness(MachineBasicBlock& MBB) {
       // it wouldn't have been otherwise.  Nullify the DBG_VALUEs when that
       // happens.
       bool UsedByDebugValueOnly = false;
-      for (MachineRegisterInfo::reg_iterator UI = MRI.reg_begin(MO.getReg()),
-             UE = MRI.reg_end(); UI != UE; ++UI) {
+      for (MachineRegisterInfo::reg_iterator UI = MRI->reg_begin(MO.getReg()),
+             UE = MRI->reg_end(); UI != UE; ++UI) {
         // Two cases:
         // - used in another block
         // - used in the same block before it is defined (loop)
@@ -742,8 +784,8 @@ void RALocal::ComputeLocalLiveness(MachineBasicBlock& MBB) {
       }
 
       if (UsedByDebugValueOnly)
-        for (MachineRegisterInfo::reg_iterator UI = MRI.reg_begin(MO.getReg()),
-             UE = MRI.reg_end(); UI != UE; ++UI)
+        for (MachineRegisterInfo::reg_iterator UI = MRI->reg_begin(MO.getReg()),
+             UE = MRI->reg_end(); UI != UE; ++UI)
           if (UI->isDebugValue() &&
               (UI->getParent() != &MBB ||
                (MO.isDef() && precedes(&*UI, MI))))
@@ -801,9 +843,12 @@ void RALocal::AllocateBasicBlock(MachineBasicBlock &MBB) {
         dbgs() << "\nStarting RegAlloc of: " << *MI;
         dbgs() << "  Regs have values: ";
         for (unsigned i = 0; i != TRI->getNumRegs(); ++i)
-          if (PhysRegsUsed[i] != -1 && PhysRegsUsed[i] != -2)
+          if (PhysRegsUsed[i] != -1 && PhysRegsUsed[i] != -2) {
+            if (PhysRegsUsed[i] && isVirtRegModified(PhysRegsUsed[i]))
+              dbgs() << "*";
             dbgs() << "[" << TRI->getName(i)
                    << ",%reg" << PhysRegsUsed[i] << "] ";
+          }
         dbgs() << '\n';
       });
 
@@ -812,7 +857,8 @@ void RALocal::AllocateBasicBlock(MachineBasicBlock &MBB) {
     unsigned SrcCopyReg, DstCopyReg, SrcCopySubReg, DstCopySubReg;
     unsigned SrcCopyPhysReg = 0U;
     bool isCopy = TII->isMoveInstr(*MI, SrcCopyReg, DstCopyReg, 
-                                   SrcCopySubReg, DstCopySubReg);
+                                   SrcCopySubReg, DstCopySubReg) &&
+      SrcCopySubReg == DstCopySubReg;
     if (isCopy && TargetRegisterInfo::isVirtualRegister(SrcCopyReg))
       SrcCopyPhysReg = getVirt2PhysRegMapSlot(SrcCopyReg);
 
@@ -862,6 +908,10 @@ void RALocal::AllocateBasicBlock(MachineBasicBlock &MBB) {
                  std::make_pair((MachineInstr*)0, 0);
           DEBUG(dbgs() << "  Assigning " << TRI->getName(DestPhysReg)
                        << " to %reg" << DestVirtReg << "\n");
+          if (unsigned DestSubIdx = MO.getSubReg()) {
+            MO.setSubReg(0);
+            DestPhysReg = TRI->getSubReg(DestPhysReg, DestSubIdx);
+          }
           MO.setReg(DestPhysReg);  // Assign the earlyclobber register
         } else {
           unsigned Reg = MO.getReg();
@@ -1057,6 +1107,11 @@ void RALocal::AllocateBasicBlock(MachineBasicBlock &MBB) {
       getVirtRegLastUse(DestVirtReg) = std::make_pair((MachineInstr*)0, 0);
       DEBUG(dbgs() << "  Assigning " << TRI->getName(DestPhysReg)
                    << " to %reg" << DestVirtReg << "\n");
+
+      if (unsigned DestSubIdx = MO.getSubReg()) {
+        MO.setSubReg(0);
+        DestPhysReg = TRI->getSubReg(DestPhysReg, DestSubIdx);
+      }
       MO.setReg(DestPhysReg);  // Assign the output register
     }
 
@@ -1092,13 +1147,30 @@ void RALocal::AllocateBasicBlock(MachineBasicBlock &MBB) {
       }
     }
     
+    // If this instruction is a call, make sure there are no dirty registers. The
+    // call might throw an exception, and the landing pad expects to find all
+    // registers in stack slots.
+    if (TID.isCall())
+      for (unsigned i = 0, e = TRI->getNumRegs(); i != e; ++i) {
+        if (PhysRegsUsed[i] <= 0) continue;
+        unsigned VirtReg = PhysRegsUsed[i];
+        if (!isVirtRegModified(VirtReg)) continue;
+        DEBUG(dbgs() << "  Storing dirty %reg" << VirtReg);
+        storeVirtReg(MBB, MI, VirtReg, i, false);
+        markVirtRegModified(VirtReg, false);
+        DEBUG(dbgs() << " because the call might throw\n");
+      }
+
     // Finally, if this is a noop copy instruction, zap it.  (Except that if
     // the copy is dead, it must be kept to avoid messing up liveness info for
     // the register scavenger.  See pr4100.)
     if (TII->isMoveInstr(*MI, SrcCopyReg, DstCopyReg,
                          SrcCopySubReg, DstCopySubReg) &&
-        SrcCopyReg == DstCopyReg && DeadDefs.empty())
+        SrcCopyReg == DstCopyReg && SrcCopySubReg == DstCopySubReg &&
+        DeadDefs.empty()) {
+      ++NumCopies;
       MBB.erase(MI);
+    }
   }
 
   MachineBasicBlock::iterator MI = MBB.getFirstTerminator();
@@ -1135,6 +1207,7 @@ void RALocal::AllocateBasicBlock(MachineBasicBlock &MBB) {
 bool RALocal::runOnMachineFunction(MachineFunction &Fn) {
   DEBUG(dbgs() << "Machine Function\n");
   MF = &Fn;
+  MRI = &Fn.getRegInfo();
   TM = &Fn.getTarget();
   TRI = TM->getRegisterInfo();
   TII = TM->getInstrInfo();

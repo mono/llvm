@@ -221,6 +221,9 @@ class Instruction {
   // purposes.
   bit isCodeGenOnly = 0;
 
+  // Is this instruction a pseudo instruction for use by the assembler parser.
+  bit isAsmParserOnly = 0;
+
   InstrItinClass Itinerary = NoItinerary;// Execution steps used for scheduling.
 
   string Constraints = "";  // OperandConstraint, e.g. $src = $dst.
@@ -473,13 +476,22 @@ def DBG_VALUE : Instruction {
   let Namespace = "TargetOpcode";
   let isAsCheapAsAMove = 1;
 }
+
+def REG_SEQUENCE : Instruction {
+  let OutOperandList = (outs unknown:$dst);
+  let InOperandList = (ins variable_ops);
+  let AsmString = "";
+  let Namespace = "TargetOpcode";
+  let neverHasSideEffects = 1;
+  let isAsCheapAsAMove = 1;
+}
 }
 
 //===----------------------------------------------------------------------===//
-// AsmParser - This class can be implemented by targets that wish to implement 
+// AsmParser - This class can be implemented by targets that wish to implement
 // .s file parsing.
 //
-// Subtargets can have multiple different assembly parsers (e.g. AT&T vs Intel 
+// Subtargets can have multiple different assembly parsers (e.g. AT&T vs Intel
 // syntax on X86 for example).
 //
 class AsmParser {
@@ -492,9 +504,13 @@ class AsmParser {
   // AsmParser class to call on every matched instruction. This can be used to
   // perform target specific instruction post-processing.
   string AsmParserInstCleanup  = "";
- 
+
+  // MatchInstructionName - The name of the instruction matching function to
+  // generate.
+  string MatchInstructionName  = "MatchInstruction";
+
   // Variant - AsmParsers can be of multiple different variants.  Variants are
-  // used to support targets that need to parser multiple formats for the 
+  // used to support targets that need to parser multiple formats for the
   // assembly language.
   int Variant = 0;
 

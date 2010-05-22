@@ -1074,6 +1074,7 @@ bool LLParser::ParseOptionalVisibility(unsigned &Res) {
 ///   ::= 'coldcc'
 ///   ::= 'x86_stdcallcc'
 ///   ::= 'x86_fastcallcc'
+///   ::= 'x86_thiscallcc'
 ///   ::= 'arm_apcscc'
 ///   ::= 'arm_aapcscc'
 ///   ::= 'arm_aapcs_vfpcc'
@@ -1088,6 +1089,7 @@ bool LLParser::ParseOptionalCallingConv(CallingConv::ID &CC) {
   case lltok::kw_coldcc:         CC = CallingConv::Cold; break;
   case lltok::kw_x86_stdcallcc:  CC = CallingConv::X86_StdCall; break;
   case lltok::kw_x86_fastcallcc: CC = CallingConv::X86_FastCall; break;
+  case lltok::kw_x86_thiscallcc: CC = CallingConv::X86_ThisCall; break;
   case lltok::kw_arm_apcscc:     CC = CallingConv::ARM_APCS; break;
   case lltok::kw_arm_aapcscc:    CC = CallingConv::ARM_AAPCS; break;
   case lltok::kw_arm_aapcs_vfpcc:CC = CallingConv::ARM_AAPCS_VFP; break;
@@ -2351,11 +2353,28 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
       if (NSW)
         return Error(ModifierLoc, "nsw only applies to integer operations");
     }
-    // API compatibility: Accept either integer or floating-point types with
-    // add, sub, and mul.
-    if (!Val0->getType()->isIntOrIntVectorTy() &&
-        !Val0->getType()->isFPOrFPVectorTy())
-      return Error(ID.Loc,"constexpr requires integer, fp, or vector operands");
+    // Check that the type is valid for the operator.
+    switch (Opc) {
+    case Instruction::Add:
+    case Instruction::Sub:
+    case Instruction::Mul:
+    case Instruction::UDiv:
+    case Instruction::SDiv:
+    case Instruction::URem:
+    case Instruction::SRem:
+      if (!Val0->getType()->isIntOrIntVectorTy())
+        return Error(ID.Loc, "constexpr requires integer operands");
+      break;
+    case Instruction::FAdd:
+    case Instruction::FSub:
+    case Instruction::FMul:
+    case Instruction::FDiv:
+    case Instruction::FRem:
+      if (!Val0->getType()->isFPOrFPVectorTy())
+        return Error(ID.Loc, "constexpr requires fp operands");
+      break;
+    default: llvm_unreachable("Unknown binary operator!");
+    }
     unsigned Flags = 0;
     if (NUW)   Flags |= OverflowingBinaryOperator::NoUnsignedWrap;
     if (NSW)   Flags |= OverflowingBinaryOperator::NoSignedWrap;
@@ -3000,8 +3019,7 @@ int LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
       if (EatIfPresent(lltok::kw_nuw))
         NUW = true;
     }
-    // API compatibility: Accept either integer or floating-point types.
-    bool Result = ParseArithmetic(Inst, PFS, KeywordVal, 0);
+    bool Result = ParseArithmetic(Inst, PFS, KeywordVal, 1);
     if (!Result) {
       if (!Inst->getType()->isIntOrIntVectorTy()) {
         if (NUW)

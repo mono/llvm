@@ -31,7 +31,7 @@ class MCInst;
 class MCStreamer;
 class MCSymbol;
 
-class VISIBILITY_HIDDEN X86AsmPrinter : public AsmPrinter {
+class LLVM_LIBRARY_VISIBILITY X86AsmPrinter : public AsmPrinter {
   const X86Subtarget *Subtarget;
  public:
   explicit X86AsmPrinter(TargetMachine &TM, MCStreamer &Streamer)
@@ -80,6 +80,8 @@ class VISIBILITY_HIDDEN X86AsmPrinter : public AsmPrinter {
   bool runOnMachineFunction(MachineFunction &F);
   
   void PrintDebugValueComment(const MachineInstr *MI, raw_ostream &OS);
+
+  MachineLocation getDebugValueLocation(const MachineInstr *MI) const;
 };
 
 } // end namespace llvm

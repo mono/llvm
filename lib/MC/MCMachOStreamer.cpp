@@ -16,6 +16,7 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCMachOSymbolFlags.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetAsmBackend.h"
@@ -25,29 +26,13 @@ using namespace llvm;
 namespace {
 
 class MCMachOStreamer : public MCStreamer {
-  /// SymbolFlags - We store the value for the 'desc' symbol field in the lowest
-  /// 16 bits of the implementation defined flags.
-  enum SymbolFlags { // See <mach-o/nlist.h>.
-    SF_DescFlagsMask                        = 0xFFFF,
-
-    // Reference type flags.
-    SF_ReferenceTypeMask                    = 0x0007,
-    SF_ReferenceTypeUndefinedNonLazy        = 0x0000,
-    SF_ReferenceTypeUndefinedLazy           = 0x0001,
-    SF_ReferenceTypeDefined                 = 0x0002,
-    SF_ReferenceTypePrivateDefined          = 0x0003,
-    SF_ReferenceTypePrivateUndefinedNonLazy = 0x0004,
-    SF_ReferenceTypePrivateUndefinedLazy    = 0x0005,
-
-    // Other 'desc' flags.
-    SF_NoDeadStrip                          = 0x0020,
-    SF_WeakReference                        = 0x0040,
-    SF_WeakDefinition                       = 0x0080
-  };
 
 private:
   MCAssembler Assembler;
   MCSectionData *CurSectionData;
+
+  /// Track the current atom for each section.
+  DenseMap<const MCSectionData*, MCSymbolData*> CurrentAtomMap;
 
 private:
   MCFragment *getCurrentFragment() const {
@@ -64,8 +49,15 @@ private:
   MCDataFragment *getOrCreateDataFragment() const {
     MCDataFragment *F = dyn_cast_or_null<MCDataFragment>(getCurrentFragment());
     if (!F)
-      F = new MCDataFragment(CurSectionData);
+      F = createDataFragment();
     return F;
+  }
+
+  /// Create a new data fragment in the current section.
+  MCDataFragment *createDataFragment() const {
+    MCDataFragment *DF = new MCDataFragment(CurSectionData);
+    DF->setAtom(CurrentAtomMap.lookup(CurSectionData));
+    return DF;
   }
 
 public:
@@ -114,6 +106,18 @@ public:
   virtual void EmitSymbolDesc(MCSymbol *Symbol, unsigned DescValue);
   virtual void EmitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                                 unsigned ByteAlignment);
+  virtual void BeginCOFFSymbolDef(const MCSymbol *Symbol) {
+    assert(0 && "macho doesn't support this directive");
+  }
+  virtual void EmitCOFFSymbolStorageClass(int StorageClass) {
+    assert(0 && "macho doesn't support this directive");
+  }
+  virtual void EmitCOFFSymbolType(int Type) {
+    assert(0 && "macho doesn't support this directive");
+  }
+  virtual void EndCOFFSymbolDef() {
+    assert(0 && "macho doesn't support this directive");
+  }
   virtual void EmitELFSize(MCSymbol *Symbol, const MCExpr *Value) {
     assert(0 && "macho doesn't support this directive");
   }
@@ -122,6 +126,8 @@ public:
   }
   virtual void EmitZerofill(const MCSection *Section, MCSymbol *Symbol = 0,
                             unsigned Size = 0, unsigned ByteAlignment = 0);
+  virtual void EmitTBSSSymbol(const MCSection *Section, MCSymbol *Symbol,
+                              uint64_t Size, unsigned ByteAlignment = 0);
   virtual void EmitBytes(StringRef Data, unsigned AddrSpace);
   virtual void EmitValue(const MCExpr *Value, unsigned Size,unsigned AddrSpace);
   virtual void EmitGPRel32Value(const MCExpr *Value) {
@@ -136,10 +142,10 @@ public:
                                  unsigned char Value = 0);
   
   virtual void EmitFileDirective(StringRef Filename) {
-    errs() << "FIXME: MCMachoStreamer:EmitFileDirective not implemented\n";
+    report_fatal_error("unsupported directive: '.file'");
   }
   virtual void EmitDwarfFileDirective(unsigned FileNo, StringRef Filename) {
-    errs() << "FIXME: MCMachoStreamer:EmitDwarfFileDirective not implemented\n";
+    report_fatal_error("unsupported directive: '.file'");
   }
   
   virtual void EmitInstruction(const MCInst &Inst);
@@ -162,19 +168,38 @@ void MCMachOStreamer::SwitchSection(const MCSection *Section) {
 
 void MCMachOStreamer::EmitLabel(MCSymbol *Symbol) {
   assert(Symbol->isUndefined() && "Cannot define a symbol twice!");
+  assert(!Symbol->isVariable() && "Cannot emit a variable symbol!");
+  assert(CurSection && "Cannot emit before setting section!");
+
+  MCSymbolData &SD = Assembler.getOrCreateSymbolData(*Symbol);
+
+  // Update the current atom map, if necessary.
+  bool MustCreateFragment = false;
+  if (Assembler.isSymbolLinkerVisible(&SD)) {
+    CurrentAtomMap[CurSectionData] = &SD;
+
+    // We have to create a new fragment, fragments cannot span atoms.
+    MustCreateFragment = true;
+  }
 
   // FIXME: This is wasteful, we don't necessarily need to create a data
   // fragment. Instead, we should mark the symbol as pointing into the data
   // fragment if it exists, otherwise we should just queue the label and set its
   // fragment pointer when we emit the next fragment.
-  MCDataFragment *F = getOrCreateDataFragment();
-  MCSymbolData &SD = Assembler.getOrCreateSymbolData(*Symbol);
+  MCDataFragment *F =
+    MustCreateFragment ? createDataFragment() : getOrCreateDataFragment();
   assert(!SD.getFragment() && "Unexpected fragment on symbol data!");
   SD.setFragment(F);
   SD.setOffset(F->getContents().size());
 
-  // This causes the reference type and weak reference flags to be cleared.
-  SD.setFlags(SD.getFlags() & ~(SF_WeakReference | SF_ReferenceTypeMask));
+  // This causes the reference type flag to be cleared. Darwin 'as' was "trying"
+  // to clear the weak reference and weak definition bits too, but the
+  // implementation was buggy. For now we just try to match 'as', for
+  // diffability.
+  //
+  // FIXME: Cleanup this code, these bits should be emitted based on semantic
+  // properties, not on the order of definition, etc.
+  SD.setFlags(SD.getFlags() & ~SF_ReferenceTypeMask);
   
   Symbol->setSection(*CurSection);
 }
@@ -190,13 +215,9 @@ void MCMachOStreamer::EmitAssemblerFlag(MCAssemblerFlag Flag) {
 }
 
 void MCMachOStreamer::EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
-  // Only absolute symbols can be redefined.
-  assert((Symbol->isUndefined() || Symbol->isAbsolute()) &&
-         "Cannot define a symbol twice!");
-
   // FIXME: Lift context changes into super class.
-  // FIXME: Set associated section.
-  Symbol->setValue(AddValueSymbols(Value));
+  Assembler.getOrCreateSymbolData(*Symbol);
+  Symbol->setVariableValue(AddValueSymbols(Value));
 }
 
 void MCMachOStreamer::EmitSymbolAttribute(MCSymbol *Symbol,
@@ -243,6 +264,13 @@ void MCMachOStreamer::EmitSymbolAttribute(MCSymbol *Symbol,
 
   case MCSA_Global:
     SD.setExternal(true);
+    // This effectively clears the undefined lazy bit, in Darwin 'as', although
+    // it isn't very consistent because it implements this as part of symbol
+    // lookup.
+    //
+    // FIXME: Cleanup this code, these bits should be emitted based on semantic
+    // properties, not on the order of definition, etc.
+    SD.setFlags(SD.getFlags() & ~SF_ReferenceTypeUndefinedLazy);
     break;
 
   case MCSA_LazyReference:
@@ -309,14 +337,28 @@ void MCMachOStreamer::EmitZerofill(const MCSection *Section, MCSymbol *Symbol,
 
   MCSymbolData &SD = Assembler.getOrCreateSymbolData(*Symbol);
 
-  MCFragment *F = new MCZeroFillFragment(Size, ByteAlignment, &SectData);
+  // Emit an align fragment if necessary.
+  if (ByteAlignment != 1)
+    new MCAlignFragment(ByteAlignment, 0, 0, ByteAlignment, &SectData);
+
+  MCFragment *F = new MCFillFragment(0, 0, Size, &SectData);
   SD.setFragment(F);
+  if (Assembler.isSymbolLinkerVisible(&SD))
+    F->setAtom(&SD);
 
   Symbol->setSection(*Section);
 
   // Update the maximum alignment on the zero fill section if necessary.
   if (ByteAlignment > SectData.getAlignment())
     SectData.setAlignment(ByteAlignment);
+}
+
+// This should always be called with the thread local bss section.  Like the
+// .zerofill directive this doesn't actually switch sections on us.
+void MCMachOStreamer::EmitTBSSSymbol(const MCSection *Section, MCSymbol *Symbol,
+                                     uint64_t Size, unsigned ByteAlignment) {
+  EmitZerofill(Section, Symbol, Size, ByteAlignment);
+  return;
 }
 
 void MCMachOStreamer::EmitBytes(StringRef Data, unsigned AddrSpace) {
@@ -345,8 +387,9 @@ void MCMachOStreamer::EmitValueToAlignment(unsigned ByteAlignment,
                                            unsigned MaxBytesToEmit) {
   if (MaxBytesToEmit == 0)
     MaxBytesToEmit = ByteAlignment;
-  new MCAlignFragment(ByteAlignment, Value, ValueSize, MaxBytesToEmit,
-                      false /* EmitNops */, CurSectionData);
+  MCFragment *F = new MCAlignFragment(ByteAlignment, Value, ValueSize,
+                                      MaxBytesToEmit, CurSectionData);
+  F->setAtom(CurrentAtomMap.lookup(CurSectionData));
 
   // Update the maximum alignment on the current section if necessary.
   if (ByteAlignment > CurSectionData->getAlignment())
@@ -357,8 +400,10 @@ void MCMachOStreamer::EmitCodeAlignment(unsigned ByteAlignment,
                                         unsigned MaxBytesToEmit) {
   if (MaxBytesToEmit == 0)
     MaxBytesToEmit = ByteAlignment;
-  new MCAlignFragment(ByteAlignment, 0, 1, MaxBytesToEmit,
-                      true /* EmitNops */, CurSectionData);
+  MCAlignFragment *F = new MCAlignFragment(ByteAlignment, 0, 1, MaxBytesToEmit,
+                                           CurSectionData);
+  F->setEmitNops(true);
+  F->setAtom(CurrentAtomMap.lookup(CurSectionData));
 
   // Update the maximum alignment on the current section if necessary.
   if (ByteAlignment > CurSectionData->getAlignment())
@@ -367,12 +412,13 @@ void MCMachOStreamer::EmitCodeAlignment(unsigned ByteAlignment,
 
 void MCMachOStreamer::EmitValueToOffset(const MCExpr *Offset,
                                         unsigned char Value) {
-  new MCOrgFragment(*Offset, Value, CurSectionData);
+  MCFragment *F = new MCOrgFragment(*Offset, Value, CurSectionData);
+  F->setAtom(CurrentAtomMap.lookup(CurSectionData));
 }
 
 void MCMachOStreamer::EmitInstruction(const MCInst &Inst) {
   // Scan for values.
-  for (unsigned i = 0; i != Inst.getNumOperands(); ++i)
+  for (unsigned i = Inst.getNumOperands(); i--; )
     if (Inst.getOperand(i).isExpr())
       AddValueSymbols(Inst.getOperand(i).getExpr());
 
@@ -410,6 +456,7 @@ void MCMachOStreamer::EmitInstruction(const MCInst &Inst) {
   // are going to often know that we can never fully resolve a fixup.
   if (Assembler.getBackend().MayNeedRelaxation(Inst, AsmFixups)) {
     MCInstFragment *IF = new MCInstFragment(Inst, CurSectionData);
+    IF->setAtom(CurrentAtomMap.lookup(CurSectionData));
 
     // Add the fixups and data.
     //

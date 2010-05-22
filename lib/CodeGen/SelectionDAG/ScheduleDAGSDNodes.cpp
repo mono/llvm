@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtarget.h"
 #include "llvm/ADT/DenseMap.h"
@@ -44,6 +45,24 @@ void ScheduleDAGSDNodes::Run(SelectionDAG *dag, MachineBasicBlock *bb,
   ScheduleDAG::Run(bb, insertPos);
 }
 
+/// NewSUnit - Creates a new SUnit and return a ptr to it.
+///
+SUnit *ScheduleDAGSDNodes::NewSUnit(SDNode *N) {
+#ifndef NDEBUG
+  const SUnit *Addr = 0;
+  if (!SUnits.empty())
+    Addr = &SUnits[0];
+#endif
+  SUnits.push_back(SUnit(N, (unsigned)SUnits.size()));
+  assert((Addr == 0 || Addr == &SUnits[0]) &&
+         "SUnits std::vector reallocated on the fly!");
+  SUnits.back().OrigNode = &SUnits.back();
+  SUnit *SU = &SUnits.back();
+  const TargetLowering &TLI = DAG->getTargetLoweringInfo();
+  SU->SchedulingPref = TLI.getSchedulingPreference(N);
+  return SU;
+}
+
 SUnit *ScheduleDAGSDNodes::Clone(SUnit *Old) {
   SUnit *SU = NewSUnit(Old->getNode());
   SU->OrigNode = Old->OrigNode;
@@ -52,6 +71,7 @@ SUnit *ScheduleDAGSDNodes::Clone(SUnit *Old) {
   SU->isCommutable = Old->isCommutable;
   SU->hasPhysRegDefs = Old->hasPhysRegDefs;
   SU->hasPhysRegClobbers = Old->hasPhysRegClobbers;
+  SU->SchedulingPref = Old->SchedulingPref;
   Old->isCloned = true;
   return SU;
 }
@@ -217,9 +237,6 @@ void ScheduleDAGSDNodes::BuildSchedUnits() {
   // This is a temporary workaround.
   SUnits.reserve(NumNodes * 2);
   
-  // Check to see if the scheduler cares about latencies.
-  bool UnitLatencies = ForceUnitLatencies();
-
   // Add all nodes in depth first order.
   SmallVector<SDNode*, 64> Worklist;
   SmallPtrSet<SDNode*, 64> Visited;
@@ -282,10 +299,7 @@ void ScheduleDAGSDNodes::BuildSchedUnits() {
     N->setNodeId(NodeSUnit->NodeNum);
 
     // Assign the Latency field of NodeSUnit using target-provided information.
-    if (UnitLatencies)
-      NodeSUnit->Latency = 1;
-    else
-      ComputeLatency(NodeSUnit);
+    ComputeLatency(NodeSUnit);
   }
 }
 
@@ -353,7 +367,7 @@ void ScheduleDAGSDNodes::AddSchedEdges() {
         const SDep& dep = SDep(OpSU, isChain ? SDep::Order : SDep::Data,
                                OpSU->Latency, PhysReg);
         if (!isChain && !UnitLatencies) {
-          ComputeOperandLatency(OpSU, SU, const_cast<SDep &>(dep));
+          ComputeOperandLatency(OpN, N, i, const_cast<SDep &>(dep));
           ST.adjustSchedDependency(OpSU, SU, const_cast<SDep &>(dep));
         }
 
@@ -377,7 +391,17 @@ void ScheduleDAGSDNodes::BuildSchedGraph(AliasAnalysis *AA) {
 }
 
 void ScheduleDAGSDNodes::ComputeLatency(SUnit *SU) {
+  // Check to see if the scheduler cares about latencies.
+  if (ForceUnitLatencies()) {
+    SU->Latency = 1;
+    return;
+  }
+
   const InstrItineraryData &InstrItins = TM.getInstrItineraryData();
+  if (InstrItins.isEmpty()) {
+    SU->Latency = 1;
+    return;
+  }
   
   // Compute the latency for the node.  We use the sum of the latencies for
   // all nodes flagged together into this SUnit.
@@ -387,6 +411,37 @@ void ScheduleDAGSDNodes::ComputeLatency(SUnit *SU) {
       SU->Latency += InstrItins.
         getStageLatency(TII->get(N->getMachineOpcode()).getSchedClass());
     }
+}
+
+void ScheduleDAGSDNodes::ComputeOperandLatency(SDNode *Def, SDNode *Use,
+                                               unsigned OpIdx, SDep& dep) const{
+  // Check to see if the scheduler cares about latencies.
+  if (ForceUnitLatencies())
+    return;
+
+  const InstrItineraryData &InstrItins = TM.getInstrItineraryData();
+  if (InstrItins.isEmpty())
+    return;
+  
+  if (dep.getKind() != SDep::Data)
+    return;
+
+  unsigned DefIdx = Use->getOperand(OpIdx).getResNo();
+  if (Def->isMachineOpcode() && Use->isMachineOpcode()) {
+    const TargetInstrDesc &II = TII->get(Def->getMachineOpcode());
+    if (DefIdx >= II.getNumDefs())
+      return;
+    int DefCycle = InstrItins.getOperandCycle(II.getSchedClass(), DefIdx);
+    if (DefCycle < 0)
+      return;
+    const unsigned UseClass = TII->get(Use->getMachineOpcode()).getSchedClass();
+    int UseCycle = InstrItins.getOperandCycle(UseClass, OpIdx);
+    if (UseCycle >= 0) {
+      int Latency = DefCycle - UseCycle + 1;
+      if (Latency >= 0)
+        dep.setLatency(Latency);
+    }
+  }
 }
 
 void ScheduleDAGSDNodes::dumpNode(const SUnit *SU) const {
@@ -422,7 +477,6 @@ namespace {
 // instructions in the right order.
 static void ProcessSourceNode(SDNode *N, SelectionDAG *DAG,
                            InstrEmitter &Emitter,
-                           DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM,
                            DenseMap<SDValue, unsigned> &VRBaseMap,
                     SmallVector<std::pair<unsigned, MachineInstr*>, 32> &Orders,
                            SmallSet<unsigned, 8> &Seen) {
@@ -449,7 +503,7 @@ static void ProcessSourceNode(SDNode *N, SelectionDAG *DAG,
       continue;
     unsigned DVOrder = DVs[i]->getOrder();
     if (DVOrder == ++Order) {
-      MachineInstr *DbgMI = Emitter.EmitDbgValue(DVs[i], VRBaseMap, EM);
+      MachineInstr *DbgMI = Emitter.EmitDbgValue(DVs[i], VRBaseMap);
       if (DbgMI) {
         Orders.push_back(std::make_pair(DVOrder, DbgMI));
         BB->insert(InsertPos, DbgMI);
@@ -461,8 +515,7 @@ static void ProcessSourceNode(SDNode *N, SelectionDAG *DAG,
 
 
 /// EmitSchedule - Emit the machine code in scheduled order.
-MachineBasicBlock *ScheduleDAGSDNodes::
-EmitSchedule(DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) {
+MachineBasicBlock *ScheduleDAGSDNodes::EmitSchedule() {
   InstrEmitter Emitter(BB, InsertPos);
   DenseMap<SDValue, unsigned> VRBaseMap;
   DenseMap<SUnit*, unsigned> CopyVRBaseMap;
@@ -475,7 +528,7 @@ EmitSchedule(DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) {
     SDDbgInfo::DbgIterator PDI = DAG->ByvalParmDbgBegin();
     SDDbgInfo::DbgIterator PDE = DAG->ByvalParmDbgEnd();
     for (; PDI != PDE; ++PDI) {
-      MachineInstr *DbgMI= Emitter.EmitDbgValue(*PDI, VRBaseMap, EM);
+      MachineInstr *DbgMI= Emitter.EmitDbgValue(*PDI, VRBaseMap);
       if (DbgMI)
         BB->insert(BB->end(), DbgMI);
     }
@@ -504,17 +557,17 @@ EmitSchedule(DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) {
     while (!FlaggedNodes.empty()) {
       SDNode *N = FlaggedNodes.back();
       Emitter.EmitNode(FlaggedNodes.back(), SU->OrigNode != SU, SU->isCloned,
-                       VRBaseMap, EM);
+                       VRBaseMap);
       // Remember the source order of the inserted instruction.
       if (HasDbg)
-        ProcessSourceNode(N, DAG, Emitter, EM, VRBaseMap, Orders, Seen);
+        ProcessSourceNode(N, DAG, Emitter, VRBaseMap, Orders, Seen);
       FlaggedNodes.pop_back();
     }
     Emitter.EmitNode(SU->getNode(), SU->OrigNode != SU, SU->isCloned,
-                     VRBaseMap, EM);
+                     VRBaseMap);
     // Remember the source order of the inserted instruction.
     if (HasDbg)
-      ProcessSourceNode(SU->getNode(), DAG, Emitter, EM, VRBaseMap, Orders,
+      ProcessSourceNode(SU->getNode(), DAG, Emitter, VRBaseMap, Orders,
                         Seen);
   }
 
@@ -553,7 +606,7 @@ EmitSchedule(DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) {
 #endif
         if ((*DI)->isInvalidated())
           continue;
-        MachineInstr *DbgMI = Emitter.EmitDbgValue(*DI, VRBaseMap, EM);
+        MachineInstr *DbgMI = Emitter.EmitDbgValue(*DI, VRBaseMap);
         if (DbgMI) {
           if (!LastOrder)
             // Insert to start of the BB (after PHIs).
@@ -573,7 +626,7 @@ EmitSchedule(DenseMap<MachineBasicBlock*, MachineBasicBlock*> *EM) {
       MachineBasicBlock *InsertBB = Emitter.getBlock();
       MachineBasicBlock::iterator Pos= Emitter.getBlock()->getFirstTerminator();
       if (!(*DI)->isInvalidated()) {
-        MachineInstr *DbgMI= Emitter.EmitDbgValue(*DI, VRBaseMap, EM);
+        MachineInstr *DbgMI= Emitter.EmitDbgValue(*DI, VRBaseMap);
         if (DbgMI)
           InsertBB->insert(Pos, DbgMI);
       }

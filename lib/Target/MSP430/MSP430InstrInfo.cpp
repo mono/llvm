@@ -32,7 +32,8 @@ MSP430InstrInfo::MSP430InstrInfo(MSP430TargetMachine &tm)
 void MSP430InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
                                           MachineBasicBlock::iterator MI,
                                     unsigned SrcReg, bool isKill, int FrameIdx,
-                                    const TargetRegisterClass *RC) const {
+                                          const TargetRegisterClass *RC,
+                                          const TargetRegisterInfo *TRI) const {
   DebugLoc DL;
   if (MI != MBB.end()) DL = MI->getDebugLoc();
   MachineFunction &MF = *MBB.getParent();
@@ -59,7 +60,8 @@ void MSP430InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
 void MSP430InstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
                                            MachineBasicBlock::iterator MI,
                                            unsigned DestReg, int FrameIdx,
-                                           const TargetRegisterClass *RC) const{
+                                           const TargetRegisterClass *RC,
+                                           const TargetRegisterInfo *TRI) const{
   DebugLoc DL;
   if (MI != MBB.end()) DL = MI->getDebugLoc();
   MachineFunction &MF = *MBB.getParent();
@@ -85,10 +87,8 @@ bool MSP430InstrInfo::copyRegToReg(MachineBasicBlock &MBB,
                                    MachineBasicBlock::iterator I,
                                    unsigned DestReg, unsigned SrcReg,
                                    const TargetRegisterClass *DestRC,
-                                   const TargetRegisterClass *SrcRC) const {
-  DebugLoc DL;
-  if (I != MBB.end()) DL = I->getDebugLoc();
-
+                                   const TargetRegisterClass *SrcRC,
+                                   DebugLoc DL) const {
   if (DestRC == SrcRC) {
     unsigned Opc;
     if (DestRC == &MSP430::GR16RegClass) {
@@ -176,7 +176,9 @@ unsigned MSP430InstrInfo::RemoveBranch(MachineBasicBlock &MBB) const {
     if (I->isDebugValue())
       continue;
     if (I->getOpcode() != MSP430::JMP &&
-        I->getOpcode() != MSP430::JCC)
+        I->getOpcode() != MSP430::JCC &&
+        I->getOpcode() != MSP430::Br &&
+        I->getOpcode() != MSP430::Bm)
       break;
     // Remove the branch.
     I->eraseFromParent();
@@ -254,6 +256,11 @@ bool MSP430InstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,
     // A terminator that isn't a branch can't easily be handled
     // by this analysis.
     if (!I->getDesc().isBranch())
+      return true;
+
+    // Cannot handle indirect branches.
+    if (I->getOpcode() == MSP430::Br ||
+        I->getOpcode() == MSP430::Bm)
       return true;
 
     // Handle unconditional branches.

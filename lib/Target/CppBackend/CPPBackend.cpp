@@ -1038,6 +1038,11 @@ namespace {
       Out << ");";
       nl(Out);
     }
+    if (GV->isThreadLocal()) {
+      printCppName(GV);
+      Out << "->setThreadLocal(true);";
+      nl(Out);
+    }
     if (is_inline) {
       out(); Out << "}"; nl(Out);
     }
@@ -1082,8 +1087,9 @@ namespace {
 
     // Before we emit this instruction, we need to take care of generating any
     // forward references. So, we get the names of all the operands in advance
-    std::string* opNames = new std::string[I->getNumOperands()];
-    for (unsigned i = 0; i < I->getNumOperands(); i++) {
+    const unsigned Ops(I->getNumOperands());
+    std::string* opNames = new std::string[Ops];
+    for (unsigned i = 0; i < Ops; i++) {
       opNames[i] = getOpName(I->getOperand(i));
     }
 
@@ -1144,15 +1150,15 @@ namespace {
       const InvokeInst* inv = cast<InvokeInst>(I);
       Out << "std::vector<Value*> " << iName << "_params;";
       nl(Out);
-      for (unsigned i = 3; i < inv->getNumOperands(); ++i) {
+      for (unsigned i = 0; i < inv->getNumOperands() - 3; ++i) {
         Out << iName << "_params.push_back("
             << opNames[i] << ");";
         nl(Out);
       }
       Out << "InvokeInst *" << iName << " = InvokeInst::Create("
-          << opNames[0] << ", "
-          << opNames[1] << ", "
-          << opNames[2] << ", "
+          << opNames[Ops - 3] << ", "
+          << opNames[Ops - 2] << ", "
+          << opNames[Ops - 1] << ", "
           << iName << "_params.begin(), " << iName << "_params.end(), \"";
       printEscapedString(inv->getName());
       Out << "\", " << bbname << ");";
@@ -2006,11 +2012,11 @@ char CppWriter::ID = 0;
 //                       External Interface declaration
 //===----------------------------------------------------------------------===//
 
-bool CPPTargetMachine::addPassesToEmitWholeFile(PassManager &PM,
-                                                formatted_raw_ostream &o,
-                                                CodeGenFileType FileType,
-                                                CodeGenOpt::Level OptLevel,
-                                                bool DisableVerify) {
+bool CPPTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
+                                           formatted_raw_ostream &o,
+                                           CodeGenFileType FileType,
+                                           CodeGenOpt::Level OptLevel,
+                                           bool DisableVerify) {
   if (FileType != TargetMachine::CGFT_AssemblyFile) return true;
   PM.add(new CppWriter(o));
   return false;

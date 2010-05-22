@@ -182,7 +182,8 @@ void StackSlotColoring::ScanForSpillSlotRefs(MachineFunction &MF) {
         if (!LS->hasInterval(FI))
           continue;
         LiveInterval &li = LS->getInterval(FI);
-        li.weight += LiveIntervals::getSpillWeight(false, true, loopDepth);
+        if (!MI->isDebugValue())
+          li.weight += LiveIntervals::getSpillWeight(false, true, loopDepth);
         SSRefs[FI].push_back(MI);
       }
     }
@@ -606,7 +607,8 @@ StackSlotColoring::UnfoldAndRewriteInstruction(MachineInstr *MI, int OldFI,
       DEBUG(MI->dump());
       ++NumLoadElim;
     } else {
-      TII->copyRegToReg(*MBB, MI, DstReg, Reg, RC, RC);
+      TII->copyRegToReg(*MBB, MI, DstReg, Reg, RC, RC,
+                        MI->getDebugLoc());
       ++NumRegRepl;
     }
 
@@ -622,7 +624,8 @@ StackSlotColoring::UnfoldAndRewriteInstruction(MachineInstr *MI, int OldFI,
       DEBUG(MI->dump());
       ++NumStoreElim;
     } else {
-      TII->copyRegToReg(*MBB, MI, Reg, SrcReg, RC, RC);
+      TII->copyRegToReg(*MBB, MI, Reg, SrcReg, RC, RC,
+                        MI->getDebugLoc());
       ++NumRegRepl;
     }
 

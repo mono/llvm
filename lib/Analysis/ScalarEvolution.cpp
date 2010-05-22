@@ -761,7 +761,7 @@ static const SCEV *BinomialCoefficient(const SCEV *It, unsigned K,
                                                       CalculationBits);
   const SCEV *Dividend = SE.getTruncateOrZeroExtend(It, CalculationTy);
   for (unsigned i = 1; i != K; ++i) {
-    const SCEV *S = SE.getMinusSCEV(It, SE.getIntegerSCEV(i, It->getType()));
+    const SCEV *S = SE.getMinusSCEV(It, SE.getConstant(It->getType(), i));
     Dividend = SE.getMulExpr(Dividend,
                              SE.getTruncateOrZeroExtend(S, CalculationTy));
   }
@@ -967,8 +967,8 @@ const SCEV *ScalarEvolution::getZeroExtendExpr(const SCEV *Op,
         } else if (isKnownNegative(Step)) {
           const SCEV *N = getConstant(APInt::getMaxValue(BitWidth) -
                                       getSignedRange(Step).getSignedMin());
-          if (isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_UGT, AR, N) &&
-              (isLoopEntryGuardedByCond(L, ICmpInst::ICMP_UGT, Start, N) ||
+          if (isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_UGT, AR, N) ||
+              (isLoopEntryGuardedByCond(L, ICmpInst::ICMP_UGT, Start, N) &&
                isLoopBackedgeGuardedByCond(L, ICmpInst::ICMP_UGT,
                                            AR->getPostIncExpr(*this), N)))
             // Return the expression with the addrec on the outside.
@@ -1326,7 +1326,7 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
     if (Ops[i] == Ops[i+1]) {      //  X + Y + Y  -->  X + Y*2
       // Found a match, merge the two values into a multiply, and add any
       // remaining values to the result.
-      const SCEV *Two = getIntegerSCEV(2, Ty);
+      const SCEV *Two = getConstant(Ty, 2);
       const SCEV *Mul = getMulExpr(Ops[i], Two);
       if (Ops.size() == 2)
         return Mul;
@@ -1443,7 +1443,7 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
           Ops.push_back(getMulExpr(getConstant(I->first),
                                    getAddExpr(I->second)));
       if (Ops.empty())
-        return getIntegerSCEV(0, Ty);
+        return getConstant(Ty, 0);
       if (Ops.size() == 1)
         return Ops[0];
       return getAddExpr(Ops);
@@ -1468,7 +1468,7 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
             MulOps.erase(MulOps.begin()+MulOp);
             InnerMul = getMulExpr(MulOps);
           }
-          const SCEV *One = getIntegerSCEV(1, Ty);
+          const SCEV *One = getConstant(Ty, 1);
           const SCEV *AddOne = getAddExpr(InnerMul, One);
           const SCEV *OuterMul = getMulExpr(AddOne, Ops[AddOp]);
           if (Ops.size() == 2) return OuterMul;
@@ -2778,7 +2778,7 @@ const SCEV *ScalarEvolution::createNodeForGEP(GEPOperator *GEP) {
   // Don't attempt to analyze GEPs over unsized objects.
   if (!cast<PointerType>(Base->getType())->getElementType()->isSized())
     return getUnknown(GEP);
-  const SCEV *TotalOffset = getIntegerSCEV(0, IntPtrTy);
+  const SCEV *TotalOffset = getConstant(IntPtrTy, 0);
   gep_type_iterator GTI = gep_type_begin(GEP);
   for (GetElementPtrInst::op_iterator I = next(GEP->op_begin()),
                                       E = GEP->op_end();
@@ -3187,7 +3187,7 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
   else if (ConstantInt *CI = dyn_cast<ConstantInt>(V))
     return getConstant(CI);
   else if (isa<ConstantPointerNull>(V))
-    return getIntegerSCEV(0, V->getType());
+    return getConstant(V->getType(), 0);
   else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(V))
     return GA->mayBeOverridden() ? getUnknown(V) : getSCEV(GA->getAliasee());
   else
@@ -3861,7 +3861,7 @@ ScalarEvolution::ComputeBackedgeTakenCountFromExitCond(const Loop *L,
       return getCouldNotCompute();
     else
       // The backedge is never taken.
-      return getIntegerSCEV(0, CI->getType());
+      return getConstant(CI->getType(), 0);
   }
 
   // If it's not an integer or pointer comparison then compute it the hard way.
@@ -3908,6 +3908,9 @@ ScalarEvolution::ComputeBackedgeTakenCountFromExitCondICmp(const Loop *L,
     Cond = ICmpInst::getSwappedPredicate(Cond);
   }
 
+  // Simplify the operands before analyzing them.
+  (void)SimplifyICmpOperands(Cond, LHS, RHS);
+
   // If we have a comparison of a chrec against a constant, try to use value
   // ranges to answer this query.
   if (const SCEVConstant *RHSC = dyn_cast<SCEVConstant>(RHS))
@@ -3920,57 +3923,6 @@ ScalarEvolution::ComputeBackedgeTakenCountFromExitCondICmp(const Loop *L,
         const SCEV *Ret = AddRec->getNumIterationsInRange(CompRange, *this);
         if (!isa<SCEVCouldNotCompute>(Ret)) return Ret;
       }
-
-  // If possible, canonicalize GE/LE comparisons to GT/LT comparisons, by
-  // adding or subtracting 1 from one of the operands.
-  switch (Cond) {
-  case ICmpInst::ICMP_SLE:
-    if (!getSignedRange(RHS).getSignedMax().isMaxSignedValue()) {
-      RHS = getAddExpr(getConstant(RHS->getType(), 1, true), RHS,
-                       /*HasNUW=*/false, /*HasNSW=*/true);
-      Cond = ICmpInst::ICMP_SLT;
-    } else if (!getSignedRange(LHS).getSignedMin().isMinSignedValue()) {
-      LHS = getAddExpr(getConstant(RHS->getType(), -1, true), LHS,
-                       /*HasNUW=*/false, /*HasNSW=*/true);
-      Cond = ICmpInst::ICMP_SLT;
-    }
-    break;
-  case ICmpInst::ICMP_SGE:
-    if (!getSignedRange(RHS).getSignedMin().isMinSignedValue()) {
-      RHS = getAddExpr(getConstant(RHS->getType(), -1, true), RHS,
-                       /*HasNUW=*/false, /*HasNSW=*/true);
-      Cond = ICmpInst::ICMP_SGT;
-    } else if (!getSignedRange(LHS).getSignedMax().isMaxSignedValue()) {
-      LHS = getAddExpr(getConstant(RHS->getType(), 1, true), LHS,
-                       /*HasNUW=*/false, /*HasNSW=*/true);
-      Cond = ICmpInst::ICMP_SGT;
-    }
-    break;
-  case ICmpInst::ICMP_ULE:
-    if (!getUnsignedRange(RHS).getUnsignedMax().isMaxValue()) {
-      RHS = getAddExpr(getConstant(RHS->getType(), 1, false), RHS,
-                       /*HasNUW=*/true, /*HasNSW=*/false);
-      Cond = ICmpInst::ICMP_ULT;
-    } else if (!getUnsignedRange(LHS).getUnsignedMin().isMinValue()) {
-      LHS = getAddExpr(getConstant(RHS->getType(), -1, false), LHS,
-                       /*HasNUW=*/true, /*HasNSW=*/false);
-      Cond = ICmpInst::ICMP_ULT;
-    }
-    break;
-  case ICmpInst::ICMP_UGE:
-    if (!getUnsignedRange(RHS).getUnsignedMin().isMinValue()) {
-      RHS = getAddExpr(getConstant(RHS->getType(), -1, false), RHS,
-                       /*HasNUW=*/true, /*HasNSW=*/false);
-      Cond = ICmpInst::ICMP_UGT;
-    } else if (!getUnsignedRange(LHS).getUnsignedMax().isMaxValue()) {
-      LHS = getAddExpr(getConstant(RHS->getType(), 1, false), LHS,
-                       /*HasNUW=*/true, /*HasNSW=*/false);
-      Cond = ICmpInst::ICMP_UGT;
-    }
-    break;
-  default:
-    break;
-  }
 
   switch (Cond) {
   case ICmpInst::ICMP_NE: {                     // while (X != Y)
@@ -4735,7 +4687,7 @@ ScalarEvolution::HowFarToNonZero(const SCEV *V, const Loop *L) {
   // already.  If so, the backedge will execute zero times.
   if (const SCEVConstant *C = dyn_cast<SCEVConstant>(V)) {
     if (!C->getValue()->isNullValue())
-      return getIntegerSCEV(0, C->getType());
+      return getConstant(C->getType(), 0);
     return getCouldNotCompute();  // Otherwise it will loop infinitely.
   }
 
@@ -4831,13 +4783,16 @@ bool ScalarEvolution::SimplifyICmpOperands(ICmpInst::Predicate &Pred,
   }
 
   // If we're comparing an addrec with a value which is loop-invariant in the
-  // addrec's loop, put the addrec on the left.
-  if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(RHS))
-    if (LHS->isLoopInvariant(AR->getLoop())) {
+  // addrec's loop, put the addrec on the left. Also make a dominance check,
+  // as both operands could be addrecs loop-invariant in each other's loop.
+  if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(RHS)) {
+    const Loop *L = AR->getLoop();
+    if (LHS->isLoopInvariant(L) && LHS->properlyDominates(L->getHeader(), DT)) {
       std::swap(LHS, RHS);
       Pred = ICmpInst::getSwappedPredicate(Pred);
       Changed = true;
     }
+  }
 
   // If there's a constant operand, canonicalize comparisons with boundary
   // cases, and canonicalize *-or-equal comparisons to regular comparisons.
@@ -4987,6 +4942,65 @@ bool ScalarEvolution::SimplifyICmpOperands(ICmpInst::Predicate &Pred,
       goto trivially_false;
   }
 
+  // If possible, canonicalize GE/LE comparisons to GT/LT comparisons, by
+  // adding or subtracting 1 from one of the operands.
+  switch (Pred) {
+  case ICmpInst::ICMP_SLE:
+    if (!getSignedRange(RHS).getSignedMax().isMaxSignedValue()) {
+      RHS = getAddExpr(getConstant(RHS->getType(), 1, true), RHS,
+                       /*HasNUW=*/false, /*HasNSW=*/true);
+      Pred = ICmpInst::ICMP_SLT;
+      Changed = true;
+    } else if (!getSignedRange(LHS).getSignedMin().isMinSignedValue()) {
+      LHS = getAddExpr(getConstant(RHS->getType(), (uint64_t)-1, true), LHS,
+                       /*HasNUW=*/false, /*HasNSW=*/true);
+      Pred = ICmpInst::ICMP_SLT;
+      Changed = true;
+    }
+    break;
+  case ICmpInst::ICMP_SGE:
+    if (!getSignedRange(RHS).getSignedMin().isMinSignedValue()) {
+      RHS = getAddExpr(getConstant(RHS->getType(), (uint64_t)-1, true), RHS,
+                       /*HasNUW=*/false, /*HasNSW=*/true);
+      Pred = ICmpInst::ICMP_SGT;
+      Changed = true;
+    } else if (!getSignedRange(LHS).getSignedMax().isMaxSignedValue()) {
+      LHS = getAddExpr(getConstant(RHS->getType(), 1, true), LHS,
+                       /*HasNUW=*/false, /*HasNSW=*/true);
+      Pred = ICmpInst::ICMP_SGT;
+      Changed = true;
+    }
+    break;
+  case ICmpInst::ICMP_ULE:
+    if (!getUnsignedRange(RHS).getUnsignedMax().isMaxValue()) {
+      RHS = getAddExpr(getConstant(RHS->getType(), 1, true), RHS,
+                       /*HasNUW=*/true, /*HasNSW=*/false);
+      Pred = ICmpInst::ICMP_ULT;
+      Changed = true;
+    } else if (!getUnsignedRange(LHS).getUnsignedMin().isMinValue()) {
+      LHS = getAddExpr(getConstant(RHS->getType(), (uint64_t)-1, true), LHS,
+                       /*HasNUW=*/true, /*HasNSW=*/false);
+      Pred = ICmpInst::ICMP_ULT;
+      Changed = true;
+    }
+    break;
+  case ICmpInst::ICMP_UGE:
+    if (!getUnsignedRange(RHS).getUnsignedMin().isMinValue()) {
+      RHS = getAddExpr(getConstant(RHS->getType(), (uint64_t)-1, true), RHS,
+                       /*HasNUW=*/true, /*HasNSW=*/false);
+      Pred = ICmpInst::ICMP_UGT;
+      Changed = true;
+    } else if (!getUnsignedRange(LHS).getUnsignedMax().isMaxValue()) {
+      LHS = getAddExpr(getConstant(RHS->getType(), 1, true), LHS,
+                       /*HasNUW=*/true, /*HasNSW=*/false);
+      Pred = ICmpInst::ICMP_UGT;
+      Changed = true;
+    }
+    break;
+  default:
+    break;
+  }
+
   // TODO: More simplifications are possible here.
 
   return Changed;
@@ -5035,15 +5049,13 @@ bool ScalarEvolution::isKnownPredicate(ICmpInst::Predicate Pred,
     if (isLoopEntryGuardedByCond(
           AR->getLoop(), Pred, AR->getStart(), RHS) &&
         isLoopBackedgeGuardedByCond(
-          AR->getLoop(), Pred,
-          getAddExpr(AR, AR->getStepRecurrence(*this)), RHS))
+          AR->getLoop(), Pred, AR->getPostIncExpr(*this), RHS))
       return true;
   if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(RHS))
     if (isLoopEntryGuardedByCond(
           AR->getLoop(), Pred, LHS, AR->getStart()) &&
         isLoopBackedgeGuardedByCond(
-          AR->getLoop(), Pred,
-          LHS, getAddExpr(AR, AR->getStepRecurrence(*this))))
+          AR->getLoop(), Pred, LHS, AR->getPostIncExpr(*this)))
       return true;
 
   // Otherwise see what can be done with known constant ranges.
@@ -5246,10 +5258,10 @@ bool ScalarEvolution::isImpliedCond(Value *CondValue,
   // canonicalized the comparison.
   if (SimplifyICmpOperands(Pred, LHS, RHS))
     if (LHS == RHS)
-      return Pred == ICmpInst::ICMP_EQ;
+      return CmpInst::isTrueWhenEqual(Pred);
   if (SimplifyICmpOperands(FoundPred, FoundLHS, FoundRHS))
     if (FoundLHS == FoundRHS)
-      return Pred == ICmpInst::ICMP_NE;
+      return CmpInst::isFalseWhenEqual(Pred);
 
   // Check to see if we can make the LHS or RHS match.
   if (LHS == FoundRHS || RHS == FoundLHS) {
@@ -5360,7 +5372,7 @@ const SCEV *ScalarEvolution::getBECount(const SCEV *Start,
          "This code doesn't handle negative strides yet!");
 
   const Type *Ty = Start->getType();
-  const SCEV *NegOne = getIntegerSCEV(-1, Ty);
+  const SCEV *NegOne = getConstant(Ty, (uint64_t)-1);
   const SCEV *Diff = getMinusSCEV(End, Start);
   const SCEV *RoundUp = getAddExpr(Step, NegOne);
 
@@ -5416,7 +5428,7 @@ ScalarEvolution::HowManyLessThans(const SCEV *LHS, const SCEV *RHS,
       // behavior, so if wrap does occur, the loop could either terminate or
       // loop infinitely, but in either case, the loop is guaranteed to
       // iterate at least until the iteration where the wrapping occurs.
-      const SCEV *One = getIntegerSCEV(1, Step->getType());
+      const SCEV *One = getConstant(Step->getType(), 1);
       if (isSigned) {
         APInt Max = APInt::getSignedMaxValue(BitWidth);
         if ((Max - getSignedRange(getMinusSCEV(Step, One)).getSignedMax())
@@ -5467,7 +5479,7 @@ ScalarEvolution::HowManyLessThans(const SCEV *LHS, const SCEV *RHS,
     // This allows the subsequent ceiling division of (N+(step-1))/step to
     // compute the correct value.
     const SCEV *StepMinusOne = getMinusSCEV(Step,
-                                            getIntegerSCEV(1, Step->getType()));
+                                            getConstant(Step->getType(), 1));
     MaxEnd = isSigned ?
       getSMinExpr(MaxEnd,
                   getMinusSCEV(getConstant(APInt::getSignedMaxValue(BitWidth)),
@@ -5504,7 +5516,7 @@ const SCEV *SCEVAddRecExpr::getNumIterationsInRange(ConstantRange Range,
   if (const SCEVConstant *SC = dyn_cast<SCEVConstant>(getStart()))
     if (!SC->getValue()->isZero()) {
       SmallVector<const SCEV *, 4> Operands(op_begin(), op_end());
-      Operands[0] = SE.getIntegerSCEV(0, SC->getType());
+      Operands[0] = SE.getConstant(SC->getType(), 0);
       const SCEV *Shifted = SE.getAddRecExpr(Operands, getLoop());
       if (const SCEVAddRecExpr *ShiftedAddRec =
             dyn_cast<SCEVAddRecExpr>(Shifted))
@@ -5528,7 +5540,7 @@ const SCEV *SCEVAddRecExpr::getNumIterationsInRange(ConstantRange Range,
   // iteration exits.
   unsigned BitWidth = SE.getTypeSizeInBits(getType());
   if (!Range.contains(APInt(BitWidth, 0)))
-    return SE.getIntegerSCEV(0, getType());
+    return SE.getConstant(getType(), 0);
 
   if (isAffine()) {
     // If this is an affine expression then we have this situation:
@@ -5753,7 +5765,7 @@ void ScalarEvolution::print(raw_ostream &OS, const Module *) const {
   WriteAsOperand(OS, F, /*PrintType=*/false);
   OS << "\n";
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I)
-    if (isSCEVable(I->getType())) {
+    if (isSCEVable(I->getType()) && !isa<CmpInst>(*I)) {
       OS << *I << '\n';
       OS << "  -->  ";
       const SCEV *SV = SE.getSCEV(&*I);

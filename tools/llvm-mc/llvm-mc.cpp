@@ -75,9 +75,6 @@ FileType("filetype", cl::init(OFT_AssemblyFile),
                   "Emit a native object ('.o') file"),
        clEnumValEnd));
 
-static cl::opt<bool>
-Force("f", cl::desc("Enable binary output on terminals"));
-
 static cl::list<std::string>
 IncludeDirs("I", cl::desc("Directory of include files"),
             cl::value_desc("directory"), cl::Prefix);
@@ -304,7 +301,8 @@ static int AssembleInput(const char *ProgName) {
     assert(FileType == OFT_ObjectFile && "Invalid file type!");
     CE.reset(TheTarget->createCodeEmitter(*TM, Ctx));
     TAB.reset(TheTarget->createAsmBackend(TripleName));
-    Str.reset(createMachOStreamer(Ctx, *TAB, *Out, CE.get(), RelaxAll));
+    Str.reset(TheTarget->createObjectStreamer(TripleName, Ctx, *TAB,
+                                              *Out, CE.get(), RelaxAll));
   }
 
   AsmParser Parser(SrcMgr, Ctx, *Str.get(), *MAI);

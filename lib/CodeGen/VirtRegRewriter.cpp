@@ -907,7 +907,7 @@ unsigned ReuseInfo::GetRegForReload(const TargetRegisterClass *RC,
                         TRI, VRM);
         } else {
           TII->loadRegFromStackSlot(*MBB, InsertLoc, NewPhysReg,
-                                    NewOp.StackSlotOrReMat, AliasRC);
+                                    NewOp.StackSlotOrReMat, AliasRC, TRI);
           MachineInstr *LoadMI = prior(InsertLoc);
           VRM.addSpillSlotUse(NewOp.StackSlotOrReMat, LoadMI);
           // Any stores to this stack slot are not dead anymore.
@@ -1066,6 +1066,7 @@ class LocalRewriter : public VirtRegRewriter {
   VirtRegMap *VRM;
   BitVector AllocatableRegs;
   DenseMap<MachineInstr*, unsigned> DistanceMap;
+  DenseMap<int, SmallVector<MachineInstr*,4> > Slot2DbgValues;
 
   MachineBasicBlock *MBB;       // Basic block currently being processed.
 
@@ -1190,12 +1191,24 @@ bool LocalRewriter::runOnMachineFunction(MachineFunction &MF, VirtRegMap &vrm,
   // Mark unused spill slots.
   MachineFrameInfo *MFI = MF.getFrameInfo();
   int SS = VRM->getLowSpillSlot();
-  if (SS != VirtRegMap::NO_STACK_SLOT)
-    for (int e = VRM->getHighSpillSlot(); SS <= e; ++SS)
+  if (SS != VirtRegMap::NO_STACK_SLOT) {
+    for (int e = VRM->getHighSpillSlot(); SS <= e; ++SS) {
+      SmallVector<MachineInstr*, 4> &DbgValues = Slot2DbgValues[SS];
       if (!VRM->isSpillSlotUsed(SS)) {
         MFI->RemoveStackObject(SS);
+        for (unsigned j = 0, ee = DbgValues.size(); j != ee; ++j) {
+          MachineInstr *DVMI = DbgValues[j];
+          MachineBasicBlock *DVMBB = DVMI->getParent();
+          DEBUG(dbgs() << "Removing debug info referencing FI#" << SS << '\n');
+          VRM->RemoveMachineInstrFromMaps(DVMI);
+          DVMBB->erase(DVMI);
+        }
         ++NumDSS;
       }
+      DbgValues.clear();
+    }
+  }
+  Slot2DbgValues.clear();
 
   return true;
 }
@@ -1252,7 +1265,7 @@ OptimizeByUnfold2(unsigned VirtReg, int SS,
   ComputeReloadLoc(MII, MBB->begin(), PhysReg, TRI, false, SS, TII, MF);
 
   // Load from SS to the spare physical register.
-  TII->loadRegFromStackSlot(*MBB, MII, PhysReg, SS, RC);
+  TII->loadRegFromStackSlot(*MBB, MII, PhysReg, SS, RC, TRI);
   // This invalidates Phys.
   Spills.ClobberPhysReg(PhysReg);
   // Remember it's available.
@@ -1295,7 +1308,7 @@ OptimizeByUnfold2(unsigned VirtReg, int SS,
   } while (FoldsStackSlotModRef(*NextMII, SS, PhysReg, TII, TRI, *VRM));
 
   // Store the value back into SS.
-  TII->storeRegToStackSlot(*MBB, NextMII, PhysReg, true, SS, RC);
+  TII->storeRegToStackSlot(*MBB, NextMII, PhysReg, true, SS, RC, TRI);
   MachineInstr *StoreMI = prior(NextMII);
   VRM->addSpillSlotUse(SS, StoreMI);
   VRM->virtFolded(VirtReg, StoreMI, VirtRegMap::isMod);
@@ -1510,7 +1523,7 @@ CommuteToFoldReload(MachineBasicBlock::iterator &MII,
     VRM->virtFolded(VirtReg, FoldedMI, VirtRegMap::isRef);
     // Insert new def MI and spill MI.
     const TargetRegisterClass* RC = MRI->getRegClass(VirtReg);
-    TII->storeRegToStackSlot(*MBB, &MI, NewReg, true, SS, RC);
+    TII->storeRegToStackSlot(*MBB, &MI, NewReg, true, SS, RC, TRI);
     MII = prior(MII);
     MachineInstr *StoreMI = MII;
     VRM->addSpillSlotUse(SS, StoreMI);
@@ -1553,7 +1566,8 @@ SpillRegToStackSlot(MachineBasicBlock::iterator &MII,
                     std::vector<MachineOperand*> &KillOps) {
 
   MachineBasicBlock::iterator oldNextMII = llvm::next(MII);
-  TII->storeRegToStackSlot(*MBB, llvm::next(MII), PhysReg, true, StackSlot, RC);
+  TII->storeRegToStackSlot(*MBB, llvm::next(MII), PhysReg, true, StackSlot, RC,
+                           TRI);
   MachineInstr *StoreMI = prior(oldNextMII);
   VRM->addSpillSlotUse(StackSlot, StoreMI);
   DEBUG(dbgs() << "Store:\t" << *StoreMI);
@@ -1696,7 +1710,7 @@ bool LocalRewriter::InsertEmergencySpills(MachineInstr *MI) {
     if (UsedSS.count(SS))
       llvm_unreachable("Need to spill more than one physical registers!");
     UsedSS.insert(SS);
-    TII->storeRegToStackSlot(*MBB, MII, PhysReg, true, SS, RC);
+    TII->storeRegToStackSlot(*MBB, MII, PhysReg, true, SS, RC, TRI);
     MachineInstr *StoreMI = prior(MII);
     VRM->addSpillSlotUse(SS, StoreMI);
 
@@ -1705,7 +1719,7 @@ bool LocalRewriter::InsertEmergencySpills(MachineInstr *MI) {
       ComputeReloadLoc(llvm::next(MII), MBB->begin(), PhysReg, TRI, false, SS,
                        TII, *MBB->getParent());
 
-    TII->loadRegFromStackSlot(*MBB, InsertLoc, PhysReg, SS, RC);
+    TII->loadRegFromStackSlot(*MBB, InsertLoc, PhysReg, SS, RC, TRI);
 
     MachineInstr *LoadMI = prior(InsertLoc);
     VRM->addSpillSlotUse(SS, LoadMI);
@@ -1780,7 +1794,8 @@ bool LocalRewriter::InsertRestores(MachineInstr *MI,
         ComputeReloadLoc(MII, MBB->begin(), Phys, TRI, DoReMat, SSorRMId, TII,
                          *MBB->getParent());
 
-      TII->copyRegToReg(*MBB, InsertLoc, Phys, InReg, RC, RC);
+      TII->copyRegToReg(*MBB, InsertLoc, Phys, InReg, RC, RC,
+                        MI->getDebugLoc());
 
       // This invalidates Phys.
       Spills.ClobberPhysReg(Phys);
@@ -1808,7 +1823,7 @@ bool LocalRewriter::InsertRestores(MachineInstr *MI,
       ReMaterialize(*MBB, InsertLoc, Phys, VirtReg, TII, TRI, *VRM);
     } else {
       const TargetRegisterClass* RC = MRI->getRegClass(VirtReg);
-      TII->loadRegFromStackSlot(*MBB, InsertLoc, Phys, SSorRMId, RC);
+      TII->loadRegFromStackSlot(*MBB, InsertLoc, Phys, SSorRMId, RC, TRI);
       MachineInstr *LoadMI = prior(InsertLoc);
       VRM->addSpillSlotUse(SSorRMId, LoadMI);
       ++NumLoads;
@@ -1844,7 +1859,7 @@ bool LocalRewriter::InsertSpills(MachineInstr *MI) {
     int StackSlot = VRM->getStackSlot(VirtReg);
     MachineBasicBlock::iterator oldNextMII = llvm::next(MII);
     TII->storeRegToStackSlot(*MBB, llvm::next(MII), Phys, isKill, StackSlot,
-                             RC);
+                             RC, TRI);
     MachineInstr *StoreMI = prior(oldNextMII);
     VRM->addSpillSlotUse(StackSlot, StoreMI);
     DEBUG(dbgs() << "Store:\t" << *StoreMI);
@@ -1880,6 +1895,11 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
 
   // Clear kill info.
   SmallSet<unsigned, 2> KilledMIRegs;
+
+  // Keep track of the registers we have already spilled in case there are
+  // multiple defs of the same register in MI.
+  SmallSet<unsigned, 8> SpilledMIRegs;
+
   RegKills.reset();
   KillOps.clear();
   KillOps.resize(TRI->getNumRegs(), NULL);
@@ -1904,6 +1924,10 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
     bool Erased = false;
     bool BackTracked = false;
     MachineInstr &MI = *MII;
+
+    // Remember DbgValue's which reference stack slots.
+    if (MI.isDebugValue() && MI.getOperand(0).isFI())
+      Slot2DbgValues[MI.getOperand(0).getIndex()].push_back(&MI);
 
     /// ReusedOperands - Keep track of operand reuse in case we need to undo
     /// reuse.
@@ -2121,7 +2145,8 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
           ComputeReloadLoc(&MI, MBB->begin(), PhysReg, TRI, DoReMat,
                            SSorRMId, TII, MF);
 
-        TII->copyRegToReg(*MBB, InsertLoc, DesignatedReg, PhysReg, RC, RC);
+        TII->copyRegToReg(*MBB, InsertLoc, DesignatedReg, PhysReg, RC, RC,
+                          MI.getDebugLoc());
 
         MachineInstr *CopyMI = prior(InsertLoc);
         CopyMI->setAsmPrinterFlag(MachineInstr::ReloadReuse);
@@ -2166,7 +2191,7 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
           ReMaterialize(*MBB, InsertLoc, PhysReg, VirtReg, TII, TRI, *VRM);
         } else {
           const TargetRegisterClass* RC = MRI->getRegClass(VirtReg);
-          TII->loadRegFromStackSlot(*MBB, InsertLoc, PhysReg, SSorRMId, RC);
+          TII->loadRegFromStackSlot(*MBB, InsertLoc, PhysReg, SSorRMId, RC,TRI);
           MachineInstr *LoadMI = prior(InsertLoc);
           VRM->addSpillSlotUse(SSorRMId, LoadMI);
           ++NumLoads;
@@ -2245,7 +2270,8 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
             DEBUG(dbgs() << "Promoted Load To Copy: " << MI);
             if (DestReg != InReg) {
               const TargetRegisterClass *RC = MRI->getRegClass(VirtReg);
-              TII->copyRegToReg(*MBB, &MI, DestReg, InReg, RC, RC);
+              TII->copyRegToReg(*MBB, &MI, DestReg, InReg, RC, RC,
+                                MI.getDebugLoc());
               MachineOperand *DefMO = MI.findRegisterDefOperand(DestReg);
               unsigned SubIdx = DefMO->getSubReg();
               // Revisit the copy so we make sure to notice the effects of the
@@ -2391,6 +2417,7 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
     }
 
     // Process all of the spilled defs.
+    SpilledMIRegs.clear();
     for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
       MachineOperand &MO = MI.getOperand(i);
       if (!(MO.isReg() && MO.getReg() && MO.isDef()))
@@ -2404,7 +2431,8 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
         // eliminate this or else the undef marker is lost and it will
         // confuses the scavenger. This is extremely rare.
         unsigned Src, Dst, SrcSR, DstSR;
-        if (TII->isMoveInstr(MI, Src, Dst, SrcSR, DstSR) && Src == Dst &&
+        if (TII->isMoveInstr(MI, Src, Dst, SrcSR, DstSR) &&
+            Src == Dst && SrcSR == DstSR &&
             !MI.findRegisterUseOperand(Src)->isUndef()) {
           ++NumDCE;
           DEBUG(dbgs() << "Removing now-noop copy: " << MI);
@@ -2483,7 +2511,7 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
       MI.getOperand(i).setReg(RReg);
       MI.getOperand(i).setSubReg(0);
 
-      if (!MO.isDead()) {
+      if (!MO.isDead() && SpilledMIRegs.insert(VirtReg)) {
         MachineInstr *&LastStore = MaybeDeadStores[StackSlot];
         SpillRegToStackSlot(MII, -1, PhysReg, StackSlot, RC, true,
           LastStore, Spills, ReMatDefs, RegKills, KillOps);
@@ -2493,7 +2521,8 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
         // instruction before considering the dest reg to be changed.
         {
           unsigned Src, Dst, SrcSR, DstSR;
-          if (TII->isMoveInstr(MI, Src, Dst, SrcSR, DstSR) && Src == Dst) {
+          if (TII->isMoveInstr(MI, Src, Dst, SrcSR, DstSR) &&
+              Src == Dst && SrcSR == DstSR) {
             ++NumDCE;
             DEBUG(dbgs() << "Removing now-noop copy: " << MI);
             InvalidateKills(MI, TRI, RegKills, KillOps);

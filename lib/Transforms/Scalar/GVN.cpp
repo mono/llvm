@@ -868,7 +868,7 @@ static Value *CoerceAvailableValueToLoadType(Value *StoredVal,
   
   const Type *StoredValTy = StoredVal->getType();
   
-  uint64_t StoreSize = TD.getTypeSizeInBits(StoredValTy);
+  uint64_t StoreSize = TD.getTypeStoreSizeInBits(StoredValTy);
   uint64_t LoadSize = TD.getTypeSizeInBits(LoadedTy);
   
   // If the store and reload are the same size, we can always reuse it.
@@ -1132,8 +1132,8 @@ static Value *GetStoreValueForLoad(Value *SrcVal, unsigned Offset,
                                    Instruction *InsertPt, const TargetData &TD){
   LLVMContext &Ctx = SrcVal->getType()->getContext();
   
-  uint64_t StoreSize = TD.getTypeSizeInBits(SrcVal->getType())/8;
-  uint64_t LoadSize = TD.getTypeSizeInBits(LoadTy)/8;
+  uint64_t StoreSize = (TD.getTypeSizeInBits(SrcVal->getType()) + 7) / 8;
+  uint64_t LoadSize = (TD.getTypeSizeInBits(LoadTy) + 7) / 8;
   
   IRBuilder<> Builder(InsertPt->getParent(), InsertPt);
   
@@ -1584,7 +1584,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   for (unsigned i = 0, e = UnavailableBlocks.size(); i != e; ++i)
     FullyAvailableBlocks[UnavailableBlocks[i]] = false;
 
-  bool NeedToSplitEdges = false;
+  SmallVector<std::pair<TerminatorInst*, unsigned>, 4> NeedToSplit;
   for (pred_iterator PI = pred_begin(LoadBB), E = pred_end(LoadBB);
        PI != E; ++PI) {
     BasicBlock *Pred = *PI;
@@ -1600,12 +1600,13 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
         return false;
       }
       unsigned SuccNum = GetSuccessorNumber(Pred, LoadBB);
-      toSplit.push_back(std::make_pair(Pred->getTerminator(), SuccNum));
-      NeedToSplitEdges = true;
+      NeedToSplit.push_back(std::make_pair(Pred->getTerminator(), SuccNum));
     }
   }
-  if (NeedToSplitEdges)
+  if (!NeedToSplit.empty()) {
+    toSplit.append(NeedToSplit.begin(), NeedToSplit.end());
     return false;
+  }
 
   // Decide whether PRE is profitable for this load.
   unsigned NumUnavailablePreds = PredLoads.size();

@@ -174,9 +174,9 @@ namespace llvm {
 
     virtual const char *getTargetNodeName(unsigned Opcode) const;
 
-    virtual MachineBasicBlock *EmitInstrWithCustomInserter(MachineInstr *MI,
-                                                         MachineBasicBlock *MBB,
-                       DenseMap<MachineBasicBlock*, MachineBasicBlock*>*) const;
+    virtual MachineBasicBlock *
+      EmitInstrWithCustomInserter(MachineInstr *MI,
+                                  MachineBasicBlock *MBB) const;
 
     /// allowsUnalignedMemoryAccesses - Returns true if the target allows
     /// unaligned memory accesses. of the specified type.
@@ -236,12 +236,18 @@ namespace llvm {
                                               std::vector<SDValue> &Ops,
                                               SelectionDAG &DAG) const;
 
-    virtual const ARMSubtarget* getSubtarget() const {
+    const ARMSubtarget* getSubtarget() const {
       return Subtarget;
     }
 
+    /// getRegClassFor - Return the register class that should be used for the
+    /// specified value type.
+    virtual TargetRegisterClass *getRegClassFor(EVT VT) const;
+
     /// getFunctionAlignment - Return the Log2 alignment of this function.
     virtual unsigned getFunctionAlignment(const Function *F) const;
+
+    Sched::Preference getSchedulingPreference(SDNode *N) const;
 
     bool isShuffleMaskLegal(const SmallVectorImpl<int> &M, EVT VT) const;
     bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const;
@@ -301,15 +307,6 @@ namespace llvm {
     SDValue LowerShiftRightParts(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerShiftLeftParts(SDValue Op, SelectionDAG &DAG) const;
 
-    SDValue EmitTargetCodeForMemcpy(SelectionDAG &DAG, DebugLoc dl,
-                                      SDValue Chain,
-                                      SDValue Dst, SDValue Src,
-                                      SDValue Size, unsigned Align,
-                                      bool isVolatile, bool AlwaysInline,
-                                      const Value *DstSV,
-                                      uint64_t DstSVOff,
-                                      const Value *SrcSV,
-                                      uint64_t SrcSVOff) const;
     SDValue LowerCallResult(SDValue Chain, SDValue InFlag,
                             CallingConv::ID CallConv, bool isVarArg,
                             const SmallVectorImpl<ISD::InputArg> &Ins,
