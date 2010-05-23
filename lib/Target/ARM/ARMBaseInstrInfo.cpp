@@ -28,6 +28,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/CommandLine.h"
@@ -194,6 +195,42 @@ ARMBaseInstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
   MFI->insert(MBBI, NewMIs[1]);
   MFI->insert(MBBI, NewMIs[0]);
   return NewMIs[0];
+}
+
+bool
+ARMBaseInstrInfo::spillCalleeSavedRegisters(MachineBasicBlock &MBB,
+                                            MachineBasicBlock::iterator MI,
+                                            const std::vector<CalleeSavedInfo> &CSI,
+                                            const TargetRegisterInfo *TRI) const {
+  if (CSI.empty())
+    return false;
+
+  DebugLoc DL;
+  if (MI != MBB.end()) DL = MI->getDebugLoc();
+
+  for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+    unsigned Reg = CSI[i].getReg();
+    bool isKill = true;
+
+    // Add the callee-saved register as live-in unless it's LR and
+    // @llvm.returnaddress is called. If LR is returned for @llvm.returnaddress
+    // then it's already added to the function and entry block live-in sets.
+    if (Reg == ARM::LR) {
+      MachineFunction &MF = *MBB.getParent();
+      if (MF.getFrameInfo()->isReturnAddressTaken() &&
+          MF.getRegInfo().isLiveIn(Reg))
+        isKill = false;
+    }
+
+    if (isKill)
+      MBB.addLiveIn(Reg);
+
+    // Insert the spill to the stack frame. The register is killed at the spill
+    // 
+    storeRegToStackSlot(MBB, MI, Reg, isKill,
+                        CSI[i].getFrameIdx(), CSI[i].getRegClass(), TRI);
+  }
+  return true;
 }
 
 // Branch analysis.
@@ -481,6 +518,10 @@ unsigned ARMBaseInstrInfo::GetInstSizeInBytes(const MachineInstr *MI) const {
       // If this machine instr is a constant pool entry, its size is recorded as
       // operand #2.
       return MI->getOperand(2).getImm();
+    case ARM::Int_eh_sjlj_longjmp:
+      return 16;
+    case ARM::tInt_eh_sjlj_longjmp:
+      return 10;
     case ARM::Int_eh_sjlj_setjmp:
     case ARM::Int_eh_sjlj_setjmp_nofp:
       return 24;
