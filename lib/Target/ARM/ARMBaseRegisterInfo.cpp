@@ -260,10 +260,10 @@ ARMBaseRegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
                                               unsigned SubIdx) const {
   switch (SubIdx) {
   default: return 0;
-  case 1:
-  case 2:
-  case 3:
-  case 4: {
+  case ARM::ssub_0:
+  case ARM::ssub_1:
+  case ARM::ssub_2:
+  case ARM::ssub_3: {
     // S sub-registers.
     if (A->getSize() == 8) {
       if (B == &ARM::SPR_8RegClass)
@@ -289,10 +289,10 @@ ARMBaseRegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
     assert(A->getSize() == 64 && "Expecting a QQQQ register class!");
     return 0;  // Do not allow coalescing!
   }
-  case 5:
-  case 6:
-  case 7:
-  case 8: {
+  case ARM::dsub_0:
+  case ARM::dsub_1:
+  case ARM::dsub_2:
+  case ARM::dsub_3: {
     // D sub-registers.
     if (A->getSize() == 16) {
       if (B == &ARM::DPR_VFP2RegClass)
@@ -315,18 +315,18 @@ ARMBaseRegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
       return 0;  // Do not allow coalescing!
     return A;
   }
-  case 9:
-  case 10:
-  case 11:
-  case 12: {
+  case ARM::dsub_4:
+  case ARM::dsub_5:
+  case ARM::dsub_6:
+  case ARM::dsub_7: {
     // D sub-registers of QQQQ registers.
     if (A->getSize() == 64 && B == &ARM::DPRRegClass)
       return A;
     return 0;  // Do not allow coalescing!
   }
 
-  case 13:
-  case 14: {
+  case ARM::qsub_0:
+  case ARM::qsub_1: {
     // Q sub-registers.
     if (A->getSize() == 32) {
       if (B == &ARM::QPR_VFP2RegClass)
@@ -341,8 +341,8 @@ ARMBaseRegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
       return A;
     return 0;  // Do not allow coalescing!
   }
-  case 15:
-  case 16: {
+  case ARM::qsub_2:
+  case ARM::qsub_3: {
     // Q sub-registers of QQQQ registers.
     if (A->getSize() == 64 && B == &ARM::QPRRegClass)
       return A;
@@ -366,101 +366,101 @@ ARMBaseRegisterInfo::canCombinedSubRegIndex(const TargetRegisterClass *RC,
   if (NumRegs == 8) {
     // 8 D registers -> 1 QQQQ register.
     return (Size == 512 &&
-            SubIndices[0] == ARM::DSUBREG_0 &&
-            SubIndices[1] == ARM::DSUBREG_1 &&
-            SubIndices[2] == ARM::DSUBREG_2 &&
-            SubIndices[3] == ARM::DSUBREG_3 &&
-            SubIndices[4] == ARM::DSUBREG_4 &&
-            SubIndices[5] == ARM::DSUBREG_5 &&
-            SubIndices[6] == ARM::DSUBREG_6 &&
-            SubIndices[7] == ARM::DSUBREG_7);
+            SubIndices[0] == ARM::dsub_0 &&
+            SubIndices[1] == ARM::dsub_1 &&
+            SubIndices[2] == ARM::dsub_2 &&
+            SubIndices[3] == ARM::dsub_3 &&
+            SubIndices[4] == ARM::dsub_4 &&
+            SubIndices[5] == ARM::dsub_5 &&
+            SubIndices[6] == ARM::dsub_6 &&
+            SubIndices[7] == ARM::dsub_7);
   } else if (NumRegs == 4) {
-    if (SubIndices[0] == ARM::QSUBREG_0) {
+    if (SubIndices[0] == ARM::qsub_0) {
       // 4 Q registers -> 1 QQQQ register.
       return (Size == 512 &&
-              SubIndices[1] == ARM::QSUBREG_1 &&
-              SubIndices[2] == ARM::QSUBREG_2 &&
-              SubIndices[3] == ARM::QSUBREG_3);
-    } else if (SubIndices[0] == ARM::DSUBREG_0) {
+              SubIndices[1] == ARM::qsub_1 &&
+              SubIndices[2] == ARM::qsub_2 &&
+              SubIndices[3] == ARM::qsub_3);
+    } else if (SubIndices[0] == ARM::dsub_0) {
       // 4 D registers -> 1 QQ register.
       if (Size >= 256 &&
-          SubIndices[1] == ARM::DSUBREG_1 &&
-          SubIndices[2] == ARM::DSUBREG_2 &&
-          SubIndices[3] == ARM::DSUBREG_3) {
+          SubIndices[1] == ARM::dsub_1 &&
+          SubIndices[2] == ARM::dsub_2 &&
+          SubIndices[3] == ARM::dsub_3) {
         if (Size == 512)
-          NewSubIdx = ARM::QQSUBREG_0;
+          NewSubIdx = ARM::qqsub_0;
         return true;
       }
-    } else if (SubIndices[0] == ARM::DSUBREG_4) {
+    } else if (SubIndices[0] == ARM::dsub_4) {
       // 4 D registers -> 1 QQ register (2nd).
       if (Size == 512 &&
-          SubIndices[1] == ARM::DSUBREG_5 &&
-          SubIndices[2] == ARM::DSUBREG_6 &&
-          SubIndices[3] == ARM::DSUBREG_7) {
-        NewSubIdx = ARM::QQSUBREG_1;
+          SubIndices[1] == ARM::dsub_5 &&
+          SubIndices[2] == ARM::dsub_6 &&
+          SubIndices[3] == ARM::dsub_7) {
+        NewSubIdx = ARM::qqsub_1;
         return true;
       }
-    } else if (SubIndices[0] == ARM::SSUBREG_0) {
+    } else if (SubIndices[0] == ARM::ssub_0) {
       // 4 S registers -> 1 Q register.
       if (Size >= 128 &&
-          SubIndices[1] == ARM::SSUBREG_1 &&
-          SubIndices[2] == ARM::SSUBREG_2 &&
-          SubIndices[3] == ARM::SSUBREG_3) {
+          SubIndices[1] == ARM::ssub_1 &&
+          SubIndices[2] == ARM::ssub_2 &&
+          SubIndices[3] == ARM::ssub_3) {
         if (Size >= 256)
-          NewSubIdx = ARM::QSUBREG_0;
+          NewSubIdx = ARM::qsub_0;
         return true;
       }
     }
   } else if (NumRegs == 2) {
-    if (SubIndices[0] == ARM::QSUBREG_0) {
+    if (SubIndices[0] == ARM::qsub_0) {
       // 2 Q registers -> 1 QQ register.
-      if (Size >= 256 && SubIndices[1] == ARM::QSUBREG_1) {
+      if (Size >= 256 && SubIndices[1] == ARM::qsub_1) {
         if (Size == 512)
-          NewSubIdx = ARM::QQSUBREG_0;
+          NewSubIdx = ARM::qqsub_0;
         return true;
       }
-    } else if (SubIndices[0] == ARM::QSUBREG_2) {
+    } else if (SubIndices[0] == ARM::qsub_2) {
       // 2 Q registers -> 1 QQ register (2nd).
-      if (Size == 512 && SubIndices[1] == ARM::QSUBREG_3) {
-        NewSubIdx = ARM::QQSUBREG_1;
+      if (Size == 512 && SubIndices[1] == ARM::qsub_3) {
+        NewSubIdx = ARM::qqsub_1;
         return true;
       }
-    } else if (SubIndices[0] == ARM::DSUBREG_0) {
+    } else if (SubIndices[0] == ARM::dsub_0) {
       // 2 D registers -> 1 Q register.
-      if (Size >= 128 && SubIndices[1] == ARM::DSUBREG_1) {
+      if (Size >= 128 && SubIndices[1] == ARM::dsub_1) {
         if (Size >= 256)
-          NewSubIdx = ARM::QSUBREG_0;
+          NewSubIdx = ARM::qsub_0;
         return true;
       }
-    } else if (SubIndices[0] == ARM::DSUBREG_2) {
+    } else if (SubIndices[0] == ARM::dsub_2) {
       // 2 D registers -> 1 Q register (2nd).
-      if (Size >= 256 && SubIndices[1] == ARM::DSUBREG_3) {
-        NewSubIdx = ARM::QSUBREG_1;
+      if (Size >= 256 && SubIndices[1] == ARM::dsub_3) {
+        NewSubIdx = ARM::qsub_1;
         return true;
       }
-    } else if (SubIndices[0] == ARM::DSUBREG_4) {
+    } else if (SubIndices[0] == ARM::dsub_4) {
       // 2 D registers -> 1 Q register (3rd).
-      if (Size == 512 && SubIndices[1] == ARM::DSUBREG_5) {
-        NewSubIdx = ARM::QSUBREG_2;
+      if (Size == 512 && SubIndices[1] == ARM::dsub_5) {
+        NewSubIdx = ARM::qsub_2;
         return true;
       }
-    } else if (SubIndices[0] == ARM::DSUBREG_6) {
+    } else if (SubIndices[0] == ARM::dsub_6) {
       // 2 D registers -> 1 Q register (3rd).
-      if (Size == 512 && SubIndices[1] == ARM::DSUBREG_7) {
-        NewSubIdx = ARM::QSUBREG_3;
+      if (Size == 512 && SubIndices[1] == ARM::dsub_7) {
+        NewSubIdx = ARM::qsub_3;
         return true;
       }
-    } else if (SubIndices[0] == ARM::SSUBREG_0) {
+    } else if (SubIndices[0] == ARM::ssub_0) {
       // 2 S registers -> 1 D register.
-      if (SubIndices[1] == ARM::SSUBREG_1) {
+      if (SubIndices[1] == ARM::ssub_1) {
         if (Size >= 128)
-          NewSubIdx = ARM::DSUBREG_0;
+          NewSubIdx = ARM::dsub_0;
         return true;
       }
-    } else if (SubIndices[0] == ARM::SSUBREG_2) {
+    } else if (SubIndices[0] == ARM::ssub_2) {
       // 2 S registers -> 1 D register (2nd).
-      if (Size >= 128 && SubIndices[1] == ARM::SSUBREG_3) {
-        NewSubIdx = ARM::DSUBREG_1;
+      if (Size >= 128 && SubIndices[1] == ARM::ssub_3) {
+        NewSubIdx = ARM::dsub_1;
         return true;
       }
     }

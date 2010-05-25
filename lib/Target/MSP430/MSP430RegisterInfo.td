@@ -60,12 +60,15 @@ def R13W : MSP430RegWithSubregs<13, "r13", [R13B]>;
 def R14W : MSP430RegWithSubregs<14, "r14", [R14B]>;
 def R15W : MSP430RegWithSubregs<15, "r15", [R15B]>;
 
-def : SubRegSet<1, [PCW, SPW, SRW, CGW, FPW,
-                    R5W, R6W, R7W, R8W, R9W, R10W, R11W, R12W, R13W, R14W, R15W],
-                   [PCB, SPB, SRB, CGB, FPB,
-                    R5B, R6B, R7B, R8B, R9B, R10B, R11B, R12B, R13B, R14B, R15B]>;
+def subreg_8bit : SubRegIndex {
+  let NumberHack = 1;
+  let Namespace = "MSP430";
+}
 
-def subreg_8bit : PatLeaf<(i32 1)>;
+def : SubRegSet<subreg_8bit, [PCW, SPW, SRW, CGW, FPW, R5W, R6W, R7W,
+                              R8W, R9W, R10W, R11W, R12W, R13W, R14W, R15W],
+                             [PCB, SPB, SRB, CGB, FPB, R5B, R6B, R7B,
+                              R8B, R9B, R10B, R11B, R12B, R13B, R14B, R15B]>;
 
 def GR8 : RegisterClass<"MSP430", [i8], 8,
    // Volatile registers
@@ -101,7 +104,7 @@ def GR16 : RegisterClass<"MSP430", [i16], 16,
    // Volatile, but not allocable
    PCW, SPW, SRW, CGW]>
 {
-  let SubRegClassList = [GR8];
+  let SubRegClasses = [(GR8 subreg_8bit)];
   let MethodProtos = [{
     iterator allocation_order_end(const MachineFunction &MF) const;
   }];

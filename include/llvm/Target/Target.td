@@ -21,6 +21,15 @@ include "llvm/Intrinsics.td"
 
 class RegisterClass; // Forward def
 
+// SubRegIndex - Use instances on SubRegIndex to identify subregisters.
+class SubRegIndex {
+  string Namespace = "";
+
+  // This explicit numbering is going away after RegisterClass::SubRegClassList
+  // is replaced.
+  int NumberHack;
+}
+
 // Register - You should define one instance of this class for each register
 // in the target machine.  String n will become the "name" of the register.
 class Register<string n> {
@@ -72,8 +81,8 @@ class RegisterWithSubRegs<string n, list<Register> subregs> : Register<n> {
 // indices, for use as named subregs of a particular physical register.  Each
 // register in 'subregs' becomes an addressable subregister at index 'n' of the
 // corresponding register in 'regs'.
-class SubRegSet<int n, list<Register> regs, list<Register> subregs> {
-  int index = n;
+class SubRegSet<SubRegIndex n, list<Register> regs, list<Register> subregs> {
+  SubRegIndex Index = n;
   
   list<Register> From = regs;
   list<Register> To = subregs;
@@ -117,9 +126,9 @@ class RegisterClass<string namespace, list<ValueType> regTypes, int alignment,
   //
   list<Register> MemberList = regList;
   
-  // SubClassList - Specify which register classes correspond to subregisters
-  // of this class. The order should be by subregister set index.
-  list<RegisterClass> SubRegClassList = [];
+  // SubRegClasses - Specify the register class of subregisters as a list of
+  // dags: (RegClass SubRegIndex, SubRegindex, ...)
+  list<dag> SubRegClasses = [];
 
   // MethodProtos/MethodBodies - These members can be used to insert arbitrary
   // code into a generated register class.   The normal usage of this is to 

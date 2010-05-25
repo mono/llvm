@@ -319,16 +319,16 @@ void ARMAsmPrinter::printOperand(const MachineInstr *MI, int OpNum,
     unsigned Reg = MO.getReg();
     assert(TargetRegisterInfo::isPhysicalRegister(Reg));
     if (Modifier && strcmp(Modifier, "dregpair") == 0) {
-      unsigned DRegLo = TM.getRegisterInfo()->getSubReg(Reg, 5);// arm_dsubreg_0
-      unsigned DRegHi = TM.getRegisterInfo()->getSubReg(Reg, 6);// arm_dsubreg_1
+      unsigned DRegLo = TM.getRegisterInfo()->getSubReg(Reg, ARM::dsub_0);
+      unsigned DRegHi = TM.getRegisterInfo()->getSubReg(Reg, ARM::dsub_1);
       O << '{'
         << getRegisterName(DRegLo) << ',' << getRegisterName(DRegHi)
         << '}';
     } else if (Modifier && strcmp(Modifier, "lane") == 0) {
       unsigned RegNum = ARMRegisterInfo::getRegisterNumbering(Reg);
       unsigned DReg =
-        TM.getRegisterInfo()->getMatchingSuperReg(Reg, RegNum & 1 ? 2 : 1,
-                                                  &ARM::DPR_VFP2RegClass);
+        TM.getRegisterInfo()->getMatchingSuperReg(Reg,
+          RegNum & 1 ? ARM::ssub_1 : ARM::ssub_0, &ARM::DPR_VFP2RegClass);
       O << getRegisterName(DReg) << '[' << (RegNum & 1) << ']';
     } else {
       assert(!MO.getSubReg() && "Subregs should be eliminated!");

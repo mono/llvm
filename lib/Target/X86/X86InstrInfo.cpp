@@ -744,17 +744,17 @@ X86InstrInfo::isCoalescableExtInstr(const MachineInstr &MI,
     case X86::MOVZX32rr8:
     case X86::MOVSX64rr8:
     case X86::MOVZX64rr8:
-      SubIdx = 1;
+      SubIdx = X86::sub_8bit;
       break;
     case X86::MOVSX32rr16:
     case X86::MOVZX32rr16:
     case X86::MOVSX64rr16:
     case X86::MOVZX64rr16:
-      SubIdx = 3;
+      SubIdx = X86::sub_16bit;
       break;
     case X86::MOVSX64rr32:
     case X86::MOVZX64rr32:
-      SubIdx = 4;
+      SubIdx = X86::sub_32bit;
       break;
     }
     return true;
@@ -1154,7 +1154,7 @@ X86InstrInfo::convertToThreeAddressWithLEA(unsigned MIOpc,
     BuildMI(*MFI, MBBI, MI->getDebugLoc(), get(X86::INSERT_SUBREG),leaInReg)
     .addReg(leaInReg)
     .addReg(Src, getKillRegState(isKill))
-    .addImm(X86::SUBREG_16BIT);
+    .addImm(X86::sub_16bit);
 
   MachineInstrBuilder MIB = BuildMI(*MFI, MBBI, MI->getDebugLoc(),
                                     get(Opc), leaOutReg);
@@ -1198,7 +1198,7 @@ X86InstrInfo::convertToThreeAddressWithLEA(unsigned MIOpc,
         BuildMI(*MFI, MIB, MI->getDebugLoc(), get(X86::INSERT_SUBREG),leaInReg2)
         .addReg(leaInReg2)
         .addReg(Src2, getKillRegState(isKill2))
-        .addImm(X86::SUBREG_16BIT);
+        .addImm(X86::sub_16bit);
       addRegReg(MIB, leaInReg, true, leaInReg2, true);
     }
     if (LV && isKill2 && InsMI2)
@@ -1212,7 +1212,7 @@ X86InstrInfo::convertToThreeAddressWithLEA(unsigned MIOpc,
     BuildMI(*MFI, MBBI, MI->getDebugLoc(), get(X86::EXTRACT_SUBREG))
     .addReg(Dest, RegState::Define | getDeadRegState(isDead))
     .addReg(leaOutReg, RegState::Kill)
-    .addImm(X86::SUBREG_16BIT);
+    .addImm(X86::sub_16bit);
 
   if (LV) {
     // Update live variables
@@ -2483,9 +2483,9 @@ X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
         unsigned DstReg = NewMI->getOperand(0).getReg();
         if (TargetRegisterInfo::isPhysicalRegister(DstReg))
           NewMI->getOperand(0).setReg(RI.getSubReg(DstReg,
-                                                   4/*x86_subreg_32bit*/));
+                                                   X86::sub_32bit));
         else
-          NewMI->getOperand(0).setSubReg(4/*x86_subreg_32bit*/);
+          NewMI->getOperand(0).setSubReg(X86::sub_32bit);
       }
       return NewMI;
     }
