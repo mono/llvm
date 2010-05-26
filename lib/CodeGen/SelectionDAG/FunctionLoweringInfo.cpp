@@ -26,6 +26,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MonoMachineFunctionInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetFrameInfo.h"
@@ -104,6 +105,19 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
         if (TySize == 0) TySize = 1; // Don't create zero-sized stack objects.
         StaticAllocaMap[AI] =
           MF->getFrameInfo()->CreateStackObject(TySize, Align, false);
+
+        //
+        // The mono exception handling code needs to location of the 'this' pointer
+        // to handle stack traces containing generic shared methods.
+        // To implement this, it saves the this pointer to an alloca which is marked with
+        // the 'mono.this' custom metadata. We save the stack slot used by this alloca
+        // in MachineFunction, so the dwarf exception info emission code can use it to
+        // compute the reg+offset for it, and save it into the LSDA.
+        //
+        if (AI->getMetadata("mono.this")) {
+          MonoMachineFunctionInfo *MonoFI = MF->getMonoInfo();
+          MonoFI->setThisStackSlot (StaticAllocaMap[AI]);
+        }
       }
 
   for (; BB != EB; ++BB)

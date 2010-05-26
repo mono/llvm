@@ -37,6 +37,7 @@ class MCContext;
 class Pass;
 class TargetMachine;
 class TargetRegisterClass;
+class MonoMachineFunctionInfo;
 
 template <>
 struct ilist_traits<MachineBasicBlock>
@@ -117,6 +118,8 @@ class MachineFunction {
   /// The alignment of the function.
   unsigned Alignment;
 
+  MonoMachineFunctionInfo *MonoInfo;
+
   MachineFunction(const MachineFunction &); // DO NOT IMPLEMENT
   void operator=(const MachineFunction&);   // DO NOT IMPLEMENT
 public:
@@ -168,6 +171,9 @@ public:
   ///
   MachineConstantPool *getConstantPool() { return ConstantPool; }
   const MachineConstantPool *getConstantPool() const { return ConstantPool; }
+
+  MonoMachineFunctionInfo *getMonoInfo() { return MonoInfo; }
+  const MonoMachineFunctionInfo *getMonoInfo() const { return MonoInfo; }
 
   /// getAlignment - Return the alignment (log2, not bytes) of the function.
   ///

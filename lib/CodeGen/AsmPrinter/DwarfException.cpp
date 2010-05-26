@@ -18,6 +18,7 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineLocation.h"
+#include "llvm/CodeGen/MonoMachineFunctionInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -142,7 +143,7 @@ void DwarfException::EmitCIE(const Function *PersonalityFn, unsigned Index) {
       Asm->EmitEncodingByte(LSDAEncoding, "LSDA");
     if (FDEEncoding != dwarf::DW_EH_PE_absptr)
       Asm->EmitEncodingByte(FDEEncoding, "FDE");
-    UsesAugmention[Index] = true;
+    UsesAugmentation[Index] = true;
   }
 
   // Indicate locations of general callee saved registers in frame.
@@ -246,7 +247,7 @@ void DwarfException::EmitFDE(const FunctionEHFrameInfo &EHFrameInfo) {
         Asm->OutStreamer.EmitIntValue(0, Size/*size*/, 0/*addrspace*/);
 
     } else {
-      if (UsesAugmention[EHFrameInfo.Number])
+      if (UsesAugmentation[EHFrameInfo.PersonalityIndex])
         Asm->EmitULEB128(0, "Augmentation size");
     }
 
@@ -699,8 +700,29 @@ void DwarfException::EmitExceptionTable() {
     Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("_LSDA_",
                                                   Asm->getFunctionNumber()));
 
+  int ThisSlot = Asm->MF->getMonoInfo()->getThisStackSlot();
+
   // Emit the LSDA header.
-  Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "@LPStart");
+  if (ThisSlot != -1) {
+    // Keep this in sync with JITDwarfEmitter::EmitExceptionTable ()
+    // FIXME: If this method has no clauses, avoid emitting the rest of the info
+    // Mark that this is a mono specific LSDA header using a magic value
+    Asm->EmitEncodingByte(dwarf::DW_EH_PE_udata4, "@LPStart");
+    Asm->EmitULEB128(0x4d4fef4f, "MONO Magic", 0);
+    Asm->EmitULEB128(1, "Version", 0);
+
+    // Emit 'this' location
+    unsigned FrameReg;
+    int Offset = Asm->MF->getTarget ().getRegisterInfo ()->getFrameIndexReference (*Asm->MF, ThisSlot, FrameReg);
+    FrameReg = Asm->MF->getTarget ().getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
+
+    Asm->OutStreamer.AddComment("bregx");
+    Asm->EmitInt8((int)dwarf::DW_OP_bregx);
+    Asm->EmitULEB128(FrameReg, "Base reg");
+    Asm->EmitSLEB128(Offset, "Offset");
+  } else {
+    Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "@LPStart");
+  }
   Asm->EmitEncodingByte(TTypeEncoding, "@TType");
 
   // The type infos need to be aligned. GCC does this by inserting padding just
@@ -937,12 +959,13 @@ void DwarfException::EndFunction() {
 
   // Record if this personality index uses a landing pad.
   bool HasLandingPad = !MMI->getLandingPads().empty();
-  UsesLSDA[MMI->getPersonalityIndex()] |= HasLandingPad;
+  bool HasMonoInfo = Asm->MF->getMonoInfo()->getThisStackSlot() != -1;
+  UsesLSDA[MMI->getPersonalityIndex()] |= HasLandingPad | HasMonoInfo;
   
   // Map all labels and get rid of any dead landing pads.
   MMI->TidyLandingPads();
 
-  if (HasLandingPad)
+  if (HasLandingPad || HasMonoInfo)
     EmitExceptionTable();
 
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
