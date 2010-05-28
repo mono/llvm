@@ -235,6 +235,15 @@ def CC_X86_64_GHC : CallingConv<[
             CCAssignToReg<[XMM1, XMM2, XMM3, XMM4, XMM5, XMM6]>>>
 ]>;
 
+def CC_X86_64_Mono : CallingConv<[
+
+	// Mono marks the parameter it wants to pass in this non-abi register with
+	// the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R10]>>,
+
+  CCDelegateTo<CC_X86_64_C>
+]>;
+
 //===----------------------------------------------------------------------===//
 // X86 C Calling Convention
 //===----------------------------------------------------------------------===//
@@ -355,4 +364,13 @@ def CC_X86_32_GHC : CallingConv<[
 
   // Pass in STG registers: Base, Sp, Hp, R1
   CCIfType<[i32], CCAssignToReg<[EBX, EBP, EDI, ESI]>>
+]>;
+
+def CC_X86_32_Mono : CallingConv<[
+
+	// Mono marks the parameter it wants to pass in this non-abi register with
+	// the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[EDX]>>,
+
+  CCDelegateTo<CC_X86_32_C>
 ]>;

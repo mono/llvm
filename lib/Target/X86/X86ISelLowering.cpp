@@ -1414,6 +1414,8 @@ CCAssignFn *X86TargetLowering::CCAssignFnForNode(CallingConv::ID CC) const {
   if (Subtarget->is64Bit()) {
     if (CC == CallingConv::GHC)
       return CC_X86_64_GHC;
+    else if (CC == CallingConv::Mono)
+      return CC_X86_64_Mono;
     else if (Subtarget->isTargetWin64())
       return CC_X86_Win64_C;
     else
