@@ -235,11 +235,20 @@ def CC_X86_64_GHC : CallingConv<[
             CCAssignToReg<[XMM1, XMM2, XMM3, XMM4, XMM5, XMM6]>>>
 ]>;
 
-def CC_X86_64_Mono : CallingConv<[
+//
+// Mono calling conventions
+//
 
-	// Mono marks the parameter it wants to pass in this non-abi register with
-	// the 'inreg' attribute.
-  CCIfInReg<CCAssignToReg<[R10]>>,
+def CC_X86_64_Mono1 : CallingConv<[
+
+  CCIfInReg<CCAssignToReg<[R10,R11]>>,
+
+  CCDelegateTo<CC_X86_64_C>
+]>;
+
+def CC_X86_64_Mono2 : CallingConv<[
+
+  CCIfInReg<CCAssignToReg<[R11]>>,
 
   CCDelegateTo<CC_X86_64_C>
 ]>;

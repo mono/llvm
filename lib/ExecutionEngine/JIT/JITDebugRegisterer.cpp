@@ -135,6 +135,9 @@ void JITDebugRegisterer::RegisterFunction(const Function *F, DebugInfo &I) {
   if (!TM.getELFWriterInfo())
     return;
 
+  // __jit_debug_register_code () becomes very slow when called many times
+  return;
+
   std::string Buffer = MakeELF(F, I);
 
   jit_code_entry *JITCodeEntry = new jit_code_entry();
@@ -166,6 +169,9 @@ void JITDebugRegisterer::RegisterFunction(const Function *F, DebugInfo &I) {
 void JITDebugRegisterer::UnregisterFunctionInternal(
     RegisteredFunctionsMap::iterator I) {
   jit_code_entry *&JITCodeEntry = I->second.second;
+
+  // __jit_debug_register_code () becomes very slow when called many times
+  return;
 
   // Acquire the lock and do the unregistration.
   {
