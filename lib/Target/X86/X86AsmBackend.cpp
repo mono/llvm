@@ -44,20 +44,19 @@ public:
   X86AsmBackend(const Target &T)
     : TargetAsmBackend(T) {}
 
-  void ApplyFixup(const MCAsmFixup &Fixup, MCDataFragment &DF,
+  void ApplyFixup(const MCFixup &Fixup, MCDataFragment &DF,
                   uint64_t Value) const {
-    unsigned Size = 1 << getFixupKindLog2Size(Fixup.Kind);
+    unsigned Size = 1 << getFixupKindLog2Size(Fixup.getKind());
 
-    assert(Fixup.Offset + Size <= DF.getContents().size() &&
+    assert(Fixup.getOffset() + Size <= DF.getContents().size() &&
            "Invalid fixup offset!");
     for (unsigned i = 0; i != Size; ++i)
-      DF.getContents()[Fixup.Offset + i] = uint8_t(Value >> (i * 8));
+      DF.getContents()[Fixup.getOffset() + i] = uint8_t(Value >> (i * 8));
   }
 
-  bool MayNeedRelaxation(const MCInst &Inst,
-                         const SmallVectorImpl<MCAsmFixup> &Fixups) const;
+  bool MayNeedRelaxation(const MCInst &Inst) const;
 
-  void RelaxInstruction(const MCInstFragment *IF, MCInst &Res) const;
+  void RelaxInstruction(const MCInst &Inst, MCInst &Res) const;
 
   bool WriteNopData(uint64_t Count, MCObjectWriter *OW) const;
 };
@@ -88,46 +87,33 @@ static unsigned getRelaxedOpcode(unsigned Op) {
   }
 }
 
-bool X86AsmBackend::MayNeedRelaxation(const MCInst &Inst,
-                              const SmallVectorImpl<MCAsmFixup> &Fixups) const {
-  for (unsigned i = 0, e = Fixups.size(); i != e; ++i) {
-    // We don't support relaxing anything else currently. Make sure we error out
-    // if we see a non-constant 1 or 2 byte fixup.
-    //
-    // FIXME: We should need to check this here, this is better checked in the
-    // object writer which should be verifying that any final relocations match
-    // the expected fixup. However, that code is more complicated and hasn't
-    // been written yet. See the FIXMEs in MachObjectWriter.cpp.
-    if ((Fixups[i].Kind == FK_Data_1 || Fixups[i].Kind == FK_Data_2) &&
-        !isa<MCConstantExpr>(Fixups[i].Value))
-      report_fatal_error("unexpected small fixup with a non-constant operand!");
+bool X86AsmBackend::MayNeedRelaxation(const MCInst &Inst) const {
+  // Check if this instruction is ever relaxable.
+  if (getRelaxedOpcode(Inst.getOpcode()) == Inst.getOpcode())
+    return false;
 
-    // Check for a 1byte pcrel fixup, and enforce that we would know how to
-    // relax this instruction.
-    if (unsigned(Fixups[i].Kind) == X86::reloc_pcrel_1byte) {
-      assert(getRelaxedOpcode(Inst.getOpcode()) != Inst.getOpcode());
-      return true;
-    }
-  }
-
-  return false;
+  // If so, just assume it can be relaxed. Once we support relaxing more complex
+  // instructions we should check that the instruction actually has symbolic
+  // operands before doing this, but we need to be careful about things like
+  // PCrel.
+  return true;
 }
 
 // FIXME: Can tblgen help at all here to verify there aren't other instructions
 // we can relax?
-void X86AsmBackend::RelaxInstruction(const MCInstFragment *IF,
-                                     MCInst &Res) const {
+void X86AsmBackend::RelaxInstruction(const MCInst &Inst, MCInst &Res) const {
   // The only relaxations X86 does is from a 1byte pcrel to a 4byte pcrel.
-  unsigned RelaxedOp = getRelaxedOpcode(IF->getInst().getOpcode());
+  unsigned RelaxedOp = getRelaxedOpcode(Inst.getOpcode());
 
-  if (RelaxedOp == IF->getInst().getOpcode()) {
+  if (RelaxedOp == Inst.getOpcode()) {
     SmallString<256> Tmp;
     raw_svector_ostream OS(Tmp);
-    IF->getInst().dump_pretty(OS);
+    Inst.dump_pretty(OS);
+    OS << "\n";
     report_fatal_error("unexpected instruction to relax: " + OS.str());
   }
 
-  Res = IF->getInst();
+  Res = Inst;
   Res.setOpcode(RelaxedOp);
 }
 

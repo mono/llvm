@@ -218,3 +218,178 @@ retl
 // CHECK: cmovel	%eax, %edx
 // CHECK:  encoding: [0x0f,0x44,0xd0]
         	cmovzl	%eax,%edx
+
+// CHECK: cmpps	$0, %xmm0, %xmm1
+// CHECK: encoding: [0x0f,0xc2,0xc8,0x00]
+        cmpps $0, %xmm0, %xmm1
+// CHECK:	cmpps	$0, (%eax), %xmm1
+// CHECK: encoding: [0x0f,0xc2,0x08,0x00]
+        cmpps $0, 0(%eax), %xmm1
+// CHECK:	cmppd	$0, %xmm0, %xmm1
+// CHECK: encoding: [0x66,0x0f,0xc2,0xc8,0x00]
+        cmppd $0, %xmm0, %xmm1
+// CHECK:	cmppd	$0, (%eax), %xmm1
+// CHECK: encoding: [0x66,0x0f,0xc2,0x08,0x00]
+        cmppd $0, 0(%eax), %xmm1
+// CHECK:	cmpss	$0, %xmm0, %xmm1
+// CHECK: encoding: [0xf3,0x0f,0xc2,0xc8,0x00]
+        cmpss $0, %xmm0, %xmm1
+// CHECK:	cmpss	$0, (%eax), %xmm1
+// CHECK: encoding: [0xf3,0x0f,0xc2,0x08,0x00]
+        cmpss $0, 0(%eax), %xmm1
+// CHECK:	cmpsd	$0, %xmm0, %xmm1
+// CHECK: encoding: [0xf2,0x0f,0xc2,0xc8,0x00]
+        cmpsd $0, %xmm0, %xmm1
+// CHECK:	cmpsd	$0, (%eax), %xmm1
+// CHECK: encoding: [0xf2,0x0f,0xc2,0x08,0x00]
+        cmpsd $0, 0(%eax), %xmm1
+
+// Check matching of instructions which embed the SSE comparison code.
+
+// CHECK: cmpps $0, %xmm0, %xmm1
+// CHECK: encoding: [0x0f,0xc2,0xc8,0x00]
+        cmpeqps %xmm0, %xmm1
+
+// CHECK: cmppd $1, %xmm0, %xmm1
+// CHECK: encoding: [0x66,0x0f,0xc2,0xc8,0x01]
+        cmpltpd %xmm0, %xmm1
+
+// CHECK: cmpss $2, %xmm0, %xmm1
+// CHECK: encoding: [0xf3,0x0f,0xc2,0xc8,0x02]
+        cmpless %xmm0, %xmm1
+
+// CHECK: cmppd $3, %xmm0, %xmm1
+// CHECK: encoding: [0x66,0x0f,0xc2,0xc8,0x03]
+        cmpunordpd %xmm0, %xmm1
+
+// CHECK: cmpps $4, %xmm0, %xmm1
+// CHECK: encoding: [0x0f,0xc2,0xc8,0x04]
+        cmpneqps %xmm0, %xmm1
+
+// CHECK: cmppd $5, %xmm0, %xmm1
+// CHECK: encoding: [0x66,0x0f,0xc2,0xc8,0x05]
+        cmpnltpd %xmm0, %xmm1
+
+// CHECK: cmpss $6, %xmm0, %xmm1
+// CHECK: encoding: [0xf3,0x0f,0xc2,0xc8,0x06]
+        cmpnless %xmm0, %xmm1
+
+// CHECK: cmpsd $7, %xmm0, %xmm1
+// CHECK: encoding: [0xf2,0x0f,0xc2,0xc8,0x07]
+        cmpordsd %xmm0, %xmm1
+
+// rdar://7995856
+// CHECK: fmul	%st(0)
+// CHECK:  encoding: [0xd8,0xc8]
+        fmul %st(0), %st
+
+// CHECK: fadd	%st(0)
+// CHECK:  encoding: [0xd8,0xc0]
+        fadd %st(0), %st
+
+// CHECK: fsub	%st(0)
+// CHECK:  encoding: [0xd8,0xe0]
+        fsub %st(0), %st
+
+// CHECK: fsubr	%st(0)
+// CHECK:  encoding: [0xd8,0xe8]
+        fsubr %st(0), %st
+
+// CHECK: fdivr	%st(0)
+// CHECK:  encoding: [0xd8,0xf8]
+        fdivr %st(0), %st
+
+// CHECK: fdiv	%st(0)
+// CHECK:  encoding: [0xd8,0xf0]
+        fdiv %st(0), %st
+
+// radr://8017519
+// CHECK: movl	%cs, %eax
+// CHECK:  encoding: [0x8c,0xc8]
+        movl %cs, %eax
+
+// CHECK: movw	%cs, %ax
+// CHECK:  encoding: [0x66,0x8c,0xc8]
+        movw %cs, %ax
+
+// CHECK: movl	%cs, (%eax)
+// CHECK:  encoding: [0x8c,0x08]
+        movl %cs, (%eax)
+
+// CHECK: movw	%cs, (%eax)
+// CHECK:  encoding: [0x66,0x8c,0x08]
+        movw %cs, (%eax)
+
+// CHECK: movl	%eax, %cs
+// CHECK:  encoding: [0x8e,0xc8]
+        movl %eax, %cs
+
+// CHECK: movl	(%eax), %cs
+// CHECK:  encoding: [0x8e,0x08]
+        movl (%eax), %cs
+
+// CHECK: movw	(%eax), %cs
+// CHECK:  encoding: [0x66,0x8e,0x08]
+        movw (%eax), %cs
+
+// radr://8033374
+// CHECK: movl	%cr0, %eax
+// CHECK:  encoding: [0x0f,0x20,0xc0]
+        movl %cr0,%eax
+
+// CHECK: movl	%cr1, %eax
+// CHECK:  encoding: [0x0f,0x20,0xc8]
+        movl %cr1,%eax
+
+// CHECK: movl	%cr2, %eax
+// CHECK:  encoding: [0x0f,0x20,0xd0]
+        movl %cr2,%eax
+
+// CHECK: movl	%cr3, %eax
+// CHECK:  encoding: [0x0f,0x20,0xd8]
+        movl %cr3,%eax
+
+// CHECK: movl	%cr4, %eax
+// CHECK:  encoding: [0x0f,0x20,0xe0]
+        movl %cr4,%eax
+
+// CHECK: movl	%dr0, %eax
+// CHECK:  encoding: [0x0f,0x21,0xc0]
+        movl %dr0,%eax
+
+// CHECK: movl	%dr1, %eax
+// CHECK:  encoding: [0x0f,0x21,0xc8]
+        movl %dr1,%eax
+
+// CHECK: movl	%dr1, %eax
+// CHECK:  encoding: [0x0f,0x21,0xc8]
+        movl %dr1,%eax
+
+// CHECK: movl	%dr2, %eax
+// CHECK:  encoding: [0x0f,0x21,0xd0]
+        movl %dr2,%eax
+
+// CHECK: movl	%dr3, %eax
+// CHECK:  encoding: [0x0f,0x21,0xd8]
+        movl %dr3,%eax
+
+// CHECK: movl	%dr4, %eax
+// CHECK:  encoding: [0x0f,0x21,0xe0]
+        movl %dr4,%eax
+
+// CHECK: movl	%dr5, %eax
+// CHECK:  encoding: [0x0f,0x21,0xe8]
+        movl %dr5,%eax
+
+// CHECK: movl	%dr6, %eax
+// CHECK:  encoding: [0x0f,0x21,0xf0]
+        movl %dr6,%eax
+
+// CHECK: movl	%dr7, %eax
+// CHECK:  encoding: [0x0f,0x21,0xf8]
+        movl %dr7,%eax
+
+// radr://8017522
+// CHECK: wait
+// CHECK:  encoding: [0x9b]
+	fwait

@@ -13,6 +13,8 @@
 
 #define DEBUG_TYPE "stackcoloring"
 #include "VirtRegMap.h"
+#include "llvm/Function.h"
+#include "llvm/Module.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
@@ -116,6 +118,7 @@ namespace {
 
   private:
     void InitializeSlots();
+    bool CheckForSetJmpCall(const MachineFunction &MF) const;
     void ScanForSpillSlotRefs(MachineFunction &MF);
     bool OverlapWithAssignments(LiveInterval *li, int Color) const;
     int ColorSlot(LiveInterval *li);
@@ -721,6 +724,13 @@ bool StackSlotColoring::runOnMachineFunction(MachineFunction &MF) {
       // Nothing to do!
       return false;
   }
+
+  // If there are calls to setjmp or sigsetjmp, don't perform stack slot
+  // coloring. The stack could be modified before the longjmp is executed,
+  // resulting in the wrong value being used afterwards. (See
+  // <rdar://problem/8007500>.)
+  if (MF.callsSetJmp())
+    return false;
 
   // Gather spill slot references
   ScanForSpillSlotRefs(MF);

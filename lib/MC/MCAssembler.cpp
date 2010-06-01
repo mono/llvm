@@ -185,9 +185,6 @@ MCFragment::MCFragment(FragmentType _Kind, MCSectionData *_Parent)
     Parent->getFragmentList().push_back(this);
 }
 
-MCFragment::~MCFragment() {
-}
-
 /* *** */
 
 MCSectionData::MCSectionData() : Section(0) {}
@@ -229,7 +226,7 @@ MCAssembler::~MCAssembler() {
 }
 
 static bool isScatteredFixupFullyResolvedSimple(const MCAssembler &Asm,
-                                                const MCAsmFixup &Fixup,
+                                                const MCFixup &Fixup,
                                                 const MCValue Target,
                                                 const MCSection *BaseSection) {
   // The effective fixup address is
@@ -267,7 +264,7 @@ static bool isScatteredFixupFullyResolvedSimple(const MCAssembler &Asm,
 
 static bool isScatteredFixupFullyResolved(const MCAssembler &Asm,
                                           const MCAsmLayout &Layout,
-                                          const MCAsmFixup &Fixup,
+                                          const MCFixup &Fixup,
                                           const MCValue Target,
                                           const MCSymbolData *BaseSymbol) {
   // The effective fixup address is
@@ -346,11 +343,11 @@ const MCSymbolData *MCAssembler::getAtom(const MCAsmLayout &Layout,
 }
 
 bool MCAssembler::EvaluateFixup(const MCAsmLayout &Layout,
-                                const MCAsmFixup &Fixup, const MCFragment *DF,
+                                const MCFixup &Fixup, const MCFragment *DF,
                                 MCValue &Target, uint64_t &Value) const {
   ++stats::EvaluateFixup;
 
-  if (!Fixup.Value->EvaluateAsRelocatable(Target, &Layout))
+  if (!Fixup.getValue()->EvaluateAsRelocatable(Target, &Layout))
     report_fatal_error("expected relocatable expression");
 
   // FIXME: How do non-scattered symbols work in ELF? I presume the linker
@@ -359,8 +356,8 @@ bool MCAssembler::EvaluateFixup(const MCAsmLayout &Layout,
 
   Value = Target.getConstant();
 
-  bool IsPCRel =
-    Emitter.getFixupKindInfo(Fixup.Kind).Flags & MCFixupKindInfo::FKF_IsPCRel;
+  bool IsPCRel = Emitter.getFixupKindInfo(
+    Fixup.getKind()).Flags & MCFixupKindInfo::FKF_IsPCRel;
   bool IsResolved = true;
   if (const MCSymbolRefExpr *A = Target.getSymA()) {
     if (A->getSymbol().isDefined())
@@ -402,7 +399,7 @@ bool MCAssembler::EvaluateFixup(const MCAsmLayout &Layout,
   }
 
   if (IsPCRel)
-    Value -= Layout.getFragmentAddress(DF) + Fixup.Offset;
+    Value -= Layout.getFragmentAddress(DF) + Fixup.getOffset();
 
   return IsResolved;
 }
@@ -743,7 +740,7 @@ void MCAssembler::Finish() {
 
       for (MCDataFragment::fixup_iterator it3 = DF->fixup_begin(),
              ie3 = DF->fixup_end(); it3 != ie3; ++it3) {
-        MCAsmFixup &Fixup = *it3;
+        MCFixup &Fixup = *it3;
 
         // Evaluate the fixup.
         MCValue Target;
@@ -767,7 +764,7 @@ void MCAssembler::Finish() {
   stats::ObjectBytes += OS.tell() - StartOffset;
 }
 
-bool MCAssembler::FixupNeedsRelaxation(const MCAsmFixup &Fixup,
+bool MCAssembler::FixupNeedsRelaxation(const MCFixup &Fixup,
                                        const MCFragment *DF,
                                        const MCAsmLayout &Layout) const {
   if (getRelaxAll())
@@ -790,7 +787,7 @@ bool MCAssembler::FragmentNeedsRelaxation(const MCInstFragment *IF,
   // If this inst doesn't ever need relaxation, ignore it. This occurs when we
   // are intentionally pushing out inst fragments, or because we relaxed a
   // previous instruction to one that doesn't need relaxation.
-  if (!getBackend().MayNeedRelaxation(IF->getInst(), IF->getFixups()))
+  if (!getBackend().MayNeedRelaxation(IF->getInst()))
     return false;
 
   for (MCInstFragment::const_fixup_iterator it = IF->fixup_begin(),
@@ -827,7 +824,7 @@ bool MCAssembler::LayoutOnce(MCAsmLayout &Layout) {
       // Relax the fragment.
 
       MCInst Relaxed;
-      getBackend().RelaxInstruction(IF, Relaxed);
+      getBackend().RelaxInstruction(IF->getInst(), Relaxed);
 
       // Encode the new instruction.
       //
@@ -844,17 +841,12 @@ bool MCAssembler::LayoutOnce(MCAsmLayout &Layout) {
       IF->setInst(Relaxed);
       IF->getCode() = Code;
       IF->getFixups().clear();
-      for (unsigned i = 0, e = Fixups.size(); i != e; ++i) {
-        MCFixup &F = Fixups[i];
-        IF->getFixups().push_back(MCAsmFixup(F.getOffset(), *F.getValue(),
-                                             F.getKind()));
-      }
+      // FIXME: Eliminate copy.
+      for (unsigned i = 0, e = Fixups.size(); i != e; ++i)
+        IF->getFixups().push_back(Fixups[i]);
 
-      // Update the layout, and remember that we relaxed. If we are relaxing
-      // everything, we can skip this step since nothing will depend on updating
-      // the values.
-      if (!getRelaxAll())
-        Layout.UpdateForSlide(IF, SlideAmount);
+      // Update the layout, and remember that we relaxed.
+      Layout.UpdateForSlide(IF, SlideAmount);
       WasRelaxed = true;
     }
   }
@@ -907,9 +899,10 @@ void MCAssembler::FinishLayout(MCAsmLayout &Layout) {
 
 namespace llvm {
 
-raw_ostream &operator<<(raw_ostream &OS, const MCAsmFixup &AF) {
-  OS << "<MCAsmFixup" << " Offset:" << AF.Offset << " Value:" << *AF.Value
-     << " Kind:" << AF.Kind << ">";
+raw_ostream &operator<<(raw_ostream &OS, const MCFixup &AF) {
+  OS << "<MCFixup" << " Offset:" << AF.getOffset()
+     << " Value:" << *AF.getValue()
+     << " Kind:" << AF.getKind() << ">";
   return OS;
 }
 
@@ -918,79 +911,75 @@ raw_ostream &operator<<(raw_ostream &OS, const MCAsmFixup &AF) {
 void MCFragment::dump() {
   raw_ostream &OS = llvm::errs();
 
+  OS << "<";
+  switch (getKind()) {
+  case MCFragment::FT_Align: OS << "MCAlignFragment"; break;
+  case MCFragment::FT_Data:  OS << "MCDataFragment"; break;
+  case MCFragment::FT_Fill:  OS << "MCFillFragment"; break;
+  case MCFragment::FT_Inst:  OS << "MCInstFragment"; break;
+  case MCFragment::FT_Org:   OS << "MCOrgFragment"; break;
+  }
+
   OS << "<MCFragment " << (void*) this << " LayoutOrder:" << LayoutOrder
      << " Offset:" << Offset << " EffectiveSize:" << EffectiveSize << ">";
-}
 
-void MCAlignFragment::dump() {
-  raw_ostream &OS = llvm::errs();
-
-  OS << "<MCAlignFragment ";
-  this->MCFragment::dump();
-  if (hasEmitNops())
-    OS << " (emit nops)";
-  if (hasOnlyAlignAddress())
-    OS << " (only align section)";
-  OS << "\n       ";
-  OS << " Alignment:" << getAlignment()
-     << " Value:" << getValue() << " ValueSize:" << getValueSize()
-     << " MaxBytesToEmit:" << getMaxBytesToEmit() << ">";
-}
-
-void MCDataFragment::dump() {
-  raw_ostream &OS = llvm::errs();
-
-  OS << "<MCDataFragment ";
-  this->MCFragment::dump();
-  OS << "\n       ";
-  OS << " Contents:[";
-  for (unsigned i = 0, e = getContents().size(); i != e; ++i) {
-    if (i) OS << ",";
-    OS << hexdigit((Contents[i] >> 4) & 0xF) << hexdigit(Contents[i] & 0xF);
+  switch (getKind()) {
+  case MCFragment::FT_Align: {
+    const MCAlignFragment *AF = cast<MCAlignFragment>(this);
+    if (AF->hasEmitNops())
+      OS << " (emit nops)";
+    if (AF->hasOnlyAlignAddress())
+      OS << " (only align section)";
+    OS << "\n       ";
+    OS << " Alignment:" << AF->getAlignment()
+       << " Value:" << AF->getValue() << " ValueSize:" << AF->getValueSize()
+       << " MaxBytesToEmit:" << AF->getMaxBytesToEmit() << ">";
+    break;
   }
-  OS << "] (" << getContents().size() << " bytes)";
-
-  if (!getFixups().empty()) {
-    OS << ",\n       ";
-    OS << " Fixups:[";
-    for (fixup_iterator it = fixup_begin(), ie = fixup_end(); it != ie; ++it) {
-      if (it != fixup_begin()) OS << ",\n                ";
-      OS << *it;
+  case MCFragment::FT_Data:  {
+    const MCDataFragment *DF = cast<MCDataFragment>(this);
+    OS << "\n       ";
+    OS << " Contents:[";
+    const SmallVectorImpl<char> &Contents = DF->getContents();
+    for (unsigned i = 0, e = Contents.size(); i != e; ++i) {
+      if (i) OS << ",";
+      OS << hexdigit((Contents[i] >> 4) & 0xF) << hexdigit(Contents[i] & 0xF);
     }
-    OS << "]";
+    OS << "] (" << Contents.size() << " bytes)";
+
+    if (!DF->getFixups().empty()) {
+      OS << ",\n       ";
+      OS << " Fixups:[";
+      for (MCDataFragment::const_fixup_iterator it = DF->fixup_begin(),
+             ie = DF->fixup_end(); it != ie; ++it) {
+        if (it != DF->fixup_begin()) OS << ",\n                ";
+        OS << *it;
+      }
+      OS << "]";
+    }
+    break;
   }
-
+  case MCFragment::FT_Fill:  {
+    const MCFillFragment *FF = cast<MCFillFragment>(this);
+    OS << " Value:" << FF->getValue() << " ValueSize:" << FF->getValueSize()
+       << " Size:" << FF->getSize();
+    break;
+  }
+  case MCFragment::FT_Inst:  {
+    const MCInstFragment *IF = cast<MCInstFragment>(this);
+    OS << "\n       ";
+    OS << " Inst:";
+    IF->getInst().dump_pretty(OS);
+    break;
+  }
+  case MCFragment::FT_Org:  {
+    const MCOrgFragment *OF = cast<MCOrgFragment>(this);
+    OS << "\n       ";
+    OS << " Offset:" << OF->getOffset() << " Value:" << OF->getValue();
+    break;
+  }
+  }
   OS << ">";
-}
-
-void MCFillFragment::dump() {
-  raw_ostream &OS = llvm::errs();
-
-  OS << "<MCFillFragment ";
-  this->MCFragment::dump();
-  OS << "\n       ";
-  OS << " Value:" << getValue() << " ValueSize:" << getValueSize()
-     << " Size:" << getSize() << ">";
-}
-
-void MCInstFragment::dump() {
-  raw_ostream &OS = llvm::errs();
-
-  OS << "<MCInstFragment ";
-  this->MCFragment::dump();
-  OS << "\n       ";
-  OS << " Inst:";
-  getInst().dump_pretty(OS);
-  OS << ">";
-}
-
-void MCOrgFragment::dump() {
-  raw_ostream &OS = llvm::errs();
-
-  OS << "<MCOrgFragment ";
-  this->MCFragment::dump();
-  OS << "\n       ";
-  OS << " Offset:" << getOffset() << " Value:" << getValue() << ">";
 }
 
 void MCSectionData::dump() {

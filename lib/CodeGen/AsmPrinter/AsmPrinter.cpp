@@ -241,6 +241,12 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
   if (EmitSpecialLLVMGlobal(GV))
     return;
 
+  if (isVerbose()) {
+    WriteAsOperand(OutStreamer.GetCommentOS(), GV,
+                   /*PrintType=*/false, GV->getParent());
+    OutStreamer.GetCommentOS() << '\n';
+  }
+  
   MCSymbol *GVSym = Mang->getSymbol(GV);
   EmitVisibility(GVSym, GV->getVisibility());
 
@@ -311,13 +317,26 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
     return;
   }
   
-  // Handle the tbss directive on darwin which is a thread local bss directive
-  // like zerofill.
-  if (GVKind.isThreadBSS() && MAI->hasMachoTBSSDirective()) {
+  // Handle thread local data for mach-o which requires us to output an
+  // additional structure of data and mangle the original symbol so that we
+  // can reference it later.
+  if (GVKind.isThreadLocal() && MAI->hasMachoTBSSDirective()) {
     // Emit the .tbss symbol
     MCSymbol *MangSym = 
       OutContext.GetOrCreateSymbol(GVSym->getName() + Twine("$tlv$init"));
-    OutStreamer.EmitTBSSSymbol(TheSection, MangSym, Size, 1 << AlignLog);
+    
+    if (GVKind.isThreadBSS())
+      OutStreamer.EmitTBSSSymbol(TheSection, MangSym, Size, 1 << AlignLog);
+    else if (GVKind.isThreadData()) {
+      OutStreamer.SwitchSection(TheSection);
+
+      EmitLinkage(GV->getLinkage(), MangSym);
+      EmitAlignment(AlignLog, GV);      
+      OutStreamer.EmitLabel(MangSym);
+      
+      EmitGlobalConstant(GV->getInitializer());
+    }
+    
     OutStreamer.AddBlankLine();
     
     // Emit the variable struct for the runtime.
@@ -348,11 +367,6 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
   EmitLinkage(GV->getLinkage(), GVSym);
   EmitAlignment(AlignLog, GV);
 
-  if (isVerbose()) {
-    WriteAsOperand(OutStreamer.GetCommentOS(), GV,
-                   /*PrintType=*/false, GV->getParent());
-    OutStreamer.GetCommentOS() << '\n';
-  }
   OutStreamer.EmitLabel(GVSym);
 
   EmitGlobalConstant(GV->getInitializer());

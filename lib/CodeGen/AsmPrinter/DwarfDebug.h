@@ -15,6 +15,7 @@
 #define CODEGEN_ASMPRINTER_DWARFDEBUG_H__
 
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/MachineLocation.h"
 #include "DIE.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/FoldingSet.h"
@@ -30,7 +31,6 @@ class DbgConcreteScope;
 class DbgScope;
 class DbgVariable;
 class MachineFrameInfo;
-class MachineLocation;
 class MachineModuleInfo;
 class MachineOperand;
 class MCAsmInfo;
@@ -164,12 +164,6 @@ class DwarfDebug {
   /// DbgScopes in AbstractScopes.
   DenseMap<const MDNode *, DbgVariable *> AbstractVariables;
 
-  /// DbgValueStartMap - Tracks starting scope of variable DIEs.
-  /// If the scope of an object begins sometime after the low pc value for the 
-  /// scope most closely enclosing the object, the object entry may have a 
-  /// DW_AT_start_scope attribute.
-  DenseMap<const MachineInstr *, DbgVariable *> DbgValueStartMap;
-
   /// DbgVariableToFrameIndexMap - Tracks frame index used to find 
   /// variable's value.
   DenseMap<const DbgVariable *, int> DbgVariableToFrameIndexMap;
@@ -180,6 +174,27 @@ class DwarfDebug {
 
   /// DbgVariableLabelsMap - Maps DbgVariable to corresponding MCSymbol.
   DenseMap<const DbgVariable *, const MCSymbol *> DbgVariableLabelsMap;
+
+  /// DotDebugLocEntry - This struct describes location entries emitted in
+  /// .debug_loc section.
+  typedef struct DotDebugLocEntry {
+    const MCSymbol *Begin;
+    const MCSymbol *End;
+    MachineLocation Loc;
+    DotDebugLocEntry() : Begin(0), End(0) {}
+    DotDebugLocEntry(const MCSymbol *B, const MCSymbol *E, 
+                  MachineLocation &L) : Begin(B), End(E), Loc(L) {}
+    /// Empty entries are also used as a trigger to emit temp label. Such
+    /// labels are referenced is used to find debug_loc offset for a given DIE.
+    bool isEmpty() { return Begin == 0 && End == 0; }
+  } DotDebugLocEntry;
+
+  /// DotDebugLocEntries - Collection of DotDebugLocEntry.
+  SmallVector<DotDebugLocEntry, 4> DotDebugLocEntries;
+
+  /// UseDotDebugLocEntry - DW_AT_location attributes for the DIEs in this set
+  /// idetifies corresponding .debug_loc entry offset.
+  SmallPtrSet<const DIE *, 4> UseDotDebugLocEntry;
 
   /// VarToAbstractVarMap - Maps DbgVariable with corresponding Abstract
   /// DbgVariable, if any.
@@ -200,7 +215,7 @@ class DwarfDebug {
 
   /// InlineInfo - Keep track of inlined functions and their location.  This
   /// information is used to populate debug_inlined section.
-  typedef std::pair<MCSymbol *, DIE *> InlineInfoLabels;
+  typedef std::pair<const MCSymbol *, DIE *> InlineInfoLabels;
   DenseMap<const MDNode *, SmallVector<InlineInfoLabels, 4> > InlineInfo;
   SmallVector<const MDNode *, 4> InlinedSPNodes;
 
@@ -211,6 +226,13 @@ class DwarfDebug {
   /// LabelsAfterInsn - Maps instruction with label emitted after
   /// instruction.
   DenseMap<const MachineInstr *, MCSymbol *> LabelsAfterInsn;
+
+  /// insnNeedsLabel - Collection of instructions that need a label to mark
+  /// a debuggging information entity.
+  SmallPtrSet<const MachineInstr *, 8> InsnNeedsLabel;
+
+  /// ProcessedArgs - Collection of arguments already processed.
+  SmallPtrSet<const MDNode *, 8> ProcessedArgs;
 
   SmallVector<const MCSymbol *, 8> DebugRangeSymbols;
 
@@ -234,8 +256,8 @@ class DwarfDebug {
   // section offsets and are created by EmitSectionLabels.
   MCSymbol *DwarfFrameSectionSym, *DwarfInfoSectionSym, *DwarfAbbrevSectionSym;
   MCSymbol *DwarfStrSectionSym, *TextSectionSym, *DwarfDebugRangeSectionSym;
-
-  MCSymbol *FunctionBeginSym;
+  MCSymbol *DwarfDebugLocSectionSym;
+  MCSymbol *FunctionBeginSym, *FunctionEndSym;
 private:
   
   /// getSourceDirectoryAndFileIds - Return the directory and file ids that
@@ -599,6 +621,12 @@ public:
   /// endFunction - Gather and emit post-function debug information.
   ///
   void endFunction(const MachineFunction *MF);
+
+  /// getLabelBeforeInsn - Return Label preceding the instruction.
+  const MCSymbol *getLabelBeforeInsn(const MachineInstr *MI);
+
+  /// getLabelAfterInsn - Return Label immediately following the instruction.
+  const MCSymbol *getLabelAfterInsn(const MachineInstr *MI);
 
   /// beginScope - Process beginning of a scope.
   void beginScope(const MachineInstr *MI);

@@ -260,14 +260,13 @@ class TargetRegisterInfo {
 protected:
   const unsigned* SubregHash;
   const unsigned SubregHashSize;
-  const unsigned* SuperregHash;
-  const unsigned SuperregHashSize;
   const unsigned* AliasesHash;
   const unsigned AliasesHashSize;
 public:
   typedef const TargetRegisterClass * const * regclass_iterator;
 private:
   const TargetRegisterDesc *Desc;             // Pointer to the descriptor array
+  const char *const *SubRegIndexNames;        // Names of subreg indexes.
   unsigned NumRegs;                           // Number of entries in the array
 
   regclass_iterator RegClassBegin, RegClassEnd;   // List of regclasses
@@ -278,12 +277,11 @@ protected:
   TargetRegisterInfo(const TargetRegisterDesc *D, unsigned NR,
                      regclass_iterator RegClassBegin,
                      regclass_iterator RegClassEnd,
+                     const char *const *subregindexnames,
                      int CallFrameSetupOpcode = -1,
                      int CallFrameDestroyOpcode = -1,
                      const unsigned* subregs = 0,
                      const unsigned subregsize = 0,
-                     const unsigned* superregs = 0,
-                     const unsigned superregsize = 0,
                      const unsigned* aliases = 0,
                      const unsigned aliasessize = 0);
   virtual ~TargetRegisterInfo();
@@ -378,6 +376,13 @@ public:
     return NumRegs;
   }
 
+  /// getSubRegIndexName - Return the human-readable symbolic target-specific
+  /// name for the specified SubRegIndex.
+  const char *getSubRegIndexName(unsigned SubIdx) const {
+    assert(SubIdx && "This is not a subregister index");
+    return SubRegIndexNames[SubIdx-1];
+  }
+
   /// regsOverlap - Returns true if the two registers are equal or alias each
   /// other. The registers may be virtual register.
   bool regsOverlap(unsigned regA, unsigned regB) const {
@@ -423,19 +428,7 @@ public:
   /// isSuperRegister - Returns true if regB is a super-register of regA.
   ///
   bool isSuperRegister(unsigned regA, unsigned regB) const {
-    // SuperregHash is a simple quadratically probed hash table.
-    size_t index = (regA + regB * 37) & (SuperregHashSize-1);
-    unsigned ProbeAmt = 2;
-    while (SuperregHash[index*2] != 0 &&
-           SuperregHash[index*2+1] != 0) {
-      if (SuperregHash[index*2] == regA && SuperregHash[index*2+1] == regB)
-        return true;
-
-      index = (index + ProbeAmt) & (SuperregHashSize-1);
-      ProbeAmt += 2;
-    }
-
-    return false;
+    return isSubRegister(regB, regA);
   }
 
   /// getCalleeSavedRegs - Return a null-terminated list of all of the
@@ -495,6 +488,23 @@ public:
   getMatchingSuperRegClass(const TargetRegisterClass *A,
                            const TargetRegisterClass *B, unsigned Idx) const {
     return 0;
+  }
+
+  /// composeSubRegIndices - Return the subregister index you get from composing
+  /// two subregister indices.
+  ///
+  /// If R:a:b is the same register as R:c, then composeSubRegIndices(a, b)
+  /// returns c. Note that composeSubRegIndices does not tell you about illegal
+  /// compositions. If R does not have a subreg a, or R:a does not have a subreg
+  /// b, composeSubRegIndices doesn't tell you.
+  ///
+  /// The ARM register Q0 has two D subregs dsub_0:D0 and dsub_1:D1. It also has
+  /// ssub_0:S0 - ssub_3:S3 subregs.
+  /// If you compose subreg indices dsub_1, ssub_0 you get ssub_2.
+  ///
+  virtual unsigned composeSubRegIndices(unsigned a, unsigned b) const {
+    // This default implementation is correct for most targets.
+    return b;
   }
 
   //===--------------------------------------------------------------------===//

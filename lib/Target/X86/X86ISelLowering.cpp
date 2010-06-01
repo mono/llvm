@@ -825,6 +825,17 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   }
 
   if (Subtarget->hasSSE41()) {
+    setOperationAction(ISD::FFLOOR,             MVT::f32,   Legal);
+    setOperationAction(ISD::FCEIL,              MVT::f32,   Legal);
+    setOperationAction(ISD::FTRUNC,             MVT::f32,   Legal);
+    setOperationAction(ISD::FRINT,              MVT::f32,   Legal);
+    setOperationAction(ISD::FNEARBYINT,         MVT::f32,   Legal);
+    setOperationAction(ISD::FFLOOR,             MVT::f64,   Legal);
+    setOperationAction(ISD::FCEIL,              MVT::f64,   Legal);
+    setOperationAction(ISD::FTRUNC,             MVT::f64,   Legal);
+    setOperationAction(ISD::FRINT,              MVT::f64,   Legal);
+    setOperationAction(ISD::FNEARBYINT,         MVT::f64,   Legal);
+
     // FIXME: Do we need to handle scalar-to-vector here?
     setOperationAction(ISD::MUL,                MVT::v4i32, Legal);
 
@@ -1259,10 +1270,8 @@ X86TargetLowering::LowerReturn(SDValue Chain,
     MachineFunction &MF = DAG.getMachineFunction();
     X86MachineFunctionInfo *FuncInfo = MF.getInfo<X86MachineFunctionInfo>();
     unsigned Reg = FuncInfo->getSRetReturnReg();
-    if (!Reg) {
-      Reg = MRI.createVirtualRegister(getRegClassFor(MVT::i64));
-      FuncInfo->setSRetReturnReg(Reg);
-    }
+    assert(Reg && 
+           "SRetReturnReg should have been set in LowerFormalArguments().");
     SDValue Val = DAG.getCopyFromReg(Chain, dl, Reg, getPointerTy());
 
     Chain = DAG.getCopyToReg(Chain, dl, X86::RAX, Val, Flag);
@@ -1383,29 +1392,6 @@ ArgsAreStructReturn(const SmallVectorImpl<ISD::InputArg> &Ins) {
     return false;
 
   return Ins[0].Flags.isSRet();
-}
-
-/// IsCalleePop - Determines whether the callee is required to pop its
-/// own arguments. Callee pop is necessary to support tail calls.
-bool X86TargetLowering::IsCalleePop(bool IsVarArg,
-                                    CallingConv::ID CallingConv) const {
-  if (IsVarArg)
-    return false;
-
-  switch (CallingConv) {
-  default:
-    return false;
-  case CallingConv::X86_StdCall:
-    return !Subtarget->is64Bit();
-  case CallingConv::X86_FastCall:
-    return !Subtarget->is64Bit();
-  case CallingConv::X86_ThisCall:
-    return !Subtarget->is64Bit();
-  case CallingConv::Fast:
-    return GuaranteedTailCallOpt;
-  case CallingConv::GHC:
-    return GuaranteedTailCallOpt;
-  }
 }
 
 /// CCAssignFnForNode - Selects the correct CCAssignFn for a the
@@ -1728,7 +1714,7 @@ X86TargetLowering::LowerFormalArguments(SDValue Chain,
   }
 
   // Some CCs need callee pop.
-  if (IsCalleePop(isVarArg, CallConv)) {
+  if (Subtarget->IsCalleePop(isVarArg, CallConv)) {
     FuncInfo->setBytesToPopOnReturn(StackSize); // Callee pops everything.
   } else {
     FuncInfo->setBytesToPopOnReturn(0); // Callee pops nothing.
@@ -2190,7 +2176,7 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 
   // Create the CALLSEQ_END node.
   unsigned NumBytesForCalleeToPush;
-  if (IsCalleePop(isVarArg, CallConv))
+  if (Subtarget->IsCalleePop(isVarArg, CallConv))
     NumBytesForCalleeToPush = NumBytes;    // Callee pops everything
   else if (!Is64Bit && !IsTailCallConvention(CallConv) && IsStructRet)
     // If this is a call to a struct-return function, the callee
@@ -2349,8 +2335,8 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
     return false;
   }
 
-  // Look for obvious safe cases to perform tail call optimization that does not
-  // requite ABI changes. This is what gcc calls sibcall.
+  // Look for obvious safe cases to perform tail call optimization that do not
+  // require ABI changes. This is what gcc calls sibcall.
 
   // Can't do sibcall if stack needs to be dynamically re-aligned. PEI needs to
   // emit a special epilogue.
@@ -2452,6 +2438,24 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
         if (!VA.isRegLoc()) {
           if (!MatchingStackOffset(Arg, VA.getLocMemOffset(), Flags,
                                    MFI, MRI, TII))
+            return false;
+        }
+      }
+    }
+
+    // If the tailcall address may be in a register, then make sure it's
+    // possible to register allocate for it. In 32-bit, the call address can
+    // only target EAX, EDX, or ECX since the tail call must be scheduled after
+    // callee-saved registers are restored. In 64-bit, it's RAX, RCX, RDX, RSI,
+    // RDI, R8, R9, R11.
+    if (!isa<GlobalAddressSDNode>(Callee) &&
+        !isa<ExternalSymbolSDNode>(Callee)) {
+      unsigned Limit = Subtarget->is64Bit() ? 8 : 3;
+      unsigned NumInRegs = 0;
+      for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
+        CCValAssign &VA = ArgLocs[i];
+        if (VA.isRegLoc()) {
+          if (++NumInRegs == Limit)
             return false;
         }
       }

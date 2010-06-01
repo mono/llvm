@@ -923,18 +923,18 @@ let isCall = 1,
 //   except for our own input by listing the relevant registers in Defs. By
 //   doing so, we also cause the prologue/epilogue code to actively preserve
 //   all of the callee-saved resgisters, which is exactly what we want.
-//   The current SP is passed in $val, and we reuse the reg as a scratch.
+//   $val is a scratch register for our use.
 let Defs =
-  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7, R12 ] in {
+  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7, R12 ], hasSideEffects = 1,
+   isBarrier = 1  in {
   def tInt_eh_sjlj_setjmp : ThumbXI<(outs),(ins tGPR:$src, tGPR:$val),
                               AddrModeNone, SizeSpecial, NoItinerary,
-                              "str\t$val, [$src, #8]\t${:comment} begin eh.setjmp\n"
-                              "\tmov\t$val, pc\n"
-                              "\tadds\t$val, #9\n"
-                              "\tstr\t$val, [$src, #4]\n"
-                              "\tmovs\tr0, #0\n"
-                              "\tb\t1f\n"
-                              "\tmovs\tr0, #1\t${:comment} end eh.setjmp\n"
+                              "mov\t$val, pc\t${:comment} begin eh.setjmp\n\t"
+                              "adds\t$val, #7\n\t"
+                              "str\t$val, [$src, #4]\n\t"
+                              "movs\tr0, #0\n\t"
+                              "b\t1f\n\t"
+                              "movs\tr0, #1\t${:comment} end eh.setjmp\n\t"
                               "1:", "",
                    [(set R0, (ARMeh_sjlj_setjmp tGPR:$src, tGPR:$val))]>;
 }

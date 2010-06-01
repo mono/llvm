@@ -146,11 +146,11 @@ namespace {
       return getMachineOpValue(MI, MI.getOperand(OpIdx));
     }
 
-    /// getMovi32Value - Return binary encoding of operand for movw/movt. If the 
+    /// getMovi32Value - Return binary encoding of operand for movw/movt. If the
     /// machine operand requires relocation, record the relocation and return zero.
-    unsigned getMovi32Value(const MachineInstr &MI,const MachineOperand &MO, 
+    unsigned getMovi32Value(const MachineInstr &MI,const MachineOperand &MO,
                             unsigned Reloc);
-    unsigned getMovi32Value(const MachineInstr &MI, unsigned OpIdx, 
+    unsigned getMovi32Value(const MachineInstr &MI, unsigned OpIdx,
                             unsigned Reloc) {
       return getMovi32Value(MI, MI.getOperand(OpIdx), Reloc);
     }
@@ -227,12 +227,12 @@ unsigned ARMCodeEmitter::getShiftOp(unsigned Imm) const {
   return 0;
 }
 
-/// getMovi32Value - Return binary encoding of operand for movw/movt. If the 
+/// getMovi32Value - Return binary encoding of operand for movw/movt. If the
 /// machine operand requires relocation, record the relocation and return zero.
 unsigned ARMCodeEmitter::getMovi32Value(const MachineInstr &MI,
-                                        const MachineOperand &MO, 
+                                        const MachineOperand &MO,
                                         unsigned Reloc) {
-  assert(((Reloc == ARM::reloc_arm_movt) || (Reloc == ARM::reloc_arm_movw)) 
+  assert(((Reloc == ARM::reloc_arm_movt) || (Reloc == ARM::reloc_arm_movw))
       && "Relocation to this function should be for movt or movw");
 
   if (MO.isImm())
@@ -781,10 +781,6 @@ void ARMCodeEmitter::emitDataProcessingInstruction(const MachineInstr &MI,
                                                    unsigned ImplicitRn) {
   const TargetInstrDesc &TID = MI.getDesc();
 
-  if (TID.Opcode == ARM::BFC) {
-    report_fatal_error("ARMv6t2 JIT is not yet supported.");
-  }
-
   // Part of binary is determined by TableGn.
   unsigned Binary = getBinaryCodeForInstr(MI);
 
@@ -818,6 +814,27 @@ void ARMCodeEmitter::emitDataProcessingInstruction(const MachineInstr &MI,
                        ARM::reloc_arm_movt) >> 16);
       Binary |= Hi16 & 0xFFF;
       Binary |= ((Hi16 >> 12) & 0xF) << 16;
+      emitWordLE(Binary);
+      return;
+  } else if ((TID.Opcode == ARM::BFC) || (TID.Opcode == ARM::BFI)) {
+      uint32_t v = ~MI.getOperand(2).getImm();
+      int32_t lsb = CountTrailingZeros_32(v);
+      int32_t msb = (32 - CountLeadingZeros_32(v)) - 1;
+      // Instr{20-16} = msb, Instr{11-7} = lsb
+      Binary |= (msb & 0x1F) << 16;
+      Binary |= (lsb & 0x1F) << 7;
+      emitWordLE(Binary);
+      return;
+  } else if ((TID.Opcode == ARM::UBFX) || (TID.Opcode == ARM::SBFX)) {
+      // Encode Rn in Instr{0-3}
+      Binary |= getMachineOpValue(MI, OpIdx++);
+
+      uint32_t lsb = MI.getOperand(OpIdx++).getImm();
+      uint32_t widthm1 = MI.getOperand(OpIdx++).getImm() - 1;
+
+      // Instr{20-16} = widthm1, Instr{11-7} = lsb
+      Binary |= (widthm1 & 0x1F) << 16;
+      Binary |= (lsb & 0x1F) << 7;
       emitWordLE(Binary);
       return;
   }
@@ -1459,7 +1476,12 @@ ARMCodeEmitter::emitVFPLoadStoreMultipleInstruction(const MachineInstr &MI) {
       break;
     ++NumRegs;
   }
-  Binary |= NumRegs * 2;
+  // Bit 8 will be set if <list> is consecutive 64-bit registers (e.g., D0)
+  // Otherwise, it will be 0, in the case of 32-bit registers.
+  if(Binary & 0x100)
+    Binary |= NumRegs * 2;
+  else
+    Binary |= NumRegs;
 
   emitWordLE(Binary);
 }

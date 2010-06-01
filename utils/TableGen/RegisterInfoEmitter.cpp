@@ -82,6 +82,7 @@ void RegisterInfoEmitter::runHeader(raw_ostream &OS) {
      << "     { return false; }\n"
      << "  unsigned getSubReg(unsigned RegNo, unsigned Index) const;\n"
      << "  unsigned getSubRegIndex(unsigned RegNo, unsigned SubRegNo) const;\n"
+     << "  unsigned composeSubRegIndices(unsigned, unsigned) const;\n"
      << "};\n\n";
 
   const std::vector<CodeGenRegisterClass> &RegisterClasses =
@@ -169,6 +170,160 @@ static void addSubSuperReg(Record *R, Record *S,
     for (std::set<Record*>::iterator I = SubRegs[S].begin(),
            E = SubRegs[S].end(); I != E; ++I)
       addSubSuperReg(R, *I, SubRegs, SuperRegs, Aliases);
+}
+
+struct RegisterMaps {
+  // Map SubRegIndex -> Register
+  typedef std::map<Record*, Record*, LessRecord> SubRegMap;
+  // Map Register -> SubRegMap
+  typedef std::map<Record*, SubRegMap> SubRegMaps;
+
+  SubRegMaps SubReg;
+  SubRegMap &inferSubRegIndices(Record *Reg);
+
+  // Composite SubRegIndex instances.
+  // Map (SubRegIndex,SubRegIndex) -> SubRegIndex
+  typedef DenseMap<std::pair<Record*,Record*>,Record*> CompositeMap;
+  CompositeMap Composite;
+
+  // Compute SubRegIndex compositions after inferSubRegIndices has run on all
+  // registers.
+  void computeComposites();
+};
+
+// Calculate all subregindices for Reg. Loopy subregs cause infinite recursion.
+RegisterMaps::SubRegMap &RegisterMaps::inferSubRegIndices(Record *Reg) {
+  SubRegMap &SRM = SubReg[Reg];
+  if (!SRM.empty())
+    return SRM;
+  std::vector<Record*> SubRegs = Reg->getValueAsListOfDefs("SubRegs");
+  std::vector<Record*> Indices = Reg->getValueAsListOfDefs("SubRegIndices");
+  if (SubRegs.size() != Indices.size())
+    throw "Register " + Reg->getName() + " SubRegIndices doesn't match SubRegs";
+
+  // First insert the direct subregs and make sure they are fully indexed.
+  for (unsigned i = 0, e = SubRegs.size(); i != e; ++i) {
+    if (!SRM.insert(std::make_pair(Indices[i], SubRegs[i])).second)
+      throw "SubRegIndex " + Indices[i]->getName()
+        + " appears twice in Register " + Reg->getName();
+    inferSubRegIndices(SubRegs[i]);
+  }
+
+  // Keep track of inherited subregs and how they can be reached.
+  // Register -> (SubRegIndex, SubRegIndex)
+  typedef std::map<Record*, std::pair<Record*,Record*>, LessRecord> OrphanMap;
+  OrphanMap Orphans;
+
+  // Clone inherited subregs. Here the order is important - earlier subregs take
+  // precedence.
+  for (unsigned i = 0, e = SubRegs.size(); i != e; ++i) {
+    SubRegMap &M = SubReg[SubRegs[i]];
+    for (SubRegMap::iterator si = M.begin(), se = M.end(); si != se; ++si)
+      if (!SRM.insert(*si).second)
+        Orphans[si->second] = std::make_pair(Indices[i], si->first);
+  }
+
+  // Finally process the composites.
+  ListInit *Comps = Reg->getValueAsListInit("CompositeIndices");
+  for (unsigned i = 0, e = Comps->size(); i != e; ++i) {
+    DagInit *Pat = dynamic_cast<DagInit*>(Comps->getElement(i));
+    if (!Pat)
+      throw "Invalid dag '" + Comps->getElement(i)->getAsString()
+        + "' in CompositeIndices";
+    DefInit *BaseIdxInit = dynamic_cast<DefInit*>(Pat->getOperator());
+    if (!BaseIdxInit || !BaseIdxInit->getDef()->isSubClassOf("SubRegIndex"))
+      throw "Invalid SubClassIndex in " + Pat->getAsString();
+
+    // Resolve list of subreg indices into R2.
+    Record *R2 = Reg;
+    for (DagInit::const_arg_iterator di = Pat->arg_begin(),
+         de = Pat->arg_end(); di != de; ++di) {
+      DefInit *IdxInit = dynamic_cast<DefInit*>(*di);
+      if (!IdxInit || !IdxInit->getDef()->isSubClassOf("SubRegIndex"))
+        throw "Invalid SubClassIndex in " + Pat->getAsString();
+      SubRegMap::const_iterator ni = SubReg[R2].find(IdxInit->getDef());
+      if (ni == SubReg[R2].end())
+        throw "Composite " + Pat->getAsString() + " refers to bad index in "
+          + R2->getName();
+      R2 = ni->second;
+    }
+
+    // Insert composite index. Allow overriding inherited indices etc.
+    SRM[BaseIdxInit->getDef()] = R2;
+
+    // R2 is now directly addressable, no longer an orphan.
+    Orphans.erase(R2);
+  }
+
+  // Now, Orphans contains the inherited subregisters without a direct index.
+  if (!Orphans.empty()) {
+    errs() << "Error: Register " << getQualifiedName(Reg)
+           << " inherited subregisters without an index:\n";
+    for (OrphanMap::iterator i = Orphans.begin(), e = Orphans.end(); i != e;
+         ++i) {
+      errs() << "  " << getQualifiedName(i->first)
+             << " = " << i->second.first->getName()
+             << ", " << i->second.second->getName() << "\n";
+    }
+    abort();
+  }
+  return SRM;
+}
+
+void RegisterMaps::computeComposites() {
+  for (SubRegMaps::const_iterator sri = SubReg.begin(), sre = SubReg.end();
+       sri != sre; ++sri) {
+    Record *Reg1 = sri->first;
+    const SubRegMap &SRM1 = sri->second;
+    for (SubRegMap::const_iterator i1 = SRM1.begin(), e1 = SRM1.end();
+         i1 != e1; ++i1) {
+      Record *Idx1 = i1->first;
+      Record *Reg2 = i1->second;
+      // Ignore identity compositions.
+      if (Reg1 == Reg2)
+        continue;
+      // If Reg2 has no subregs, Idx1 doesn't compose.
+      if (!SubReg.count(Reg2))
+        continue;
+      const SubRegMap &SRM2 = SubReg[Reg2];
+      // Try composing Idx1 with another SubRegIndex.
+      for (SubRegMap::const_iterator i2 = SRM2.begin(), e2 = SRM2.end();
+           i2 != e2; ++i2) {
+        std::pair<Record*,Record*> IdxPair(Idx1, i2->first);
+        Record *Reg3 = i2->second;
+        // OK Reg1:IdxPair == Reg3. Find the index with Reg:Idx == Reg3.
+        for (SubRegMap::const_iterator i1d = SRM1.begin(), e1d = SRM1.end();
+             i1d != e1d; ++i1d) {
+          // Ignore identity compositions.
+          if (Reg2 == Reg3)
+            continue;
+          if (i1d->second == Reg3) {
+            std::pair<CompositeMap::iterator,bool> Ins =
+              Composite.insert(std::make_pair(IdxPair, i1d->first));
+            // Conflicting composition?
+            if (!Ins.second && Ins.first->second != i1d->first) {
+              errs() << "Error: SubRegIndex " << getQualifiedName(Idx1)
+                     << " and " << getQualifiedName(IdxPair.second)
+                     << " compose ambiguously as "
+                     << getQualifiedName(Ins.first->second) << " or "
+                     << getQualifiedName(i1d->first) << "\n";
+              abort();
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // We don't care about the difference between (Idx1, Idx2) -> Idx2 and invalid
+  // compositions, so remove any mappings of that form.
+  for (CompositeMap::iterator i = Composite.begin(), e = Composite.end();
+       i != e;) {
+    CompositeMap::iterator j = i;
+    ++i;
+    if (j->first.second == j->second)
+      Composite.erase(j);
+  }
 }
 
 class RegisterSorter {
@@ -455,8 +610,6 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
   std::map<Record*, std::set<Record*>, LessRecord> RegisterSubRegs;
   std::map<Record*, std::set<Record*>, LessRecord> RegisterSuperRegs;
   std::map<Record*, std::set<Record*>, LessRecord> RegisterAliases;
-  // Register -> [(SubRegIndex, Register)]
-  std::map<Record*, std::vector<std::pair<Record*, Record*> > > SubRegVectors;
   typedef std::map<Record*, std::vector<int64_t>, LessRecord> DwarfRegNumsMapTy;
   DwarfRegNumsMapTy DwarfRegNums;
   
@@ -576,83 +729,6 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
   delete [] SubregHashTable;
 
 
-  // Print the SuperregHashTable, a simple quadratically probed
-  // hash table for determining if a register is a super-register
-  // of another register.
-  unsigned NumSupRegs = 0;
-  RegNo.clear();
-  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
-    RegNo[Regs[i].TheDef] = i;
-    NumSupRegs += RegisterSuperRegs[Regs[i].TheDef].size();
-  }
-  
-  unsigned SuperregHashTableSize = 2 * NextPowerOf2(2 * NumSupRegs);
-  unsigned* SuperregHashTable = new unsigned[2 * SuperregHashTableSize];
-  std::fill(SuperregHashTable, SuperregHashTable + 2 * SuperregHashTableSize, ~0U);
-  
-  hashMisses = 0;
-  
-  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
-    Record* R = Regs[i].TheDef;
-    for (std::set<Record*>::iterator I = RegisterSuperRegs[R].begin(),
-         E = RegisterSuperRegs[R].end(); I != E; ++I) {
-      Record* RJ = *I;
-      // We have to increase the indices of both registers by one when
-      // computing the hash because, in the generated code, there
-      // will be an extra empty slot at register 0.
-      size_t index = ((i+1) + (RegNo[RJ]+1) * 37) & (SuperregHashTableSize-1);
-      unsigned ProbeAmt = 2;
-      while (SuperregHashTable[index*2] != ~0U &&
-             SuperregHashTable[index*2+1] != ~0U) {
-        index = (index + ProbeAmt) & (SuperregHashTableSize-1);
-        ProbeAmt += 2;
-        
-        hashMisses++;
-      }
-      
-      SuperregHashTable[index*2] = i;
-      SuperregHashTable[index*2+1] = RegNo[RJ];
-    }
-  }
-  
-  OS << "\n\n  // Number of hash collisions: " << hashMisses << "\n";
-  
-  if (SuperregHashTableSize) {
-    std::string Namespace = Regs[0].TheDef->getValueAsString("Namespace");
-    
-    OS << "  const unsigned SuperregHashTable[] = { ";
-    for (unsigned i = 0; i < SuperregHashTableSize - 1; ++i) {
-      if (i != 0)
-        // Insert spaces for nice formatting.
-        OS << "                                       ";
-      
-      if (SuperregHashTable[2*i] != ~0U) {
-        OS << getQualifiedName(Regs[SuperregHashTable[2*i]].TheDef) << ", "
-           << getQualifiedName(Regs[SuperregHashTable[2*i+1]].TheDef) << ", \n";
-      } else {
-        OS << Namespace << "::NoRegister, " << Namespace << "::NoRegister, \n";
-      }
-    }
-    
-    unsigned Idx = SuperregHashTableSize*2-2;
-    if (SuperregHashTable[Idx] != ~0U) {
-      OS << "                                       "
-         << getQualifiedName(Regs[SuperregHashTable[Idx]].TheDef) << ", "
-         << getQualifiedName(Regs[SuperregHashTable[Idx+1]].TheDef) << " };\n";
-    } else {
-      OS << Namespace << "::NoRegister, " << Namespace << "::NoRegister };\n";
-    }
-    
-    OS << "  const unsigned SuperregHashTableSize = "
-       << SuperregHashTableSize << ";\n";
-  } else {
-    OS << "  const unsigned SuperregHashTable[] = { ~0U, ~0U };\n"
-       << "  const unsigned SuperregHashTableSize = 1;\n";
-  }
-  
-  delete [] SuperregHashTable;
-
-
   // Print the AliasHashTable, a simple quadratically probed
   // hash table for determining if a register aliases another register.
   unsigned NumAliases = 0;
@@ -737,6 +813,8 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
   // to memory.
   for (std::map<Record*, std::set<Record*>, LessRecord >::iterator
          I = RegisterAliases.begin(), E = RegisterAliases.end(); I != E; ++I) {
+    if (I->second.empty())
+      continue;
     OS << "  const unsigned " << I->first->getName() << "_AliasSet[] = { ";
     for (std::set<Record*>::iterator ASI = I->second.begin(),
            E = I->second.end(); ASI != E; ++ASI)
@@ -753,6 +831,8 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
   // sub-registers list to memory.
   for (std::map<Record*, std::set<Record*>, LessRecord>::iterator
          I = RegisterSubRegs.begin(), E = RegisterSubRegs.end(); I != E; ++I) {
+   if (I->second.empty())
+     continue;
     OS << "  const unsigned " << I->first->getName() << "_SubRegsSet[] = { ";
     std::vector<Record*> SubRegsVector;
     for (std::set<Record*>::iterator ASI = I->second.begin(),
@@ -774,6 +854,8 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
   // super-registers list to memory.
   for (std::map<Record*, std::set<Record*>, LessRecord >::iterator
          I = RegisterSuperRegs.begin(), E = RegisterSuperRegs.end(); I != E; ++I) {
+    if (I->second.empty())
+      continue;
     OS << "  const unsigned " << I->first->getName() << "_SuperRegsSet[] = { ";
 
     std::vector<Record*> SuperRegsVector;
@@ -792,94 +874,116 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
 
   // Now that register alias and sub-registers sets have been emitted, emit the
   // register descriptors now.
-  const std::vector<CodeGenRegister> &Registers = Target.getRegisters();
-  for (unsigned i = 0, e = Registers.size(); i != e; ++i) {
-    const CodeGenRegister &Reg = Registers[i];
+  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
+    const CodeGenRegister &Reg = Regs[i];
     OS << "    { \"";
     OS << Reg.getName() << "\",\t";
-    if (RegisterAliases.count(Reg.TheDef))
+    if (!RegisterAliases[Reg.TheDef].empty())
       OS << Reg.getName() << "_AliasSet,\t";
     else
       OS << "Empty_AliasSet,\t";
-    if (RegisterSubRegs.count(Reg.TheDef))
+    if (!RegisterSubRegs[Reg.TheDef].empty())
       OS << Reg.getName() << "_SubRegsSet,\t";
     else
       OS << "Empty_SubRegsSet,\t";
-    if (RegisterSuperRegs.count(Reg.TheDef))
+    if (!RegisterSuperRegs[Reg.TheDef].empty())
       OS << Reg.getName() << "_SuperRegsSet },\n";
     else
       OS << "Empty_SuperRegsSet },\n";
   }
   OS << "  };\n";      // End of register descriptors...
+
+  // Emit SubRegIndex names, skipping 0
+  const std::vector<Record*> SubRegIndices = Target.getSubRegIndices();
+  OS << "\n  const char *const SubRegIndexTable[] = { \"";
+  for (unsigned i = 0, e = SubRegIndices.size(); i != e; ++i) {
+    OS << SubRegIndices[i]->getName();
+    if (i+1 != e)
+      OS << "\", \"";
+  }
+  OS << "\" };\n\n";
   OS << "}\n\n";       // End of anonymous namespace...
 
   std::string ClassName = Target.getName() + "GenRegisterInfo";
 
   // Calculate the mapping of subregister+index pairs to physical registers.
-  std::vector<Record*> SubRegs = Records.getAllDerivedDefinitions("SubRegSet");
-  for (unsigned i = 0, e = SubRegs.size(); i != e; ++i) {
-    Record *subRegIndex = SubRegs[i]->getValueAsDef("Index");
-    std::vector<Record*> From = SubRegs[i]->getValueAsListOfDefs("From");
-    std::vector<Record*> To   = SubRegs[i]->getValueAsListOfDefs("To");
-    
-    if (From.size() != To.size()) {
-      errs() << "Error: register list and sub-register list not of equal length"
-             << " in SubRegSet\n";
-      exit(1);
-    }
-    
-    // For each entry in from/to vectors, insert the to register at index 
-    for (unsigned ii = 0, ee = From.size(); ii != ee; ++ii)
-      SubRegVectors[From[ii]].push_back(std::make_pair(subRegIndex, To[ii]));
-  }
-  
+  RegisterMaps RegMaps;
+
   // Emit the subregister + index mapping function based on the information
   // calculated above.
-  OS << "unsigned " << ClassName 
+  OS << "unsigned " << ClassName
      << "::getSubReg(unsigned RegNo, unsigned Index) const {\n"
      << "  switch (RegNo) {\n"
      << "  default:\n    return 0;\n";
-  for (std::map<Record*, std::vector<std::pair<Record*, Record*> > >::iterator
-        I = SubRegVectors.begin(), E = SubRegVectors.end(); I != E; ++I) {
-    OS << "  case " << getQualifiedName(I->first) << ":\n";
+  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
+    RegisterMaps::SubRegMap &SRM = RegMaps.inferSubRegIndices(Regs[i].TheDef);
+    if (SRM.empty())
+      continue;
+    OS << "  case " << getQualifiedName(Regs[i].TheDef) << ":\n";
     OS << "    switch (Index) {\n";
     OS << "    default: return 0;\n";
-    for (unsigned i = 0, e = I->second.size(); i != e; ++i)
-      OS << "    case "
-         << getQualifiedName((I->second)[i].first) << ": return "
-         << getQualifiedName((I->second)[i].second) << ";\n";
+    for (RegisterMaps::SubRegMap::const_iterator ii = SRM.begin(),
+         ie = SRM.end(); ii != ie; ++ii)
+      OS << "    case " << getQualifiedName(ii->first)
+         << ": return " << getQualifiedName(ii->second) << ";\n";
     OS << "    };\n" << "    break;\n";
   }
   OS << "  };\n";
   OS << "  return 0;\n";
   OS << "}\n\n";
 
-  OS << "unsigned " << ClassName 
+  OS << "unsigned " << ClassName
      << "::getSubRegIndex(unsigned RegNo, unsigned SubRegNo) const {\n"
      << "  switch (RegNo) {\n"
      << "  default:\n    return 0;\n";
-  for (std::map<Record*, std::vector<std::pair<Record*, Record*> > >::iterator
-        I = SubRegVectors.begin(), E = SubRegVectors.end(); I != E; ++I) {
-    OS << "  case " << getQualifiedName(I->first) << ":\n";
-    for (unsigned i = 0, e = I->second.size(); i != e; ++i)
-      OS << "    if (SubRegNo == "
-         << getQualifiedName((I->second)[i].second)
-         << ")  return "
-         << getQualifiedName((I->second)[i].first) << ";\n";
+   for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
+     RegisterMaps::SubRegMap &SRM = RegMaps.SubReg[Regs[i].TheDef];
+     if (SRM.empty())
+       continue;
+    OS << "  case " << getQualifiedName(Regs[i].TheDef) << ":\n";
+    for (RegisterMaps::SubRegMap::const_iterator ii = SRM.begin(),
+         ie = SRM.end(); ii != ie; ++ii)
+      OS << "    if (SubRegNo == " << getQualifiedName(ii->second)
+         << ")  return " << getQualifiedName(ii->first) << ";\n";
     OS << "    return 0;\n";
   }
   OS << "  };\n";
   OS << "  return 0;\n";
   OS << "}\n\n";
-  
+
+  // Emit composeSubRegIndices
+  RegMaps.computeComposites();
+  OS << "unsigned " << ClassName
+     << "::composeSubRegIndices(unsigned IdxA, unsigned IdxB) const {\n"
+     << "  switch (IdxA) {\n"
+     << "  default:\n    return IdxB;\n";
+  for (unsigned i = 0, e = SubRegIndices.size(); i != e; ++i) {
+    bool Open = false;
+    for (unsigned j = 0; j != e; ++j) {
+      if (Record *Comp = RegMaps.Composite.lookup(
+                          std::make_pair(SubRegIndices[i], SubRegIndices[j]))) {
+        if (!Open) {
+          OS << "  case " << getQualifiedName(SubRegIndices[i])
+             << ": switch(IdxB) {\n    default: return IdxB;\n";
+          Open = true;
+        }
+        OS << "    case " << getQualifiedName(SubRegIndices[j])
+           << ": return " << getQualifiedName(Comp) << ";\n";
+      }
+    }
+    if (Open)
+      OS << "    }\n";
+  }
+  OS << "  }\n}\n\n";
+
   // Emit the constructor of the class...
   OS << ClassName << "::" << ClassName
      << "(int CallFrameSetupOpcode, int CallFrameDestroyOpcode)\n"
-     << "  : TargetRegisterInfo(RegisterDescriptors, " << Registers.size()+1
-     << ", RegisterClasses, RegisterClasses+" << RegisterClasses.size() <<",\n "
+     << "  : TargetRegisterInfo(RegisterDescriptors, " << Regs.size()+1
+     << ", RegisterClasses, RegisterClasses+" << RegisterClasses.size() <<",\n"
+     << "                 SubRegIndexTable,\n"
      << "                 CallFrameSetupOpcode, CallFrameDestroyOpcode,\n"
      << "                 SubregHashTable, SubregHashTableSize,\n"
-     << "                 SuperregHashTable, SuperregHashTableSize,\n"
      << "                 AliasesHashTable, AliasesHashTableSize) {\n"
      << "}\n\n";
 
@@ -887,8 +991,8 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
 
   // First, just pull all provided information to the map
   unsigned maxLength = 0;
-  for (unsigned i = 0, e = Registers.size(); i != e; ++i) {
-    Record *Reg = Registers[i].TheDef;
+  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
+    Record *Reg = Regs[i].TheDef;
     std::vector<int64_t> RegNums = Reg->getValueAsListOfInts("DwarfNumbers");
     maxLength = std::max((size_t)maxLength, RegNums.size());
     if (DwarfRegNums.count(Reg))

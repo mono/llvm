@@ -25,6 +25,7 @@
 #include "llvm/Intrinsics.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/LLVMContext.h"
+#include "llvm/Module.h"
 #include "llvm/CodeGen/FastISel.h"
 #include "llvm/CodeGen/GCStrategy.h"
 #include "llvm/CodeGen/GCMetadata.h"
@@ -170,7 +171,7 @@ TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
 SelectionDAGISel::SelectionDAGISel(const TargetMachine &tm, CodeGenOpt::Level OL) :
   MachineFunctionPass(&ID), TM(tm), TLI(*tm.getTargetLowering()),
   FuncInfo(new FunctionLoweringInfo(TLI)),
-  CurDAG(new SelectionDAG(tm, *FuncInfo)),
+  CurDAG(new SelectionDAG(tm)),
   SDB(new SelectionDAGBuilder(*CurDAG, *FuncInfo, OL)),
   GFI(),
   OptLevel(OL),
@@ -189,6 +190,39 @@ void SelectionDAGISel::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<GCModuleInfo>();
   AU.addPreserved<GCModuleInfo>();
   MachineFunctionPass::getAnalysisUsage(AU);
+}
+
+/// FunctionCallsSetJmp - Return true if the function has a call to setjmp or
+/// other function that gcc recognizes as "returning twice". This is used to
+/// limit code-gen optimizations on the machine function.
+///
+/// FIXME: Remove after <rdar://problem/8031714> is fixed.
+static bool FunctionCallsSetJmp(const Function *F) {
+  const Module *M = F->getParent();
+  static const char *ReturnsTwiceFns[] = {
+    "setjmp",
+    "sigsetjmp",
+    "setjmp_syscall",
+    "savectx",
+    "qsetjmp",
+    "vfork",
+    "getcontext"
+  };
+#define NUM_RETURNS_TWICE_FNS sizeof(ReturnsTwiceFns) / sizeof(const char *)
+
+  for (unsigned I = 0; I < NUM_RETURNS_TWICE_FNS; ++I)
+    if (const Function *Callee = M->getFunction(ReturnsTwiceFns[I])) {
+      if (!Callee->use_empty())
+        for (Value::const_use_iterator
+               I = Callee->use_begin(), E = Callee->use_end();
+             I != E; ++I)
+          if (const CallInst *CI = dyn_cast<CallInst>(I))
+            if (CI->getParent()->getParent() == F)
+              return true;
+    }
+
+  return false;
+#undef NUM_RETURNS_TWICE_FNS
 }
 
 bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
@@ -210,7 +244,7 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
   DEBUG(dbgs() << "\n\n\n=== " << Fn.getName() << "\n");
 
   CurDAG->init(*MF);
-  FuncInfo->set(Fn, *MF, EnableFastISel);
+  FuncInfo->set(Fn, *MF);
   SDB->init(GFI, *AA);
 
   SelectAllBasicBlocks(Fn);
@@ -220,6 +254,13 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
   // emitting the code for the block.
   MachineBasicBlock *EntryMBB = MF->begin();
   RegInfo->EmitLiveInCopies(EntryMBB, TRI, TII);
+
+  DenseMap<unsigned, unsigned> LiveInMap;
+  if (!FuncInfo->ArgDbgValues.empty())
+    for (MachineRegisterInfo::livein_iterator LI = RegInfo->livein_begin(),
+           E = RegInfo->livein_end(); LI != E; ++LI)
+      if (LI->second) 
+        LiveInMap.insert(std::make_pair(LI->first, LI->second));
 
   // Insert DBG_VALUE instructions for function arguments to the entry block.
   for (unsigned i = 0, e = FuncInfo->ArgDbgValues.size(); i != e; ++i) {
@@ -232,6 +273,21 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
       MachineBasicBlock::iterator InsertPos = Def;
       // FIXME: VR def may not be in entry block.
       Def->getParent()->insert(llvm::next(InsertPos), MI);
+    }
+
+    // If Reg is live-in then update debug info to track its copy in a vreg.
+    DenseMap<unsigned, unsigned>::iterator LDI = LiveInMap.find(Reg);
+    if (LDI != LiveInMap.end()) {
+      MachineInstr *Def = RegInfo->getVRegDef(LDI->second);
+      MachineBasicBlock::iterator InsertPos = Def;
+      const MDNode *Variable = 
+        MI->getOperand(MI->getNumOperands()-1).getMetadata();
+      unsigned Offset = MI->getOperand(1).getImm();
+      // Def is never a terminator here, so it is ok to increment InsertPos.
+      BuildMI(*EntryMBB, ++InsertPos, MI->getDebugLoc(), 
+              TII.get(TargetOpcode::DBG_VALUE))
+        .addReg(LDI->second, RegState::Debug)
+        .addImm(Offset).addMetadata(Variable);
     }
   }
 
@@ -252,6 +308,9 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
     }
   done:;
   }
+
+  // Determine if there is a call to setjmp in the machine function.
+  MF->setCallsSetJmp(FunctionCallsSetJmp(&Fn));
 
   // Release function-specific state. SDB and CurDAG are already cleared
   // at this point.

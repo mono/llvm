@@ -160,8 +160,10 @@ bool LLVMTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
     TargetAsmBackend *TAB = getTarget().createAsmBackend(TargetTriple);
     if (MCE == 0 || TAB == 0)
       return true;
-    
-    AsmStreamer.reset(createMachOStreamer(*Context, *TAB, Out, MCE));
+
+    AsmStreamer.reset(getTarget().createObjectStreamer(TargetTriple, *Context,
+                                                       *TAB, Out, MCE,
+                                                       hasMCRelaxAll()));
     break;
   }
   case CGFT_Null:
@@ -356,7 +358,7 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
                    /* allowDoubleDefs= */ true);
 
   // Perform register allocation.
-  PM.add(createRegisterAllocator());
+  PM.add(createRegisterAllocator(OptLevel));
   printAndVerify(PM, "After Register Allocation");
 
   // Perform stack slot coloring and post-ra machine LICM.

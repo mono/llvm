@@ -145,7 +145,8 @@ class MachObjectWriterImpl {
     RIT_Pair                = 1,
     RIT_Difference          = 2,
     RIT_PreboundLazyPointer = 3,
-    RIT_LocalDifference     = 4
+    RIT_LocalDifference     = 4,
+    RIT_TLV                 = 5
   };
 
   /// X86_64 uses its own relocation types.
@@ -158,7 +159,8 @@ class MachObjectWriterImpl {
     RIT_X86_64_Subtractor = 5,
     RIT_X86_64_Signed1    = 6,
     RIT_X86_64_Signed2    = 7,
-    RIT_X86_64_Signed4    = 8
+    RIT_X86_64_Signed4    = 8,
+    RIT_X86_64_TLV        = 9
   };
 
   /// MachSymbolData - Helper struct for containing some precomputed information
@@ -470,15 +472,17 @@ public:
 
   void RecordX86_64Relocation(const MCAssembler &Asm, const MCAsmLayout &Layout,
                               const MCFragment *Fragment,
-                              const MCAsmFixup &Fixup, MCValue Target,
+                              const MCFixup &Fixup, MCValue Target,
                               uint64_t &FixedValue) {
-    unsigned IsPCRel = isFixupKindPCRel(Fixup.Kind);
-    unsigned IsRIPRel = isFixupKindRIPRel(Fixup.Kind);
-    unsigned Log2Size = getFixupKindLog2Size(Fixup.Kind);
+    unsigned IsPCRel = isFixupKindPCRel(Fixup.getKind());
+    unsigned IsRIPRel = isFixupKindRIPRel(Fixup.getKind());
+    unsigned Log2Size = getFixupKindLog2Size(Fixup.getKind());
 
     // See <reloc.h>.
-    uint32_t FixupOffset = Layout.getFragmentOffset(Fragment) + Fixup.Offset;
-    uint32_t FixupAddress = Layout.getFragmentAddress(Fragment) + Fixup.Offset;
+    uint32_t FixupOffset =
+      Layout.getFragmentOffset(Fragment) + Fixup.getOffset();
+    uint32_t FixupAddress =
+      Layout.getFragmentAddress(Fragment) + Fixup.getOffset();
     int64_t Value = 0;
     unsigned Index = 0;
     unsigned IsExtern = 0;
@@ -604,11 +608,13 @@ public:
             // x86_64 distinguishes movq foo@GOTPCREL so that the linker can
             // rewrite the movq to an leaq at link time if the symbol ends up in
             // the same linkage unit.
-            if (unsigned(Fixup.Kind) == X86::reloc_riprel_4byte_movq_load)
+            if (unsigned(Fixup.getKind()) == X86::reloc_riprel_4byte_movq_load)
               Type = RIT_X86_64_GOTLoad;
             else
               Type = RIT_X86_64_GOT;
-          } else if (Modifier != MCSymbolRefExpr::VK_None) {
+          }  else if (Modifier == MCSymbolRefExpr::VK_TLVP) {
+            Type = RIT_X86_64_TLV;
+          }  else if (Modifier != MCSymbolRefExpr::VK_None) {
             report_fatal_error("unsupported symbol modifier in relocation");
           } else {
             Type = RIT_X86_64_Signed;
@@ -650,6 +656,8 @@ public:
           // required to include any necessary offset directly.
           Type = RIT_X86_64_GOT;
           IsPCRel = 1;
+        } else if (Modifier == MCSymbolRefExpr::VK_TLVP) {
+          report_fatal_error("TLVP symbol modifier should have been rip-rel");
         } else if (Modifier != MCSymbolRefExpr::VK_None)
           report_fatal_error("unsupported symbol modifier in relocation");
         else
@@ -674,11 +682,11 @@ public:
   void RecordScatteredRelocation(const MCAssembler &Asm,
                                  const MCAsmLayout &Layout,
                                  const MCFragment *Fragment,
-                                 const MCAsmFixup &Fixup, MCValue Target,
+                                 const MCFixup &Fixup, MCValue Target,
                                  uint64_t &FixedValue) {
-    uint32_t FixupOffset = Layout.getFragmentOffset(Fragment) + Fixup.Offset;
-    unsigned IsPCRel = isFixupKindPCRel(Fixup.Kind);
-    unsigned Log2Size = getFixupKindLog2Size(Fixup.Kind);
+    uint32_t FixupOffset = Layout.getFragmentOffset(Fragment)+Fixup.getOffset();
+    unsigned IsPCRel = isFixupKindPCRel(Fixup.getKind());
+    unsigned Log2Size = getFixupKindLog2Size(Fixup.getKind());
     unsigned Type = RIT_Vanilla;
 
     // See <reloc.h>.
@@ -731,15 +739,15 @@ public:
   }
 
   void RecordRelocation(const MCAssembler &Asm, const MCAsmLayout &Layout,
-                        const MCFragment *Fragment, const MCAsmFixup &Fixup,
+                        const MCFragment *Fragment, const MCFixup &Fixup,
                         MCValue Target, uint64_t &FixedValue) {
     if (Is64Bit) {
       RecordX86_64Relocation(Asm, Layout, Fragment, Fixup, Target, FixedValue);
       return;
     }
 
-    unsigned IsPCRel = isFixupKindPCRel(Fixup.Kind);
-    unsigned Log2Size = getFixupKindLog2Size(Fixup.Kind);
+    unsigned IsPCRel = isFixupKindPCRel(Fixup.getKind());
+    unsigned Log2Size = getFixupKindLog2Size(Fixup.getKind());
 
     // If this is a difference or a defined symbol plus an offset, then we need
     // a scattered relocation entry.
@@ -763,7 +771,7 @@ public:
                                        Target, FixedValue);
 
     // See <reloc.h>.
-    uint32_t FixupOffset = Layout.getFragmentOffset(Fragment) + Fixup.Offset;
+    uint32_t FixupOffset = Layout.getFragmentOffset(Fragment)+Fixup.getOffset();
     uint32_t Value = 0;
     unsigned Index = 0;
     unsigned IsExtern = 0;
@@ -1160,7 +1168,7 @@ void MachObjectWriter::ExecutePostLayoutBinding(MCAssembler &Asm) {
 void MachObjectWriter::RecordRelocation(const MCAssembler &Asm,
                                         const MCAsmLayout &Layout,
                                         const MCFragment *Fragment,
-                                        const MCAsmFixup &Fixup, MCValue Target,
+                                        const MCFixup &Fixup, MCValue Target,
                                         uint64_t &FixedValue) {
   ((MachObjectWriterImpl*) Impl)->RecordRelocation(Asm, Layout, Fragment, Fixup,
                                                    Target, FixedValue);

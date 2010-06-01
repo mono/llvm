@@ -85,9 +85,10 @@ namespace llvm {
   ///
   FunctionPass *createDeadMachineInstructionElimPass();
 
-  /// Creates a register allocator as the user specified on the command line.
+  /// Creates a register allocator as the user specified on the command line, or
+  /// picks one that matches OptLevel.
   ///
-  FunctionPass *createRegisterAllocator();
+  FunctionPass *createRegisterAllocator(CodeGenOpt::Level OptLevel);
 
   /// LocalRegisterAllocation Pass - This pass register allocates the input code
   /// a basic block at a time, yielding code better than the simple register
@@ -146,10 +147,6 @@ namespace llvm {
   /// Code Placement Pass - This pass optimize code placement and aligns loop
   /// headers to target specific alignment boundary.
   FunctionPass *createCodePlacementOptPass();
-
-  /// getRegisterAllocator - This creates an instance of the register allocator
-  /// for the Sparc.
-  FunctionPass *getRegisterAllocator(TargetMachine &T);
 
   /// IntrinsicLowering Pass - Performs target-independent LLVM IR
   /// transformations for highly portable strategies.

@@ -36,27 +36,6 @@ class MCSymbolData;
 class MCValue;
 class TargetAsmBackend;
 
-/// MCAsmFixup - Represent a fixed size region of bytes inside some fragment
-/// which needs to be rewritten. This region will either be rewritten by the
-/// assembler or cause a relocation entry to be generated.
-//
-// FIXME: This should probably just be merged with MCFixup.
-class MCAsmFixup {
-public:
-  /// Offset - The offset inside the fragment which needs to be rewritten.
-  uint64_t Offset;
-
-  /// Value - The expression to eventually write into the fragment.
-  const MCExpr *Value;
-
-  /// Kind - The fixup kind.
-  MCFixupKind Kind;
-
-public:
-  MCAsmFixup(uint64_t _Offset, const MCExpr &_Value, MCFixupKind _Kind)
-    : Offset(_Offset), Value(&_Value), Kind(_Kind) {}
-};
-
 class MCFragment : public ilist_node<MCFragment> {
   friend class MCAsmLayout;
 
@@ -108,7 +87,6 @@ protected:
 public:
   // Only for sentinel.
   MCFragment();
-  virtual ~MCFragment();
 
   FragmentType getKind() const { return Kind; }
 
@@ -123,18 +101,18 @@ public:
 
   static bool classof(const MCFragment *O) { return true; }
 
-  virtual void dump();
+  void dump();
 };
 
 class MCDataFragment : public MCFragment {
   SmallString<32> Contents;
 
   /// Fixups - The list of fixups in this fragment.
-  std::vector<MCAsmFixup> Fixups;
+  std::vector<MCFixup> Fixups;
 
 public:
-  typedef std::vector<MCAsmFixup>::const_iterator const_fixup_iterator;
-  typedef std::vector<MCAsmFixup>::iterator fixup_iterator;
+  typedef std::vector<MCFixup>::const_iterator const_fixup_iterator;
+  typedef std::vector<MCFixup>::iterator fixup_iterator;
 
 public:
   MCDataFragment(MCSectionData *SD = 0) : MCFragment(FT_Data, SD) {}
@@ -149,15 +127,15 @@ public:
   /// @name Fixup Access
   /// @{
 
-  void addFixup(MCAsmFixup Fixup) {
+  void addFixup(MCFixup Fixup) {
     // Enforce invariant that fixups are in offset order.
-    assert((Fixups.empty() || Fixup.Offset > Fixups.back().Offset) &&
+    assert((Fixups.empty() || Fixup.getOffset() > Fixups.back().getOffset()) &&
            "Fixups must be added in order!");
     Fixups.push_back(Fixup);
   }
 
-  std::vector<MCAsmFixup> &getFixups() { return Fixups; }
-  const std::vector<MCAsmFixup> &getFixups() const { return Fixups; }
+  std::vector<MCFixup> &getFixups() { return Fixups; }
+  const std::vector<MCFixup> &getFixups() const { return Fixups; }
 
   fixup_iterator fixup_begin() { return Fixups.begin(); }
   const_fixup_iterator fixup_begin() const { return Fixups.begin(); }
@@ -173,8 +151,6 @@ public:
     return F->getKind() == MCFragment::FT_Data;
   }
   static bool classof(const MCDataFragment *) { return true; }
-
-  virtual void dump();
 };
 
 // FIXME: This current incarnation of MCInstFragment doesn't make much sense, as
@@ -190,11 +166,11 @@ class MCInstFragment : public MCFragment {
   SmallString<8> Code;
 
   /// Fixups - The list of fixups in this fragment.
-  SmallVector<MCAsmFixup, 1> Fixups;
+  SmallVector<MCFixup, 1> Fixups;
 
 public:
-  typedef SmallVectorImpl<MCAsmFixup>::const_iterator const_fixup_iterator;
-  typedef SmallVectorImpl<MCAsmFixup>::iterator fixup_iterator;
+  typedef SmallVectorImpl<MCFixup>::const_iterator const_fixup_iterator;
+  typedef SmallVectorImpl<MCFixup>::iterator fixup_iterator;
 
 public:
   MCInstFragment(MCInst _Inst, MCSectionData *SD = 0)
@@ -218,8 +194,8 @@ public:
   /// @name Fixup Access
   /// @{
 
-  SmallVectorImpl<MCAsmFixup> &getFixups() { return Fixups; }
-  const SmallVectorImpl<MCAsmFixup> &getFixups() const { return Fixups; }
+  SmallVectorImpl<MCFixup> &getFixups() { return Fixups; }
+  const SmallVectorImpl<MCFixup> &getFixups() const { return Fixups; }
 
   fixup_iterator fixup_begin() { return Fixups.begin(); }
   const_fixup_iterator fixup_begin() const { return Fixups.begin(); }
@@ -235,8 +211,6 @@ public:
     return F->getKind() == MCFragment::FT_Inst;
   }
   static bool classof(const MCInstFragment *) { return true; }
-
-  virtual void dump();
 };
 
 class MCAlignFragment : public MCFragment {
@@ -295,8 +269,6 @@ public:
     return F->getKind() == MCFragment::FT_Align;
   }
   static bool classof(const MCAlignFragment *) { return true; }
-
-  virtual void dump();
 };
 
 class MCFillFragment : public MCFragment {
@@ -334,8 +306,6 @@ public:
     return F->getKind() == MCFragment::FT_Fill;
   }
   static bool classof(const MCFillFragment *) { return true; }
-
-  virtual void dump();
 };
 
 class MCOrgFragment : public MCFragment {
@@ -363,8 +333,6 @@ public:
     return F->getKind() == MCFragment::FT_Org;
   }
   static bool classof(const MCOrgFragment *) { return true; }
-
-  virtual void dump();
 };
 
 // FIXME: Should this be a separate class, or just merged into MCSection? Since
@@ -638,12 +606,12 @@ private:
   /// \arg Value result is fixed, otherwise the value may change due to
   /// relocation.
   bool EvaluateFixup(const MCAsmLayout &Layout,
-                     const MCAsmFixup &Fixup, const MCFragment *DF,
+                     const MCFixup &Fixup, const MCFragment *DF,
                      MCValue &Target, uint64_t &Value) const;
 
   /// Check whether a fixup can be satisfied, or whether it needs to be relaxed
   /// (increased in size, in order to hold its value correctly).
-  bool FixupNeedsRelaxation(const MCAsmFixup &Fixup, const MCFragment *DF,
+  bool FixupNeedsRelaxation(const MCFixup &Fixup, const MCFragment *DF,
                             const MCAsmLayout &Layout) const;
 
   /// Check whether the given fragment needs relaxation.
