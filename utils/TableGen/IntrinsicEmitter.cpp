@@ -489,6 +489,20 @@ EmitAttributes(const std::vector<CodeGenIntrinsic> &Ints, raw_ostream &OS) {
   OS << "    Attr |= Attribute::ReadOnly; // These do not write memory.\n";
   OS << "    break;\n";
   OS << "  }\n";
+
+  OS << "  switch (id) {\n";
+  OS << "  default: break;\n";
+  /* Add canThrow attribute */
+  for (unsigned i = 0, e = Ints.size(); i != e; ++i) {
+    if (Ints[i].canThrow) {
+      OS << "  case " << TargetPrefix << "Intrinsic::" << Ints[i].EnumName
+         << ":\n";
+    }
+  }
+  OS << "    Attr &= ~Attribute::NoUnwind; // These can throw exceptions.\n";
+  OS << "    break;\n";
+  OS << "  }\n";
+
   OS << "  AttributeWithIndex AWI[" << MaxArgAttrs+1 << "];\n";
   OS << "  unsigned NumAttrs = 0;\n";
   OS << "  switch (id) {\n";
@@ -531,8 +545,12 @@ EmitAttributes(const std::vector<CodeGenIntrinsic> &Ints, raw_ostream &OS) {
   }
   
   OS << "  }\n";
-  OS << "  AWI[NumAttrs] = AttributeWithIndex::get(~0, Attr);\n";
-  OS << "  return AttrListPtr::get(AWI, NumAttrs+1);\n";
+  OS << "  if (Attr != Attribute::None) {\n";
+  OS << "    AWI[NumAttrs] = AttributeWithIndex::get(~0, Attr);\n";
+  OS << "    return AttrListPtr::get(AWI, NumAttrs+1);\n";
+  OS << "  } else {\n";
+  OS << "    return AttrListPtr::get(AWI, NumAttrs);\n";
+  OS << "  }\n";
   OS << "}\n";
   OS << "#endif // GET_INTRINSIC_ATTRIBUTES\n\n";
 }

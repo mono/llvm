@@ -366,6 +366,10 @@ public:
   void ExportFromCurrentBlock(const Value *V);
   void LowerCallTo(ImmutableCallSite CS, SDValue Callee, bool IsTailCall,
                    MachineBasicBlock *LandingPad = NULL);
+  void LowerIntrinsicTo(ImmutableCallSite CS, unsigned Intrinsic,
+						MachineBasicBlock *LandingPad = NULL);
+  MCSymbol *EmitTryRangeStart(MachineBasicBlock *LandingPad);
+  void EmitTryRangeEnd(MachineBasicBlock *LandingPad, MCSymbol *BeginLabel);
 
 private:
   // Terminator instructions.

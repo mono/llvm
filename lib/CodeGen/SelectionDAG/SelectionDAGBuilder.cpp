@@ -1594,6 +1594,120 @@ void SelectionDAGBuilder::visitBitTestCase(MachineBasicBlock* NextMBB,
   DAG.setRoot(BrAnd);
 }
 
+void SelectionDAGBuilder::LowerIntrinsicTo(ImmutableCallSite CS, unsigned Intrinsic,
+                                           MachineBasicBlock *LandingPad)
+{
+  MCSymbol *BeginLabel = 0;
+
+  if (LandingPad)
+    BeginLabel = EmitTryRangeStart(LandingPad);
+
+  // FIXME: Should merge with visitIntrinsicCall
+  switch (Intrinsic) {
+  default:
+    assert(0);
+  case Intrinsic::mono_load: {
+    // Same as visitLoad ()
+    const Value *SV = CS.getArgument(0);
+
+    unsigned Alignment = cast<ConstantInt>(CS.getArgument(1))->getZExtValue();
+    bool isVolatile = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
+    bool isNonTemporal = false;
+
+    SDValue Ptr = getValue(SV);
+
+    const Type *Ty = CS.getType();
+
+    SmallVector<EVT, 4> ValueVTs;
+    SmallVector<uint64_t, 4> Offsets;
+    ComputeValueVTs(TLI, Ty, ValueVTs, &Offsets);
+    unsigned NumValues = ValueVTs.size();
+
+    SDValue Root;
+    bool ConstantMemory = false;
+    if (isVolatile)
+      // Serialize volatile loads with other side effects.
+      Root = getRoot();
+    else if (AA->pointsToConstantMemory(SV)) {
+      // Do not serialize (non-volatile) loads of constant memory with anything.
+      Root = DAG.getEntryNode();
+      ConstantMemory = true;
+    } else {
+      // Do not serialize non-volatile loads against each other.
+      Root = DAG.getRoot();
+    }
+
+    SmallVector<SDValue, 4> Values(NumValues);
+    SmallVector<SDValue, 4> Chains(NumValues);
+    EVT PtrVT = Ptr.getValueType();
+    for (unsigned i = 0; i != NumValues; ++i) {
+      SDValue A = DAG.getNode(ISD::ADD, getCurDebugLoc(),
+                              PtrVT, Ptr,
+                              DAG.getConstant(Offsets[i], PtrVT));
+      SDValue L = DAG.getLoad(ValueVTs[i], getCurDebugLoc(), Root,
+                              A, SV, Offsets[i], isVolatile, 
+                              isNonTemporal, Alignment);
+
+      Values[i] = L;
+      Chains[i] = L.getValue(1);
+    }
+
+    if (!ConstantMemory) {
+      SDValue Chain = DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
+                                  MVT::Other, &Chains[0], NumValues);
+      if (isVolatile)
+        DAG.setRoot(Chain);
+      else
+        PendingLoads.push_back(Chain);
+    }
+
+    setValue(CS.getInstruction (), DAG.getNode(ISD::MERGE_VALUES, getCurDebugLoc(),
+                                               DAG.getVTList(&ValueVTs[0], NumValues),
+                                               &Values[0], NumValues));
+    break;
+  }
+  case Intrinsic::mono_store: {
+    // Same as visitStore ()
+    const Value *SrcV = CS.getArgument(0);
+    const Value *PtrV = CS.getArgument(1);
+    unsigned Alignment = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
+    bool isVolatile = cast<ConstantInt>(CS.getArgument(3))->getZExtValue();
+    bool isNonTemporal = false;
+
+    SmallVector<EVT, 4> ValueVTs;
+    SmallVector<uint64_t, 4> Offsets;
+    ComputeValueVTs(TLI, SrcV->getType(), ValueVTs, &Offsets);
+    unsigned NumValues = ValueVTs.size();
+
+    // Get the lowered operands. Note that we do this after
+    // checking if NumResults is zero, because with zero results
+    // the operands won't have values in the map.
+    SDValue Src = getValue(SrcV);
+    SDValue Ptr = getValue(PtrV);
+
+    SDValue Root = getRoot();
+    SmallVector<SDValue, 4> Chains(NumValues);
+    EVT PtrVT = Ptr.getValueType();
+
+    for (unsigned i = 0; i != NumValues; ++i) {
+      SDValue Add = DAG.getNode(ISD::ADD, getCurDebugLoc(), PtrVT, Ptr,
+                                DAG.getConstant(Offsets[i], PtrVT));
+      Chains[i] = DAG.getStore(Root, getCurDebugLoc(),
+                               SDValue(Src.getNode(), Src.getResNo() + i),
+                               Add, PtrV, Offsets[i], isVolatile, 
+                               isNonTemporal, Alignment);
+    }
+
+    DAG.setRoot(DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
+                            MVT::Other, &Chains[0], NumValues));
+    break;
+  }
+  }
+
+  if (LandingPad)
+    EmitTryRangeEnd(LandingPad, BeginLabel);
+}
+                                         
 void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
   MachineBasicBlock *InvokeMBB = FuncInfo.MBBMap[I.getParent()];
 
@@ -1602,10 +1716,18 @@ void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
   MachineBasicBlock *LandingPad = FuncInfo.MBBMap[I.getSuccessor(1)];
 
   const Value *Callee(I.getCalledValue());
-  if (isa<InlineAsm>(Callee))
+  if (isa<InlineAsm>(Callee)) {
     visitInlineAsm(&I);
-  else
-    LowerCallTo(&I, getValue(Callee), false, LandingPad);
+  } else {
+    unsigned IID = 0;
+    if (Function *F = I.getCalledFunction())
+      if (F->isDeclaration())
+        IID = F->getIntrinsicID();
+    if (IID)
+      LowerIntrinsicTo (&I, IID, LandingPad);
+    else
+      LowerCallTo(&I, getValue(Callee), false, LandingPad);
+  }
 
   // If the value of the invoke is used outside of its defining block, make it
   // available as a virtual register.
@@ -4491,7 +4613,51 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   case Intrinsic::lifetime_end:
     // Discard region information.
     return 0;
+  case Intrinsic::mono_load:
+  case Intrinsic::mono_store:
+    LowerIntrinsicTo(&I, Intrinsic);
+    return 0;
   }
+}
+
+MCSymbol*
+SelectionDAGBuilder::EmitTryRangeStart(MachineBasicBlock *LandingPad)
+{
+  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
+
+  // Insert a label before the invoke call to mark the try range.  This can be
+  // used to detect deletion of the invoke via the MachineModuleInfo.
+  MCSymbol *BeginLabel = MMI.getContext().CreateTempSymbol();
+
+  // For SjLj, keep track of which landing pads go with which invokes
+  // so as to maintain the ordering of pads in the LSDA.
+  unsigned CallSiteIndex = MMI.getCurrentCallSite();
+  if (CallSiteIndex) {
+    MMI.setCallSiteBeginLabel(BeginLabel, CallSiteIndex);
+    // Now that the call site is handled, stop tracking it.
+    MMI.setCurrentCallSite(0);
+  }
+
+  // Both PendingLoads and PendingExports must be flushed here;
+  // this call might not return.
+  (void)getRoot();
+  DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getControlRoot(), BeginLabel));
+
+  return BeginLabel;
+}
+
+void
+SelectionDAGBuilder::EmitTryRangeEnd(MachineBasicBlock *LandingPad, MCSymbol *BeginLabel)
+{
+  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
+
+  // Insert a label at the end of the invoke call to mark the try range.  This
+  // can be used to detect deletion of the invoke via the MachineModuleInfo.
+  MCSymbol *EndLabel = MMI.getContext().CreateTempSymbol();
+  DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getRoot(), EndLabel));
+
+  // Inform MachineModuleInfo of range.
+  MMI.addInvoke(LandingPad, BeginLabel, EndLabel);
 }
 
 void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
@@ -4500,7 +4666,6 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
   const PointerType *PT = cast<PointerType>(CS.getCalledValue()->getType());
   const FunctionType *FTy = cast<FunctionType>(PT->getElementType());
   const Type *RetTy = FTy->getReturnType();
-  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
   MCSymbol *BeginLabel = 0;
 
   TargetLowering::ArgListTy Args;
@@ -4558,25 +4723,8 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
     Args.push_back(Entry);
   }
 
-  if (LandingPad) {
-    // Insert a label before the invoke call to mark the try range.  This can be
-    // used to detect deletion of the invoke via the MachineModuleInfo.
-    BeginLabel = MMI.getContext().CreateTempSymbol();
-
-    // For SjLj, keep track of which landing pads go with which invokes
-    // so as to maintain the ordering of pads in the LSDA.
-    unsigned CallSiteIndex = MMI.getCurrentCallSite();
-    if (CallSiteIndex) {
-      MMI.setCallSiteBeginLabel(BeginLabel, CallSiteIndex);
-      // Now that the call site is handled, stop tracking it.
-      MMI.setCurrentCallSite(0);
-    }
-
-    // Both PendingLoads and PendingExports must be flushed here;
-    // this call might not return.
-    (void)getRoot();
-    DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getControlRoot(), BeginLabel));
-  }
+  if (LandingPad)
+    BeginLabel = EmitTryRangeStart(LandingPad);
 
   // Check if target-independent constraints permit a tail call here.
   // Target-dependent constraints are checked within TLI.LowerCallTo.
@@ -4660,15 +4808,8 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
   else
     HasTailCall = true;
 
-  if (LandingPad) {
-    // Insert a label at the end of the invoke call to mark the try range.  This
-    // can be used to detect deletion of the invoke via the MachineModuleInfo.
-    MCSymbol *EndLabel = MMI.getContext().CreateTempSymbol();
-    DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getRoot(), EndLabel));
-
-    // Inform MachineModuleInfo of range.
-    MMI.addInvoke(LandingPad, BeginLabel, EndLabel);
-  }
+  if (LandingPad)
+    EmitTryRangeEnd (LandingPad, BeginLabel);
 }
 
 /// IsOnlyUsedInZeroEqualityComparison - Return true if it only matters that the

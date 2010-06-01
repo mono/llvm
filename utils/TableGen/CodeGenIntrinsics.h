@@ -69,7 +69,10 @@ namespace llvm {
 
     /// isCommutative - True if the intrinsic is commutative.
     bool isCommutative;
-    
+
+    // canThrow - True if the intrinsic can throw an exception
+    bool canThrow;
+
     enum ArgAttribute {
       NoCapture
     };
