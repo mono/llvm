@@ -2180,12 +2180,15 @@ void DwarfDebug::collectVariableInfo(const MachineFunction *MF) {
     if (Processed.count(DV) != 0)
       continue;
 
+    const MachineInstr *PrevMI = MInsn;
     for (SmallVector<const MachineInstr *, 8>::iterator MI = I+1, 
            ME = DbgValues.end(); MI != ME; ++MI) {
       const MDNode *Var = 
         (*MI)->getOperand((*MI)->getNumOperands()-1).getMetadata();
-      if (Var == DV && isDbgValueInDefinedReg(*MI))
+      if (Var == DV && isDbgValueInDefinedReg(*MI) && 
+          !PrevMI->isIdenticalTo(*MI))
         MultipleValues.push_back(*MI);
+      PrevMI = *MI;
     }
 
     DbgScope *Scope = findDbgScope(MInsn);
@@ -2620,6 +2623,9 @@ void DwarfDebug::beginFunction(const MachineFunction *MF) {
   
   recordSourceLine(Line, Col, Scope);
 
+  /// ProcessedArgs - Collection of arguments already processed.
+  SmallPtrSet<const MDNode *, 8> ProcessedArgs;
+
   DebugLoc PrevLoc;
   for (MachineFunction::const_iterator I = MF->begin(), E = MF->end();
        I != E; ++I)
@@ -2631,6 +2637,7 @@ void DwarfDebug::beginFunction(const MachineFunction *MF) {
         assert (MI->getNumOperands() > 1 && "Invalid machine instruction!");
         DIVariable DV(MI->getOperand(MI->getNumOperands() - 1).getMetadata());
         if (!DV.Verify()) continue;
+        if (isDbgValueInUndefinedReg(MI)) continue;
         // If DBG_VALUE is for a local variable then it needs a label.
         if (DV.getTag() != dwarf::DW_TAG_arg_variable)
           InsnNeedsLabel.insert(MI);
@@ -2703,7 +2710,6 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
   // Clear debug info
   CurrentFnDbgScope = NULL;
   InsnNeedsLabel.clear();
-  ProcessedArgs.clear();
   DbgVariableToFrameIndexMap.clear();
   VarToAbstractVarMap.clear();
   DbgVariableToDbgInstMap.clear();

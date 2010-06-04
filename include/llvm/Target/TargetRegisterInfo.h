@@ -319,6 +319,10 @@ public:
   virtual const TargetRegisterClass *
     getPhysicalRegisterRegClass(unsigned Reg, EVT VT = MVT::Other) const;
 
+  /// getMinimalPhysRegClass - Returns the Register Class of a physical
+  /// register of the given type.
+  const TargetRegisterClass * getMinimalPhysRegClass(unsigned Reg) const;
+
   /// getAllocatableSet - Returns a bitset indexed by register number
   /// indicating if a register is allocatable or not. If a register class is
   /// specified, returns the subset for the class.
@@ -438,11 +442,6 @@ public:
   virtual const unsigned* getCalleeSavedRegs(const MachineFunction *MF = 0)
                                                                       const = 0;
 
-  /// getCalleeSavedRegClasses - Return a null-terminated list of the preferred
-  /// register classes to spill each callee saved register with.  The order and
-  /// length of this list match the getCalleeSaveRegs() list.
-  virtual const TargetRegisterClass* const *getCalleeSavedRegClasses(
-                                            const MachineFunction *MF) const =0;
 
   /// getReservedRegs - Returns a bitset indexed by physical register number
   /// indicating if a register is a special register that has particular uses
@@ -470,14 +469,15 @@ public:
     return 0;
   }
 
-  /// canCombinedSubRegIndex - Given a register class and a list of sub-register
-  /// indices, return true if it's possible to combine the sub-register indices
-  /// into one that corresponds to a larger sub-register. Return the new sub-
-  /// register index by reference. Note the new index by be zero if the given
-  /// sub-registers combined to form the whole register.
-  virtual bool canCombinedSubRegIndex(const TargetRegisterClass *RC,
-                                      SmallVectorImpl<unsigned> &SubIndices,
-                                      unsigned &NewSubIdx) const {
+  /// canCombineSubRegIndices - Given a register class and a list of
+  /// subregister indices, return true if it's possible to combine the
+  /// subregister indices into one that corresponds to a larger
+  /// subregister. Return the new subregister index by reference. Note the
+  /// new index may be zero if the given subregisters can be combined to
+  /// form the whole register.
+  virtual bool canCombineSubRegIndices(const TargetRegisterClass *RC,
+                                       SmallVectorImpl<unsigned> &SubIndices,
+                                       unsigned &NewSubIdx) const {
     return 0;
   }
 

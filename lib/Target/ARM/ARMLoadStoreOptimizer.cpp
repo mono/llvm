@@ -517,8 +517,11 @@ bool ARMLoadStoreOpt::MergeBaseUpdateLSMultiple(MachineBasicBlock &MBB,
   }
 
   // Try merging with the previous instruction.
-  if (MBBI != MBB.begin()) {
+  MachineBasicBlock::iterator BeginMBBI = MBB.begin();
+  if (MBBI != BeginMBBI) {
     MachineBasicBlock::iterator PrevMBBI = prior(MBBI);
+    while (PrevMBBI != BeginMBBI && PrevMBBI->isDebugValue())
+      --PrevMBBI;
     if (isAM4) {
       if (Mode == ARM_AM::ia &&
           isMatchingDecrement(PrevMBBI, Base, Bytes, 0, Pred, PredReg)) {
@@ -541,8 +544,11 @@ bool ARMLoadStoreOpt::MergeBaseUpdateLSMultiple(MachineBasicBlock &MBB,
   }
 
   // Try merging with the next instruction.
-  if (!DoMerge && MBBI != MBB.end()) {
+  MachineBasicBlock::iterator EndMBBI = MBB.end();
+  if (!DoMerge && MBBI != EndMBBI) {
     MachineBasicBlock::iterator NextMBBI = llvm::next(MBBI);
+    while (NextMBBI != EndMBBI && NextMBBI->isDebugValue())
+      ++NextMBBI;
     if (isAM4) {
       if ((Mode == ARM_AM::ia || Mode == ARM_AM::ib) &&
           isMatchingIncrement(NextMBBI, Base, Bytes, 0, Pred, PredReg)) {
@@ -669,8 +675,11 @@ bool ARMLoadStoreOpt::MergeBaseUpdateLoadStore(MachineBasicBlock &MBB,
   unsigned Limit = isAM5 ? 0 : (isAM2 ? 0x1000 : 0x100);
 
   // Try merging with the previous instruction.
-  if (MBBI != MBB.begin()) {
+  MachineBasicBlock::iterator BeginMBBI = MBB.begin();
+  if (MBBI != BeginMBBI) {
     MachineBasicBlock::iterator PrevMBBI = prior(MBBI);
+    while (PrevMBBI != BeginMBBI && PrevMBBI->isDebugValue())
+      --PrevMBBI;
     if (isMatchingDecrement(PrevMBBI, Base, Bytes, Limit, Pred, PredReg)) {
       DoMerge = true;
       AddSub = ARM_AM::sub;
@@ -685,8 +694,11 @@ bool ARMLoadStoreOpt::MergeBaseUpdateLoadStore(MachineBasicBlock &MBB,
   }
 
   // Try merging with the next instruction.
-  if (!DoMerge && MBBI != MBB.end()) {
+  MachineBasicBlock::iterator EndMBBI = MBB.begin();
+  if (!DoMerge && MBBI != EndMBBI) {
     MachineBasicBlock::iterator NextMBBI = llvm::next(MBBI);
+    while (NextMBBI != EndMBBI && NextMBBI->isDebugValue())
+      ++NextMBBI;
     if (!isAM5 &&
         isMatchingDecrement(NextMBBI, Base, Bytes, Limit, Pred, PredReg)) {
       DoMerge = true;
@@ -968,8 +980,8 @@ bool ARMLoadStoreOpt::FixInvalidRegPairOp(MachineBasicBlock &MBB,
                       Pred, PredReg, TII, isT2);
       } else {
         if (OddReg == EvenReg && EvenDeadKill) {
-          // If the two source operands are the same, the kill marker is probably
-          // on the first one. e.g.
+          // If the two source operands are the same, the kill marker is
+          // probably on the first one. e.g.
           // t2STRDi8 %R5<kill>, %R5, %R9<kill>, 0, 14, %reg0
           EvenDeadKill = false;
           OddDeadKill = true;
@@ -1279,7 +1291,7 @@ static bool IsSafeAndProfitableToMove(bool isLd, unsigned Base,
   // some day.
   SmallSet<unsigned, 4> AddedRegPressure;
   while (++I != E) {
-    if (MemOps.count(&*I))
+    if (I->isDebugValue() || MemOps.count(&*I))
       continue;
     const TargetInstrDesc &TID = I->getDesc();
     if (TID.isCall() || TID.isTerminator() || TID.hasUnmodeledSideEffects())
@@ -1411,7 +1423,7 @@ bool ARMPreAllocLoadStoreOpt::RescheduleOps(MachineBasicBlock *MBB,
   std::sort(Ops.begin(), Ops.end(), OffsetCompare());
 
   // The loads / stores of the same base are in order. Scan them from first to
-  // last and check for the followins:
+  // last and check for the following:
   // 1. Any def of base.
   // 2. Any gaps.
   while (Ops.size() > 1) {
@@ -1562,7 +1574,9 @@ ARMPreAllocLoadStoreOpt::RescheduleLoadStoreInstrs(MachineBasicBlock *MBB) {
         break;
       }
 
-      MI2LocMap[MI] = Loc++;
+      if (!MI->isDebugValue())
+        MI2LocMap[MI] = ++Loc;
+
       if (!isMemoryOp(MI))
         continue;
       unsigned PredReg = 0;

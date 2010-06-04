@@ -179,6 +179,8 @@ static void MarkBlocksLiveIn(BasicBlock *BB, std::set<BasicBlock*> &LiveBBs) {
 /// we spill into a stack location, guaranteeing that there is nothing live
 /// across the unwind edge.  This process also splits all critical edges
 /// coming out of invoke's.
+/// FIXME: Move this function to a common utility file (Local.cpp?) so
+/// both SjLj and LowerInvoke can use it.
 void SjLjEHPass::
 splitLiveRangesLiveAcrossInvokes(SmallVector<InvokeInst*,16> &Invokes) {
   // First step, split all critical edges from invoke instructions.
@@ -202,16 +204,33 @@ splitLiveRangesLiveAcrossInvokes(SmallVector<InvokeInst*,16> &Invokes) {
     ++AfterAllocaInsertPt;
   for (Function::arg_iterator AI = F->arg_begin(), E = F->arg_end();
        AI != E; ++AI) {
-    // This is always a no-op cast because we're casting AI to AI->getType() so
-    // src and destination types are identical. BitCast is the only possibility.
-    CastInst *NC = new BitCastInst(
-      AI, AI->getType(), AI->getName()+".tmp", AfterAllocaInsertPt);
-    AI->replaceAllUsesWith(NC);
-    // Normally its is forbidden to replace a CastInst's operand because it
-    // could cause the opcode to reflect an illegal conversion. However, we're
-    // replacing it here with the same value it was constructed with to simply
-    // make NC its user.
-    NC->setOperand(0, AI);
+    const Type *Ty = AI->getType();
+    // StructType can't be cast, but is a legal argument type, so we have
+    // to handle them differently. We use an extract/insert pair as a
+    // lightweight method to achieve the same goal.
+    if (isa<StructType>(Ty)) {
+      Instruction *EI = ExtractValueInst::Create(AI, 0, "", AfterAllocaInsertPt);
+      Instruction *NI = InsertValueInst::Create(AI, EI, 0);
+      NI->insertAfter(EI);
+      AI->replaceAllUsesWith(NI);
+      // Set the struct operand of the instructions back to the AllocaInst.
+      EI->setOperand(0, AI);
+      NI->setOperand(0, AI);
+    } else {
+      // This is always a no-op cast because we're casting AI to AI->getType()
+      // so src and destination types are identical. BitCast is the only
+      // possibility.
+      CastInst *NC = new BitCastInst(
+        AI, AI->getType(), AI->getName()+".tmp", AfterAllocaInsertPt);
+      AI->replaceAllUsesWith(NC);
+      // Set the operand of the cast instruction back to the AllocaInst.
+      // Normally it's forbidden to replace a CastInst's operand because it
+      // could cause the opcode to reflect an illegal conversion. However,
+      // we're replacing it here with the same value it was constructed with.
+      // We do this because the above replaceAllUsesWith() clobbered the
+      // operand, but we want this one to remain.
+      NC->setOperand(0, AI);
+    }
   }
 
   // Finally, scan the code looking for instructions with bad live ranges.

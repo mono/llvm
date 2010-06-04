@@ -117,7 +117,8 @@ void MachineOperand::substVirtReg(unsigned Reg, unsigned SubIdx,
   if (SubIdx && getSubReg())
     SubIdx = TRI.composeSubRegIndices(SubIdx, getSubReg());
   setReg(Reg);
-  setSubReg(SubIdx);
+  if (SubIdx)
+    setSubReg(SubIdx);
 }
 
 void MachineOperand::substPhysReg(unsigned Reg, const TargetRegisterInfo &TRI) {
@@ -1032,6 +1033,29 @@ void MachineInstr::copyPredicates(const MachineInstr *MI) {
     if (TID.OpInfo[i].isPredicate()) {
       // Predicated operands must be last operands.
       addOperand(MI->getOperand(i));
+    }
+  }
+}
+
+void MachineInstr::substituteRegister(unsigned FromReg,
+                                      unsigned ToReg,
+                                      unsigned SubIdx,
+                                      const TargetRegisterInfo &RegInfo) {
+  if (TargetRegisterInfo::isPhysicalRegister(ToReg)) {
+    if (SubIdx)
+      ToReg = RegInfo.getSubReg(ToReg, SubIdx);
+    for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
+      MachineOperand &MO = getOperand(i);
+      if (!MO.isReg() || MO.getReg() != FromReg)
+        continue;
+      MO.substPhysReg(ToReg, RegInfo);
+    }
+  } else {
+    for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
+      MachineOperand &MO = getOperand(i);
+      if (!MO.isReg() || MO.getReg() != FromReg)
+        continue;
+      MO.substVirtReg(ToReg, SubIdx, RegInfo);
     }
   }
 }

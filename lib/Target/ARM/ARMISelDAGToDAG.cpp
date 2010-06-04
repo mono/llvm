@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "arm-isel"
 #include "ARM.h"
 #include "ARMAddressingModes.h"
 #include "ARMTargetMachine.h"
@@ -173,24 +174,17 @@ private:
                                             char ConstraintCode,
                                             std::vector<SDValue> &OutOps);
 
-  /// PairDRegs - Form a quad register from a pair of D registers.
-  ///
+  // Form pairs of consecutive S, D, or Q registers.
+  SDNode *PairSRegs(EVT VT, SDValue V0, SDValue V1);
   SDNode *PairDRegs(EVT VT, SDValue V0, SDValue V1);
-
-  /// PairDRegs - Form a quad register pair from a pair of Q registers.
-  ///
   SDNode *PairQRegs(EVT VT, SDValue V0, SDValue V1);
 
-  /// QuadDRegs - Form a quad register pair from a quad of D registers.
-  ///
+  // Form sequences of 4 consecutive S, D, or Q registers.
+  SDNode *QuadSRegs(EVT VT, SDValue V0, SDValue V1, SDValue V2, SDValue V3);
   SDNode *QuadDRegs(EVT VT, SDValue V0, SDValue V1, SDValue V2, SDValue V3);
-
-  /// QuadQRegs - Form 4 consecutive Q registers.
-  ///
   SDNode *QuadQRegs(EVT VT, SDValue V0, SDValue V1, SDValue V2, SDValue V3);
 
-  /// OctoDRegs - Form 8 consecutive D registers.
-  ///
+  // Form sequences of 8 consecutive D registers.
   SDNode *OctoDRegs(EVT VT, SDValue V0, SDValue V1, SDValue V2, SDValue V3,
                     SDValue V4, SDValue V5, SDValue V6, SDValue V7);
 };
@@ -788,8 +782,9 @@ bool ARMDAGToDAGISel::SelectT2AddrModeImm8s4(SDNode *Op, SDValue N,
   if (N.getOpcode() == ISD::ADD) {
     if (ConstantSDNode *RHS = dyn_cast<ConstantSDNode>(N.getOperand(1))) {
       int RHSC = (int)RHS->getZExtValue();
+      // 8 bits.
       if (((RHSC & 0x3) == 0) &&
-          ((RHSC >= 0 && RHSC < 0x400) || (RHSC < 0 && RHSC > -0x400))) { // 8 bits.
+          ((RHSC >= 0 && RHSC < 0x400) || (RHSC < 0 && RHSC > -0x400))) {
         Base   = N.getOperand(0);
         OffImm = CurDAG->getTargetConstant(RHSC, MVT::i32);
         return true;
@@ -798,7 +793,8 @@ bool ARMDAGToDAGISel::SelectT2AddrModeImm8s4(SDNode *Op, SDValue N,
   } else if (N.getOpcode() == ISD::SUB) {
     if (ConstantSDNode *RHS = dyn_cast<ConstantSDNode>(N.getOperand(1))) {
       int RHSC = (int)RHS->getZExtValue();
-      if (((RHSC & 0x3) == 0) && (RHSC >= 0 && RHSC < 0x400)) { // 8 bits.
+      // 8 bits.
+      if (((RHSC & 0x3) == 0) && (RHSC >= 0 && RHSC < 0x400)) {
         Base   = N.getOperand(0);
         OffImm = CurDAG->getTargetConstant(-RHSC, MVT::i32);
         return true;
@@ -960,6 +956,24 @@ SDNode *ARMDAGToDAGISel::SelectT2IndexedLoad(SDNode *N) {
   return NULL;
 }
 
+/// PairSRegs - Form a D register from a pair of S registers.
+///
+SDNode *ARMDAGToDAGISel::PairSRegs(EVT VT, SDValue V0, SDValue V1) {
+  DebugLoc dl = V0.getNode()->getDebugLoc();
+  SDValue SubReg0 = CurDAG->getTargetConstant(ARM::ssub_0, MVT::i32);
+  SDValue SubReg1 = CurDAG->getTargetConstant(ARM::ssub_1, MVT::i32);
+  if (llvm::ModelWithRegSequence()) {
+    const SDValue Ops[] = { V0, SubReg0, V1, SubReg1 };
+    return CurDAG->getMachineNode(TargetOpcode::REG_SEQUENCE, dl, VT, Ops, 4);
+  }
+  SDValue Undef =
+    SDValue(CurDAG->getMachineNode(TargetOpcode::IMPLICIT_DEF, dl, VT), 0);
+  SDNode *Pair = CurDAG->getMachineNode(TargetOpcode::INSERT_SUBREG, dl,
+                                        VT, Undef, V0, SubReg0);
+  return CurDAG->getMachineNode(TargetOpcode::INSERT_SUBREG, dl,
+                                VT, SDValue(Pair, 0), V1, SubReg1);
+}
+
 /// PairDRegs - Form a quad register from a pair of D registers.
 ///
 SDNode *ARMDAGToDAGISel::PairDRegs(EVT VT, SDValue V0, SDValue V1) {
@@ -986,6 +1000,19 @@ SDNode *ARMDAGToDAGISel::PairQRegs(EVT VT, SDValue V0, SDValue V1) {
   SDValue SubReg1 = CurDAG->getTargetConstant(ARM::qsub_1, MVT::i32);
   const SDValue Ops[] = { V0, SubReg0, V1, SubReg1 };
   return CurDAG->getMachineNode(TargetOpcode::REG_SEQUENCE, dl, VT, Ops, 4);
+}
+
+/// QuadSRegs - Form 4 consecutive S registers.
+///
+SDNode *ARMDAGToDAGISel::QuadSRegs(EVT VT, SDValue V0, SDValue V1,
+                                   SDValue V2, SDValue V3) {
+  DebugLoc dl = V0.getNode()->getDebugLoc();
+  SDValue SubReg0 = CurDAG->getTargetConstant(ARM::ssub_0, MVT::i32);
+  SDValue SubReg1 = CurDAG->getTargetConstant(ARM::ssub_1, MVT::i32);
+  SDValue SubReg2 = CurDAG->getTargetConstant(ARM::ssub_2, MVT::i32);
+  SDValue SubReg3 = CurDAG->getTargetConstant(ARM::ssub_3, MVT::i32);
+  const SDValue Ops[] = { V0, SubReg0, V1, SubReg1, V2, SubReg2, V3, SubReg3 };
+  return CurDAG->getMachineNode(TargetOpcode::REG_SEQUENCE, dl, VT, Ops, 8);
 }
 
 /// QuadDRegs - Form 4 consecutive D registers.
@@ -1548,8 +1575,8 @@ SDNode *ARMDAGToDAGISel::SelectVLDSTLane(SDNode *N, bool IsLoad,
         RegSeq = SDValue(QuadDRegs(MVT::v4i64, V0, V1, V2, V3), 0);
       }
     } else {
-      // For 128-bit vectors, take the 64-bit results of the load and insert them
-      // as subregs into the result.
+      // For 128-bit vectors, take the 64-bit results of the load and insert
+      // them as subregs into the result.
       SDValue V[8];
       for (unsigned Vec = 0, i = 0; Vec < NumVecs; ++Vec, i+=2) {
         if (Even) {
@@ -2015,7 +2042,7 @@ SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
       SDValue Ops[] = { N->getOperand(0), N->getOperand(1),
                         getAL(CurDAG), CurDAG->getRegister(0, MVT::i32),
                         CurDAG->getRegister(0, MVT::i32) };
-      return CurDAG->getMachineNode(ARM::t2UMULL, dl, MVT::i32, MVT::i32, Ops,4);
+      return CurDAG->getMachineNode(ARM::t2UMULL, dl, MVT::i32, MVT::i32,Ops,4);
     } else {
       SDValue Ops[] = { N->getOperand(0), N->getOperand(1),
                         getAL(CurDAG), CurDAG->getRegister(0, MVT::i32),
@@ -2029,7 +2056,7 @@ SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
     if (Subtarget->isThumb()) {
       SDValue Ops[] = { N->getOperand(0), N->getOperand(1),
                         getAL(CurDAG), CurDAG->getRegister(0, MVT::i32) };
-      return CurDAG->getMachineNode(ARM::t2SMULL, dl, MVT::i32, MVT::i32, Ops,4);
+      return CurDAG->getMachineNode(ARM::t2SMULL, dl, MVT::i32, MVT::i32,Ops,4);
     } else {
       SDValue Ops[] = { N->getOperand(0), N->getOperand(1),
                         getAL(CurDAG), CurDAG->getRegister(0, MVT::i32),
@@ -2210,6 +2237,22 @@ SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
     SDValue PredReg = CurDAG->getRegister(0, MVT::i32);
     SDValue Ops[] = { N->getOperand(0), N->getOperand(1), Pred, PredReg };
     return CurDAG->getMachineNode(Opc, dl, VT, VT, Ops, 4);
+  }
+  case ARMISD::BUILD_VECTOR: {
+    EVT VecVT = N->getValueType(0);
+    EVT EltVT = VecVT.getVectorElementType();
+    unsigned NumElts = VecVT.getVectorNumElements();
+    if (EltVT.getSimpleVT() == MVT::f64) {
+      assert(NumElts == 2 && "unexpected type for BUILD_VECTOR");
+      return PairDRegs(VecVT, N->getOperand(0), N->getOperand(1));
+    }
+    assert(EltVT.getSimpleVT() == MVT::f32 &&
+           "unexpected type for BUILD_VECTOR");
+    if (NumElts == 2)
+      return PairSRegs(VecVT, N->getOperand(0), N->getOperand(1));
+    assert(NumElts == 4 && "unexpected type for BUILD_VECTOR");
+    return QuadSRegs(VecVT, N->getOperand(0), N->getOperand(1),
+                     N->getOperand(2), N->getOperand(3));
   }
 
   case ISD::INTRINSIC_VOID:

@@ -70,6 +70,8 @@ namespace llvm {
       EH_SJLJ_SETJMP,    // SjLj exception handling setjmp.
       EH_SJLJ_LONGJMP,   // SjLj exception handling longjmp.
 
+      TC_RETURN,    // Tail call return pseudo.
+
       THREAD_POINTER,
 
       DYN_ALLOC,    // Dynamic allocation on the stack.
@@ -133,6 +135,13 @@ namespace llvm {
       VUZP,         // unzip (deinterleave)
       VTRN,         // transpose
 
+      // Operands of the standard BUILD_VECTOR node are not legalized, which
+      // is fine if BUILD_VECTORs are always lowered to shuffles or other
+      // operations, but for ARM some BUILD_VECTORs are legal as-is and their
+      // operands need to be legalized.  Define an ARM-specific version of
+      // BUILD_VECTOR for this purpose.
+      BUILD_VECTOR,
+
       // Floating-point max and min:
       FMAX,
       FMIN
@@ -189,9 +198,9 @@ namespace llvm {
     bool isLegalT2ScaledAddressingMode(const AddrMode &AM, EVT VT) const;
 
     /// isLegalICmpImmediate - Return true if the specified immediate is legal
-    /// icmp immediate, that is the target has icmp instructions which can compare
-    /// a register against the immediate without having to materialize the
-    /// immediate into a register.
+    /// icmp immediate, that is the target has icmp instructions which can
+    /// compare a register against the immediate without having to materialize
+    /// the immediate into a register.
     virtual bool isLegalICmpImmediate(int64_t Imm) const;
 
     /// getPreIndexedAddressParts - returns true by value, base pointer and
@@ -282,7 +291,8 @@ namespace llvm {
                                  SDValue &Root, SelectionDAG &DAG,
                                  DebugLoc dl) const;
 
-    CCAssignFn *CCAssignFnForNode(CallingConv::ID CC, bool Return, bool isVarArg) const;
+    CCAssignFn *CCAssignFnForNode(CallingConv::ID CC, bool Return,
+                                  bool isVarArg) const;
     SDValue LowerMemOpCallTo(SDValue Chain, SDValue StackPtr, SDValue Arg,
                              DebugLoc dl, SelectionDAG &DAG,
                              const CCValAssign &VA,
@@ -331,6 +341,17 @@ namespace llvm {
                 DebugLoc dl, SelectionDAG &DAG,
                 SmallVectorImpl<SDValue> &InVals) const;
 
+    /// IsEligibleForTailCallOptimization - Check whether the call is eligible
+    /// for tail call optimization. Targets which want to do tail call
+    /// optimization should implement this function.
+    bool IsEligibleForTailCallOptimization(SDValue Callee,
+                                           CallingConv::ID CalleeCC,
+                                           bool isVarArg,
+                                           bool isCalleeStructRet,
+                                           bool isCallerStructRet,
+                                    const SmallVectorImpl<ISD::OutputArg> &Outs,
+                                    const SmallVectorImpl<ISD::InputArg> &Ins,
+                                           SelectionDAG& DAG) const;
     virtual SDValue
       LowerReturn(SDValue Chain,
                   CallingConv::ID CallConv, bool isVarArg,
