@@ -22,7 +22,7 @@ use Cwd 'abs_path';
 
 #---- begin autoconf values ----
 my $PACKAGE_NAME        = q{@PACKAGE_NAME@};
-my $VERSION             = q{@PACKAGE_VERSION@};
+my $VERSION             = q{@PACKAGE_VERSION@-mono};
 my $PREFIX              = q{@LLVM_PREFIX@};
 my $LLVM_CONFIGTIME     = q{@LLVM_CONFIGTIME@};
 my $LLVM_SRC_ROOT       = q{@abs_top_srcdir@};
