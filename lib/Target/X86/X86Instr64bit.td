@@ -1732,6 +1732,16 @@ def MOV64FSrm : RI<0x8B, MRMSrcMem, (outs GR64:$dst), (ins i64mem:$src),
                  "movq\t%fs:$src, $dst",
                  [(set GR64:$dst, (fsload addr:$src))]>, SegFS;
 
+let AddedComplexity = 5, isCodeGenOnly = 1 in
+def MOV64GSmr : RI<0x89, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src),
+                 "mov{q}\t{$src, gs:$dst|gs:$dst, $src}",
+                 [(gsstore GR64:$src, addr:$dst)]>, SegGS;
+
+let AddedComplexity = 5, isCodeGenOnly = 1 in
+def MOV64FSmr : RI<0x89, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src),
+                 "mov{q}\t{$src, fs:$dst|fs:$dst, $src}",
+                 [(fsstore GR64:$src, addr:$dst)]>, SegFS;
+
 //===----------------------------------------------------------------------===//
 // Atomic Instructions
 //===----------------------------------------------------------------------===//
