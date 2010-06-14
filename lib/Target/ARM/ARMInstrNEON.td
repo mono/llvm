@@ -98,17 +98,8 @@ def NEONfmin      : SDNode<"ARMISD::FMIN", SDTARMFMAX>;
 // NEON operand definitions
 //===----------------------------------------------------------------------===//
 
-def h8imm  : Operand<i8> {
-  let PrintMethod = "printHex8ImmOperand";
-}
-def h16imm : Operand<i16> {
-  let PrintMethod = "printHex16ImmOperand";
-}
-def h32imm : Operand<i32> {
-  let PrintMethod = "printHex32ImmOperand";
-}
-def h64imm : Operand<i64> {
-  let PrintMethod = "printHex64ImmOperand";
+def nModImm : Operand<i32> {
+  let PrintMethod = "printNEONModImmOperand";
 }
 
 //===----------------------------------------------------------------------===//
@@ -811,11 +802,6 @@ def DSubReg_i32_reg : SDNodeXForm<imm, [{
 def DSubReg_f64_reg : SDNodeXForm<imm, [{
   assert(ARM::dsub_7 == ARM::dsub_0+7 && "Unexpected subreg numbering");
   return CurDAG->getTargetConstant(ARM::dsub_0 + N->getZExtValue(), MVT::i32);
-}]>;
-def DSubReg_f64_other_reg : SDNodeXForm<imm, [{
-  assert(ARM::dsub_7 == ARM::dsub_0+7 && "Unexpected subreg numbering");
-  return CurDAG->getTargetConstant(ARM::dsub_0 + (1 - N->getZExtValue()),
-                                   MVT::i32);
 }]>;
 
 // Extract S sub-registers of Q/D registers.
@@ -2869,38 +2855,38 @@ def vmovImm64 : PatLeaf<(build_vector), [{
 
 let isReMaterializable = 1 in {
 def VMOVv8i8  : N1ModImm<1, 0b000, 0b1110, 0, 0, 0, 1, (outs DPR:$dst),
-                         (ins h8imm:$SIMM), IIC_VMOVImm,
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i8", "$dst, $SIMM", "",
                          [(set DPR:$dst, (v8i8 vmovImm8:$SIMM))]>;
 def VMOVv16i8 : N1ModImm<1, 0b000, 0b1110, 0, 1, 0, 1, (outs QPR:$dst),
-                         (ins h8imm:$SIMM), IIC_VMOVImm,
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i8", "$dst, $SIMM", "",
                          [(set QPR:$dst, (v16i8 vmovImm8:$SIMM))]>;
 
-def VMOVv4i16 : N1ModImm<1, 0b000, {1,0,?,?}, 0, 0, {?}, 1, (outs DPR:$dst),
-                         (ins h16imm:$SIMM), IIC_VMOVImm,
+def VMOVv4i16 : N1ModImm<1, 0b000, {1,0,?,0}, 0, 0, 0, 1, (outs DPR:$dst),
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i16", "$dst, $SIMM", "",
                          [(set DPR:$dst, (v4i16 vmovImm16:$SIMM))]>;
-def VMOVv8i16 : N1ModImm<1, 0b000, {1,0,?,?}, 0, 1, {?}, 1, (outs QPR:$dst),
-                         (ins h16imm:$SIMM), IIC_VMOVImm,
+def VMOVv8i16 : N1ModImm<1, 0b000, {1,0,?,0}, 0, 1, 0, 1, (outs QPR:$dst),
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i16", "$dst, $SIMM", "",
                          [(set QPR:$dst, (v8i16 vmovImm16:$SIMM))]>;
 
-def VMOVv2i32 : N1ModImm<1, 0b000, {?,?,?,?}, 0, 0, {?}, 1, (outs DPR:$dst),
-                         (ins h32imm:$SIMM), IIC_VMOVImm,
+def VMOVv2i32 : N1ModImm<1, 0b000, {0,?,?,0}, 0, 0, 0, 1, (outs DPR:$dst),
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i32", "$dst, $SIMM", "",
                          [(set DPR:$dst, (v2i32 vmovImm32:$SIMM))]>;
-def VMOVv4i32 : N1ModImm<1, 0b000, {?,?,?,?}, 0, 1, {?}, 1, (outs QPR:$dst),
-                         (ins h32imm:$SIMM), IIC_VMOVImm,
+def VMOVv4i32 : N1ModImm<1, 0b000, {0,?,?,0}, 0, 1, 0, 1, (outs QPR:$dst),
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i32", "$dst, $SIMM", "",
                          [(set QPR:$dst, (v4i32 vmovImm32:$SIMM))]>;
 
 def VMOVv1i64 : N1ModImm<1, 0b000, 0b1110, 0, 0, 1, 1, (outs DPR:$dst),
-                         (ins h64imm:$SIMM), IIC_VMOVImm,
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i64", "$dst, $SIMM", "",
                          [(set DPR:$dst, (v1i64 vmovImm64:$SIMM))]>;
 def VMOVv2i64 : N1ModImm<1, 0b000, 0b1110, 0, 1, 1, 1, (outs QPR:$dst),
-                         (ins h64imm:$SIMM), IIC_VMOVImm,
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i64", "$dst, $SIMM", "",
                          [(set QPR:$dst, (v2i64 vmovImm64:$SIMM))]>;
 } // isReMaterializable
@@ -3121,17 +3107,6 @@ def  VDUPfqf  : N2V<0b11, 0b11, {?,1}, {0,0}, 0b11000, 1, 0,
                     (outs QPR:$dst), (ins SPR:$src),
                     IIC_VMOVD, "vdup", "32", "$dst, ${src:lane}", "",
                     [(set QPR:$dst, (v4f32 (NEONvdup (f32 SPR:$src))))]>;
-
-def : Pat<(v2i64 (NEONvduplane (v2i64 QPR:$src), imm:$lane)),
-          (INSERT_SUBREG QPR:$src, 
-                         (i64 (EXTRACT_SUBREG QPR:$src,
-                               (DSubReg_f64_reg imm:$lane))),
-                         (DSubReg_f64_other_reg imm:$lane))>;
-def : Pat<(v2f64 (NEONvduplane (v2f64 QPR:$src), imm:$lane)),
-          (INSERT_SUBREG QPR:$src, 
-                         (f64 (EXTRACT_SUBREG QPR:$src,
-                               (DSubReg_f64_reg imm:$lane))),
-                         (DSubReg_f64_other_reg imm:$lane))>;
 
 //   VMOVN    : Vector Narrowing Move
 defm VMOVN    : N2VNInt_HSD<0b11,0b11,0b10,0b00100,0,0, IIC_VMOVD,

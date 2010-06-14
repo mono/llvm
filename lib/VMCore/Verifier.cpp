@@ -85,7 +85,8 @@ namespace {  // Anonymous namespace for class
 
       for (Function::iterator I = F.begin(), E = F.end(); I != E; ++I) {
         if (I->empty() || !I->back().isTerminator()) {
-          dbgs() << "Basic Block does not have terminator!\n";
+          dbgs() << "Basic Block in function '" << F.getName() 
+                 << "' does not have terminator!\n";
           WriteAsOperand(dbgs(), I, true);
           dbgs() << "\n";
           Broken = true;
@@ -1630,8 +1631,8 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
 
   // If the intrinsic takes MDNode arguments, verify that they are either global
   // or are local to *this* function.
-  for (unsigned i = 1, e = CI.getNumOperands(); i != e; ++i)
-    if (MDNode *MD = dyn_cast<MDNode>(CI.getOperand(i)))
+  for (unsigned i = 0, e = CI.getNumArgOperands(); i != e; ++i)
+    if (MDNode *MD = dyn_cast<MDNode>(CI.getArgOperand(i)))
       visitMDNode(*MD, CI.getParent()->getParent());
 
   switch (ID) {

@@ -673,6 +673,26 @@ multiclass basic_sse12_fp_binop_rm<bits<8> opc, string OpcodeStr,
     let isCommutable = Commutable;
   }
 
+  def V#NAME#SSrr : VSSI<opc, MRMSrcReg, (outs FR32:$dst),
+                 (ins FR32:$src1, FR32:$src2),
+                 !strconcat(OpcodeStr,
+                            "ss\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                 []> {
+    let isCommutable = Commutable;
+    let Constraints = "";
+    let isAsmParserOnly = 1;
+  }
+
+  def V#NAME#SDrr : VSDI<opc, MRMSrcReg, (outs FR64:$dst),
+                 (ins FR64:$src1, FR64:$src2),
+                 !strconcat(OpcodeStr,
+                            "sd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                 []> {
+    let isCommutable = Commutable;
+    let Constraints = "";
+    let isAsmParserOnly = 1;
+  }
+
   // Scalar operation, reg+mem.
   def SSrm : SSI<opc, MRMSrcMem, (outs FR32:$dst),
                                  (ins FR32:$src1, f32mem:$src2),
@@ -683,6 +703,24 @@ multiclass basic_sse12_fp_binop_rm<bits<8> opc, string OpcodeStr,
                                  (ins FR64:$src1, f64mem:$src2),
                  !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
                  [(set FR64:$dst, (OpNode FR64:$src1, (load addr:$src2)))]>;
+
+  def V#NAME#SSrm : VSSI<opc, MRMSrcMem, (outs FR32:$dst),
+                 (ins FR32:$src1, f32mem:$src2),
+                 !strconcat(OpcodeStr,
+                            "ss\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                 []> {
+    let Constraints = "";
+    let isAsmParserOnly = 1;
+  }
+
+  def V#NAME#SDrm : VSDI<opc, MRMSrcMem, (outs FR64:$dst),
+                 (ins FR64:$src1, f64mem:$src2),
+                 !strconcat(OpcodeStr,
+                            "sd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                 []> {
+    let Constraints = "";
+    let isAsmParserOnly = 1;
+  }
 
   // Vector operation, reg+reg.
   def PSrr : PSI<opc, MRMSrcReg, (outs VR128:$dst),
@@ -699,6 +737,26 @@ multiclass basic_sse12_fp_binop_rm<bits<8> opc, string OpcodeStr,
     let isCommutable = Commutable;
   }
 
+  def V#NAME#PSrr : VPSI<opc, MRMSrcReg, (outs VR128:$dst),
+               (ins VR128:$src1, VR128:$src2),
+               !strconcat(OpcodeStr,
+                          "ps\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+               []> {
+    let isCommutable = Commutable;
+    let Constraints = "";
+    let isAsmParserOnly = 1;
+  }
+
+  def V#NAME#PDrr : VPDI<opc, MRMSrcReg, (outs VR128:$dst),
+               (ins VR128:$src1, VR128:$src2),
+               !strconcat(OpcodeStr,
+                          "pd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+               []> {
+    let isCommutable = Commutable;
+    let Constraints = "";
+    let isAsmParserOnly = 1;
+  }
+
   // Vector operation, reg+mem.
   def PSrm : PSI<opc, MRMSrcMem, (outs VR128:$dst),
                                  (ins VR128:$src1, f128mem:$src2),
@@ -710,7 +768,43 @@ multiclass basic_sse12_fp_binop_rm<bits<8> opc, string OpcodeStr,
                  !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
              [(set VR128:$dst, (OpNode VR128:$src1, (memopv2f64 addr:$src2)))]>;
 
+  def V#NAME#PSrm : VPSI<opc, MRMSrcMem, (outs VR128:$dst),
+               (ins VR128:$src1, f128mem:$src2),
+               !strconcat(OpcodeStr,
+                          "ps\t{$src2, $src1, $dst|$dst, $src1, $src2}"), []> {
+    let Constraints = "";
+    let isAsmParserOnly = 1;
+  }
+
+  def V#NAME#PDrm : VPDI<opc, MRMSrcMem, (outs VR128:$dst),
+               (ins VR128:$src1, f128mem:$src2),
+               !strconcat(OpcodeStr,
+                          "pd\t{$src2, $src1, $dst|$dst, $src1, $src2}"), []> {
+    let Constraints = "";
+    let isAsmParserOnly = 1;
+  }
+
   // Intrinsic operation, reg+reg.
+  def V#NAME#SSrr_Int : VSSI<opc, MRMSrcReg, (outs VR128:$dst),
+                                             (ins VR128:$src1, VR128:$src2),
+       !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
+       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
+                          !strconcat(OpcodeStr, "_ss")) VR128:$src1,
+                                                      VR128:$src2))]> {
+                          // int_x86_sse_xxx_ss
+    let Constraints = "";
+  }
+
+  def V#NAME#SDrr_Int : VSDI<opc, MRMSrcReg, (outs VR128:$dst),
+                                             (ins VR128:$src1, VR128:$src2),
+       !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
+       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
+                          !strconcat(OpcodeStr, "_sd")) VR128:$src1,
+                                                      VR128:$src2))]> {
+                          // int_x86_sse2_xxx_sd
+    let Constraints = "";
+  }
+
   def SSrr_Int : SSI<opc, MRMSrcReg, (outs VR128:$dst),
                                      (ins VR128:$src1, VR128:$src2),
        !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
@@ -728,6 +822,26 @@ multiclass basic_sse12_fp_binop_rm<bits<8> opc, string OpcodeStr,
                           // int_x86_sse2_xxx_sd
 
   // Intrinsic operation, reg+mem.
+  def V#NAME#SSrm_Int : VSSI<opc, MRMSrcMem, (outs VR128:$dst),
+                                             (ins VR128:$src1, ssmem:$src2),
+       !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
+       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
+                          !strconcat(OpcodeStr, "_ss")) VR128:$src1,
+                                               sse_load_f32:$src2))]> {
+                          // int_x86_sse_xxx_ss
+    let Constraints = "";
+  }
+
+  def V#NAME#SDrm_Int : VSDI<opc, MRMSrcMem, (outs VR128:$dst),
+                                             (ins VR128:$src1, sdmem:$src2),
+       !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
+       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
+                          !strconcat(OpcodeStr, "_sd")) VR128:$src1,
+                                               sse_load_f64:$src2))]> {
+                          // int_x86_sse2_xxx_sd
+    let Constraints = "";
+  }
+
   def SSrm_Int : SSI<opc, MRMSrcMem, (outs VR128:$dst),
                                      (ins VR128:$src1, ssmem:$src2),
        !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
