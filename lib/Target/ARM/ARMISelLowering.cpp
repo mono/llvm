@@ -2758,15 +2758,25 @@ static SDValue LowerVSETCC(SDValue Op, SelectionDAG &DAG) {
   return Result;
 }
 
-/// isVMOVSplat - Check if the specified splat value corresponds to an immediate
-/// VMOV instruction.  If so, return either the constant being splatted or the
-/// encoded value, depending on the DoEncode parameter.  The format of the
-/// encoded value is: bit12=Op, bits11-8=Cmode, bits7-0=Immediate.
-static SDValue isVMOVSplat(uint64_t SplatBits, uint64_t SplatUndef,
-                           unsigned SplatBitSize, SelectionDAG &DAG,
-                           bool DoEncode) {
+/// isNEONModifiedImm - Check if the specified splat value corresponds to a
+/// valid vector constant for a NEON instruction with a "modified immediate"
+/// operand (e.g., VMOV).  If so, return either the constant being
+/// splatted or the encoded value, depending on the DoEncode parameter.  The
+/// format of the encoded value is: bit12=Op, bits11-8=Cmode,
+/// bits7-0=Immediate.
+static SDValue isNEONModifiedImm(uint64_t SplatBits, uint64_t SplatUndef,
+                                 unsigned SplatBitSize, SelectionDAG &DAG,
+                                 bool isVMOV, bool DoEncode) {
   unsigned Op, Cmode, Imm;
   EVT VT;
+
+  // SplatBitSize is set to the smallest size that splats the vector, so a
+  // zero vector will always have SplatBitSize == 8.  However, NEON modified
+  // immediate instructions others than VMOV do not support the 8-bit encoding
+  // of a zero vector, and the default encoding of zero is supposed to be the
+  // 32-bit version.
+  if (SplatBits == 0)
+    SplatBitSize = 32;
 
   Op = 0;
   switch (SplatBitSize) {
@@ -2853,6 +2863,8 @@ static SDValue isVMOVSplat(uint64_t SplatBits, uint64_t SplatUndef,
 
   case 64: {
     // NEON has a 64-bit VMOV splat where each byte is either 0 or 0xff.
+    if (!isVMOV)
+      return SDValue();
     uint64_t BitMask = 0xff;
     uint64_t Val = 0;
     unsigned ImmMask = 1;
@@ -2885,11 +2897,13 @@ static SDValue isVMOVSplat(uint64_t SplatBits, uint64_t SplatUndef,
   return DAG.getTargetConstant(SplatBits, VT);
 }
 
-/// getVMOVImm - If this is a build_vector of constants which can be
-/// formed by using a VMOV instruction of the specified element size,
-/// return the constant being splatted.  The ByteSize field indicates the
-/// number of bytes of each element [1248].
-SDValue ARM::getVMOVImm(SDNode *N, unsigned ByteSize, SelectionDAG &DAG) {
+
+/// getNEONModImm - If this is a valid vector constant for a NEON instruction
+/// with a "modified immediate" operand (e.g., VMOV) of the specified element
+/// size, return the encoded value for that immediate.  The ByteSize field
+/// indicates the number of bytes of each element [1248].
+SDValue ARM::getNEONModImm(SDNode *N, unsigned ByteSize, bool isVMOV,
+                           SelectionDAG &DAG) {
   BuildVectorSDNode *BVN = dyn_cast<BuildVectorSDNode>(N);
   APInt SplatBits, SplatUndef;
   unsigned SplatBitSize;
@@ -2901,8 +2915,8 @@ SDValue ARM::getVMOVImm(SDNode *N, unsigned ByteSize, SelectionDAG &DAG) {
   if (SplatBitSize > ByteSize * 8)
     return SDValue();
 
-  return isVMOVSplat(SplatBits.getZExtValue(), SplatUndef.getZExtValue(),
-                     SplatBitSize, DAG, true);
+  return isNEONModifiedImm(SplatBits.getZExtValue(), SplatUndef.getZExtValue(),
+                           SplatBitSize, DAG, isVMOV, true);
 }
 
 static bool isVEXTMask(const SmallVectorImpl<int> &M, EVT VT,
@@ -3142,9 +3156,10 @@ static SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) {
   bool HasAnyUndefs;
   if (BVN->isConstantSplat(SplatBits, SplatUndef, SplatBitSize, HasAnyUndefs)) {
     if (SplatBitSize <= 64) {
-      SDValue Val = isVMOVSplat(SplatBits.getZExtValue(),
-                                SplatUndef.getZExtValue(), SplatBitSize, DAG,
-                                false);
+      // Check if an immediate VMOV works.
+      SDValue Val = isNEONModifiedImm(SplatBits.getZExtValue(),
+                                      SplatUndef.getZExtValue(),
+                                      SplatBitSize, DAG, true, false);
       if (Val.getNode())
         return BuildSplat(Val, VT, DAG, dl);
     }

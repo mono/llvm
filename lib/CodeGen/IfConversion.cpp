@@ -115,7 +115,7 @@ namespace {
                  BB(0), TrueBB(0), FalseBB(0) {}
     };
 
-    /// IfcvtToken - Record information about pending if-conversions to attemp:
+    /// IfcvtToken - Record information about pending if-conversions to attempt:
     /// BBI             - Corresponding BBInfo.
     /// Kind            - Type of block. See IfcvtKind.
     /// NeedSubsumption - True if the to-be-predicated BB has already been
@@ -167,8 +167,7 @@ namespace {
                          std::vector<IfcvtToken*> &Tokens);
     bool FeasibilityAnalysis(BBInfo &BBI, SmallVectorImpl<MachineOperand> &Cond,
                              bool isTriangle = false, bool RevBranch = false);
-    bool AnalyzeBlocks(MachineFunction &MF,
-                       std::vector<IfcvtToken*> &Tokens);
+    void AnalyzeBlocks(MachineFunction &MF, std::vector<IfcvtToken*> &Tokens);
     void InvalidatePreds(MachineBasicBlock *BB);
     void RemoveExtraEdges(BBInfo &BBI);
     bool IfConvertSimple(BBInfo &BBI, IfcvtKind Kind);
@@ -253,7 +252,8 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
   while (IfCvtLimit == -1 || (int)NumIfCvts < IfCvtLimit) {
     // Do an initial analysis for each basic block and find all the potential
     // candidates to perform if-conversion.
-    bool Change = AnalyzeBlocks(MF, Tokens);
+    bool Change = false;
+    AnalyzeBlocks(MF, Tokens);
     while (!Tokens.empty()) {
       IfcvtToken *Token = Tokens.back();
       Tokens.pop_back();
@@ -802,11 +802,9 @@ IfConverter::BBInfo &IfConverter::AnalyzeBlock(MachineBasicBlock *BB,
 }
 
 /// AnalyzeBlocks - Analyze all blocks and find entries for all if-conversion
-/// candidates. It returns true if any CFG restructuring is done to expose more
-/// if-conversion opportunities.
-bool IfConverter::AnalyzeBlocks(MachineFunction &MF,
+/// candidates.
+void IfConverter::AnalyzeBlocks(MachineFunction &MF,
                                 std::vector<IfcvtToken*> &Tokens) {
-  bool Change = false;
   std::set<MachineBasicBlock*> Visited;
   for (unsigned i = 0, e = Roots.size(); i != e; ++i) {
     for (idf_ext_iterator<MachineBasicBlock*> I=idf_ext_begin(Roots[i],Visited),
@@ -818,8 +816,6 @@ bool IfConverter::AnalyzeBlocks(MachineFunction &MF,
 
   // Sort to favor more complex ifcvt scheme.
   std::stable_sort(Tokens.begin(), Tokens.end(), IfcvtTokenCmp);
-
-  return Change;
 }
 
 /// canFallThroughTo - Returns true either if ToBB is the next block after BB or
@@ -1091,6 +1087,13 @@ bool IfConverter::IfConvertDiamond(BBInfo &BBI, IfcvtKind Kind,
   // Remove the duplicated instructions at the beginnings of both paths.
   MachineBasicBlock::iterator DI1 = BBI1->BB->begin();
   MachineBasicBlock::iterator DI2 = BBI2->BB->begin();
+  MachineBasicBlock::iterator DIE1 = BBI1->BB->end();
+  MachineBasicBlock::iterator DIE2 = BBI2->BB->end();
+  // Skip dbg_value instructions
+  while (DI1 != DIE1 && DI1->isDebugValue())
+    ++DI1;
+  while (DI2 != DIE2 && DI2->isDebugValue())
+    ++DI2;
   BBI1->NonPredSize -= NumDups1;
   BBI2->NonPredSize -= NumDups1;
   while (NumDups1 != 0) {
@@ -1104,8 +1107,15 @@ bool IfConverter::IfConvertDiamond(BBInfo &BBI, IfcvtKind Kind,
   // Predicate the 'true' block after removing its branch.
   BBI1->NonPredSize -= TII->RemoveBranch(*BBI1->BB);
   DI1 = BBI1->BB->end();
-  for (unsigned i = 0; i != NumDups2; ++i)
+  for (unsigned i = 0; i != NumDups2; ) {
+    // NumDups2 only counted non-dbg_value instructions, so this won't
+    // run off the head of the list.
+    assert (DI1 != BBI1->BB->begin());
     --DI1;
+    // skip dbg_value instructions
+    if (!DI1->isDebugValue())
+      ++i;
+  }
   BBI1->BB->erase(DI1, BBI1->BB->end());
   PredicateBlock(*BBI1, BBI1->BB->end(), *Cond1);
 
@@ -1113,8 +1123,13 @@ bool IfConverter::IfConvertDiamond(BBInfo &BBI, IfcvtKind Kind,
   BBI2->NonPredSize -= TII->RemoveBranch(*BBI2->BB);
   DI2 = BBI2->BB->end();
   while (NumDups2 != 0) {
+    // NumDups2 only counted non-dbg_value instructions, so this won't
+    // run off the head of the list.
+    assert (DI2 != BBI2->BB->begin());
     --DI2;
-    --NumDups2;
+    // skip dbg_value instructions
+    if (!DI2->isDebugValue())
+      --NumDups2;
   }
   PredicateBlock(*BBI2, DI2, *Cond2);
 
