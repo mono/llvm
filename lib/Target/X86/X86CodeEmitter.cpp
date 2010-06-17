@@ -708,6 +708,27 @@ void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI,
       bool Indirect = gvNeedsNonLazyPtr(MO1, TM);
       emitGlobalAddress(MO1.getGlobal(), rt, MO1.getOffset(), 0,
                         Indirect);
+    } else if (MO1.isBlockAddress()) {
+      // Ugly, but the BlockAddress refers to the original LLVM bblock
+      const MachineFunction *MF = MI.getParent()->getParent();
+      const MachineBasicBlock *TargetBB = NULL;
+      for (MachineFunction::const_iterator MBB2 = MF->begin(), E = MF->end(); 
+           MBB2 != E; ++MBB2) {
+        if (MBB2->getBasicBlock() == MO1.getBlockAddress()->getBasicBlock()) {
+          TargetBB = MBB2;
+          break;
+        }
+      }
+      assert(TargetBB);
+      MCE.addRelocation(MachineRelocation::getBB(MCE.getCurrentPCOffset(),
+                                                 rt,
+                                                 const_cast<MachineBasicBlock*>(TargetBB)));
+      if (rt == X86::reloc_absolute_word)
+        MCE.emitWordLE(0);
+      else if (rt == X86::reloc_absolute_dword)
+        MCE.emitDWordLE(0);
+      else
+        assert(0);
     } else if (MO1.isSymbol())
       emitExternalSymbolAddress(MO1.getSymbolName(), rt);
     else if (MO1.isCPI())

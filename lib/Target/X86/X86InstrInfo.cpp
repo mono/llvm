@@ -3181,6 +3181,12 @@ static unsigned sizeGlobalAddress(bool dword) {
   return dword ? 8 : 4;
 }
 
+/// sizeBlockAddress - Give the size of the emission of this block address
+///
+static unsigned sizeBlockAddress(bool dword) {
+  return dword ? 8 : 4;
+}
+
 /// sizeConstPoolAddress - Give the size of the emission of this constant
 /// pool address
 ///
@@ -3466,6 +3472,8 @@ static unsigned GetInstSizeWithDesc(const MachineInstr &MI,
           dword = true; 
         if (MO1.isGlobal()) {
           FinalSize += sizeGlobalAddress(dword);
+        } else if (MO1.isBlockAddress()) {
+          FinalSize += sizeBlockAddress(dword);
         } else if (MO1.isSymbol())
           FinalSize += sizeExternalSymbolAddress(dword);
         else if (MO1.isCPI())
