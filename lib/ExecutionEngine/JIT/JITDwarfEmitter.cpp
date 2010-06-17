@@ -24,6 +24,7 @@
 #include "llvm/ExecutionEngine/JITMemoryManager.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/TargetData.h"
@@ -807,7 +808,10 @@ JITDwarfEmitter::GetExceptionTableSizeInBytes(MachineFunction* MF) const {
   const std::vector<const GlobalVariable *> &TypeInfos = MMI->getTypeInfos();
   const std::vector<unsigned> &FilterIds = MMI->getFilterIds();
   const std::vector<LandingPadInfo> &PadInfos = MMI->getLandingPads();
-  if (PadInfos.empty()) return 0;
+
+  int ThisSlot = MF->getMonoInfo()->getThisStackSlot();
+
+  if (PadInfos.empty() && ThisSlot == -1) return 0;
 
   // Sort the landing pads in order of their type ids.  This is used to fold
   // duplicate actions.
@@ -990,6 +994,9 @@ JITDwarfEmitter::GetExceptionTableSizeInBytes(MachineFunction* MF) const {
                        sizeof(int8_t) + // TType format
                        MCAsmInfo::getULEB128Size(TypeOffset) + // TType base offset
                        TypeOffset;
+
+  if (ThisSlot != -1)
+	  TotalSize += 16;
 
   unsigned SizeAlign = (4 - TotalSize) & 3;
 
