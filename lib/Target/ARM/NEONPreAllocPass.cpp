@@ -448,8 +448,7 @@ NEONPreAllocPass::FormsRegSequence(MachineInstr *MI,
     assert(DefMI->isExtractSubreg());
     MO.setReg(LastSrcReg);
     MO.setSubReg(SubIds[R]);
-    if (R != 0)
-      MO.setIsKill(false);
+    MO.setIsKill(false);
     // Delete the EXTRACT_SUBREG if its result is now dead.
     if (MRI->use_empty(OldReg))
       DefMI->eraseFromParent();
@@ -467,8 +466,7 @@ bool NEONPreAllocPass::PreAllocNEONRegisters(MachineBasicBlock &MBB) {
     unsigned FirstOpnd, NumRegs, Offset, Stride;
     if (!isNEONMultiRegOp(MI->getOpcode(), FirstOpnd, NumRegs, Offset, Stride))
       continue;
-    if (llvm::ModelWithRegSequence() &&
-        FormsRegSequence(MI, FirstOpnd, NumRegs, Offset, Stride))
+    if (FormsRegSequence(MI, FirstOpnd, NumRegs, Offset, Stride))
       continue;
 
     MachineBasicBlock::iterator NextI = llvm::next(MBBI);

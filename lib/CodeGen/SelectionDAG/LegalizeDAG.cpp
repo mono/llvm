@@ -2359,10 +2359,42 @@ void SelectionDAGLegalize::ExpandNode(SDNode *Node,
   case ISD::EH_RETURN:
   case ISD::EH_LABEL:
   case ISD::PREFETCH:
-  case ISD::MEMBARRIER:
   case ISD::VAEND:
     Results.push_back(Node->getOperand(0));
     break;
+  case ISD::MEMBARRIER: {
+    // If the target didn't lower this, lower it to '__sync_synchronize()' call
+    TargetLowering::ArgListTy Args;
+    std::pair<SDValue, SDValue> CallResult =
+      TLI.LowerCallTo(Node->getOperand(0), Type::getVoidTy(*DAG.getContext()),
+                      false, false, false, false, 0, CallingConv::C, false,
+                      /*isReturnValueUsed=*/true,
+                      DAG.getExternalSymbol("__sync_synchronize",
+                                            TLI.getPointerTy()),
+                      Args, DAG, dl);
+    Results.push_back(CallResult.second);
+    break;
+  }
+  // By default, atomic intrinsics are marked Legal and lowered. Targets
+  // which don't support them directly, however, may want libcalls, in which
+  // case they mark them Expand, and we get here.
+  // FIXME: Unimplemented for now. Add libcalls.
+  case ISD::ATOMIC_SWAP:
+  case ISD::ATOMIC_LOAD_ADD:
+  case ISD::ATOMIC_LOAD_SUB:
+  case ISD::ATOMIC_LOAD_AND:
+  case ISD::ATOMIC_LOAD_OR:
+  case ISD::ATOMIC_LOAD_XOR:
+  case ISD::ATOMIC_LOAD_NAND:
+  case ISD::ATOMIC_LOAD_MIN:
+  case ISD::ATOMIC_LOAD_MAX:
+  case ISD::ATOMIC_LOAD_UMIN:
+  case ISD::ATOMIC_LOAD_UMAX:
+  case ISD::ATOMIC_CMP_SWAP: {
+    assert (0 && "atomic intrinsic not lowered!");
+    Results.push_back(Node->getOperand(0));
+    break;
+  }
   case ISD::DYNAMIC_STACKALLOC:
     ExpandDYNAMIC_STACKALLOC(Node, Results);
     break;

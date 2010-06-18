@@ -66,6 +66,11 @@ public:
     this->TD = TD;
     if (CI->getCalledFunction())
       Context = &CI->getCalledFunction()->getContext();
+
+    // We never change the calling convention.
+    if (CI->getCallingConv() != llvm::CallingConv::C)
+      return NULL;
+
     return CallOptimizer(CI->getCalledFunction(), CI, B);
   }
 };
@@ -86,6 +91,20 @@ static bool IsOnlyUsedInZeroEqualityComparison(Value *V) {
         if (Constant *C = dyn_cast<Constant>(IC->getOperand(1)))
           if (C->isNullValue())
             continue;
+    // Unknown instruction.
+    return false;
+  }
+  return true;
+}
+
+/// IsOnlyUsedInEqualityComparison - Return true if it is only used in equality
+/// comparisons with With.
+static bool IsOnlyUsedInEqualityComparison(Value *V, Value *With) {
+  for (Value::use_iterator UI = V->use_begin(), E = V->use_end();
+       UI != E; ++UI) {
+    if (ICmpInst *IC = dyn_cast<ICmpInst>(*UI))
+      if (IC->isEquality() && IC->getOperand(1) == With)
+        continue;
     // Unknown instruction.
     return false;
   }
@@ -328,6 +347,9 @@ struct StrNCmpOpt : public LibCallOptimization {
     if (Length == 0) // strncmp(x,y,0)   -> 0
       return ConstantInt::get(CI->getType(), 0);
 
+    if (TD && Length == 1) // strncmp(x,y,1) -> memcmp(x,y,1)
+      return EmitMemCmp(Str1P, Str2P, CI->getOperand(3), B, TD);
+
     std::string Str1, Str2;
     bool HasStr1 = GetConstantStringInfo(Str1P, Str1);
     bool HasStr2 = GetConstantStringInfo(Str2P, Str2);
@@ -502,6 +524,23 @@ struct StrStrOpt : public LibCallOptimization {
     // fold strstr(x, x) -> x.
     if (CI->getOperand(1) == CI->getOperand(2))
       return B.CreateBitCast(CI->getOperand(1), CI->getType());
+
+    // fold strstr(a, b) == a -> strncmp(a, b, strlen(b)) == 0
+    if (TD && IsOnlyUsedInEqualityComparison(CI, CI->getOperand(1))) {
+      Value *StrLen = EmitStrLen(CI->getOperand(2), B, TD);
+      Value *StrNCmp = EmitStrNCmp(CI->getOperand(1), CI->getOperand(2),
+                                   StrLen, B, TD);
+      for (Value::use_iterator UI = CI->use_begin(), UE = CI->use_end();
+           UI != UE; ) {
+        ICmpInst *Old = cast<ICmpInst>(UI++);
+        Value *Cmp = B.CreateICmp(Old->getPredicate(), StrNCmp,
+                                  ConstantInt::getNullValue(StrNCmp->getType()),
+                                  "cmp");
+        Old->replaceAllUsesWith(Cmp);
+        Old->eraseFromParent();
+      }
+      return CI;
+    }
 
     // See if either input string is a constant string.
     std::string SearchStr, ToFindStr;

@@ -8484,21 +8484,41 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   MachineBasicBlock *sinkMBB = F->CreateMachineBasicBlock(LLVM_BB);
   unsigned Opc =
     X86::GetCondBranchFromCond((X86::CondCode)MI->getOperand(3).getImm());
+
   BuildMI(BB, DL, TII->get(Opc)).addMBB(sinkMBB);
   F->insert(It, copy0MBB);
   F->insert(It, sinkMBB);
+
   // Update machine-CFG edges by first adding all successors of the current
   // block to the new block which will contain the Phi node for the select.
   for (MachineBasicBlock::succ_iterator I = BB->succ_begin(),
          E = BB->succ_end(); I != E; ++I)
     sinkMBB->addSuccessor(*I);
+
   // Next, remove all successors of the current block, and add the true
   // and fallthrough blocks as its successors.
   while (!BB->succ_empty())
     BB->removeSuccessor(BB->succ_begin());
+
   // Add the true and fallthrough blocks as its successors.
   BB->addSuccessor(copy0MBB);
   BB->addSuccessor(sinkMBB);
+
+  // If the EFLAGS register isn't dead in the terminator, then claim that it's
+  // live into the sink and copy blocks.
+  const MachineFunction *MF = BB->getParent();
+  const TargetRegisterInfo *TRI = MF->getTarget().getRegisterInfo();
+  BitVector ReservedRegs = TRI->getReservedRegs(*MF);
+  const MachineInstr *Term = BB->getFirstTerminator();
+
+  for (unsigned I = 0, E = Term->getNumOperands(); I != E; ++I) {
+    const MachineOperand &MO = Term->getOperand(I);
+    if (!MO.isReg() || MO.isKill() || MO.isDead()) continue;
+    unsigned Reg = MO.getReg();
+    if (Reg != X86::EFLAGS) continue;
+    copy0MBB->addLiveIn(Reg);
+    sinkMBB->addLiveIn(Reg);
+  }
 
   //  copy0MBB:
   //   %FalseValue = ...
@@ -8562,6 +8582,15 @@ X86TargetLowering::EmitLoweredTLSCall(MachineInstr *MI,
     .addReg(0);
     MIB = BuildMI(BB, DL, TII->get(X86::CALL64m));
     addDirectMem(MIB, X86::RDI).addReg(0);
+  } else if (getTargetMachine().getRelocationModel() != Reloc::PIC_) {
+    MachineInstrBuilder MIB = BuildMI(BB, DL, TII->get(X86::MOV32rm), X86::EAX)
+    .addReg(0)
+    .addImm(0).addReg(0)
+    .addGlobalAddress(MI->getOperand(3).getGlobal(), 0, 
+                      MI->getOperand(3).getTargetFlags())
+    .addReg(0);
+    MIB = BuildMI(BB, DL, TII->get(X86::CALL32m));
+    addDirectMem(MIB, X86::EAX).addReg(0);
   } else {
     MachineInstrBuilder MIB = BuildMI(BB, DL, TII->get(X86::MOV32rm), X86::EAX)
     .addReg(TII->getGlobalBaseReg(F))
@@ -9631,8 +9660,10 @@ static SDValue PerformOrCombine(SDNode *N, SelectionDAG &DAG,
   if (ShAmt1.getOpcode() == ISD::SUB) {
     SDValue Sum = ShAmt1.getOperand(0);
     if (ConstantSDNode *SumC = dyn_cast<ConstantSDNode>(Sum)) {
-      if (SumC->getSExtValue() == Bits &&
-          ShAmt1.getOperand(1) == ShAmt0)
+      SDValue ShAmt1Op1 = ShAmt1.getOperand(1);
+      if (ShAmt1Op1.getNode()->getOpcode() == ISD::TRUNCATE)
+        ShAmt1Op1 = ShAmt1Op1.getOperand(0);
+      if (SumC->getSExtValue() == Bits && ShAmt1Op1 == ShAmt0)
         return DAG.getNode(Opc, DL, VT,
                            Op0, Op1,
                            DAG.getNode(ISD::TRUNCATE, DL,

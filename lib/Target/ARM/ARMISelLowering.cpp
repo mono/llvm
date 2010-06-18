@@ -62,6 +62,11 @@ EnableARMLongCalls("arm-long-calls", cl::Hidden,
   cl::desc("Generate calls via indirect call instructions."),
   cl::init(false));
 
+static cl::opt<bool>
+ARMInterworking("arm-interworking", cl::Hidden,
+  cl::desc("Enable / disable ARM interworking (for debugging only)"),
+  cl::init(true));
+
 static bool CC_ARM_APCS_Custom_f64(unsigned &ValNo, EVT &ValVT, EVT &LocVT,
                                    CCValAssign::LocInfo &LocInfo,
                                    ISD::ArgFlagsTy &ArgFlags,
@@ -104,10 +109,7 @@ void ARMTargetLowering::addTypeForNEON(EVT VT, EVT PromotedLdStVT,
   }
   setOperationAction(ISD::BUILD_VECTOR, VT.getSimpleVT(), Custom);
   setOperationAction(ISD::VECTOR_SHUFFLE, VT.getSimpleVT(), Custom);
-  if (llvm::ModelWithRegSequence())
-    setOperationAction(ISD::CONCAT_VECTORS, VT.getSimpleVT(), Legal);
-  else
-    setOperationAction(ISD::CONCAT_VECTORS, VT.getSimpleVT(), Custom);
+  setOperationAction(ISD::CONCAT_VECTORS, VT.getSimpleVT(), Legal);
   setOperationAction(ISD::EXTRACT_SUBVECTOR, VT.getSimpleVT(), Expand);
   setOperationAction(ISD::SELECT, VT.getSimpleVT(), Expand);
   setOperationAction(ISD::SELECT_CC, VT.getSimpleVT(), Expand);
@@ -403,7 +405,12 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   // doesn't yet know how to not do that for SjLj.
   setExceptionSelectorRegister(ARM::R0);
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
-  setOperationAction(ISD::MEMBARRIER,         MVT::Other, Custom);
+  // Handle atomics directly for ARMv[67] (except for Thumb1), otherwise
+  // use the default expansion.
+  TargetLowering::LegalizeAction AtomicAction =
+    (Subtarget->hasV7Ops() ||
+      (Subtarget->hasV6Ops() && !Subtarget->isThumb1Only())) ? Custom : Expand;
+  setOperationAction(ISD::MEMBARRIER, MVT::Other, AtomicAction);
 
   // If the subtarget does not have extract instructions, sign_extend_inreg
   // needs to be expanded. Extract is available in ARM mode on v6 and up,
@@ -1109,11 +1116,14 @@ ARMTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   // Build a sequence of copy-to-reg nodes chained together with token chain
   // and flag operands which copy the outgoing args into the appropriate regs.
   SDValue InFlag;
-  for (unsigned i = 0, e = RegsToPass.size(); i != e; ++i) {
-    Chain = DAG.getCopyToReg(Chain, dl, RegsToPass[i].first,
-                             RegsToPass[i].second, InFlag);
-    InFlag = Chain.getValue(1);
-  }
+  // Tail call byval lowering might overwrite argument registers so in case of
+  // tail call optimization the copies to registers are lowered later.
+  if (!isTailCall)
+    for (unsigned i = 0, e = RegsToPass.size(); i != e; ++i) {
+      Chain = DAG.getCopyToReg(Chain, dl, RegsToPass[i].first,
+                               RegsToPass[i].second, InFlag);
+      InFlag = Chain.getValue(1);
+    }
 
   // For tail calls lower the arguments to the 'real' stack slot.
   if (isTailCall) {
@@ -1185,7 +1195,7 @@ ARMTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
                    getTargetMachine().getRelocationModel() != Reloc::Static;
     isARMFunc = !Subtarget->isThumb() || isStub;
     // ARM call to a local ARM function is predicable.
-    isLocalARMFunc = !Subtarget->isThumb() && !isExt;
+    isLocalARMFunc = !Subtarget->isThumb() && (!isExt || !ARMInterworking);
     // tBX takes a register source operand.
     if (isARMFunc && Subtarget->isThumb1Only() && !Subtarget->hasV5TOps()) {
       unsigned ARMPCLabelIndex = AFI->createConstPoolEntryUId();
@@ -1353,8 +1363,8 @@ ARMTargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
 //??  if (RegInfo->needsStackRealignment(MF))
 //??    return false;
 
-  // Do not sibcall optimize vararg calls unless the call site is not passing any
-  // arguments.
+  // Do not sibcall optimize vararg calls unless the call site is not passing
+  // any arguments.
   if (isVarArg && !Outs.empty())
     return false;
 
@@ -1809,8 +1819,7 @@ ARMTargetLowering::LowerEH_SJLJ_LONGJMP(SDValue Op, SelectionDAG &DAG) const {
 
 SDValue
 ARMTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG,
-                                           const ARMSubtarget *Subtarget)
-                                             const {
+                                          const ARMSubtarget *Subtarget) const {
   unsigned IntNo = cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue();
   DebugLoc dl = Op.getDebugLoc();
   switch (IntNo) {
@@ -1850,25 +1859,21 @@ ARMTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG,
 }
 
 static SDValue LowerMEMBARRIER(SDValue Op, SelectionDAG &DAG,
-                          const ARMSubtarget *Subtarget) {
+                               const ARMSubtarget *Subtarget) {
   DebugLoc dl = Op.getDebugLoc();
   SDValue Op5 = Op.getOperand(5);
-  SDValue Res;
   unsigned isDeviceBarrier = cast<ConstantSDNode>(Op5)->getZExtValue();
-  if (isDeviceBarrier) {
-    if (Subtarget->hasV7Ops())
-      Res = DAG.getNode(ARMISD::SYNCBARRIER, dl, MVT::Other, Op.getOperand(0));
-    else
-      Res = DAG.getNode(ARMISD::SYNCBARRIER, dl, MVT::Other, Op.getOperand(0),
-                        DAG.getConstant(0, MVT::i32));
-  } else {
-    if (Subtarget->hasV7Ops())
-      Res = DAG.getNode(ARMISD::MEMBARRIER, dl, MVT::Other, Op.getOperand(0));
-    else
-      Res = DAG.getNode(ARMISD::MEMBARRIER, dl, MVT::Other, Op.getOperand(0),
-                        DAG.getConstant(0, MVT::i32));
-  }
-  return Res;
+  // v6 and v7 can both handle barriers directly, but need handled a bit
+  // differently. Thumb1 and pre-v6 ARM mode use a libcall instead and should
+  // never get here.
+  unsigned Opc = isDeviceBarrier ? ARMISD::SYNCBARRIER : ARMISD::MEMBARRIER;
+  if (Subtarget->hasV7Ops())
+    return DAG.getNode(Opc, dl, MVT::Other, Op.getOperand(0));
+  else if (Subtarget->hasV6Ops() && !Subtarget->isThumb1Only())
+    return DAG.getNode(Opc, dl, MVT::Other, Op.getOperand(0),
+                       DAG.getConstant(0, MVT::i32));
+  assert(0 && "Unexpected ISD::MEMBARRIER encountered. Should be libcall!");
+  return SDValue();
 }
 
 static SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) {

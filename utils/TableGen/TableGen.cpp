@@ -19,6 +19,7 @@
 #include "AsmWriterEmitter.h"
 #include "CallingConvEmitter.h"
 #include "ClangASTNodesEmitter.h"
+#include "ClangAttrEmitter.h"
 #include "ClangDiagnosticsEmitter.h"
 #include "CodeEmitterGen.h"
 #include "DAGISelEmitter.h"
@@ -53,6 +54,8 @@ enum ActionType {
   GenARMDecoder,
   GenDisassembler,
   GenCallingConv,
+  GenClangAttrClasses,
+  GenClangAttrList,
   GenClangDiagsDefs,
   GenClangDiagGroups,
   GenClangDeclNodes,
@@ -65,8 +68,8 @@ enum ActionType {
   GenTgtIntrinsic,
   GenLLVMCConf,
   GenEDHeader, GenEDInfo,
-  GenNeonHeader,
-  GenNeonBuiltinsDef,
+  GenArmNeon,
+  GenArmNeonSema,
   PrintEnums
 };
 
@@ -111,6 +114,10 @@ namespace {
                                "Generate intrinsic information"),
                     clEnumValN(GenTgtIntrinsic, "gen-tgt-intrinsic",
                                "Generate target intrinsic information"),
+                    clEnumValN(GenClangAttrClasses, "gen-clang-attr-classes",
+                               "Generate clang attribute clases"),
+                    clEnumValN(GenClangAttrList, "gen-clang-attr-list",
+                               "Generate a clang attribute list"),
                     clEnumValN(GenClangDiagsDefs, "gen-clang-diags-defs",
                                "Generate Clang diagnostics definitions"),
                     clEnumValN(GenClangDiagGroups, "gen-clang-diag-groups",
@@ -125,10 +132,10 @@ namespace {
                                "Generate enhanced disassembly info header"),
                     clEnumValN(GenEDInfo, "gen-enhanced-disassembly-info",
                                "Generate enhanced disassembly info"),
-                    clEnumValN(GenNeonHeader, "gen-arm-neon-header",
+                    clEnumValN(GenArmNeon, "gen-arm-neon",
                                "Generate arm_neon.h for clang"),
-                    clEnumValN(GenNeonBuiltinsDef, "gen-arm-neon-builtins-def",
-                               "Generate NEON BuiltinsARM.def for clang"),
+                    clEnumValN(GenArmNeonSema, "gen-arm-neon-sema",
+                               "Generate ARM NEON sema support for clang"),
                     clEnumValN(PrintEnums, "print-enums",
                                "Print enum values for a class"),
                     clEnumValEnd));
@@ -248,6 +255,12 @@ int main(int argc, char **argv) {
     case GenAsmMatcher:
       AsmMatcherEmitter(Records).run(Out);
       break;
+    case GenClangAttrClasses:
+      ClangAttrClassEmitter(Records).run(Out);
+      break;
+    case GenClangAttrList:
+      ClangAttrListEmitter(Records).run(Out);
+      break;
     case GenClangDiagsDefs:
       ClangDiagsDefsEmitter(Records, ClangComponent).run(Out);
       break;
@@ -294,10 +307,10 @@ int main(int argc, char **argv) {
     case GenEDInfo:
       EDEmitter(Records).run(Out);
       break;
-    case GenNeonHeader:
+    case GenArmNeon:
       NeonEmitter(Records).run(Out);
       break;
-    case GenNeonBuiltinsDef:
+    case GenArmNeonSema:
       NeonEmitter(Records).runHeader(Out);
       break;
     case PrintEnums:
