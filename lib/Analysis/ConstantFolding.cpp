@@ -1129,7 +1129,7 @@ llvm::ConstantFoldCall(Function *F,
           return ConstantFoldFP(log10, V, Ty);
         else if (Name == "llvm.sqrt.f32" ||
                  Name == "llvm.sqrt.f64") {
-          if (V >= -0.0)
+          if (V >= -0.0 || Op->getValueAPF().isNaN())
             return ConstantFoldFP(sqrt, V, Ty);
           else // Undefined
             return Constant::getNullValue(Ty);
