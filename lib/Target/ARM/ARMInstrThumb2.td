@@ -787,6 +787,7 @@ def t2LEApcrel : T2XI<(outs GPR:$dst), (ins i32imm:$label, pred:$p), IIC_iALUi,
   let Inst{19-16} = 0b1111; // Rn
   let Inst{15} = 0;
 }
+} // neverHasSideEffects
 def t2LEApcrelJT : T2XI<(outs GPR:$dst),
                         (ins i32imm:$label, nohash_imm:$id, pred:$p), IIC_iALUi,
                         "adr$p.w\t$dst, #${label}_${id}", []> {
@@ -798,7 +799,6 @@ def t2LEApcrelJT : T2XI<(outs GPR:$dst),
   let Inst{19-16} = 0b1111; // Rn
   let Inst{15} = 0;
 }
-} // neverHasSideEffects
 
 // ADD r, sp, {so_imm|i12}
 def t2ADDrSPi   : T2sI<(outs GPR:$dst), (ins GPR:$sp, t2_so_imm:$imm),
@@ -2528,6 +2528,7 @@ def t2Bcc : T2I<(outs), (ins brtarget:$target), IIC_Br,
 
 
 // IT block
+let Defs = [ITSTATE] in
 def t2IT : Thumb2XI<(outs), (ins it_pred:$cc, it_mask:$mask),
                     AddrModeNone, Size2Bytes,  IIC_iALUx,
                     "it$mask\t$cc", "", []> {

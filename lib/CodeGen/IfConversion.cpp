@@ -235,6 +235,12 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
   TRI = MF.getTarget().getRegisterInfo();
   if (!TII) return false;
 
+  // Tail merge tend to expose more if-conversion opportunities.
+  BranchFolder BF(true);
+  bool BFChange = BF.OptimizeFunction(MF, TII,
+                                   MF.getTarget().getRegisterInfo(),
+                                   getAnalysisIfAvailable<MachineModuleInfo>());
+
   DEBUG(dbgs() << "\nIfcvt: function (" << ++FnNum <<  ") \'"
                << MF.getFunction()->getName() << "\'");
 
@@ -369,13 +375,14 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
   Roots.clear();
   BBAnalysis.clear();
 
-  if (MadeChange && !IfCvtBranchFold) {
+  if (MadeChange && IfCvtBranchFold) {
     BranchFolder BF(false);
     BF.OptimizeFunction(MF, TII,
                         MF.getTarget().getRegisterInfo(),
                         getAnalysisIfAvailable<MachineModuleInfo>());
   }
 
+  MadeChange |= BFChange;
   return MadeChange;
 }
 
@@ -531,6 +538,19 @@ bool IfConverter::ValidDiamond(BBInfo &TrueBBI, BBInfo &FalseBBI,
   while (FI != FIE && FI->isDebugValue())
     ++FI;
   while (TI != TIE && FI != FIE) {
+    // Skip dbg_value instructions. These do not count.
+    if (TI->isDebugValue()) {
+      while (TI != TIE && TI->isDebugValue())
+        ++TI;
+      if (TI == TIE)
+        break;
+    }
+    if (FI->isDebugValue()) {
+      while (FI != FIE && FI->isDebugValue())
+        ++FI;
+      if (FI == FIE)
+        break;
+    }
     if (!TI->isIdenticalTo(FI))
       break;
     ++Dups1;
@@ -542,12 +562,25 @@ bool IfConverter::ValidDiamond(BBInfo &TrueBBI, BBInfo &FalseBBI,
   FI = firstNonBranchInst(FalseBBI.BB, TII);
   MachineBasicBlock::iterator TIB = TrueBBI.BB->begin();
   MachineBasicBlock::iterator FIB = FalseBBI.BB->begin();
-  // Skip dbg_value instructions
+  // Skip dbg_value instructions at end of the bb's.
   while (TI != TIB && TI->isDebugValue())
     --TI;
   while (FI != FIB && FI->isDebugValue())
     --FI;
   while (TI != TIB && FI != FIB) {
+    // Skip dbg_value instructions. These do not count.
+    if (TI->isDebugValue()) {
+      while (TI != TIB && TI->isDebugValue())
+        --TI;
+      if (TI == TIB)
+        break;
+    }
+    if (FI->isDebugValue()) {
+      while (FI != FIB && FI->isDebugValue())
+        --FI;
+      if (FI == FIB)
+        break;
+    }
     if (!TI->isIdenticalTo(FI))
       break;
     ++Dups2;
@@ -961,7 +994,7 @@ bool IfConverter::IfConvertSimple(BBInfo &BBI, IfcvtKind Kind) {
     if (TII->ReverseBranchCondition(Cond))
       assert(false && "Unable to reverse branch condition!");
 
-  // Initialize liveins to the first BB. These are potentiall re-defined by
+  // Initialize liveins to the first BB. These are potentiall redefined by
   // predicated instructions.
   SmallSet<unsigned, 4> Redefs;
   InitPredRedefs(CvtBBI->BB, Redefs, TRI);
@@ -1052,7 +1085,7 @@ bool IfConverter::IfConvertTriangle(BBInfo &BBI, IfcvtKind Kind) {
     }
   }
 
-  // Initialize liveins to the first BB. These are potentiall re-defined by
+  // Initialize liveins to the first BB. These are potentially redefined by
   // predicated instructions.
   SmallSet<unsigned, 4> Redefs;
   InitPredRedefs(CvtBBI->BB, Redefs, TRI);
@@ -1172,7 +1205,7 @@ bool IfConverter::IfConvertDiamond(BBInfo &BBI, IfcvtKind Kind,
   // Remove the conditional branch from entry to the blocks.
   BBI.NonPredSize -= TII->RemoveBranch(*BBI.BB);
 
-  // Initialize liveins to the first BB. These are potentiall re-defined by
+  // Initialize liveins to the first BB. These are potentiall redefined by
   // predicated instructions.
   SmallSet<unsigned, 4> Redefs;
   InitPredRedefs(BBI1->BB, Redefs, TRI);
@@ -1274,7 +1307,7 @@ void IfConverter::PredicateBlock(BBInfo &BBI,
       llvm_unreachable(0);
     }
 
-    // If the predicated instruction now re-defines a register as the result of
+    // If the predicated instruction now redefines a register as the result of
     // if-conversion, add an implicit kill.
     UpdatePredRedefs(I, Redefs, TRI, true);
   }
@@ -1298,16 +1331,15 @@ void IfConverter::CopyAndPredicateBlock(BBInfo &ToBBI, BBInfo &FromBBI,
   for (MachineBasicBlock::iterator I = FromBBI.BB->begin(),
          E = FromBBI.BB->end(); I != E; ++I) {
     const TargetInstrDesc &TID = I->getDesc();
-    bool isPredicated = TII->isPredicated(I);
     // Do not copy the end of the block branches.
-    if (IgnoreBr && !isPredicated && TID.isBranch())
+    if (IgnoreBr && TID.isBranch())
       break;
 
     MachineInstr *MI = MF.CloneMachineInstr(I);
     ToBBI.BB->insert(ToBBI.BB->end(), MI);
     ToBBI.NonPredSize++;
 
-    if (!isPredicated && !MI->isDebugValue()) {
+    if (!TII->isPredicated(I) && !MI->isDebugValue()) {
       if (!TII->PredicateInstruction(MI, Cond)) {
 #ifndef NDEBUG
         dbgs() << "Unable to predicate " << *I << "!\n";
@@ -1316,7 +1348,7 @@ void IfConverter::CopyAndPredicateBlock(BBInfo &ToBBI, BBInfo &FromBBI,
       }
     }
 
-    // If the predicated instruction now re-defines a register as the result of
+    // If the predicated instruction now redefines a register as the result of
     // if-conversion, add an implicit kill.
     UpdatePredRedefs(MI, Redefs, TRI, true);
   }

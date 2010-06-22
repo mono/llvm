@@ -801,23 +801,27 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
   if (RC == ARM::tGPRRegisterClass || RC == ARM::tcGPRRegisterClass)
     RC = ARM::GPRRegisterClass;
 
-  if (RC == ARM::GPRRegisterClass) {
+  switch (RC->getID()) {
+  case ARM::GPRRegClassID:
     AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::STR))
                    .addReg(SrcReg, getKillRegState(isKill))
                    .addFrameIndex(FI).addReg(0).addImm(0).addMemOperand(MMO));
-  } else if (RC == ARM::SPRRegisterClass) {
+    break;
+  case ARM::SPRRegClassID:
     AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VSTRS))
                    .addReg(SrcReg, getKillRegState(isKill))
                    .addFrameIndex(FI).addImm(0).addMemOperand(MMO));
-  } else if (RC == ARM::DPRRegisterClass ||
-             RC == ARM::DPR_VFP2RegisterClass ||
-             RC == ARM::DPR_8RegisterClass) {
+    break;
+  case ARM::DPRRegClassID:
+  case ARM::DPR_VFP2RegClassID:
+  case ARM::DPR_8RegClassID:
     AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VSTRD))
                    .addReg(SrcReg, getKillRegState(isKill))
                    .addFrameIndex(FI).addImm(0).addMemOperand(MMO));
-  } else if (RC == ARM::QPRRegisterClass ||
-             RC == ARM::QPR_VFP2RegisterClass ||
-             RC == ARM::QPR_8RegisterClass) {
+    break;
+  case ARM::QPRRegClassID:
+  case ARM::QPR_VFP2RegClassID:
+  case ARM::QPR_8RegClassID:
     // FIXME: Neon instructions should support predicates
     if (Align >= 16 && getRegisterInfo().canRealignStack(MF)) {
       AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VST1q))
@@ -831,7 +835,9 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
                      .addImm(ARM_AM::getAM5Opc(ARM_AM::ia, 4))
                      .addMemOperand(MMO));
     }
-  } else if (RC == ARM::QQPRRegisterClass || RC == ARM::QQPR_VFP2RegisterClass){
+    break;
+  case ARM::QQPRRegClassID:
+  case ARM::QQPR_VFP2RegClassID:
     if (Align >= 16 && getRegisterInfo().canRealignStack(MF)) {
       // FIXME: It's possible to only store part of the QQ register if the
       // spilled def has a sub-register index.
@@ -853,8 +859,8 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
       MIB = AddDReg(MIB, SrcReg, ARM::dsub_2, 0, TRI);
             AddDReg(MIB, SrcReg, ARM::dsub_3, 0, TRI);
     }
-  } else {
-    assert(RC == ARM::QQQQPRRegisterClass && "Unknown regclass!");
+    break;
+  case ARM::QQQQPRRegClassID: {
     MachineInstrBuilder MIB =
       AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VSTMD))
                      .addFrameIndex(FI)
@@ -868,6 +874,10 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
     MIB = AddDReg(MIB, SrcReg, ARM::dsub_5, 0, TRI);
     MIB = AddDReg(MIB, SrcReg, ARM::dsub_6, 0, TRI);
           AddDReg(MIB, SrcReg, ARM::dsub_7, 0, TRI);
+    break;
+  }
+  default:
+    llvm_unreachable("Unknown regclass!");
   }
 }
 
@@ -892,20 +902,24 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
   if (RC == ARM::tGPRRegisterClass || RC == ARM::tcGPRRegisterClass)
     RC = ARM::GPRRegisterClass;
 
-  if (RC == ARM::GPRRegisterClass) {
+  switch (RC->getID()) {
+  case ARM::GPRRegClassID:
     AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::LDR), DestReg)
                    .addFrameIndex(FI).addReg(0).addImm(0).addMemOperand(MMO));
-  } else if (RC == ARM::SPRRegisterClass) {
+    break;
+  case ARM::SPRRegClassID:
     AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VLDRS), DestReg)
                    .addFrameIndex(FI).addImm(0).addMemOperand(MMO));
-  } else if (RC == ARM::DPRRegisterClass ||
-             RC == ARM::DPR_VFP2RegisterClass ||
-             RC == ARM::DPR_8RegisterClass) {
+    break;
+  case ARM::DPRRegClassID:
+  case ARM::DPR_VFP2RegClassID:
+  case ARM::DPR_8RegClassID:
     AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VLDRD), DestReg)
                    .addFrameIndex(FI).addImm(0).addMemOperand(MMO));
-  } else if (RC == ARM::QPRRegisterClass ||
-             RC == ARM::QPR_VFP2RegisterClass ||
-             RC == ARM::QPR_8RegisterClass) {
+    break;
+  case ARM::QPRRegClassID:
+  case ARM::QPR_VFP2RegClassID:
+  case ARM::QPR_8RegClassID:
     if (Align >= 16 && getRegisterInfo().canRealignStack(MF)) {
       AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VLD1q), DestReg)
                      .addFrameIndex(FI).addImm(128)
@@ -916,7 +930,9 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
                      .addImm(ARM_AM::getAM5Opc(ARM_AM::ia, 4))
                      .addMemOperand(MMO));
     }
-  } else if (RC == ARM::QQPRRegisterClass || RC == ARM::QQPR_VFP2RegisterClass){
+    break;
+  case ARM::QQPRRegClassID:
+  case ARM::QQPR_VFP2RegClassID:
     if (Align >= 16 && getRegisterInfo().canRealignStack(MF)) {
       MachineInstrBuilder MIB = BuildMI(MBB, I, DL, get(ARM::VLD2q32));
       MIB = AddDReg(MIB, DestReg, ARM::dsub_0, RegState::Define, TRI);
@@ -935,21 +951,25 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
       MIB = AddDReg(MIB, DestReg, ARM::dsub_2, RegState::Define, TRI);
             AddDReg(MIB, DestReg, ARM::dsub_3, RegState::Define, TRI);
     }
-  } else {
-    assert(RC == ARM::QQQQPRRegisterClass && "Unknown regclass!");
-      MachineInstrBuilder MIB =
-        AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VLDMD))
-                       .addFrameIndex(FI)
-                       .addImm(ARM_AM::getAM5Opc(ARM_AM::ia, 4)))
-        .addMemOperand(MMO);
-      MIB = AddDReg(MIB, DestReg, ARM::dsub_0, RegState::Define, TRI);
-      MIB = AddDReg(MIB, DestReg, ARM::dsub_1, RegState::Define, TRI);
-      MIB = AddDReg(MIB, DestReg, ARM::dsub_2, RegState::Define, TRI);
-      MIB = AddDReg(MIB, DestReg, ARM::dsub_3, RegState::Define, TRI);
-      MIB = AddDReg(MIB, DestReg, ARM::dsub_4, RegState::Define, TRI);
-      MIB = AddDReg(MIB, DestReg, ARM::dsub_5, RegState::Define, TRI);
-      MIB = AddDReg(MIB, DestReg, ARM::dsub_6, RegState::Define, TRI);
-            AddDReg(MIB, DestReg, ARM::dsub_7, RegState::Define, TRI);
+    break;
+  case ARM::QQQQPRRegClassID: {
+    MachineInstrBuilder MIB =
+      AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VLDMD))
+                     .addFrameIndex(FI)
+                     .addImm(ARM_AM::getAM5Opc(ARM_AM::ia, 4)))
+      .addMemOperand(MMO);
+    MIB = AddDReg(MIB, DestReg, ARM::dsub_0, RegState::Define, TRI);
+    MIB = AddDReg(MIB, DestReg, ARM::dsub_1, RegState::Define, TRI);
+    MIB = AddDReg(MIB, DestReg, ARM::dsub_2, RegState::Define, TRI);
+    MIB = AddDReg(MIB, DestReg, ARM::dsub_3, RegState::Define, TRI);
+    MIB = AddDReg(MIB, DestReg, ARM::dsub_4, RegState::Define, TRI);
+    MIB = AddDReg(MIB, DestReg, ARM::dsub_5, RegState::Define, TRI);
+    MIB = AddDReg(MIB, DestReg, ARM::dsub_6, RegState::Define, TRI);
+    AddDReg(MIB, DestReg, ARM::dsub_7, RegState::Define, TRI);
+    break;
+  }
+  default:
+    llvm_unreachable("Unknown regclass!");
   }
 }
 
@@ -1284,6 +1304,34 @@ bool ARMBaseInstrInfo::produceSameValue(const MachineInstr *MI0,
   }
 
   return MI0->isIdenticalTo(MI1, MachineInstr::IgnoreVRegDefs);
+}
+
+bool ARMBaseInstrInfo::isSchedulingBoundary(const MachineInstr *MI,
+                                            const MachineBasicBlock *MBB,
+                                            const MachineFunction &MF) const {
+  // Terminators and labels can't be scheduled around.
+  if (MI->getDesc().isTerminator() || MI->isLabel())
+    return true;
+
+  // Treat the start of the IT block as a scheduling boundary, but schedule
+  // t2IT along with all instructions following it.
+  // FIXME: This is a big hammer. But the alternative is to add all potential
+  // true and anti dependencies to IT block instructions as implicit operands
+  // to the t2IT instruction. The added compile time and complexity does not
+  // seem worth it.
+  MachineBasicBlock::const_iterator I = MI;
+  if (++I != MBB->end() && I->getOpcode() == ARM::t2IT)
+    return true;
+
+  // Don't attempt to schedule around any instruction that defines
+  // a stack-oriented pointer, as it's unlikely to be profitable. This
+  // saves compile time, because it doesn't require every single
+  // stack slot reference to depend on the instruction that does the
+  // modification.
+  if (MI->definesRegister(ARM::SP))
+    return true;
+
+  return false;
 }
 
 /// getInstrPredicate - If instruction is predicated, returns its predicate

@@ -549,6 +549,15 @@ public:
     return FoundNode;
   }
 
+  /// getFlaggedUser - If this node has a flag value with a user, return
+  /// the user (there is at most one). Otherwise return NULL.
+  SDNode *getFlaggedUser() const {
+    for (use_iterator UI = use_begin(), UE = use_end(); UI != UE; ++UI)
+      if (UI.getUse().get().getValueType() == MVT::Flag)
+        return *UI;
+    return 0;
+  }
+
   /// getNumValues - Return the number of values defined/returned by this
   /// operator.
   ///
@@ -1082,6 +1091,7 @@ public:
   uint64_t getZExtValue() const { return Value->getZExtValue(); }
   int64_t getSExtValue() const { return Value->getSExtValue(); }
 
+  bool isOne() const { return Value->isOne(); }
   bool isNullValue() const { return Value->isNullValue(); }
   bool isAllOnesValue() const { return Value->isAllOnesValue(); }
 
@@ -1130,7 +1140,7 @@ public:
   }
   bool isExactlyValue(const APFloat& V) const;
 
-  bool isValueValidForType(EVT VT, const APFloat& Val);
+  static bool isValueValidForType(EVT VT, const APFloat& Val);
 
   static bool classof(const ConstantFPSDNode *) { return true; }
   static bool classof(const SDNode *N) {

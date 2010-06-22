@@ -55,7 +55,7 @@ STATISTIC(NumTailCalls, "Number of tail calls");
 static cl::opt<bool>
 EnableARMTailCalls("arm-tail-calls", cl::Hidden,
   cl::desc("Generate tail calls (TEMPORARY OPTION)."),
-  cl::init(false));
+  cl::init(true));
 
 static cl::opt<bool>
 EnableARMLongCalls("arm-long-calls", cl::Hidden,
@@ -407,15 +407,55 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
   // Handle atomics directly for ARMv[67] (except for Thumb1), otherwise
   // use the default expansion.
-  TargetLowering::LegalizeAction AtomicAction =
+  bool canHandleAtomics =
     (Subtarget->hasV7Ops() ||
-      (Subtarget->hasV6Ops() && !Subtarget->isThumb1Only())) ? Custom : Expand;
-  setOperationAction(ISD::MEMBARRIER, MVT::Other, AtomicAction);
+      (Subtarget->hasV6Ops() && !Subtarget->isThumb1Only()));
+  if (canHandleAtomics) {
+    // membarrier needs custom lowering; the rest are legal and handled
+    // normally.
+    setOperationAction(ISD::MEMBARRIER, MVT::Other, Custom);
+  } else {
+    // Set them all for expansion, which will force libcalls.
+    setOperationAction(ISD::MEMBARRIER, MVT::Other, Expand);
+    setOperationAction(ISD::ATOMIC_CMP_SWAP,  MVT::i8,  Expand);
+    setOperationAction(ISD::ATOMIC_CMP_SWAP,  MVT::i16, Expand);
+    setOperationAction(ISD::ATOMIC_CMP_SWAP,  MVT::i32, Expand);
+    setOperationAction(ISD::ATOMIC_SWAP,      MVT::i8,  Expand);
+    setOperationAction(ISD::ATOMIC_SWAP,      MVT::i16, Expand);
+    setOperationAction(ISD::ATOMIC_SWAP,      MVT::i32, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_ADD,  MVT::i8,  Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_ADD,  MVT::i16, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_ADD,  MVT::i32, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_SUB,  MVT::i8,  Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_SUB,  MVT::i16, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_SUB,  MVT::i32, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_AND,  MVT::i8,  Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_AND,  MVT::i16, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_AND,  MVT::i32, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_OR,   MVT::i8,  Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_OR,   MVT::i16, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_OR,   MVT::i32, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_XOR,  MVT::i8,  Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_XOR,  MVT::i16, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_XOR,  MVT::i32, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_NAND, MVT::i8,  Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_NAND, MVT::i16, Expand);
+    setOperationAction(ISD::ATOMIC_LOAD_NAND, MVT::i32, Expand);
+  }
+  // 64-bit versions are always libcalls (for now)
+  setOperationAction(ISD::ATOMIC_CMP_SWAP,  MVT::i64, Expand);
+  setOperationAction(ISD::ATOMIC_SWAP,      MVT::i64, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_ADD,  MVT::i64, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_SUB,  MVT::i64, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_AND,  MVT::i64, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_OR,   MVT::i64, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_XOR,  MVT::i64, Expand);
+  setOperationAction(ISD::ATOMIC_LOAD_NAND, MVT::i64, Expand);
 
   // If the subtarget does not have extract instructions, sign_extend_inreg
   // needs to be expanded. Extract is available in ARM mode on v6 and up,
   // and on most Thumb2 implementations.
-  if ((!Subtarget->isThumb() && !Subtarget->hasV6Ops())
+  if (!Subtarget->hasV6Ops()
       || (Subtarget->isThumb2() && !Subtarget->hasT2ExtractPack())) {
     setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i16, Expand);
     setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i8,  Expand);
@@ -1101,7 +1141,7 @@ ARMTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
       }
     } else if (VA.isRegLoc()) {
       RegsToPass.push_back(std::make_pair(VA.getLocReg(), Arg));
-    } else {
+    } else if (!IsSibCall) {
       assert(VA.isMemLoc());
 
       MemOpChains.push_back(LowerMemOpCallTo(Chain, StackPtr, Arg,
@@ -1349,19 +1389,12 @@ ARMTargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
                                     const SmallVectorImpl<ISD::OutputArg> &Outs,
                                     const SmallVectorImpl<ISD::InputArg> &Ins,
                                                      SelectionDAG& DAG) const {
-
   const Function *CallerF = DAG.getMachineFunction().getFunction();
   CallingConv::ID CallerCC = CallerF->getCallingConv();
   bool CCMatch = CallerCC == CalleeCC;
 
   // Look for obvious safe cases to perform tail call optimization that do not
   // require ABI changes. This is what gcc calls sibcall.
-
-  // Can't do sibcall if stack needs to be dynamically re-aligned. PEI needs to
-  // emit a special epilogue.
-  // Not sure yet if this is true on ARM.
-//??  if (RegInfo->needsStackRealignment(MF))
-//??    return false;
 
   // Do not sibcall optimize vararg calls unless the call site is not passing
   // any arguments.
@@ -1372,6 +1405,29 @@ ARMTargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
   // return semantics.
   if (isCalleeStructRet || isCallerStructRet)
     return false;
+
+  // FIXME: Completely disable sibcal for Thumb1 since Thumb1RegisterInfo::
+  // emitEpilogue is not ready for them.
+  if (Subtarget->isThumb1Only())
+    return false;
+
+  if (isa<ExternalSymbolSDNode>(Callee))
+      return false;
+
+  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+    if (Subtarget->isThumb1Only())
+      return false;
+
+    // On Thumb, for the moment, we can only do this to functions defined in this
+    // compilation, or to indirect calls.  A Thumb B to an ARM function is not
+    // easily fixed up in the linker, unlike BL.
+    if (Subtarget->isThumb()) {
+      const GlobalValue *GV = G->getGlobal();
+      if (GV->isDeclaration() || GV->isWeakForLinker())
+        return false;
+    }
+  }
+
 
   // If the calling conventions do not match, then we'd better make sure the
   // results are returned in the same way as what the caller expects.
@@ -2893,7 +2949,7 @@ static SDValue isNEONModifiedImm(uint64_t SplatBits, uint64_t SplatUndef,
   }
 
   default:
-    llvm_unreachable("unexpected size for EncodeNEONModImm");
+    llvm_unreachable("unexpected size for isNEONModifiedImm");
     return SDValue();
   }
 
@@ -4945,7 +5001,7 @@ ARMTargetLowering::getRegForInlineAsmConstraint(const std::string &Constraint,
     }
   }
   if (StringRef("{cc}").equals_lower(Constraint))
-    return std::make_pair(0U, ARM::CCRRegisterClass);
+    return std::make_pair(unsigned(ARM::CPSR), ARM::CCRRegisterClass);
 
   return TargetLowering::getRegForInlineAsmConstraint(Constraint, VT);
 }

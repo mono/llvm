@@ -3204,7 +3204,7 @@ unsigned X86::getShufflePALIGNRImmediate(SDNode *N) {
 /// constant +0.0.
 bool X86::isZeroNode(SDValue Elt) {
   return ((isa<ConstantSDNode>(Elt) &&
-           cast<ConstantSDNode>(Elt)->getZExtValue() == 0) ||
+           cast<ConstantSDNode>(Elt)->isNullValue()) ||
           (isa<ConstantFPSDNode>(Elt) &&
            cast<ConstantFPSDNode>(Elt)->getValueAPF().isPosZero()));
 }
@@ -6248,7 +6248,7 @@ SDValue X86TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   if (Op0.getOpcode() == ISD::AND &&
       Op0.hasOneUse() &&
       Op1.getOpcode() == ISD::Constant &&
-      cast<ConstantSDNode>(Op1)->getZExtValue() == 0 &&
+      cast<ConstantSDNode>(Op1)->isNullValue() &&
       (CC == ISD::SETEQ || CC == ISD::SETNE)) {
     SDValue NewSetCC = LowerToBT(Op0, CC, dl, DAG);
     if (NewSetCC.getNode())
@@ -6628,15 +6628,16 @@ SDValue X86TargetLowering::LowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
             (X86::CondCode)Cond.getOperand(0).getConstantOperandVal(0);
           CCode = X86::GetOppositeBranchCondition(CCode);
           CC = DAG.getConstant(CCode, MVT::i8);
-          SDValue User = SDValue(*Op.getNode()->use_begin(), 0);
+          SDNode *User = *Op.getNode()->use_begin();
           // Look for an unconditional branch following this conditional branch.
           // We need this because we need to reverse the successors in order
           // to implement FCMP_OEQ.
-          if (User.getOpcode() == ISD::BR) {
-            SDValue FalseBB = User.getOperand(1);
-            SDValue NewBR =
-              DAG.UpdateNodeOperands(User, User.getOperand(0), Dest);
+          if (User->getOpcode() == ISD::BR) {
+            SDValue FalseBB = User->getOperand(1);
+            SDNode *NewBR =
+              DAG.UpdateNodeOperands(User, User->getOperand(0), Dest);
             assert(NewBR == User);
+            (void)NewBR;
             Dest = FalseBB;
 
             Chain = DAG.getNode(X86ISD::BRCOND, dl, Op.getValueType(),
@@ -9890,9 +9891,10 @@ static SDValue PerformMEMBARRIERCombine(SDNode* N, SelectionDAG &DAG) {
 
   switch (atomic.getOpcode()) {
     case ISD::ATOMIC_CMP_SWAP:
-      return DAG.UpdateNodeOperands(atomic, fence.getOperand(0),
+      return SDValue(DAG.UpdateNodeOperands(atomic.getNode(),
+                                    fence.getOperand(0),
                                     atomic.getOperand(1), atomic.getOperand(2),
-                                    atomic.getOperand(3));
+                                    atomic.getOperand(3)), atomic.getResNo());
     case ISD::ATOMIC_SWAP:
     case ISD::ATOMIC_LOAD_ADD:
     case ISD::ATOMIC_LOAD_SUB:
@@ -9904,8 +9906,10 @@ static SDValue PerformMEMBARRIERCombine(SDNode* N, SelectionDAG &DAG) {
     case ISD::ATOMIC_LOAD_MAX:
     case ISD::ATOMIC_LOAD_UMIN:
     case ISD::ATOMIC_LOAD_UMAX:
-      return DAG.UpdateNodeOperands(atomic, fence.getOperand(0),
-                                    atomic.getOperand(1), atomic.getOperand(2));
+      return SDValue(DAG.UpdateNodeOperands(atomic.getNode(),
+                                    fence.getOperand(0),
+                                    atomic.getOperand(1), atomic.getOperand(2)),
+                     atomic.getResNo());
     default:
       return SDValue();
   }
@@ -10270,9 +10274,8 @@ void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
   case 'e': {
     // 32-bit signed value
     if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-      const ConstantInt *CI = C->getConstantIntValue();
-      if (CI->isValueValidForType(Type::getInt32Ty(*DAG.getContext()),
-                                  C->getSExtValue())) {
+      if (ConstantInt::isValueValidForType(Type::getInt32Ty(*DAG.getContext()),
+                                           C->getSExtValue())) {
         // Widen to 64 bits here to get it sign extended.
         Result = DAG.getTargetConstant(C->getSExtValue(), MVT::i64);
         break;
@@ -10285,9 +10288,8 @@ void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
   case 'Z': {
     // 32-bit unsigned value
     if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {
-      const ConstantInt *CI = C->getConstantIntValue();
-      if (CI->isValueValidForType(Type::getInt32Ty(*DAG.getContext()),
-                                  C->getZExtValue())) {
+      if (ConstantInt::isValueValidForType(Type::getInt32Ty(*DAG.getContext()),
+                                           C->getZExtValue())) {
         Result = DAG.getTargetConstant(C->getZExtValue(), Op.getValueType());
         break;
       }

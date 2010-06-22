@@ -1208,8 +1208,19 @@ CollectAddOperandsWithScales(DenseMap<const SCEV *, APInt> &M,
                              ScalarEvolution &SE) {
   bool Interesting = false;
 
-  // Iterate over the add operands.
-  for (unsigned i = 0, e = NumOperands; i != e; ++i) {
+  // Iterate over the add operands. They are sorted, with constants first.
+  unsigned i = 0;
+  while (const SCEVConstant *C = dyn_cast<SCEVConstant>(Ops[i])) {
+    ++i;
+    // Pull a buried constant out to the outside.
+    if (Scale != 1 || AccumulatedConstant != 0 || C->getValue()->isZero())
+      Interesting = true;
+    AccumulatedConstant += Scale * C->getValue()->getValue();
+  }
+
+  // Next comes everything else. We're especially interested in multiplies
+  // here, but they're in the middle, so just visit the rest with one loop.
+  for (; i != NumOperands; ++i) {
     const SCEVMulExpr *Mul = dyn_cast<SCEVMulExpr>(Ops[i]);
     if (Mul && isa<SCEVConstant>(Mul->getOperand(0))) {
       APInt NewScale =
@@ -1237,11 +1248,6 @@ CollectAddOperandsWithScales(DenseMap<const SCEV *, APInt> &M,
           Interesting = true;
         }
       }
-    } else if (const SCEVConstant *C = dyn_cast<SCEVConstant>(Ops[i])) {
-      // Pull a buried constant out to the outside.
-      if (Scale != 1 || AccumulatedConstant != 0 || C->getValue()->isZero())
-        Interesting = true;
-      AccumulatedConstant += Scale * C->getValue()->getValue();
     } else {
       // An ordinary operand. Update the map.
       std::pair<DenseMap<const SCEV *, APInt>::iterator, bool> Pair =
@@ -1275,9 +1281,9 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
   assert(!Ops.empty() && "Cannot get empty add!");
   if (Ops.size() == 1) return Ops[0];
 #ifndef NDEBUG
+  const Type *ETy = getEffectiveSCEVType(Ops[0]->getType());
   for (unsigned i = 1, e = Ops.size(); i != e; ++i)
-    assert(getEffectiveSCEVType(Ops[i]->getType()) ==
-           getEffectiveSCEVType(Ops[0]->getType()) &&
+    assert(getEffectiveSCEVType(Ops[i]->getType()) == ETy &&
            "SCEVAddExpr operand types don't match!");
 #endif
 
@@ -1400,8 +1406,8 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
     while (const SCEVAddExpr *Add = dyn_cast<SCEVAddExpr>(Ops[Idx])) {
       // If we have an add, expand the add operands onto the end of the operands
       // list.
-      Ops.insert(Ops.end(), Add->op_begin(), Add->op_end());
       Ops.erase(Ops.begin()+Idx);
+      Ops.append(Add->op_begin(), Add->op_end());
       DeletedAdd = true;
     }
 
@@ -1578,7 +1584,7 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
                                               AddRec->op_end());
           for (unsigned i = 0, e = OtherAddRec->getNumOperands(); i != e; ++i) {
             if (i >= NewOps.size()) {
-              NewOps.insert(NewOps.end(), OtherAddRec->op_begin()+i,
+              NewOps.append(OtherAddRec->op_begin()+i,
                             OtherAddRec->op_end());
               break;
             }
@@ -1711,8 +1717,8 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
     while (const SCEVMulExpr *Mul = dyn_cast<SCEVMulExpr>(Ops[Idx])) {
       // If we have an mul, expand the mul operands onto the end of the operands
       // list.
-      Ops.insert(Ops.end(), Mul->op_begin(), Mul->op_end());
       Ops.erase(Ops.begin()+Idx);
+      Ops.append(Mul->op_begin(), Mul->op_end());
       DeletedMul = true;
     }
 
@@ -1934,8 +1940,7 @@ const SCEV *ScalarEvolution::getAddRecExpr(const SCEV *Start,
   Operands.push_back(Start);
   if (const SCEVAddRecExpr *StepChrec = dyn_cast<SCEVAddRecExpr>(Step))
     if (StepChrec->getLoop() == L) {
-      Operands.insert(Operands.end(), StepChrec->op_begin(),
-                      StepChrec->op_end());
+      Operands.append(StepChrec->op_begin(), StepChrec->op_end());
       return getAddRecExpr(Operands, L);
     }
 
@@ -2098,8 +2103,8 @@ ScalarEvolution::getSMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   if (Idx < Ops.size()) {
     bool DeletedSMax = false;
     while (const SCEVSMaxExpr *SMax = dyn_cast<SCEVSMaxExpr>(Ops[Idx])) {
-      Ops.insert(Ops.end(), SMax->op_begin(), SMax->op_end());
       Ops.erase(Ops.begin()+Idx);
+      Ops.append(SMax->op_begin(), SMax->op_end());
       DeletedSMax = true;
     }
 
@@ -2203,8 +2208,8 @@ ScalarEvolution::getUMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   if (Idx < Ops.size()) {
     bool DeletedUMax = false;
     while (const SCEVUMaxExpr *UMax = dyn_cast<SCEVUMaxExpr>(Ops[Idx])) {
-      Ops.insert(Ops.end(), UMax->op_begin(), UMax->op_end());
       Ops.erase(Ops.begin()+Idx);
+      Ops.append(UMax->op_begin(), UMax->op_end());
       DeletedUMax = true;
     }
 
@@ -2392,13 +2397,6 @@ const SCEV *ScalarEvolution::getSCEV(Value *V) {
   const SCEV *S = createSCEV(V);
   Scalars.insert(std::make_pair(SCEVCallbackVH(V, this), S));
   return S;
-}
-
-/// getIntegerSCEV - Given a SCEVable type, create a constant for the
-/// specified signed integer value and return a SCEV for the constant.
-const SCEV *ScalarEvolution::getIntegerSCEV(int64_t Val, const Type *Ty) {
-  const IntegerType *ITy = cast<IntegerType>(getEffectiveSCEVType(Ty));
-  return getConstant(ConstantInt::get(ITy, Val));
 }
 
 /// getNegativeSCEV - Return a SCEV corresponding to -V = -1*V
@@ -4239,8 +4237,11 @@ ScalarEvolution::ComputeBackedgeTakenCountExhaustively(const Loop *L,
   PHINode *PN = getConstantEvolvingPHI(Cond, L);
   if (PN == 0) return getCouldNotCompute();
 
-  // Since the loop is canonicalized, the PHI node must have two entries.  One
-  // entry must be a constant (coming in from outside of the loop), and the
+  // If the loop is canonicalized, the PHI will have exactly two entries.
+  // That's the only form we support here.
+  if (PN->getNumIncomingValues() != 2) return getCouldNotCompute();
+
+  // One entry must be a constant (coming in from outside of the loop), and the
   // second must be derived from the same PHI.
   bool SecondIsBackedge = L->contains(PN->getIncomingBlock(1));
   Constant *StartCST =

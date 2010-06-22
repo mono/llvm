@@ -1746,15 +1746,20 @@ static SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) {
   unsigned V0Elt = 0;
   bool monotonic = true;
   bool rotate = true;
+  EVT maskVT;             // which of the c?d instructions to use
 
   if (EltVT == MVT::i8) {
     V2EltIdx0 = 16;
+    maskVT = MVT::v16i8; 
   } else if (EltVT == MVT::i16) {
     V2EltIdx0 = 8;
+    maskVT = MVT::v8i16;
   } else if (EltVT == MVT::i32 || EltVT == MVT::f32) {
     V2EltIdx0 = 4;
+    maskVT = MVT::v4i32;
   } else if (EltVT == MVT::i64 || EltVT == MVT::f64) {
     V2EltIdx0 = 2;
+    maskVT = MVT::v2i64;
   } else
     llvm_unreachable("Unhandled vector type in LowerVECTOR_SHUFFLE");
 
@@ -1786,7 +1791,7 @@ static SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) {
         } else {
           rotate = false;
         }
-      } else if (PrevElt == 0) {
+      } else if (i == 0) {
         // First time through, need to keep track of previous element
         PrevElt = SrcElt;
       } else {
@@ -1798,18 +1803,16 @@ static SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) {
 
   if (EltsFromV2 == 1 && monotonic) {
     // Compute mask and shuffle
-    MachineFunction &MF = DAG.getMachineFunction();
-    MachineRegisterInfo &RegInfo = MF.getRegInfo();
-    unsigned VReg = RegInfo.createVirtualRegister(&SPU::R32CRegClass);
     EVT PtrVT = DAG.getTargetLoweringInfo().getPointerTy();
-    // Initialize temporary register to 0
-    SDValue InitTempReg =
-      DAG.getCopyToReg(DAG.getEntryNode(), dl, VReg, DAG.getConstant(0, PtrVT));
-    // Copy register's contents as index in SHUFFLE_MASK:
-    SDValue ShufMaskOp =
-      DAG.getNode(SPUISD::SHUFFLE_MASK, dl, MVT::v4i32,
-                  DAG.getTargetConstant(V2Elt, MVT::i32),
-                  DAG.getCopyFromReg(InitTempReg, dl, VReg, PtrVT));
+
+    // As SHUFFLE_MASK becomes a c?d instruction, feed it an address
+    // R1 ($sp) is used here only as it is guaranteed to have last bits zero
+    SDValue Pointer = DAG.getNode(SPUISD::IndirectAddr, dl, PtrVT,
+                                DAG.getRegister(SPU::R1, PtrVT),
+                                DAG.getConstant(V2Elt, MVT::i32));
+    SDValue ShufMaskOp = DAG.getNode(SPUISD::SHUFFLE_MASK, dl, 
+                                     maskVT, Pointer);
+
     // Use shuffle mask in SHUFB synthetic instruction:
     return DAG.getNode(SPUISD::SHUFB, dl, V1.getValueType(), V2, V1,
                        ShufMaskOp);
@@ -2867,7 +2870,7 @@ SPUTargetLowering::PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const
   case SPUISD::IndirectAddr: {
     if (!ST->usingLargeMem() && Op0.getOpcode() == SPUISD::AFormAddr) {
       ConstantSDNode *CN = dyn_cast<ConstantSDNode>(N->getOperand(1));
-      if (CN != 0 && CN->getZExtValue() == 0) {
+      if (CN != 0 && CN->isNullValue()) {
         // (SPUindirect (SPUaform <addr>, 0), 0) ->
         // (SPUaform <addr>, 0)
 

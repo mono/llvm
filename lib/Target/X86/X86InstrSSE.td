@@ -368,6 +368,83 @@ let Uses = [EFLAGS], usesCustomInserter = 1 in {
 }
 
 //===----------------------------------------------------------------------===//
+// SSE 1 & 2 Instructions Classes
+//===----------------------------------------------------------------------===//
+
+/// sse12_fp_scalar - SSE 1 & 2 scalar instructions class
+multiclass sse12_fp_scalar<bits<8> opc, string OpcodeStr, SDNode OpNode,
+                           RegisterClass RC, X86MemOperand x86memop> {
+  let isCommutable = 1 in {
+    def rr : SI<opc, MRMSrcReg, (outs RC:$dst), (ins RC:$src1, RC:$src2),
+                OpcodeStr, [(set RC:$dst, (OpNode RC:$src1, RC:$src2))]>;
+  }
+  def rm : SI<opc, MRMSrcMem, (outs RC:$dst), (ins RC:$src1, x86memop:$src2),
+              OpcodeStr, [(set RC:$dst, (OpNode RC:$src1, (load addr:$src2)))]>;
+}
+
+/// sse12_fp_scalar_int - SSE 1 & 2 scalar instructions intrinsics class
+multiclass sse12_fp_scalar_int<bits<8> opc, string OpcodeStr, RegisterClass RC,
+                               string asm, string SSEVer, string FPSizeStr,
+                               Operand memopr, ComplexPattern mem_cpat> {
+  def rr_Int : SI<opc, MRMSrcReg, (outs RC:$dst), (ins RC:$src1, RC:$src2),
+                  asm, [(set RC:$dst, (
+                                !nameconcat<Intrinsic>("int_x86_sse",
+                                !strconcat(SSEVer, !strconcat("_",
+                                !strconcat(OpcodeStr, FPSizeStr))))
+                         RC:$src1, RC:$src2))]>;
+  def rm_Int : SI<opc, MRMSrcMem, (outs RC:$dst), (ins RC:$src1, memopr:$src2),
+                  asm, [(set RC:$dst, (
+                                !nameconcat<Intrinsic>("int_x86_sse",
+                                !strconcat(SSEVer, !strconcat("_",
+                                !strconcat(OpcodeStr, FPSizeStr))))
+                         RC:$src1, mem_cpat:$src2))]>;
+}
+
+/// sse12_fp_packed - SSE 1 & 2 packed instructions class
+multiclass sse12_fp_packed<bits<8> opc, string OpcodeStr, SDNode OpNode,
+                           RegisterClass RC, ValueType vt,
+                           X86MemOperand x86memop, PatFrag mem_frag,
+                           Domain d, bit MayLoad = 0> {
+  let isCommutable = 1 in
+    def rr : PI<opc, MRMSrcReg, (outs RC:$dst), (ins RC:$src1, RC:$src2),
+                OpcodeStr, [(set RC:$dst, (vt (OpNode RC:$src1, RC:$src2)))],d>;
+  let mayLoad = MayLoad in
+    def rm : PI<opc, MRMSrcMem, (outs RC:$dst), (ins RC:$src1, x86memop:$src2),
+                OpcodeStr, [(set RC:$dst, (OpNode RC:$src1,
+                                                  (mem_frag addr:$src2)))],d>;
+}
+
+/// sse12_fp_packed_logical_rm - SSE 1 & 2 packed instructions class
+multiclass sse12_fp_packed_logical_rm<bits<8> opc, RegisterClass RC, Domain d,
+                                      string OpcodeStr, X86MemOperand x86memop,
+                                      list<dag> pat_rr, list<dag> pat_rm> {
+  let isCommutable = 1 in
+    def rr : PI<opc, MRMSrcReg, (outs RC:$dst),
+                (ins RC:$src1, RC:$src2), OpcodeStr, pat_rr, d>;
+  def rm : PI<opc, MRMSrcMem, (outs RC:$dst),
+                (ins RC:$src1, x86memop:$src2), OpcodeStr, pat_rm, d>;
+}
+
+/// sse12_fp_packed_int - SSE 1 & 2 packed instructions intrinsics class
+multiclass sse12_fp_packed_int<bits<8> opc, string OpcodeStr, RegisterClass RC,
+                               string asm, string SSEVer, string FPSizeStr,
+                               X86MemOperand x86memop, PatFrag mem_frag,
+                               Domain d> {
+  def rr_Int : PI<opc, MRMSrcReg, (outs RC:$dst), (ins RC:$src1, RC:$src2),
+                  asm, [(set RC:$dst, (
+                                !nameconcat<Intrinsic>("int_x86_sse",
+                                !strconcat(SSEVer, !strconcat("_",
+                                !strconcat(OpcodeStr, FPSizeStr))))
+                         RC:$src1, RC:$src2))], d>;
+  def rm_Int : PI<opc, MRMSrcMem, (outs RC:$dst), (ins RC:$src1, x86memop:$src2),
+                  asm, [(set RC:$dst, (
+                                !nameconcat<Intrinsic>("int_x86_sse",
+                                !strconcat(SSEVer, !strconcat("_",
+                                !strconcat(OpcodeStr, FPSizeStr))))
+                         RC:$src1, (mem_frag addr:$src2)))], d>;
+}
+
+//===----------------------------------------------------------------------===//
 // SSE1 Instructions
 //===----------------------------------------------------------------------===//
 
@@ -601,61 +678,36 @@ def FsMOVAPSrm : PSI<0x28, MRMSrcMem, (outs FR32:$dst), (ins f128mem:$src),
 /// sse12_fp_alias_pack_logical - SSE 1 & 2 aliased packed FP logical ops
 ///
 multiclass sse12_fp_alias_pack_logical<bits<8> opc, string OpcodeStr,
-                                       SDNode OpNode, int NoPat = 0,
-                                       bit MayLoad = 0, bit Commutable = 1> {
-  def PSrr : PSI<opc, MRMSrcReg, (outs FR32:$dst), (ins FR32:$src1, FR32:$src2),
-                      !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-                      !if(NoPat, []<dag>,
-                          [(set FR32:$dst, (OpNode FR32:$src1, FR32:$src2))])> {
-    let isCommutable = Commutable;
+                                       SDNode OpNode, bit MayLoad = 0> {
+  let isAsmParserOnly = 1 in {
+    defm V#NAME#PS : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                "ps\t{$src2, $src1, $dst|$dst, $src1, $src2}"), OpNode, FR32,
+                f32, f128mem, memopfsf32, SSEPackedSingle, MayLoad>, VEX_4V;
+
+    defm V#NAME#PD : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                "pd\t{$src2, $src1, $dst|$dst, $src1, $src2}"), OpNode, FR64,
+                f64, f128mem, memopfsf64, SSEPackedDouble, MayLoad>, OpSize,
+                VEX_4V;
   }
 
-  def PDrr : PDI<opc, MRMSrcReg, (outs FR64:$dst), (ins FR64:$src1, FR64:$src2),
-                      !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-                      !if(NoPat, []<dag>,
-                          [(set FR64:$dst, (OpNode FR64:$src1, FR64:$src2))])> {
-    let isCommutable = Commutable;
-  }
+  let Constraints = "$src1 = $dst" in {
+    defm PS : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                "ps\t{$src2, $dst|$dst, $src2}"), OpNode, FR32, f32,
+                f128mem, memopfsf32, SSEPackedSingle, MayLoad>, TB;
 
-  def PSrm : PSI<opc, MRMSrcMem, (outs FR32:$dst),
-                      (ins FR32:$src1, f128mem:$src2),
-                      !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-                      !if(NoPat, []<dag>,
-                          [(set FR32:$dst, (OpNode FR32:$src1,
-                                               (memopfsf32 addr:$src2)))])> {
-    let mayLoad = MayLoad;
-  }
-
-  def PDrm : PDI<opc, MRMSrcMem, (outs FR64:$dst),
-                      (ins FR64:$src1, f128mem:$src2),
-                      !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-                      !if(NoPat, []<dag>,
-                          [(set FR64:$dst, (OpNode FR64:$src1,
-                                               (memopfsf64 addr:$src2)))])> {
-    let mayLoad = MayLoad;
+    defm PD : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                "pd\t{$src2, $dst|$dst, $src2}"), OpNode, FR64, f64,
+                f128mem, memopfsf64, SSEPackedDouble, MayLoad>, TB, OpSize;
   }
 }
 
 // Alias bitwise logical operations using SSE logical ops on packed FP values.
-let Constraints = "$src1 = $dst" in {
-  defm FsAND  : sse12_fp_alias_pack_logical<0x54, "and", X86fand>;
-  defm FsOR   : sse12_fp_alias_pack_logical<0x56, "or", X86for>;
-  defm FsXOR  : sse12_fp_alias_pack_logical<0x57, "xor", X86fxor>;
+defm FsAND  : sse12_fp_alias_pack_logical<0x54, "and", X86fand>;
+defm FsOR   : sse12_fp_alias_pack_logical<0x56, "or", X86for>;
+defm FsXOR  : sse12_fp_alias_pack_logical<0x57, "xor", X86fxor>;
 
-  let neverHasSideEffects = 1 in
-    defm FsANDN : sse12_fp_alias_pack_logical<0x55, "andn", undef, 1, 1, 0>;
-}
-
-/// sse12_fp_scalar - SSE 1 & 2 scalar instructions class
-multiclass sse12_fp_scalar<bits<8> opc, string OpcodeStr, SDNode OpNode,
-                           RegisterClass RC, X86MemOperand memop> {
-  let isCommutable = 1 in {
-    def rr : SI<opc, MRMSrcReg, (outs RC:$dst), (ins RC:$src1, RC:$src2),
-                OpcodeStr, [(set RC:$dst, (OpNode RC:$src1, RC:$src2))]>;
-  }
-  def rm : SI<opc, MRMSrcMem, (outs RC:$dst), (ins RC:$src1, memop:$src2),
-              OpcodeStr, [(set RC:$dst, (OpNode RC:$src1, (load addr:$src2)))]>;
-}
+let neverHasSideEffects = 1, Pattern = []<dag>, isCommutable = 0 in
+  defm FsANDN : sse12_fp_alias_pack_logical<0x55, "andn", undef, 1>;
 
 /// basic_sse12_fp_binop_rm - SSE 1 & 2 binops come in both scalar and
 /// vector forms.
@@ -668,176 +720,67 @@ multiclass sse12_fp_scalar<bits<8> opc, string OpcodeStr, SDNode OpNode,
 /// These three forms can each be reg+reg or reg+mem, so there are a total of
 /// six "instructions".
 ///
-let Constraints = "$src1 = $dst" in {
 multiclass basic_sse12_fp_binop_rm<bits<8> opc, string OpcodeStr,
-                                 SDNode OpNode, bit Commutable = 0> {
+                                   SDNode OpNode> {
 
-  let Constraints = "", isAsmParserOnly = 1, hasVEX_4VPrefix = 1 in {
-    // Scalar operation, reg+reg.
-    let Prefix = 12 /* XS */ in
-      defm V#NAME#SS : sse12_fp_scalar<opc,
+  let isAsmParserOnly = 1 in {
+    defm V#NAME#SS : sse12_fp_scalar<opc,
         !strconcat(OpcodeStr, "ss\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
-                   OpNode, FR32, f32mem>;
+                   OpNode, FR32, f32mem>, XS, VEX_4V;
 
-    let Prefix = 11 /* XD */ in
-      defm V#NAME#SD : sse12_fp_scalar<opc,
+    defm V#NAME#SD : sse12_fp_scalar<opc,
         !strconcat(OpcodeStr, "sd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
-                   OpNode, FR64, f64mem>;
+                   OpNode, FR64, f64mem>, XD, VEX_4V;
+
+    defm V#NAME#PS : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                      "ps\t{$src2, $src1, $dst|$dst, $src1, $src2}"), OpNode,
+                      VR128, v4f32, f128mem, memopv4f32, SSEPackedSingle>,
+                      VEX_4V;
+
+    defm V#NAME#PD : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                      "pd\t{$src2, $src1, $dst|$dst, $src1, $src2}"), OpNode,
+                      VR128, v2f64, f128mem, memopv2f64, SSEPackedDouble>,
+                      OpSize, VEX_4V;
+
+    defm V#NAME#SS : sse12_fp_scalar_int<opc, OpcodeStr, VR128,
+       !strconcat(OpcodeStr, "ss\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                  "", "_ss", ssmem, sse_load_f32>, XS, VEX_4V;
+
+    defm V#NAME#SD : sse12_fp_scalar_int<opc, OpcodeStr, VR128,
+       !strconcat(OpcodeStr, "sd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                  "2", "_sd", sdmem, sse_load_f64>, XD, VEX_4V;
   }
 
   let Constraints = "$src1 = $dst" in {
-    // Scalar operation, reg+reg.
-    let Prefix = 12 /* XS */ in
-      defm SS : sse12_fp_scalar<opc,
-                      !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
-                      OpNode, FR32, f32mem>;
-    let Prefix = 11 /* XD */ in
-      defm SD : sse12_fp_scalar<opc,
-                      !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
-                      OpNode, FR64, f64mem>;
-  }
+    defm SS : sse12_fp_scalar<opc,
+                    !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
+                    OpNode, FR32, f32mem>, XS;
 
-  // Vector operation, reg+reg.
-  def PSrr : PSI<opc, MRMSrcReg, (outs VR128:$dst),
-                                 (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (v4f32 (OpNode VR128:$src1, VR128:$src2)))]> {
-    let isCommutable = Commutable;
-  }
+    defm SD : sse12_fp_scalar<opc,
+                    !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
+                    OpNode, FR64, f64mem>, XD;
 
-  def PDrr : PDI<opc, MRMSrcReg, (outs VR128:$dst),
-                                 (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (v2f64 (OpNode VR128:$src1, VR128:$src2)))]> {
-    let isCommutable = Commutable;
-  }
+    defm PS : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                "ps\t{$src2, $dst|$dst, $src2}"), OpNode, VR128, v4f32,
+                f128mem, memopv4f32, SSEPackedSingle>, TB;
 
-  def V#NAME#PSrr : VPSI<opc, MRMSrcReg, (outs VR128:$dst),
-               (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr,
-                          "ps\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
-               []> {
-    let isCommutable = Commutable;
-    let Constraints = "";
-    let isAsmParserOnly = 1;
-  }
+    defm PD : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                "pd\t{$src2, $dst|$dst, $src2}"), OpNode, VR128, v2f64,
+                f128mem, memopv2f64, SSEPackedDouble>, TB, OpSize;
 
-  def V#NAME#PDrr : VPDI<opc, MRMSrcReg, (outs VR128:$dst),
-               (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr,
-                          "pd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
-               []> {
-    let isCommutable = Commutable;
-    let Constraints = "";
-    let isAsmParserOnly = 1;
-  }
-
-  // Vector operation, reg+mem.
-  def PSrm : PSI<opc, MRMSrcMem, (outs VR128:$dst),
-                                 (ins VR128:$src1, f128mem:$src2),
-                 !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-             [(set VR128:$dst, (OpNode VR128:$src1, (memopv4f32 addr:$src2)))]>;
-
-  def PDrm : PDI<opc, MRMSrcMem, (outs VR128:$dst),
-                                 (ins VR128:$src1, f128mem:$src2),
-                 !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-             [(set VR128:$dst, (OpNode VR128:$src1, (memopv2f64 addr:$src2)))]>;
-
-  def V#NAME#PSrm : VPSI<opc, MRMSrcMem, (outs VR128:$dst),
-               (ins VR128:$src1, f128mem:$src2),
-               !strconcat(OpcodeStr,
-                          "ps\t{$src2, $src1, $dst|$dst, $src1, $src2}"), []> {
-    let Constraints = "";
-    let isAsmParserOnly = 1;
-  }
-
-  def V#NAME#PDrm : VPDI<opc, MRMSrcMem, (outs VR128:$dst),
-               (ins VR128:$src1, f128mem:$src2),
-               !strconcat(OpcodeStr,
-                          "pd\t{$src2, $src1, $dst|$dst, $src1, $src2}"), []> {
-    let Constraints = "";
-    let isAsmParserOnly = 1;
-  }
-
-  // Intrinsic operation, reg+reg.
-  def V#NAME#SSrr_Int : VSSI<opc, MRMSrcReg, (outs VR128:$dst),
-                                             (ins VR128:$src1, VR128:$src2),
+    defm SS : sse12_fp_scalar_int<opc, OpcodeStr, VR128,
        !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
-                          !strconcat(OpcodeStr, "_ss")) VR128:$src1,
-                                                      VR128:$src2))]> {
-                          // int_x86_sse_xxx_ss
-    let Constraints = "";
-  }
+                  "", "_ss", ssmem, sse_load_f32>, XS;
 
-  def V#NAME#SDrr_Int : VSDI<opc, MRMSrcReg, (outs VR128:$dst),
-                                             (ins VR128:$src1, VR128:$src2),
+    defm SD : sse12_fp_scalar_int<opc, OpcodeStr, VR128,
        !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
-                          !strconcat(OpcodeStr, "_sd")) VR128:$src1,
-                                                      VR128:$src2))]> {
-                          // int_x86_sse2_xxx_sd
-    let Constraints = "";
+                  "2", "_sd", sdmem, sse_load_f64>, XD;
   }
-
-  def SSrr_Int : SSI<opc, MRMSrcReg, (outs VR128:$dst),
-                                     (ins VR128:$src1, VR128:$src2),
-       !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
-                          !strconcat(OpcodeStr, "_ss")) VR128:$src1,
-                                                      VR128:$src2))]>;
-                          // int_x86_sse_xxx_ss
-
-  def SDrr_Int : SDI<opc, MRMSrcReg, (outs VR128:$dst),
-                                     (ins VR128:$src1, VR128:$src2),
-       !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
-                          !strconcat(OpcodeStr, "_sd")) VR128:$src1,
-                                                      VR128:$src2))]>;
-                          // int_x86_sse2_xxx_sd
-
-  // Intrinsic operation, reg+mem.
-  def V#NAME#SSrm_Int : VSSI<opc, MRMSrcMem, (outs VR128:$dst),
-                                             (ins VR128:$src1, ssmem:$src2),
-       !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
-                          !strconcat(OpcodeStr, "_ss")) VR128:$src1,
-                                               sse_load_f32:$src2))]> {
-                          // int_x86_sse_xxx_ss
-    let Constraints = "";
-  }
-
-  def V#NAME#SDrm_Int : VSDI<opc, MRMSrcMem, (outs VR128:$dst),
-                                             (ins VR128:$src1, sdmem:$src2),
-       !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
-                          !strconcat(OpcodeStr, "_sd")) VR128:$src1,
-                                               sse_load_f64:$src2))]> {
-                          // int_x86_sse2_xxx_sd
-    let Constraints = "";
-  }
-
-  def SSrm_Int : SSI<opc, MRMSrcMem, (outs VR128:$dst),
-                                     (ins VR128:$src1, ssmem:$src2),
-       !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
-                          !strconcat(OpcodeStr, "_ss")) VR128:$src1,
-                                               sse_load_f32:$src2))]>;
-                          // int_x86_sse_xxx_ss
-
-  def SDrm_Int : SDI<opc, MRMSrcMem, (outs VR128:$dst),
-                                     (ins VR128:$src1, sdmem:$src2),
-       !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
-                          !strconcat(OpcodeStr, "_sd")) VR128:$src1,
-                                               sse_load_f64:$src2))]>;
-                          // int_x86_sse2_xxx_sd
-}
 }
 
 // Arithmetic instructions
-defm ADD : basic_sse12_fp_binop_rm<0x58, "add", fadd, 1>;
-defm MUL : basic_sse12_fp_binop_rm<0x59, "mul", fmul, 1>;
+defm ADD : basic_sse12_fp_binop_rm<0x58, "add", fadd>;
+defm MUL : basic_sse12_fp_binop_rm<0x59, "mul", fmul>;
 
 let isCommutable = 0 in {
   defm SUB : basic_sse12_fp_binop_rm<0x5C, "sub", fsub>;
@@ -853,137 +796,79 @@ let isCommutable = 0 in {
 ///
 /// This provides a total of eight "instructions".
 ///
-let Constraints = "$src1 = $dst" in {
 multiclass sse12_fp_binop_rm<bits<8> opc, string OpcodeStr,
-                            SDNode OpNode, bit Commutable = 0> {
+                             SDNode OpNode> {
 
-  let Constraints = "", isAsmParserOnly = 1, hasVEX_4VPrefix = 1 in {
+  let isAsmParserOnly = 1 in {
     // Scalar operation, reg+reg.
-    let Prefix = 12 /* XS */ in
-      defm V#NAME#SS : sse12_fp_scalar<opc,
-        !strconcat(OpcodeStr, "ss\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
-                   OpNode, FR32, f32mem>;
+    defm V#NAME#SS : sse12_fp_scalar<opc,
+      !strconcat(OpcodeStr, "ss\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                 OpNode, FR32, f32mem>, XS, VEX_4V;
 
-    let Prefix = 11 /* XD */ in
-      defm V#NAME#SD : sse12_fp_scalar<opc,
-        !strconcat(OpcodeStr, "sd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
-                   OpNode, FR64, f64mem>;
+    defm V#NAME#SD : sse12_fp_scalar<opc,
+      !strconcat(OpcodeStr, "sd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                 OpNode, FR64, f64mem>, XD, VEX_4V;
+
+    defm V#NAME#PS : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                      "ps\t{$src2, $src1, $dst|$dst, $src1, $src2}"), OpNode,
+                      VR128, v4f32, f128mem, memopv4f32, SSEPackedSingle>,
+                      VEX_4V;
+
+    defm V#NAME#PD : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                      "pd\t{$src2, $src1, $dst|$dst, $src1, $src2}"), OpNode,
+                      VR128, v2f64, f128mem, memopv2f64, SSEPackedDouble>,
+                      OpSize, VEX_4V;
+
+    defm V#NAME#SS : sse12_fp_scalar_int<opc, OpcodeStr, VR128,
+       !strconcat(OpcodeStr, "ss\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                  "", "_ss", ssmem, sse_load_f32>, XS, VEX_4V;
+
+    defm V#NAME#SD : sse12_fp_scalar_int<opc, OpcodeStr, VR128,
+       !strconcat(OpcodeStr, "sd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                  "2", "_sd", sdmem, sse_load_f64>, XD, VEX_4V;
+
+    defm V#NAME#PS : sse12_fp_packed_int<opc, OpcodeStr, VR128,
+       !strconcat(OpcodeStr, "ps\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                  "", "_ps", f128mem, memopv4f32, SSEPackedSingle>, VEX_4V;
+
+    defm V#NAME#PD : sse12_fp_packed_int<opc, OpcodeStr, VR128,
+       !strconcat(OpcodeStr, "pd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+                  "2", "_pd", f128mem, memopv2f64, SSEPackedDouble>, OpSize,
+                  VEX_4V;
   }
 
   let Constraints = "$src1 = $dst" in {
     // Scalar operation, reg+reg.
-    let Prefix = 12 /* XS */ in
-      defm SS : sse12_fp_scalar<opc,
-                      !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
-                      OpNode, FR32, f32mem>;
-    let Prefix = 11 /* XD */ in
-      defm SD : sse12_fp_scalar<opc,
-                      !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
-                      OpNode, FR64, f64mem>;
-  }
+    defm SS : sse12_fp_scalar<opc,
+                    !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
+                    OpNode, FR32, f32mem>, XS;
+    defm SD : sse12_fp_scalar<opc,
+                    !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
+                    OpNode, FR64, f64mem>, XD;
+    defm PS : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                "ps\t{$src2, $dst|$dst, $src2}"), OpNode, VR128, v4f32,
+                f128mem, memopv4f32, SSEPackedSingle>, TB;
 
-  // Vector operation, reg+reg.
-  def PSrr : PSI<opc, MRMSrcReg, (outs VR128:$dst),
-                                 (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (v4f32 (OpNode VR128:$src1, VR128:$src2)))]> {
-    let isCommutable = Commutable;
-  }
+    defm PD : sse12_fp_packed<opc, !strconcat(OpcodeStr,
+                "pd\t{$src2, $dst|$dst, $src2}"), OpNode, VR128, v2f64,
+                f128mem, memopv2f64, SSEPackedDouble>, TB, OpSize;
 
-  def PDrr : PDI<opc, MRMSrcReg, (outs VR128:$dst),
-                                 (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (v2f64 (OpNode VR128:$src1, VR128:$src2)))]> {
-    let isCommutable = Commutable;
-  }
-
-  // Vector operation, reg+mem.
-  def PSrm : PSI<opc, MRMSrcMem, (outs VR128:$dst),
-                                 (ins VR128:$src1, f128mem:$src2),
-                 !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-             [(set VR128:$dst, (OpNode VR128:$src1, (memopv4f32 addr:$src2)))]>;
-
-  def PDrm : PDI<opc, MRMSrcMem, (outs VR128:$dst),
-                                 (ins VR128:$src1, f128mem:$src2),
-                 !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-             [(set VR128:$dst, (OpNode VR128:$src1, (memopv2f64 addr:$src2)))]>;
-
-  // Intrinsic operation, reg+reg.
-  def SSrr_Int : SSI<opc, MRMSrcReg, (outs VR128:$dst),
-                                     (ins VR128:$src1, VR128:$src2),
+    defm SS : sse12_fp_scalar_int<opc, OpcodeStr, VR128,
        !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
-                          !strconcat(OpcodeStr, "_ss")) VR128:$src1,
-                                                      VR128:$src2))]> {
-                          // int_x86_sse_xxx_ss
-    let isCommutable = Commutable;
-  }
+                  "", "_ss", ssmem, sse_load_f32>, XS;
 
-  def SDrr_Int : SDI<opc, MRMSrcReg, (outs VR128:$dst),
-                                     (ins VR128:$src1, VR128:$src2),
+    defm SD : sse12_fp_scalar_int<opc, OpcodeStr, VR128,
        !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
-                          !strconcat(OpcodeStr, "_sd")) VR128:$src1,
-                                                      VR128:$src2))]> {
-                          // int_x86_sse2_xxx_sd
-    let isCommutable = Commutable;
-  }
+                  "2", "_sd", sdmem, sse_load_f64>, XD;
 
-  // Intrinsic operation, reg+mem.
-  def SSrm_Int : SSI<opc, MRMSrcMem, (outs VR128:$dst),
-                                     (ins VR128:$src1, ssmem:$src2),
-       !strconcat(OpcodeStr, "ss\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
-                          !strconcat(OpcodeStr, "_ss")) VR128:$src1,
-                                               sse_load_f32:$src2))]>;
-                          // int_x86_sse_xxx_ss
-
-  def SDrm_Int : SDI<opc, MRMSrcMem, (outs VR128:$dst),
-                                     (ins VR128:$src1, sdmem:$src2),
-       !strconcat(OpcodeStr, "sd\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
-                          !strconcat(OpcodeStr, "_sd")) VR128:$src1,
-                                               sse_load_f64:$src2))]>;
-                          // int_x86_sse2_xxx_sd
-
-  // Vector intrinsic operation, reg+reg.
-  def PSrr_Int : PSI<opc, MRMSrcReg, (outs VR128:$dst),
-                                     (ins VR128:$src1, VR128:$src2),
+    defm PS : sse12_fp_packed_int<opc, OpcodeStr, VR128,
        !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
-                          !strconcat(OpcodeStr, "_ps")) VR128:$src1,
-                                                      VR128:$src2))]> {
-                          // int_x86_sse_xxx_ps
-    let isCommutable = Commutable;
-  }
+                  "", "_ps", f128mem, memopv4f32, SSEPackedSingle>, TB;
 
-  def PDrr_Int : PDI<opc, MRMSrcReg, (outs VR128:$dst),
-                                     (ins VR128:$src1, VR128:$src2),
+    defm PD : sse12_fp_packed_int<opc, OpcodeStr, VR128,
        !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
-                          !strconcat(OpcodeStr, "_pd")) VR128:$src1,
-                                                      VR128:$src2))]> {
-                          // int_x86_sse2_xxx_pd
-    let isCommutable = Commutable;
+                  "2", "_pd", f128mem, memopv2f64, SSEPackedDouble>, TB, OpSize;
   }
-
-  // Vector intrinsic operation, reg+mem.
-  def PSrm_Int : PSI<opc, MRMSrcMem, (outs VR128:$dst),
-                                     (ins VR128:$src1, f128mem:$src2),
-       !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse_",
-                          !strconcat(OpcodeStr, "_ps")) VR128:$src1,
-                                                 (memopv4f32 addr:$src2)))]>;
-                          // int_x86_sse_xxx_ps
-
-  def PDrm_Int : PDI<opc, MRMSrcMem, (outs VR128:$dst),
-                                     (ins VR128:$src1, f128mem:$src2),
-       !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-       [(set VR128:$dst, (!nameconcat<Intrinsic>("int_x86_sse2_",
-                          !strconcat(OpcodeStr, "_pd")) VR128:$src1,
-                                                 (memopv2f64 addr:$src2)))]>;
-                          // int_x86_sse2_xxx_pd
-}
 }
 
 let isCommutable = 0 in {
@@ -1166,49 +1051,64 @@ defm RSQRT : sse1_fp_unop_rm<0x52, "rsqrt", X86frsqrt,
 defm RCP   : sse1_fp_unop_rm<0x53, "rcp",   X86frcp,
                              int_x86_sse_rcp_ss, int_x86_sse_rcp_ps>;
 
-/// sse12_fp_pack_logical - SSE 1 & 2 packed FP logical ops
+/// sse12_fp_packed_logical - SSE 1 & 2 packed FP logical ops
 ///
-multiclass sse12_fp_pack_logical<bits<8> opc, string OpcodeStr,
+multiclass sse12_fp_packed_logical<bits<8> opc, string OpcodeStr,
                                  SDNode OpNode, int HasPat = 0,
-                                 bit Commutable = 1,
                                  list<list<dag>> Pattern = []> {
-  def PSrr : PSI<opc, MRMSrcReg, (outs VR128:$dst),
-       (ins VR128:$src1, VR128:$src2),
-       !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-       !if(HasPat, Pattern[0],
-                   [(set VR128:$dst, (v2i64 (OpNode VR128:$src1,
-                                                    VR128:$src2)))])>
-       { let isCommutable = Commutable; }
+  let isAsmParserOnly = 1 in {
+    defm V#NAME#PS : sse12_fp_packed_logical_rm<opc, VR128, SSEPackedSingle,
+         !strconcat(OpcodeStr, "ps\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+         f128mem,
+         !if(HasPat, Pattern[0], // rr
+                     [(set VR128:$dst, (v2i64 (OpNode VR128:$src1,
+                                                      VR128:$src2)))]),
+         !if(HasPat, Pattern[2], // rm
+                     [(set VR128:$dst, (OpNode (bc_v2i64 (v4f32 VR128:$src1)),
+                                               (memopv2i64 addr:$src2)))])>,
+                                               VEX_4V;
 
-  def PDrr : PDI<opc, MRMSrcReg, (outs VR128:$dst),
-       (ins VR128:$src1, VR128:$src2),
-       !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-       !if(HasPat, Pattern[1],
-                   [(set VR128:$dst, (OpNode (bc_v2i64 (v2f64 VR128:$src1)),
-                                             (bc_v2i64 (v2f64 VR128:$src2))))])>
-       { let isCommutable = Commutable; }
+    defm V#NAME#PD : sse12_fp_packed_logical_rm<opc, VR128, SSEPackedDouble,
+         !strconcat(OpcodeStr, "pd\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+         f128mem,
+         !if(HasPat, Pattern[1], // rr
+                     [(set VR128:$dst, (OpNode (bc_v2i64 (v2f64 VR128:$src1)),
+                                               (bc_v2i64 (v2f64
+                                               VR128:$src2))))]),
+         !if(HasPat, Pattern[3], // rm
+                     [(set VR128:$dst, (OpNode (bc_v2i64 (v2f64 VR128:$src1)),
+                                               (memopv2i64 addr:$src2)))])>,
+                                                               OpSize, VEX_4V;
+  }
+  let Constraints = "$src1 = $dst" in {
+    defm PS : sse12_fp_packed_logical_rm<opc, VR128, SSEPackedSingle,
+         !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"), f128mem,
+         !if(HasPat, Pattern[0], // rr
+                     [(set VR128:$dst, (v2i64 (OpNode VR128:$src1,
+                                                      VR128:$src2)))]),
+         !if(HasPat, Pattern[2], // rm
+                     [(set VR128:$dst, (OpNode (bc_v2i64 (v4f32 VR128:$src1)),
+                                               (memopv2i64 addr:$src2)))])>, TB;
 
-  def PSrm : PSI<opc, MRMSrcMem, (outs VR128:$dst),
-       (ins VR128:$src1, f128mem:$src2),
-       !strconcat(OpcodeStr, "ps\t{$src2, $dst|$dst, $src2}"),
-       !if(HasPat, Pattern[2],
-                   [(set VR128:$dst, (OpNode (bc_v2i64 (v4f32 VR128:$src1)),
-                                             (memopv2i64 addr:$src2)))])>;
-
-  def PDrm : PDI<opc, MRMSrcMem, (outs VR128:$dst),
-       (ins VR128:$src1, f128mem:$src2),
-       !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"),
-       !if(HasPat, Pattern[3],
-                   [(set VR128:$dst, (OpNode (bc_v2i64 (v2f64 VR128:$src1)),
-                                             (memopv2i64 addr:$src2)))])>;
+    defm PD : sse12_fp_packed_logical_rm<opc, VR128, SSEPackedDouble,
+         !strconcat(OpcodeStr, "pd\t{$src2, $dst|$dst, $src2}"), f128mem,
+         !if(HasPat, Pattern[1], // rr
+                     [(set VR128:$dst, (OpNode (bc_v2i64 (v2f64 VR128:$src1)),
+                                               (bc_v2i64 (v2f64
+                                               VR128:$src2))))]),
+         !if(HasPat, Pattern[3], // rm
+                     [(set VR128:$dst, (OpNode (bc_v2i64 (v2f64 VR128:$src1)),
+                                               (memopv2i64 addr:$src2)))])>,
+                                                                    TB, OpSize;
+  }
 }
 
 // Logical
-let Constraints = "$src1 = $dst" in {
-  defm AND  : sse12_fp_pack_logical<0x54, "and", and>;
-  defm OR   : sse12_fp_pack_logical<0x56, "or", or>;
-  defm XOR  : sse12_fp_pack_logical<0x57, "xor", xor>;
-  defm ANDN : sse12_fp_pack_logical<0x55, "andn", undef /* dummy */, 1, 0, [
+defm AND  : sse12_fp_packed_logical<0x54, "and", and>;
+defm OR   : sse12_fp_packed_logical<0x56, "or", or>;
+defm XOR  : sse12_fp_packed_logical<0x57, "xor", xor>;
+let isCommutable = 0 in
+  defm ANDN : sse12_fp_packed_logical<0x55, "andn", undef /* dummy */, 1, [
     // single r+r
     [(set VR128:$dst, (v2i64 (and (xor VR128:$src1,
                                        (bc_v2i64 (v4i32 immAllOnesV))),
@@ -1223,7 +1123,6 @@ let Constraints = "$src1 = $dst" in {
     // double r+m
     [(set VR128:$dst, (and (vnot (bc_v2i64 (v2f64 VR128:$src1))),
                            (memopv2i64 addr:$src2)))]]>;
-}
 
 let Constraints = "$src1 = $dst" in {
   def CMPPSrri : PSIi8<0xC2, MRMSrcReg,
@@ -1236,6 +1135,16 @@ let Constraints = "$src1 = $dst" in {
                   "cmp${cc}ps\t{$src, $dst|$dst, $src}",
                   [(set VR128:$dst, (int_x86_sse_cmp_ps VR128:$src1,
                                             (memop addr:$src), imm:$cc))]>;
+  def CMPPDrri : PDIi8<0xC2, MRMSrcReg,
+                    (outs VR128:$dst), (ins VR128:$src1, VR128:$src, SSECC:$cc),
+                    "cmp${cc}pd\t{$src, $dst|$dst, $src}",
+                    [(set VR128:$dst, (int_x86_sse2_cmp_pd VR128:$src1,
+                                                        VR128:$src, imm:$cc))]>;
+  def CMPPDrmi : PDIi8<0xC2, MRMSrcMem,
+                  (outs VR128:$dst), (ins VR128:$src1, f128mem:$src, SSECC:$cc),
+                  "cmp${cc}pd\t{$src, $dst|$dst, $src}",
+                  [(set VR128:$dst, (int_x86_sse2_cmp_pd VR128:$src1,
+                                                 (memop addr:$src), imm:$cc))]>;
 
   // Accept explicit immediate argument form instead of comparison code.
 let isAsmParserOnly = 1 in {
@@ -1245,12 +1154,22 @@ let isAsmParserOnly = 1 in {
   def CMPPSrmi_alt : PSIi8<0xC2, MRMSrcMem,
                   (outs VR128:$dst), (ins VR128:$src1, f128mem:$src, i8imm:$src2),
                   "cmpps\t{$src2, $src, $dst|$dst, $src, $src}", []>;
+  def CMPPDrri_alt : PDIi8<0xC2, MRMSrcReg,
+                    (outs VR128:$dst), (ins VR128:$src1, VR128:$src, i8imm:$src2),
+                    "cmppd\t{$src2, $src, $dst|$dst, $src, $src2}", []>;
+  def CMPPDrmi_alt : PDIi8<0xC2, MRMSrcMem,
+                  (outs VR128:$dst), (ins VR128:$src1, f128mem:$src, i8imm:$src2),
+                  "cmppd\t{$src2, $src, $dst|$dst, $src, $src2}", []>;
 }
 }
 def : Pat<(v4i32 (X86cmpps (v4f32 VR128:$src1), VR128:$src2, imm:$cc)),
           (CMPPSrri (v4f32 VR128:$src1), (v4f32 VR128:$src2), imm:$cc)>;
 def : Pat<(v4i32 (X86cmpps (v4f32 VR128:$src1), (memop addr:$src2), imm:$cc)),
           (CMPPSrmi (v4f32 VR128:$src1), addr:$src2, imm:$cc)>;
+def : Pat<(v2i64 (X86cmppd (v2f64 VR128:$src1), VR128:$src2, imm:$cc)),
+          (CMPPDrri VR128:$src1, VR128:$src2, imm:$cc)>;
+def : Pat<(v2i64 (X86cmppd (v2f64 VR128:$src1), (memop addr:$src2), imm:$cc)),
+          (CMPPDrmi VR128:$src1, addr:$src2, imm:$cc)>;
 
 // Shuffle and unpack instructions
 let Constraints = "$src1 = $dst" in {
@@ -1268,6 +1187,18 @@ let Constraints = "$src1 = $dst" in {
                         [(set VR128:$dst,
                           (v4f32 (shufp:$src3
                                   VR128:$src1, (memopv4f32 addr:$src2))))]>;
+  def SHUFPDrri : PDIi8<0xC6, MRMSrcReg,
+                 (outs VR128:$dst), (ins VR128:$src1, VR128:$src2, i8imm:$src3),
+                 "shufpd\t{$src3, $src2, $dst|$dst, $src2, $src3}",
+                 [(set VR128:$dst,
+                   (v2f64 (shufp:$src3 VR128:$src1, VR128:$src2)))]>;
+  def SHUFPDrmi : PDIi8<0xC6, MRMSrcMem,
+                        (outs VR128:$dst), (ins VR128:$src1,
+                         f128mem:$src2, i8imm:$src3),
+                        "shufpd\t{$src3, $src2, $dst|$dst, $src2, $src3}",
+                        [(set VR128:$dst,
+                          (v2f64 (shufp:$src3
+                                  VR128:$src1, (memopv2f64 addr:$src2))))]>;
 
   let AddedComplexity = 10 in {
     def UNPCKHPSrr : PSI<0x15, MRMSrcReg,
@@ -1292,6 +1223,28 @@ let Constraints = "$src1 = $dst" in {
                          "unpcklps\t{$src2, $dst|$dst, $src2}",
                          [(set VR128:$dst,
                            (unpckl VR128:$src1, (memopv4f32 addr:$src2)))]>;
+    def UNPCKHPDrr : PDI<0x15, MRMSrcReg,
+                         (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
+                         "unpckhpd\t{$src2, $dst|$dst, $src2}",
+                         [(set VR128:$dst,
+                           (v2f64 (unpckh VR128:$src1, VR128:$src2)))]>;
+    def UNPCKHPDrm : PDI<0x15, MRMSrcMem,
+                         (outs VR128:$dst), (ins VR128:$src1, f128mem:$src2),
+                         "unpckhpd\t{$src2, $dst|$dst, $src2}",
+                         [(set VR128:$dst,
+                           (v2f64 (unpckh VR128:$src1,
+                                          (memopv2f64 addr:$src2))))]>;
+
+    def UNPCKLPDrr : PDI<0x14, MRMSrcReg,
+                         (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
+                         "unpcklpd\t{$src2, $dst|$dst, $src2}",
+                         [(set VR128:$dst,
+                           (v2f64 (unpckl VR128:$src1, VR128:$src2)))]>;
+    def UNPCKLPDrm : PDI<0x14, MRMSrcMem,
+                         (outs VR128:$dst), (ins VR128:$src1, f128mem:$src2),
+                         "unpcklpd\t{$src2, $dst|$dst, $src2}",
+                         [(set VR128:$dst,
+                           (unpckl VR128:$src1, (memopv2f64 addr:$src2)))]>;
   } // AddedComplexity
 } // Constraints = "$src1 = $dst"
 
@@ -1886,75 +1839,6 @@ defm SQRT  : sse2_fp_unop_rm<0x51, "sqrt",  fsqrt,
                              int_x86_sse2_sqrt_sd, int_x86_sse2_sqrt_pd>;
 
 // There is no f64 version of the reciprocal approximation instructions.
-
-let Constraints = "$src1 = $dst" in {
-  def CMPPDrri : PDIi8<0xC2, MRMSrcReg,
-                    (outs VR128:$dst), (ins VR128:$src1, VR128:$src, SSECC:$cc),
-                    "cmp${cc}pd\t{$src, $dst|$dst, $src}",
-                    [(set VR128:$dst, (int_x86_sse2_cmp_pd VR128:$src1,
-                                                        VR128:$src, imm:$cc))]>;
-  def CMPPDrmi : PDIi8<0xC2, MRMSrcMem,
-                  (outs VR128:$dst), (ins VR128:$src1, f128mem:$src, SSECC:$cc),
-                  "cmp${cc}pd\t{$src, $dst|$dst, $src}",
-                  [(set VR128:$dst, (int_x86_sse2_cmp_pd VR128:$src1,
-                                                 (memop addr:$src), imm:$cc))]>;
-
-  // Accept explicit immediate argument form instead of comparison code.
-let isAsmParserOnly = 1 in {
-  def CMPPDrri_alt : PDIi8<0xC2, MRMSrcReg,
-                    (outs VR128:$dst), (ins VR128:$src1, VR128:$src, i8imm:$src2),
-                    "cmppd\t{$src2, $src, $dst|$dst, $src, $src2}", []>;
-  def CMPPDrmi_alt : PDIi8<0xC2, MRMSrcMem,
-                  (outs VR128:$dst), (ins VR128:$src1, f128mem:$src, i8imm:$src2),
-                  "cmppd\t{$src2, $src, $dst|$dst, $src, $src2}", []>;
-}
-}
-def : Pat<(v2i64 (X86cmppd (v2f64 VR128:$src1), VR128:$src2, imm:$cc)),
-          (CMPPDrri VR128:$src1, VR128:$src2, imm:$cc)>;
-def : Pat<(v2i64 (X86cmppd (v2f64 VR128:$src1), (memop addr:$src2), imm:$cc)),
-          (CMPPDrmi VR128:$src1, addr:$src2, imm:$cc)>;
-
-// Shuffle and unpack instructions
-let Constraints = "$src1 = $dst" in {
-  def SHUFPDrri : PDIi8<0xC6, MRMSrcReg,
-                 (outs VR128:$dst), (ins VR128:$src1, VR128:$src2, i8imm:$src3),
-                 "shufpd\t{$src3, $src2, $dst|$dst, $src2, $src3}",
-                 [(set VR128:$dst,
-                   (v2f64 (shufp:$src3 VR128:$src1, VR128:$src2)))]>;
-  def SHUFPDrmi : PDIi8<0xC6, MRMSrcMem,
-                        (outs VR128:$dst), (ins VR128:$src1,
-                         f128mem:$src2, i8imm:$src3),
-                        "shufpd\t{$src3, $src2, $dst|$dst, $src2, $src3}",
-                        [(set VR128:$dst,
-                          (v2f64 (shufp:$src3
-                                  VR128:$src1, (memopv2f64 addr:$src2))))]>;
-
-  let AddedComplexity = 10 in {
-    def UNPCKHPDrr : PDI<0x15, MRMSrcReg,
-                         (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
-                         "unpckhpd\t{$src2, $dst|$dst, $src2}",
-                         [(set VR128:$dst,
-                           (v2f64 (unpckh VR128:$src1, VR128:$src2)))]>;
-    def UNPCKHPDrm : PDI<0x15, MRMSrcMem,
-                         (outs VR128:$dst), (ins VR128:$src1, f128mem:$src2),
-                         "unpckhpd\t{$src2, $dst|$dst, $src2}",
-                         [(set VR128:$dst,
-                           (v2f64 (unpckh VR128:$src1,
-                                          (memopv2f64 addr:$src2))))]>;
-
-    def UNPCKLPDrr : PDI<0x14, MRMSrcReg,
-                         (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
-                         "unpcklpd\t{$src2, $dst|$dst, $src2}",
-                         [(set VR128:$dst,
-                           (v2f64 (unpckl VR128:$src1, VR128:$src2)))]>;
-    def UNPCKLPDrm : PDI<0x14, MRMSrcMem,
-                         (outs VR128:$dst), (ins VR128:$src1, f128mem:$src2),
-                         "unpcklpd\t{$src2, $dst|$dst, $src2}",
-                         [(set VR128:$dst,
-                           (unpckl VR128:$src1, (memopv2f64 addr:$src2)))]>;
-  } // AddedComplexity
-} // Constraints = "$src1 = $dst"
-
 
 //===---------------------------------------------------------------------===//
 // SSE integer instructions

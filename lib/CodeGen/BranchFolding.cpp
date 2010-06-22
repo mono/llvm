@@ -358,24 +358,10 @@ static unsigned ComputeCommonTailLength(MachineBasicBlock *MBB1,
 }
 
 /// ReplaceTailWithBranchTo - Delete the instruction OldInst and everything
-/// after it, replacing it with an unconditional branch to NewDest.  This
-/// returns true if OldInst's block is modified, false if NewDest is modified.
+/// after it, replacing it with an unconditional branch to NewDest.
 void BranchFolder::ReplaceTailWithBranchTo(MachineBasicBlock::iterator OldInst,
                                            MachineBasicBlock *NewDest) {
-  MachineBasicBlock *OldBB = OldInst->getParent();
-
-  // Remove all the old successors of OldBB from the CFG.
-  while (!OldBB->succ_empty())
-    OldBB->removeSuccessor(OldBB->succ_begin());
-
-  // Remove all the dead instructions from the end of OldBB.
-  OldBB->erase(OldInst, OldBB->end());
-
-  // If OldBB isn't immediately before OldBB, insert a branch to it.
-  if (++MachineFunction::iterator(OldBB) != MachineFunction::iterator(NewDest))
-    TII->InsertBranch(*OldBB, NewDest, 0, SmallVector<MachineOperand, 0>(),
-                      OldInst->getDebugLoc());
-  OldBB->addSuccessor(NewDest);
+  TII->ReplaceTailWithBranchTo(OldInst, NewDest);
   ++NumTailMerge;
 }
 
@@ -384,6 +370,9 @@ void BranchFolder::ReplaceTailWithBranchTo(MachineBasicBlock::iterator OldInst,
 /// iterator.  This returns the new MBB.
 MachineBasicBlock *BranchFolder::SplitMBBAt(MachineBasicBlock &CurMBB,
                                             MachineBasicBlock::iterator BBI1) {
+  if (!TII->isLegalToSplitMBBAt(CurMBB, BBI1))
+    return 0;
+
   MachineFunction &MF = *CurMBB.getParent();
 
   // Create the fall-through block.
@@ -628,9 +617,10 @@ void BranchFolder::RemoveBlocksWithHash(unsigned CurHash,
 
 /// CreateCommonTailOnlyBlock - None of the blocks to be tail-merged consist
 /// only of the common tail.  Create a block that does by splitting one.
-unsigned BranchFolder::CreateCommonTailOnlyBlock(MachineBasicBlock *&PredBB,
-                                             unsigned maxCommonTailLength) {
-  unsigned commonTailIndex = 0;
+bool BranchFolder::CreateCommonTailOnlyBlock(MachineBasicBlock *&PredBB,
+                                             unsigned maxCommonTailLength,
+                                             unsigned &commonTailIndex) {
+  commonTailIndex = 0;
   unsigned TimeEstimate = ~0U;
   for (unsigned i = 0, e = SameTails.size(); i != e; ++i) {
     // Use PredBB if possible; that doesn't require a new branch.
@@ -658,6 +648,11 @@ unsigned BranchFolder::CreateCommonTailOnlyBlock(MachineBasicBlock *&PredBB,
                << maxCommonTailLength);
 
   MachineBasicBlock *newMBB = SplitMBBAt(*MBB, BBI);
+  if (!newMBB) {
+    DEBUG(dbgs() << "... failed!");
+    return false;
+  }
+
   SameTails[commonTailIndex].setBlock(newMBB);
   SameTails[commonTailIndex].setTailStartPos(newMBB->begin());
 
@@ -665,7 +660,7 @@ unsigned BranchFolder::CreateCommonTailOnlyBlock(MachineBasicBlock *&PredBB,
   if (PredBB == MBB)
     PredBB = newMBB;
 
-  return commonTailIndex;
+  return true;
 }
 
 // See if any of the blocks in MergePotentials (which all have a common single
@@ -760,7 +755,11 @@ bool BranchFolder::TryTailMergeBlocks(MachineBasicBlock *SuccBB,
          !SameTails[commonTailIndex].tailIsWholeBlock())) {
       // None of the blocks consist entirely of the common tail.
       // Split a block so that one does.
-      commonTailIndex = CreateCommonTailOnlyBlock(PredBB, maxCommonTailLength);
+      if (!CreateCommonTailOnlyBlock(PredBB,
+                                     maxCommonTailLength, commonTailIndex)) {
+        RemoveBlocksWithHash(CurHash, SuccBB, PredBB);
+        continue;
+      }
     }
 
     MachineBasicBlock *MBB = SameTails[commonTailIndex].getBlock();

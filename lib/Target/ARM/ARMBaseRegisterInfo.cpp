@@ -675,6 +675,15 @@ ARMBaseRegisterInfo::estimateRSStackSizeLimit(MachineFunction &MF) const {
          I != E; ++I) {
       for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i) {
         if (!I->getOperand(i).isFI()) continue;
+
+        // When using ADDri to get the address of a stack object, 255 is the
+        // largest offset guaranteed to fit in the immediate offset.
+        if (I->getOpcode() == ARM::ADDri) {
+          Limit = std::min(Limit, (1U << 8) - 1);
+          break;
+        }
+
+        // Otherwise check the addressing mode.
         switch (I->getDesc().TSFlags & ARMII::AddrModeMask) {
         case ARMII::AddrMode3:
         case ARMII::AddrModeT2_i8:
@@ -1767,7 +1776,8 @@ emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const {
         addGlobalAddress(JumpTarget.getGlobal(), JumpTarget.getOffset(),
                          JumpTarget.getTargetFlags());
     } else if (RetOpcode == ARM::TCRETURNdiND) {
-      BuildMI(MBB, MBBI, dl, TII.get(ARM::TAILJMPdND)).
+      BuildMI(MBB, MBBI, dl,
+            TII.get(STI.isThumb() ? ARM::TAILJMPdNDt : ARM::TAILJMPdND)).
         addGlobalAddress(JumpTarget.getGlobal(), JumpTarget.getOffset(),
                          JumpTarget.getTargetFlags());
     } else if (RetOpcode == ARM::TCRETURNri) {

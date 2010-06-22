@@ -1093,7 +1093,7 @@ def SHRD64mri8 : RIi8<0xAC, MRMDestMem,
 //  Logical Instructions...
 //
 
-let isTwoAddress = 1 , AddedComplexity = 15 in
+let Constraints = "$src = $dst" , AddedComplexity = 15 in
 def NOT64r : RI<0xF7, MRM2r, (outs GR64:$dst), (ins GR64:$src), "not{q}\t$dst",
                 [(set GR64:$dst, (not GR64:$src))]>;
 def NOT64m : RI<0xF7, MRM2m, (outs), (ins i64mem:$dst), "not{q}\t$dst",
@@ -1103,7 +1103,7 @@ let Defs = [EFLAGS] in {
 def AND64i32 : RIi32<0x25, RawFrm, (outs), (ins i64i32imm:$src),
                      "and{q}\t{$src, %rax|%rax, $src}", []>;
 
-let isTwoAddress = 1 in {
+let Constraints = "$src1 = $dst" in {
 let isCommutable = 1 in
 def AND64rr  : RI<0x21, MRMDestReg, 
                   (outs GR64:$dst), (ins GR64:$src1, GR64:$src2),
@@ -1130,7 +1130,7 @@ def AND64ri32  : RIi32<0x81, MRM4r,
                        "and{q}\t{$src2, $dst|$dst, $src2}",
                        [(set GR64:$dst, EFLAGS,
                              (X86and_flag GR64:$src1, i64immSExt32:$src2))]>;
-} // isTwoAddress
+} // Constraints = "$src1 = $dst"
 
 def AND64mr  : RI<0x21, MRMDestMem,
                   (outs), (ins i64mem:$dst, GR64:$src),
@@ -1148,7 +1148,7 @@ def AND64mi32  : RIi32<0x81, MRM4m,
              [(store (and (loadi64 addr:$dst), i64immSExt32:$src), addr:$dst),
               (implicit EFLAGS)]>;
 
-let isTwoAddress = 1 in {
+let Constraints = "$src1 = $dst" in {
 let isCommutable = 1 in
 def OR64rr   : RI<0x09, MRMDestReg, (outs GR64:$dst), 
                   (ins GR64:$src1, GR64:$src2),
@@ -1175,7 +1175,7 @@ def OR64ri32 : RIi32<0x81, MRM1r, (outs GR64:$dst),
                      "or{q}\t{$src2, $dst|$dst, $src2}",
                   [(set GR64:$dst, EFLAGS,
                         (X86or_flag GR64:$src1, i64immSExt32:$src2))]>;
-} // isTwoAddress
+} // Constraints = "$src1 = $dst"
 
 def OR64mr : RI<0x09, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src),
                 "or{q}\t{$src, $dst|$dst, $src}",
@@ -1193,7 +1193,7 @@ def OR64mi32 : RIi32<0x81, MRM1m, (outs), (ins i64mem:$dst, i64i32imm:$src),
 def OR64i32 : RIi32<0x0D, RawFrm, (outs), (ins i64i32imm:$src),
                     "or{q}\t{$src, %rax|%rax, $src}", []>;
 
-let isTwoAddress = 1 in {
+let Constraints = "$src1 = $dst" in {
 let isCommutable = 1 in
 def XOR64rr  : RI<0x31, MRMDestReg,  (outs GR64:$dst), 
                   (ins GR64:$src1, GR64:$src2), 
@@ -1220,7 +1220,7 @@ def XOR64ri32 : RIi32<0x81, MRM6r,
                       "xor{q}\t{$src2, $dst|$dst, $src2}",
                       [(set GR64:$dst, EFLAGS,
                             (X86xor_flag GR64:$src1, i64immSExt32:$src2))]>;
-} // isTwoAddress
+} // Constraints = "$src1 = $dst"
 
 def XOR64mr  : RI<0x31, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src),
                   "xor{q}\t{$src, $dst|$dst, $src}",
@@ -1362,7 +1362,7 @@ def BTS64mi8 : RIi8<0xBA, MRM5m, (outs), (ins i64mem:$src1, i64i8imm:$src2),
 } // Defs = [EFLAGS]
 
 // Conditional moves
-let Uses = [EFLAGS], isTwoAddress = 1 in {
+let Uses = [EFLAGS], Constraints = "$src1 = $dst" in {
 let isCommutable = 1 in {
 def CMOVB64rr : RI<0x42, MRMSrcReg,       // if <u, GR64 = GR64
                    (outs GR64:$dst), (ins GR64:$src1, GR64:$src2),
@@ -1526,7 +1526,7 @@ def CMOVNO64rm : RI<0x41, MRMSrcMem,       // if !overflow, GR64 = [mem64]
                    "cmovno{q}\t{$src2, $dst|$dst, $src2}",
                     [(set GR64:$dst, (X86cmov GR64:$src1, (loadi64 addr:$src2),
                                      X86_COND_NO, EFLAGS))]>, TB;
-} // isTwoAddress
+} // Constraints = "$src1 = $dst"
 
 // Use sbb to materialize carry flag into a GPR.
 // FIXME: This are pseudo ops that should be replaced with Pat<> patterns.
@@ -1584,7 +1584,7 @@ def CVTSI2SD64rm: RSDI<0x2A, MRMSrcMem, (outs FR64:$dst), (ins i64mem:$src),
                        "cvtsi2sd{q}\t{$src, $dst|$dst, $src}",
                        [(set FR64:$dst, (sint_to_fp (loadi64 addr:$src)))]>;
 
-let isTwoAddress = 1 in {
+let Constraints = "$src1 = $dst" in {
 def Int_CVTSI2SD64rr: RSDI<0x2A, MRMSrcReg,
                            (outs VR128:$dst), (ins VR128:$src1, GR64:$src2),
                            "cvtsi2sd{q}\t{$src2, $dst|$dst, $src2}",
@@ -1597,7 +1597,7 @@ def Int_CVTSI2SD64rm: RSDI<0x2A, MRMSrcMem,
                            [(set VR128:$dst,
                              (int_x86_sse2_cvtsi642sd VR128:$src1,
                               (loadi64 addr:$src2)))]>;
-} // isTwoAddress
+} // Constraints = "$src1 = $dst"
 
 // Signed i64 -> f32
 def CVTSI2SS64rr: RSSI<0x2A, MRMSrcReg, (outs FR32:$dst), (ins GR64:$src),
@@ -1607,7 +1607,7 @@ def CVTSI2SS64rm: RSSI<0x2A, MRMSrcMem, (outs FR32:$dst), (ins i64mem:$src),
                        "cvtsi2ss{q}\t{$src, $dst|$dst, $src}",
                        [(set FR32:$dst, (sint_to_fp (loadi64 addr:$src)))]>;
 
-let isTwoAddress = 1 in {
+let Constraints = "$src1 = $dst" in {
   def Int_CVTSI2SS64rr : RSSI<0x2A, MRMSrcReg,
                               (outs VR128:$dst), (ins VR128:$src1, GR64:$src2),
                               "cvtsi2ss{q}\t{$src2, $dst|$dst, $src2}",
@@ -1621,7 +1621,7 @@ let isTwoAddress = 1 in {
                               [(set VR128:$dst,
                                 (int_x86_sse_cvtsi642ss VR128:$src1,
                                  (loadi64 addr:$src2)))]>;
-}
+} // Constraints = "$src1 = $dst"
 
 // f32 -> signed i64
 def CVTSS2SI64rr: RSSI<0x2D, MRMSrcReg, (outs GR64:$dst), (ins FR32:$src),
@@ -1901,6 +1901,8 @@ def : Pat<(i64 (X86Wrapper tjumptable  :$dst)),
           (MOV64ri tjumptable  :$dst)>, Requires<[FarData]>;
 def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
           (MOV64ri tglobaladdr :$dst)>, Requires<[FarData]>;
+def : Pat<(i64 (X86Wrapper tglobaltlsaddr :$dst)),
+          (MOV64ri tglobaltlsaddr :$dst)>, Requires<[FarData]>;
 def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
           (MOV64ri texternalsym:$dst)>, Requires<[FarData]>;
 def : Pat<(i64 (X86Wrapper tblockaddress:$dst)),
@@ -1915,6 +1917,8 @@ def : Pat<(i64 (X86Wrapper tjumptable  :$dst)),
           (MOV64ri64i32 tjumptable  :$dst)>, Requires<[SmallCode]>;
 def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
           (MOV64ri64i32 tglobaladdr :$dst)>, Requires<[SmallCode]>;
+def : Pat<(i64 (X86Wrapper tglobaltlsaddr :$dst)),
+          (MOV64ri64i32 tglobaltlsaddr :$dst)>, Requires<[SmallCode]>;
 def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
           (MOV64ri64i32 texternalsym:$dst)>, Requires<[SmallCode]>;
 def : Pat<(i64 (X86Wrapper tblockaddress:$dst)),
@@ -1929,6 +1933,8 @@ def : Pat<(i64 (X86Wrapper tjumptable  :$dst)),
           (MOV64ri32 tjumptable  :$dst)>, Requires<[KernelCode]>;
 def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
           (MOV64ri32 tglobaladdr :$dst)>, Requires<[KernelCode]>;
+def : Pat<(i64 (X86Wrapper tglobaltlsaddr :$dst)),
+          (MOV64ri32 tglobaltlsaddr :$dst)>, Requires<[KernelCode]>;
 def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
           (MOV64ri32 texternalsym:$dst)>, Requires<[KernelCode]>;
 def : Pat<(i64 (X86Wrapper tblockaddress:$dst)),
@@ -1945,6 +1951,9 @@ def : Pat<(store (i64 (X86Wrapper tjumptable:$src)), addr:$dst),
           Requires<[NearData, IsStatic]>;
 def : Pat<(store (i64 (X86Wrapper tglobaladdr:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tglobaladdr:$src)>,
+          Requires<[NearData, IsStatic]>;
+def : Pat<(store (i64 (X86Wrapper tglobaltlsaddr:$src)), addr:$dst),
+          (MOV64mi32 addr:$dst, tglobaltlsaddr:$src)>,
           Requires<[NearData, IsStatic]>;
 def : Pat<(store (i64 (X86Wrapper texternalsym:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, texternalsym:$src)>,
@@ -2373,7 +2382,7 @@ multiclass SS41I_extract64<bits<8> opc, string OpcodeStr> {
 
 defm PEXTRQ      : SS41I_extract64<0x16, "pextrq">;
 
-let isTwoAddress = 1 in {
+let Constraints = "$src1 = $dst" in {
   multiclass SS41I_insert64<bits<8> opc, string OpcodeStr> {
     def rr : SS4AIi8<opc, MRMSrcReg, (outs VR128:$dst),
                    (ins VR128:$src1, GR64:$src2, i32i8imm:$src3),
@@ -2390,6 +2399,6 @@ let isTwoAddress = 1 in {
                      (v2i64 (insertelt VR128:$src1, (loadi64 addr:$src2),
                                        imm:$src3)))]>, OpSize, REX_W;
   }
-}
+} // Constraints = "$src1 = $dst"
 
 defm PINSRQ      : SS41I_insert64<0x22, "pinsrq">;

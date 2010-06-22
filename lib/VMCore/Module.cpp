@@ -312,15 +312,11 @@ GlobalAlias *Module::getNamedAlias(StringRef Name) const {
 
 /// getNamedMetadata - Return the first NamedMDNode in the module with the
 /// specified name. This method returns null if a NamedMDNode with the 
-//// specified name is not found.
-NamedMDNode *Module::getNamedMetadata(StringRef Name) const {
-  return NamedMDSymTab->lookup(Name);
-}
-
-NamedMDNode *Module::getNamedMetadataUsingTwine(Twine Name) const {
+/// specified name is not found.
+NamedMDNode *Module::getNamedMetadata(const Twine &Name) const {
   SmallString<256> NameData;
   StringRef NameRef = Name.toStringRef(NameData);
-   return NamedMDSymTab->lookup(NameRef);
+  return NamedMDSymTab->lookup(NameRef);
 }
 
 /// getOrInsertNamedMetadata - Return the first named MDNode in the module 

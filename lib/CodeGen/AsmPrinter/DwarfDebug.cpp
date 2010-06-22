@@ -322,11 +322,9 @@ DwarfDebug::DwarfDebug(AsmPrinter *A, Module *M)
   DwarfStrSectionSym = TextSectionSym = 0;
   DwarfDebugRangeSectionSym = DwarfDebugLocSectionSym = 0; 
   FunctionBeginSym = FunctionEndSym = 0;
-  if (TimePassesIsEnabled) {
-      NamedRegionTimer T(DbgTimerName, DWARFGroupName);
-      beginModule(M);
-  } else {
-      beginModule(M);
+  {
+    NamedRegionTimer T(DbgTimerName, DWARFGroupName, TimePassesIsEnabled);
+    beginModule(M);
   }
 }
 DwarfDebug::~DwarfDebug() {
@@ -2259,9 +2257,11 @@ void DwarfDebug::collectVariableInfo(const MachineFunction *MF) {
   }
 
   // Collect info for variables that were optimized out.
-  const Twine FnLVName = Twine("llvm.dbg.lv.", MF->getFunction()->getName());
-  if (NamedMDNode *NMD =
-      MF->getFunction()->getParent()->getNamedMetadataUsingTwine(FnLVName)) {
+  const Function *F = MF->getFunction();
+  const Module *M = F->getParent();
+  if (NamedMDNode *NMD = 
+      M->getNamedMetadata(Twine("llvm.dbg.lv.", 
+                                getRealLinkageName(F->getName())))) {
     for (unsigned i = 0, e = NMD->getNumOperands(); i != e; ++i) {
       DIVariable DV(cast_or_null<MDNode>(NMD->getOperand(i)));
       if (!DV || !Processed.insert(DV))

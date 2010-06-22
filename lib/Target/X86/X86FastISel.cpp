@@ -342,6 +342,12 @@ bool X86FastISel::X86SelectAddress(const Value *V, X86AddressMode &AM) {
   const User *U = NULL;
   unsigned Opcode = Instruction::UserOp1;
   if (const Instruction *I = dyn_cast<Instruction>(V)) {
+    // Don't walk into other basic blocks; it's possible we haven't
+    // visited them yet, so the instructions may not yet be assigned
+    // virtual registers.
+    if (MBBMap[I->getParent()] != MBB)
+      return false;
+
     Opcode = I->getOpcode();
     U = I;
   } else if (const ConstantExpr *C = dyn_cast<ConstantExpr>(V)) {
@@ -351,7 +357,8 @@ bool X86FastISel::X86SelectAddress(const Value *V, X86AddressMode &AM) {
 
   if (const PointerType *Ty = dyn_cast<PointerType>(V->getType()))
     if (Ty->getAddressSpace() > 255)
-      // Fast instruction selection doesn't support pointers through %fs or %gs
+      // Fast instruction selection doesn't support the special
+      // address spaces.
       return false;
 
   switch (Opcode) {
@@ -1210,7 +1217,7 @@ bool X86FastISel::X86VisitIntrinsicCall(const IntrinsicInst &I) {
     
     unsigned ResultReg = createResultReg(TLI.getRegClassFor(VT));
     BuildMI(MBB, DL, TII.get(OpC), ResultReg).
-                                  addImm(CI->getZExtValue() == 0 ? -1ULL : 0);
+                                  addImm(CI->isZero() ? -1ULL : 0);
     UpdateValueMap(&I, ResultReg);
     return true;
   }
@@ -1548,6 +1555,7 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
   BuildMI(MBB, DL, TII.get(AdjStackUp)).addImm(NumBytes).addImm(0);
 
   // Now handle call return value (if any).
+  SmallVector<unsigned, 4> UsedRegs;
   if (RetVT.getSimpleVT().SimpleTy != MVT::isVoid) {
     SmallVector<CCValAssign, 16> RVLocs;
     CCState CCInfo(CC, false, TM, RVLocs, I->getParent()->getContext());
@@ -1575,6 +1583,8 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
                                     RVLocs[0].getLocReg(), DstRC, SrcRC, DL);
     assert(Emitted && "Failed to emit a copy instruction!"); Emitted=Emitted;
     Emitted = true;
+    UsedRegs.push_back(RVLocs[0].getLocReg());
+
     if (CopyVT != RVLocs[0].getValVT()) {
       // Round the F80 the right size, which also moves to the appropriate xmm
       // register. This is accomplished by storing the F80 value in memory and
@@ -1601,6 +1611,9 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
 
     UpdateValueMap(I, ResultReg);
   }
+
+  // Set all unused physreg defs as dead.
+  static_cast<MachineInstr *>(MIB)->setPhysRegsDeadExcept(UsedRegs, TRI);
 
   return true;
 }
