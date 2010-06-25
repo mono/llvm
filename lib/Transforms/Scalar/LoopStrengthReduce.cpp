@@ -392,12 +392,13 @@ static bool isAddSExtable(const SCEVAddExpr *A, ScalarEvolution &SE) {
   return isa<SCEVAddExpr>(SE.getSignExtendExpr(A, WideTy));
 }
 
-/// isMulSExtable - Return true if the given add can be sign-extended
+/// isMulSExtable - Return true if the given mul can be sign-extended
 /// without changing its value.
-static bool isMulSExtable(const SCEVMulExpr *A, ScalarEvolution &SE) {
+static bool isMulSExtable(const SCEVMulExpr *M, ScalarEvolution &SE) {
   const Type *WideTy =
-    IntegerType::get(SE.getContext(), SE.getTypeSizeInBits(A->getType()) + 1);
-  return isa<SCEVMulExpr>(SE.getSignExtendExpr(A, WideTy));
+    IntegerType::get(SE.getContext(),
+                     SE.getTypeSizeInBits(M->getType()) * M->getNumOperands());
+  return isa<SCEVMulExpr>(SE.getSignExtendExpr(M, WideTy));
 }
 
 /// getExactSDiv - Return an expression for LHS /s RHS, if it can be determined
@@ -413,20 +414,28 @@ static const SCEV *getExactSDiv(const SCEV *LHS, const SCEV *RHS,
   if (LHS == RHS)
     return SE.getConstant(LHS->getType(), 1);
 
-  // Handle x /s -1 as x * -1, to give ScalarEvolution a chance to do some
-  // folding.
-  if (RHS->isAllOnesValue())
-    return SE.getMulExpr(LHS, RHS);
+  // Handle a few RHS special cases.
+  const SCEVConstant *RC = dyn_cast<SCEVConstant>(RHS);
+  if (RC) {
+    const APInt &RA = RC->getValue()->getValue();
+    // Handle x /s -1 as x * -1, to give ScalarEvolution a chance to do
+    // some folding.
+    if (RA.isAllOnesValue())
+      return SE.getMulExpr(LHS, RC);
+    // Handle x /s 1 as x.
+    if (RA == 1)
+      return LHS;
+  }
 
   // Check for a division of a constant by a constant.
   if (const SCEVConstant *C = dyn_cast<SCEVConstant>(LHS)) {
-    const SCEVConstant *RC = dyn_cast<SCEVConstant>(RHS);
     if (!RC)
       return 0;
-    if (C->getValue()->getValue().srem(RC->getValue()->getValue()) != 0)
+    const APInt &LA = C->getValue()->getValue();
+    const APInt &RA = RC->getValue()->getValue();
+    if (LA.srem(RA) != 0)
       return 0;
-    return SE.getConstant(C->getValue()->getValue()
-               .sdiv(RC->getValue()->getValue()));
+    return SE.getConstant(LA.sdiv(RA));
   }
 
   // Distribute the sdiv over addrec operands, if the addrec doesn't overflow.
@@ -440,6 +449,7 @@ static const SCEV *getExactSDiv(const SCEV *LHS, const SCEV *RHS,
       if (!Step) return 0;
       return SE.getAddRecExpr(Start, Step, AR->getLoop());
     }
+    return 0;
   }
 
   // Distribute the sdiv over add operands, if the add doesn't overflow.
@@ -455,10 +465,11 @@ static const SCEV *getExactSDiv(const SCEV *LHS, const SCEV *RHS,
       }
       return SE.getAddExpr(Ops);
     }
+    return 0;
   }
 
   // Check for a multiply operand that we can pull RHS out of.
-  if (const SCEVMulExpr *Mul = dyn_cast<SCEVMulExpr>(LHS))
+  if (const SCEVMulExpr *Mul = dyn_cast<SCEVMulExpr>(LHS)) {
     if (IgnoreSignificantBits || isMulSExtable(Mul, SE)) {
       SmallVector<const SCEV *, 4> Ops;
       bool Found = false;
@@ -475,6 +486,8 @@ static const SCEV *getExactSDiv(const SCEV *LHS, const SCEV *RHS,
       }
       return Found ? SE.getMulExpr(Ops) : 0;
     }
+    return 0;
+  }
 
   // Otherwise we don't know.
   return 0;
@@ -1643,8 +1656,11 @@ ICmpInst *LSRInstance::OptimizeMax(ICmpInst *Cond, IVStrideUse* &CondUse) {
     NewRHS = Sel->getOperand(1);
   else if (SE.getSCEV(Sel->getOperand(2)) == MaxRHS)
     NewRHS = Sel->getOperand(2);
+  else if (const SCEVUnknown *SU = dyn_cast<SCEVUnknown>(MaxRHS))
+    NewRHS = SU->getValue();
   else
-    llvm_unreachable("Max doesn't match expected pattern!");
+    // Max doesn't match expected pattern.
+    return Cond;
 
   // Determine the new comparison opcode. It may be signed or unsigned,
   // and the original comparison may be either equality or inequality.
@@ -2385,13 +2401,12 @@ void LSRInstance::GenerateICmpZeroScales(LSRUse &LU, unsigned LUIdx,
   for (SmallSetVector<int64_t, 8>::const_iterator
        I = Factors.begin(), E = Factors.end(); I != E; ++I) {
     int64_t Factor = *I;
-    Formula F = Base;
 
     // Check that the multiplication doesn't overflow.
-    if (F.AM.BaseOffs == INT64_MIN && Factor == -1)
+    if (Base.AM.BaseOffs == INT64_MIN && Factor == -1)
       continue;
-    F.AM.BaseOffs = (uint64_t)Base.AM.BaseOffs * Factor;
-    if (F.AM.BaseOffs / Factor != Base.AM.BaseOffs)
+    int64_t NewBaseOffs = (uint64_t)Base.AM.BaseOffs * Factor;
+    if (NewBaseOffs / Factor != Base.AM.BaseOffs)
       continue;
 
     // Check that multiplying with the use offset doesn't overflow.
@@ -2401,6 +2416,9 @@ void LSRInstance::GenerateICmpZeroScales(LSRUse &LU, unsigned LUIdx,
     Offset = (uint64_t)Offset * Factor;
     if (Offset / Factor != LU.MinOffset)
       continue;
+
+    Formula F = Base;
+    F.AM.BaseOffs = NewBaseOffs;
 
     // Check that this scale is legal.
     if (!isLegalUse(F.AM, Offset, Offset, LU.Kind, LU.AccessTy, TLI))

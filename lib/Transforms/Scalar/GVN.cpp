@@ -272,7 +272,8 @@ Expression ValueTable::create_expression(CallInst* C) {
   e.function = C->getCalledFunction();
   e.opcode = Expression::CALL;
 
-  for (CallInst::op_iterator I = C->op_begin()+1, E = C->op_end();
+  CallSite CS(C);
+  for (CallInst::op_iterator I = CS.arg_begin(), E = CS.arg_end();
        I != E; ++I)
     e.varargs.push_back(lookup_or_add(*I));
 
@@ -453,9 +454,9 @@ uint32_t ValueTable::lookup_or_add_call(CallInst* C) {
         return nextValueNumber++;
       }
 
-      for (unsigned i = 1; i < C->getNumOperands(); ++i) {
-        uint32_t c_vn = lookup_or_add(C->getOperand(i));
-        uint32_t cd_vn = lookup_or_add(local_cdep->getOperand(i));
+      for (unsigned i = 0, e = C->getNumArgOperands(); i < e; ++i) {
+        uint32_t c_vn = lookup_or_add(C->getArgOperand(i));
+        uint32_t cd_vn = lookup_or_add(local_cdep->getArgOperand(i));
         if (c_vn != cd_vn) {
           valueNumbering[C] = nextValueNumber;
           return nextValueNumber++;
@@ -509,9 +510,9 @@ uint32_t ValueTable::lookup_or_add_call(CallInst* C) {
       valueNumbering[C] = nextValueNumber;
       return nextValueNumber++;
     }
-    for (unsigned i = 1; i < C->getNumOperands(); ++i) {
-      uint32_t c_vn = lookup_or_add(C->getOperand(i));
-      uint32_t cd_vn = lookup_or_add(cdep->getOperand(i));
+    for (unsigned i = 0, e = C->getNumArgOperands(); i < e; ++i) {
+      uint32_t c_vn = lookup_or_add(C->getArgOperand(i));
+      uint32_t cd_vn = lookup_or_add(cdep->getArgOperand(i));
       if (c_vn != cd_vn) {
         valueNumbering[C] = nextValueNumber;
         return nextValueNumber++;
@@ -1501,7 +1502,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
       MD->invalidateCachedPointerInfo(V);
     VN.erase(LI);
     toErase.push_back(LI);
-    NumGVNLoad++;
+    ++NumGVNLoad;
     return true;
   }
 
@@ -1724,7 +1725,7 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
     MD->invalidateCachedPointerInfo(V);
   VN.erase(LI);
   toErase.push_back(LI);
-  NumPRELoad++;
+  ++NumPRELoad;
   return true;
 }
 
@@ -1785,7 +1786,7 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
         MD->invalidateCachedPointerInfo(AvailVal);
       VN.erase(L);
       toErase.push_back(L);
-      NumGVNLoad++;
+      ++NumGVNLoad;
       return true;
     }
         
@@ -1831,7 +1832,7 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
       MD->invalidateCachedPointerInfo(StoredVal);
     VN.erase(L);
     toErase.push_back(L);
-    NumGVNLoad++;
+    ++NumGVNLoad;
     return true;
   }
 
@@ -1861,7 +1862,7 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
       MD->invalidateCachedPointerInfo(DepLI);
     VN.erase(L);
     toErase.push_back(L);
-    NumGVNLoad++;
+    ++NumGVNLoad;
     return true;
   }
 
@@ -1872,7 +1873,7 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
     L->replaceAllUsesWith(UndefValue::get(L->getType()));
     VN.erase(L);
     toErase.push_back(L);
-    NumGVNLoad++;
+    ++NumGVNLoad;
     return true;
   }
   
@@ -1883,7 +1884,7 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
       L->replaceAllUsesWith(UndefValue::get(L->getType()));
       VN.erase(L);
       toErase.push_back(L);
-      NumGVNLoad++;
+      ++NumGVNLoad;
       return true;
     }
   }
@@ -2015,7 +2016,7 @@ bool GVN::runOnFunction(Function& F) {
     BasicBlock *BB = FI;
     ++FI;
     bool removedBlock = MergeBlockIntoPredecessor(BB, this);
-    if (removedBlock) NumGVNBlocks++;
+    if (removedBlock) ++NumGVNBlocks;
 
     Changed |= removedBlock;
   }
@@ -2142,12 +2143,12 @@ bool GVN::performPRE(Function &F) {
                                             localAvail[*PI]->table.find(ValNo);
         if (predV == localAvail[*PI]->table.end()) {
           PREPred = *PI;
-          NumWithout++;
+          ++NumWithout;
         } else if (predV->second == CurInst) {
           NumWithout = 2;
         } else {
           predMap[*PI] = predV->second;
-          NumWith++;
+          ++NumWith;
         }
       }
 
@@ -2202,7 +2203,7 @@ bool GVN::performPRE(Function &F) {
       PREInstr->setName(CurInst->getName() + ".pre");
       predMap[PREPred] = PREInstr;
       VN.add(PREInstr, ValNo);
-      NumGVNPRE++;
+      ++NumGVNPRE;
 
       // Update the availability map to include the new instruction.
       localAvail[PREPred]->table.insert(std::make_pair(ValNo, PREInstr));

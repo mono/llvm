@@ -187,7 +187,7 @@ static char ModType(const char mod, char type, bool &quad, bool &poly,
 
 /// TypeString - for a modifier and type, generate the name of the typedef for
 /// that type.  If generic is true, emit the generic vector type rather than
-/// the public NEON type. QUc -> uint8x8t_t / __neon_uint8x8_t.
+/// the public NEON type. QUc -> uint8x8_t / __neon_uint8x8_t.
 static std::string TypeString(const char mod, StringRef typestr,
                               bool generic = false) {
   bool quad = false;
@@ -277,9 +277,9 @@ static std::string TypeString(const char mod, StringRef typestr,
   return s.str();
 }
 
-/// TypeString - for a modifier and type, generate the clang BuiltinsARM.def 
-/// prototype code for the function.  See the top of clang's Builtins.def for
-/// a description of the type strings.
+/// BuiltinTypeString - for a modifier and type, generate the clang
+/// BuiltinsARM.def prototype code for the function.  See the top of clang's
+/// Builtins.def for a description of the type strings.
 static std::string BuiltinTypeString(const char mod, StringRef typestr,
                                      ClassKind ck, bool ret) {
   bool quad = false;
@@ -366,6 +366,52 @@ static std::string BuiltinTypeString(const char mod, StringRef typestr,
     return quad ? "V2LLi" : "V1LLi";
   
   return quad ? "V16c" : "V8c";
+}
+
+/// StructTag - generate the name of the struct tag for a type.
+/// These names are mandated by ARM's ABI.
+static std::string StructTag(StringRef typestr) {
+  bool quad = false;
+  bool poly = false;
+  bool usgn = false;
+  
+  // base type to get the type string for.
+  char type = ClassifyType(typestr, quad, poly, usgn);
+  
+  SmallString<128> s;
+  s += "__simd";
+  s += quad ? "128_" : "64_";
+  if (usgn)
+    s.push_back('u');
+  
+  switch (type) {
+    case 'c':
+      s += poly ? "poly8" : "int8";
+      break;
+    case 's':
+      s += poly ? "poly16" : "int16";
+      break;
+    case 'i':
+      s += "int32";
+      break;
+    case 'l':
+      s += "int64";
+      break;
+    case 'h':
+      s += "float16";
+      break;
+    case 'f':
+      s += "float32";
+      break;
+    default:
+      throw "unhandled type!";
+      break;
+  }
+
+  // Append _t, finishing the struct tag name.
+  s += "_t";
+  
+  return s.str();
 }
 
 /// MangleName - Append a type or width suffix to a base neon function name, 
@@ -758,7 +804,7 @@ static std::string GenBuiltin(const std::string &name, const std::string &proto,
     // argument to the __builtin.
     if (structTypes && (proto[i] == '2' || proto[i] == '3' || proto[i] == '4')){
       for (unsigned vi = 0, ve = proto[i] - '0'; vi != ve; ++vi) {
-        s += args + ".val[" + utostr(vi) + "]";
+        s += args + ".val[" + utostr(vi) + "].val";
         if ((vi + 1) < ve)
           s += ", ";
       }
@@ -878,10 +924,11 @@ void NeonEmitter::run(raw_ostream &OS) {
   // Emit struct typedefs.
   for (unsigned vi = 1; vi != 5; ++vi) {
     for (unsigned i = 0, e = TDTypeVec.size(); i != e; ++i) {
-      std::string ts = TypeString('d', TDTypeVec[i]);
-      std::string vs = (vi > 1) ? TypeString('0' + vi, TDTypeVec[i]) : ts;
-      OS << "typedef struct __" << vs << " {\n";
-      OS << "  __neon_" << ts << " val";
+      std::string ts = TypeString('d', TDTypeVec[i], vi == 1);
+      std::string vs = TypeString((vi > 1) ? '0' + vi : 'd', TDTypeVec[i]);
+      std::string tag = (vi > 1) ? vs : StructTag(TDTypeVec[i]);
+      OS << "typedef struct " << tag << " {\n";
+      OS << "  " << ts << " val";
       if (vi > 1)
         OS << "[" << utostr(vi) << "]";
       OS << ";\n} " << vs << ";\n\n";

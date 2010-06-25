@@ -484,6 +484,8 @@ void LiveInterval::join(LiveInterval &Other,
     I->valno = NewVNInfo[OtherAssignments[RangeNo]];
     assert(I->valno && "Adding a dead range?");
     InsertPos = addRangeFrom(*I, InsertPos);
+    InsertPos->valno->removeKills(InsertPos->start,
+                                  InsertPos->end.getPrevSlot());
   }
 
   ComputeJoinedWeight(Other);
@@ -529,6 +531,7 @@ void LiveInterval::MergeValueInAsValue(
   SmallVector<VNInfo*, 4> ReplacedValNos;
   iterator IP = begin();
   for (const_iterator I = RHS.begin(), E = RHS.end(); I != E; ++I) {
+    assert(I->valno == RHS.getValNumInfo(I->valno->id) && "Bad VNInfo");
     if (I->valno != RHSValNo)
       continue;
     SlotIndex Start = I->start, End = I->end;
@@ -823,8 +826,10 @@ void LiveInterval::print(raw_ostream &OS, const TargetRegisterInfo *TRI) const {
   else {
     OS << " = ";
     for (LiveInterval::Ranges::const_iterator I = ranges.begin(),
-           E = ranges.end(); I != E; ++I)
-    OS << *I;
+           E = ranges.end(); I != E; ++I) {
+      OS << *I;
+      assert(I->valno == getValNumInfo(I->valno->id) && "Bad VNInfo");
+    }
   }
   
   // Print value number info.

@@ -842,6 +842,17 @@ def PUSHF32  : I<0x9C, RawFrm, (outs), (ins), "pushf{l|d}", []>,
                Requires<[In32BitMode]>;
 }
 
+let Defs = [EDI, ESI, EBP, EBX, EDX, ECX, EAX, ESP], Uses = [ESP],
+    mayLoad=1, neverHasSideEffects=1 in {
+def POPA32   : I<0x61, RawFrm, (outs), (ins), "popa{l}", []>,
+               Requires<[In32BitMode]>;
+}
+let Defs = [ESP], Uses = [EDI, ESI, EBP, EBX, EDX, ECX, EAX, ESP],
+    mayStore=1, neverHasSideEffects=1 in {
+def PUSHA32  : I<0x60, RawFrm, (outs), (ins), "pusha{l}", []>,
+               Requires<[In32BitMode]>;
+}
+
 let Uses = [EFLAGS], Constraints = "$src = $dst" in     // GR32 = bswap GR32
   def BSWAP32r : I<0xC8, AddRegFrm,
                    (outs GR32:$dst), (ins GR32:$src),
@@ -3859,6 +3870,7 @@ def MOV32r0  : I<0x31, MRMInitReg, (outs GR32:$dst), (ins), "",
 // Thread Local Storage Instructions
 //
 
+// ELF TLS Support
 // All calls clobber the non-callee saved registers. ESP is marked as
 // a use to prevent stack-pointer assignments that appear immediately
 // before calls from potentially appearing dead.
@@ -3873,15 +3885,15 @@ def TLS_addr32 : I<0, Pseudo, (outs), (ins lea32mem:$sym),
                   [(X86tlsaddr tls32addr:$sym)]>,
                   Requires<[In32BitMode]>;
 
-// FIXME: Not true for darwin
-let Defs = [EAX, ECX, EDX, FP0, FP1, FP2, FP3, FP4, FP5, FP6, ST0,
-            MM0, MM1, MM2, MM3, MM4, MM5, MM6, MM7,
-            XMM0, XMM1, XMM2, XMM3, XMM4, XMM5, XMM6, XMM7,
-            XMM8, XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15, EFLAGS],
+// Darwin TLS Support
+// For i386, the address of the thunk is passed on the stack, on return the 
+// address of the variable is in %eax.  %ecx is trashed during the function 
+// call.  All other registers are preserved.
+let Defs = [EAX, ECX],
     Uses = [ESP],
     usesCustomInserter = 1 in
 def TLSCall_32 : I<0, Pseudo, (outs), (ins i32mem:$sym),
-                "# Fixme into a call",
+                "# TLSCall_32",
                 [(X86TLSCall addr:$sym)]>,
                 Requires<[In32BitMode]>;
                 

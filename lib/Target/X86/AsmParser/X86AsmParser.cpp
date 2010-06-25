@@ -412,6 +412,28 @@ bool X86ATTAsmParser::ParseRegister(unsigned &RegNo,
     return false;
   }
   
+  // If this is "db[0-7]", match it as an alias
+  // for dr[0-7].
+  if (RegNo == 0 && Tok.getString().size() == 3 &&
+      Tok.getString().startswith("db")) {
+    switch (Tok.getString()[2]) {
+    case '0': RegNo = X86::DR0; break;
+    case '1': RegNo = X86::DR1; break;
+    case '2': RegNo = X86::DR2; break;
+    case '3': RegNo = X86::DR3; break;
+    case '4': RegNo = X86::DR4; break;
+    case '5': RegNo = X86::DR5; break;
+    case '6': RegNo = X86::DR6; break;
+    case '7': RegNo = X86::DR7; break;
+    }
+    
+    if (RegNo != 0) {
+      EndLoc = Tok.getLoc();
+      Parser.Lex(); // Eat it.
+      return false;
+    }
+  }
+  
   if (RegNo == 0)
     return Error(Tok.getLoc(), "invalid register name");
 
@@ -664,11 +686,13 @@ ParseInstruction(const StringRef &Name, SMLoc NameLoc,
 
   // FIXME: Hack to recognize cmp<comparison code>{ss,sd,ps,pd}.
   const MCExpr *ExtraImmOp = 0;
-  if (PatchedName.startswith("cmp") &&
+  if ((PatchedName.startswith("cmp") || PatchedName.startswith("vcmp")) &&
       (PatchedName.endswith("ss") || PatchedName.endswith("sd") ||
        PatchedName.endswith("ps") || PatchedName.endswith("pd"))) {
+    bool IsVCMP = PatchedName.startswith("vcmp");
+    unsigned SSECCIdx = IsVCMP ? 4 : 3;
     unsigned SSEComparisonCode = StringSwitch<unsigned>(
-      PatchedName.slice(3, PatchedName.size() - 2))
+      PatchedName.slice(SSECCIdx, PatchedName.size() - 2))
       .Case("eq", 0)
       .Case("lt", 1)
       .Case("le", 2)
@@ -682,14 +706,14 @@ ParseInstruction(const StringRef &Name, SMLoc NameLoc,
       ExtraImmOp = MCConstantExpr::Create(SSEComparisonCode,
                                           getParser().getContext());
       if (PatchedName.endswith("ss")) {
-        PatchedName = "cmpss";
+        PatchedName = IsVCMP ? "vcmpss" : "cmpss";
       } else if (PatchedName.endswith("sd")) {
-        PatchedName = "cmpsd";
+        PatchedName = IsVCMP ? "vcmpsd" : "cmpsd";
       } else if (PatchedName.endswith("ps")) {
-        PatchedName = "cmpps";
+        PatchedName = IsVCMP ? "vcmpps" : "cmpps";
       } else {
         assert(PatchedName.endswith("pd") && "Unexpected mnemonic!");
-        PatchedName = "cmppd";
+        PatchedName = IsVCMP ? "vcmppd" : "cmppd";
       }
     }
   }

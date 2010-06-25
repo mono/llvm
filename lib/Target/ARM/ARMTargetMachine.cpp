@@ -66,8 +66,10 @@ ARMTargetMachine::ARMTargetMachine(const Target &T, const std::string &TT,
                                    const std::string &FS)
   : ARMBaseTargetMachine(T, TT, FS, false), InstrInfo(Subtarget),
     DataLayout(Subtarget.isAPCS_ABI() ?
-               std::string("e-p:32:32-f64:32:32-i64:32:32-n32") :
-               std::string("e-p:32:32-f64:64:64-i64:64:64-n32")),
+               std::string("e-p:32:32-f64:32:32-i64:32:32-"
+                           "v128:32:128-v64:32:64-n32") :
+               std::string("e-p:32:32-f64:64:64-i64:64:64-"
+                           "v128:64:128-v64:64:64-n32")),
     TLInfo(*this),
     TSInfo(*this) {
 }
@@ -80,9 +82,11 @@ ThumbTargetMachine::ThumbTargetMachine(const Target &T, const std::string &TT,
               : ((ARMBaseInstrInfo*)new Thumb1InstrInfo(Subtarget))),
     DataLayout(Subtarget.isAPCS_ABI() ?
                std::string("e-p:32:32-f64:32:32-i64:32:32-"
-                           "i16:16:32-i8:8:32-i1:8:32-a:0:32-n32") :
+                           "i16:16:32-i8:8:32-i1:8:32-"
+                           "v128:32:128-v64:32:64-a:0:32-n32") :
                std::string("e-p:32:32-f64:64:64-i64:64:64-"
-                           "i16:16:32-i8:8:32-i1:8:32-a:0:32-n32")),
+                           "i16:16:32-i8:8:32-i1:8:32-"
+                           "v128:64:128-v64:64:64-a:0:32-n32")),
     TLInfo(*this),
     TSInfo(*this) {
 }
@@ -105,8 +109,7 @@ bool ARMBaseTargetMachine::addPreRegAlloc(PassManagerBase &PM,
   if (OptLevel != CodeGenOpt::None && !Subtarget.isThumb1Only())
     PM.add(createARMLoadStoreOptimizationPass(true));
 
-  if (OptLevel != CodeGenOpt::None && Subtarget.isThumb2() &&
-      EarlyITBlockFormation)
+  if (Subtarget.isThumb2() && EarlyITBlockFormation)
     PM.add(createThumb2ITBlockPass(true));
   return true;
 }
@@ -128,9 +131,9 @@ bool ARMBaseTargetMachine::addPreSched2(PassManagerBase &PM,
   if (OptLevel != CodeGenOpt::None) {
     if (!Subtarget.isThumb1Only())
       PM.add(createIfConverterPass());
-    if (Subtarget.isThumb2())
-      PM.add(createThumb2ITBlockPass());
   }
+  if (Subtarget.isThumb2())
+    PM.add(createThumb2ITBlockPass());
 
   return true;
 }

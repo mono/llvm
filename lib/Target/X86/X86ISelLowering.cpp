@@ -347,6 +347,12 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
 
   if (!Subtarget->hasSSE2())
     setOperationAction(ISD::MEMBARRIER    , MVT::Other, Expand);
+  // On X86 and X86-64, atomic operations are lowered to locked instructions.
+  // Locked instructions, in turn, have implicit fence semantics (all memory
+  // operations are flushed before issuing the locked instruction, and they
+  // are not buffered), so we can fold away the common pattern of
+  // fence-atomic-fence.
+  setShouldFoldAtomicFences(true);
 
   // Expand certain atomics
   setOperationAction(ISD::ATOMIC_CMP_SWAP, MVT::i8, Custom);
@@ -1012,7 +1018,6 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   setTargetDAGCombine(ISD::SRL);
   setTargetDAGCombine(ISD::OR);
   setTargetDAGCombine(ISD::STORE);
-  setTargetDAGCombine(ISD::MEMBARRIER);
   setTargetDAGCombine(ISD::ZERO_EXTEND);
   if (Subtarget->is64Bit())
     setTargetDAGCombine(ISD::MUL);
@@ -6189,15 +6194,21 @@ SDValue X86TargetLowering::LowerToBT(SDValue And, ISD::CondCode CC,
     Op1 = Op1.getOperand(0);
 
   SDValue LHS, RHS;
-  if (Op1.getOpcode() == ISD::SHL) {
-    if (ConstantSDNode *And10C = dyn_cast<ConstantSDNode>(Op1.getOperand(0)))
-      if (And10C->getZExtValue() == 1) {
-        LHS = Op0;
-        RHS = Op1.getOperand(1);
-      }
-  } else if (Op0.getOpcode() == ISD::SHL) {
+  if (Op1.getOpcode() == ISD::SHL)
+    std::swap(Op0, Op1);
+  if (Op0.getOpcode() == ISD::SHL) {
     if (ConstantSDNode *And00C = dyn_cast<ConstantSDNode>(Op0.getOperand(0)))
       if (And00C->getZExtValue() == 1) {
+        // If we looked past a truncate, check that it's only truncating away
+        // known zeros.
+        unsigned BitWidth = Op0.getValueSizeInBits();
+        unsigned AndBitWidth = And.getValueSizeInBits();
+        if (BitWidth > AndBitWidth) {
+          APInt Mask = APInt::getAllOnesValue(BitWidth), Zeros, Ones;
+          DAG.ComputeMaskedBits(Op0, Mask, Zeros, Ones);
+          if (Zeros.countLeadingOnes() < BitWidth - AndBitWidth)
+            return SDValue();
+        }
         LHS = Op1;
         RHS = Op0.getOperand(1);
       }
@@ -8485,41 +8496,21 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   MachineBasicBlock *sinkMBB = F->CreateMachineBasicBlock(LLVM_BB);
   unsigned Opc =
     X86::GetCondBranchFromCond((X86::CondCode)MI->getOperand(3).getImm());
-
   BuildMI(BB, DL, TII->get(Opc)).addMBB(sinkMBB);
   F->insert(It, copy0MBB);
   F->insert(It, sinkMBB);
-
   // Update machine-CFG edges by first adding all successors of the current
   // block to the new block which will contain the Phi node for the select.
   for (MachineBasicBlock::succ_iterator I = BB->succ_begin(),
          E = BB->succ_end(); I != E; ++I)
     sinkMBB->addSuccessor(*I);
-
   // Next, remove all successors of the current block, and add the true
   // and fallthrough blocks as its successors.
   while (!BB->succ_empty())
     BB->removeSuccessor(BB->succ_begin());
-
   // Add the true and fallthrough blocks as its successors.
   BB->addSuccessor(copy0MBB);
   BB->addSuccessor(sinkMBB);
-
-  // If the EFLAGS register isn't dead in the terminator, then claim that it's
-  // live into the sink and copy blocks.
-  const MachineFunction *MF = BB->getParent();
-  const TargetRegisterInfo *TRI = MF->getTarget().getRegisterInfo();
-  BitVector ReservedRegs = TRI->getReservedRegs(*MF);
-  const MachineInstr *Term = BB->getFirstTerminator();
-
-  for (unsigned I = 0, E = Term->getNumOperands(); I != E; ++I) {
-    const MachineOperand &MO = Term->getOperand(I);
-    if (!MO.isReg() || MO.isKill() || MO.isDead()) continue;
-    unsigned Reg = MO.getReg();
-    if (Reg != X86::EFLAGS) continue;
-    copy0MBB->addLiveIn(Reg);
-    sinkMBB->addLiveIn(Reg);
-  }
 
   //  copy0MBB:
   //   %FalseValue = ...
@@ -9860,61 +9851,6 @@ static SDValue PerformVZEXT_MOVLCombine(SDNode *N, SelectionDAG &DAG) {
   return SDValue();
 }
 
-// On X86 and X86-64, atomic operations are lowered to locked instructions.
-// Locked instructions, in turn, have implicit fence semantics (all memory
-// operations are flushed before issuing the locked instruction, and the
-// are not buffered), so we can fold away the common pattern of
-// fence-atomic-fence.
-static SDValue PerformMEMBARRIERCombine(SDNode* N, SelectionDAG &DAG) {
-  SDValue atomic = N->getOperand(0);
-  switch (atomic.getOpcode()) {
-    case ISD::ATOMIC_CMP_SWAP:
-    case ISD::ATOMIC_SWAP:
-    case ISD::ATOMIC_LOAD_ADD:
-    case ISD::ATOMIC_LOAD_SUB:
-    case ISD::ATOMIC_LOAD_AND:
-    case ISD::ATOMIC_LOAD_OR:
-    case ISD::ATOMIC_LOAD_XOR:
-    case ISD::ATOMIC_LOAD_NAND:
-    case ISD::ATOMIC_LOAD_MIN:
-    case ISD::ATOMIC_LOAD_MAX:
-    case ISD::ATOMIC_LOAD_UMIN:
-    case ISD::ATOMIC_LOAD_UMAX:
-      break;
-    default:
-      return SDValue();
-  }
-
-  SDValue fence = atomic.getOperand(0);
-  if (fence.getOpcode() != ISD::MEMBARRIER)
-    return SDValue();
-
-  switch (atomic.getOpcode()) {
-    case ISD::ATOMIC_CMP_SWAP:
-      return SDValue(DAG.UpdateNodeOperands(atomic.getNode(),
-                                    fence.getOperand(0),
-                                    atomic.getOperand(1), atomic.getOperand(2),
-                                    atomic.getOperand(3)), atomic.getResNo());
-    case ISD::ATOMIC_SWAP:
-    case ISD::ATOMIC_LOAD_ADD:
-    case ISD::ATOMIC_LOAD_SUB:
-    case ISD::ATOMIC_LOAD_AND:
-    case ISD::ATOMIC_LOAD_OR:
-    case ISD::ATOMIC_LOAD_XOR:
-    case ISD::ATOMIC_LOAD_NAND:
-    case ISD::ATOMIC_LOAD_MIN:
-    case ISD::ATOMIC_LOAD_MAX:
-    case ISD::ATOMIC_LOAD_UMIN:
-    case ISD::ATOMIC_LOAD_UMAX:
-      return SDValue(DAG.UpdateNodeOperands(atomic.getNode(),
-                                    fence.getOperand(0),
-                                    atomic.getOperand(1), atomic.getOperand(2)),
-                     atomic.getResNo());
-    default:
-      return SDValue();
-  }
-}
-
 static SDValue PerformZExtCombine(SDNode *N, SelectionDAG &DAG) {
   // (i32 zext (and (i8  x86isd::setcc_carry), 1)) ->
   //           (and (i32 x86isd::setcc_carry), 1)
@@ -9962,7 +9898,6 @@ SDValue X86TargetLowering::PerformDAGCombine(SDNode *N,
   case X86ISD::FAND:        return PerformFANDCombine(N, DAG);
   case X86ISD::BT:          return PerformBTCombine(N, DAG, DCI);
   case X86ISD::VZEXT_MOVL:  return PerformVZEXT_MOVLCombine(N, DAG);
-  case ISD::MEMBARRIER:     return PerformMEMBARRIERCombine(N, DAG);
   case ISD::ZERO_EXTEND:    return PerformZExtCombine(N, DAG);
   }
 
@@ -10305,6 +10240,13 @@ void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
       Result = DAG.getTargetConstant(CST->getSExtValue(), MVT::i64);
       break;
     }
+
+    // In any sort of PIC mode addresses need to be computed at runtime by
+    // adding in a register or some sort of table lookup.  These can't
+    // be used as immediates.
+    if (Subtarget->isPICStyleGOT() || Subtarget->isPICStyleStubPIC() ||
+        Subtarget->isPICStyleRIPRel())
+      return;
 
     // If we are in non-pic codegen mode, we allow the address of a global (with
     // an optional displacement) to be used with 'i'.

@@ -822,7 +822,8 @@ const SCEV *ScalarEvolution::getTruncateExpr(const SCEV *Op,
   // Fold if the operand is constant.
   if (const SCEVConstant *SC = dyn_cast<SCEVConstant>(Op))
     return getConstant(
-      cast<ConstantInt>(ConstantExpr::getTrunc(SC->getValue(), Ty)));
+      cast<ConstantInt>(ConstantExpr::getTrunc(SC->getValue(),
+                                               getEffectiveSCEVType(Ty))));
 
   // trunc(trunc(x)) --> trunc(x)
   if (const SCEVTruncateExpr *ST = dyn_cast<SCEVTruncateExpr>(Op))
@@ -862,12 +863,10 @@ const SCEV *ScalarEvolution::getZeroExtendExpr(const SCEV *Op,
   Ty = getEffectiveSCEVType(Ty);
 
   // Fold if the operand is constant.
-  if (const SCEVConstant *SC = dyn_cast<SCEVConstant>(Op)) {
-    const Type *IntTy = getEffectiveSCEVType(Ty);
-    Constant *C = ConstantExpr::getZExt(SC->getValue(), IntTy);
-    if (IntTy != Ty) C = ConstantExpr::getIntToPtr(C, Ty);
-    return getConstant(cast<ConstantInt>(C));
-  }
+  if (const SCEVConstant *SC = dyn_cast<SCEVConstant>(Op))
+    return getConstant(
+      cast<ConstantInt>(ConstantExpr::getZExt(SC->getValue(),
+                                              getEffectiveSCEVType(Ty))));
 
   // zext(zext(x)) --> zext(x)
   if (const SCEVZeroExtendExpr *SZ = dyn_cast<SCEVZeroExtendExpr>(Op))
@@ -997,12 +996,10 @@ const SCEV *ScalarEvolution::getSignExtendExpr(const SCEV *Op,
   Ty = getEffectiveSCEVType(Ty);
 
   // Fold if the operand is constant.
-  if (const SCEVConstant *SC = dyn_cast<SCEVConstant>(Op)) {
-    const Type *IntTy = getEffectiveSCEVType(Ty);
-    Constant *C = ConstantExpr::getSExt(SC->getValue(), IntTy);
-    if (IntTy != Ty) C = ConstantExpr::getIntToPtr(C, Ty);
-    return getConstant(cast<ConstantInt>(C));
-  }
+  if (const SCEVConstant *SC = dyn_cast<SCEVConstant>(Op))
+    return getConstant(
+      cast<ConstantInt>(ConstantExpr::getSExt(SC->getValue(),
+                                              getEffectiveSCEVType(Ty))));
 
   // sext(sext(x)) --> sext(x)
   if (const SCEVSignExtendExpr *SS = dyn_cast<SCEVSignExtendExpr>(Op))
@@ -4133,8 +4130,7 @@ static PHINode *getConstantEvolvingPHI(Value *V, const Loop *L) {
   // constant or derived from a PHI node themselves.
   PHINode *PHI = 0;
   for (unsigned Op = 0, e = I->getNumOperands(); Op != e; ++Op)
-    if (!(isa<Constant>(I->getOperand(Op)) ||
-          isa<GlobalValue>(I->getOperand(Op)))) {
+    if (!isa<Constant>(I->getOperand(Op))) {
       PHINode *P = getConstantEvolvingPHI(I->getOperand(Op), L);
       if (P == 0) return 0;  // Not evolving from PHI
       if (PHI == 0)
@@ -4155,11 +4151,9 @@ static Constant *EvaluateExpression(Value *V, Constant *PHIVal,
                                     const TargetData *TD) {
   if (isa<PHINode>(V)) return PHIVal;
   if (Constant *C = dyn_cast<Constant>(V)) return C;
-  if (GlobalValue *GV = dyn_cast<GlobalValue>(V)) return GV;
   Instruction *I = cast<Instruction>(V);
 
-  std::vector<Constant*> Operands;
-  Operands.resize(I->getNumOperands());
+  std::vector<Constant*> Operands(I->getNumOperands());
 
   for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i) {
     Operands[i] = EvaluateExpression(I->getOperand(i), PHIVal, TD);
@@ -4201,8 +4195,8 @@ ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
     return RetVal = 0;  // Must be a constant.
 
   Value *BEValue = PN->getIncomingValue(SecondIsBackedge);
-  PHINode *PN2 = getConstantEvolvingPHI(BEValue, L);
-  if (PN2 != PN)
+  if (getConstantEvolvingPHI(BEValue, L) != PN &&
+      !isa<Constant>(BEValue))
     return RetVal = 0;  // Not derived from same PHI.
 
   // Execute the loop symbolically to determine the exit value.
@@ -4249,8 +4243,9 @@ ScalarEvolution::ComputeBackedgeTakenCountExhaustively(const Loop *L,
   if (StartCST == 0) return getCouldNotCompute();  // Must be a constant.
 
   Value *BEValue = PN->getIncomingValue(SecondIsBackedge);
-  PHINode *PN2 = getConstantEvolvingPHI(BEValue, L);
-  if (PN2 != PN) return getCouldNotCompute();  // Not derived from same PHI.
+  if (getConstantEvolvingPHI(BEValue, L) != PN &&
+      !isa<Constant>(BEValue))
+    return getCouldNotCompute();  // Not derived from same PHI.
 
   // Okay, we find a PHI node that defines the trip count of this loop.  Execute
   // the loop symbolically to determine when the condition gets a value of
@@ -4693,23 +4688,6 @@ ScalarEvolution::HowFarToNonZero(const SCEV *V, const Loop *L) {
   return getCouldNotCompute();
 }
 
-/// getLoopPredecessor - If the given loop's header has exactly one unique
-/// predecessor outside the loop, return it. Otherwise return null.
-/// This is less strict that the loop "preheader" concept, which requires
-/// the predecessor to have only one single successor.
-///
-BasicBlock *ScalarEvolution::getLoopPredecessor(const Loop *L) {
-  BasicBlock *Header = L->getHeader();
-  BasicBlock *Pred = 0;
-  for (pred_iterator PI = pred_begin(Header), E = pred_end(Header);
-       PI != E; ++PI)
-    if (!L->contains(*PI)) {
-      if (Pred && Pred != *PI) return 0; // Multiple predecessors.
-      Pred = *PI;
-    }
-  return Pred;
-}
-
 /// getPredecessorWithUniqueSuccessorForBB - Return a predecessor of BB
 /// (which may not be an immediate predecessor) which has exactly one
 /// successor from which BB is reachable, or null if no such block is
@@ -4727,7 +4705,7 @@ ScalarEvolution::getPredecessorWithUniqueSuccessorForBB(BasicBlock *BB) {
   // If the header has a unique predecessor outside the loop, it must be
   // a block that has exactly one successor that can reach the loop.
   if (Loop *L = LI->getLoopFor(BB))
-    return std::make_pair(getLoopPredecessor(L), L->getHeader());
+    return std::make_pair(L->getLoopPredecessor(), L->getHeader());
 
   return std::pair<BasicBlock *, BasicBlock *>();
 }
@@ -5178,7 +5156,7 @@ ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
   // as there are predecessors that can be found that have unique successors
   // leading to the original header.
   for (std::pair<BasicBlock *, BasicBlock *>
-         Pair(getLoopPredecessor(L), L->getHeader());
+         Pair(L->getLoopPredecessor(), L->getHeader());
        Pair.first;
        Pair = getPredecessorWithUniqueSuccessorForBB(Pair.first)) {
 

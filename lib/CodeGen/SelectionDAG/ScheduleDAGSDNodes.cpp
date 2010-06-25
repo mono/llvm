@@ -110,17 +110,42 @@ static void CheckForPhysRegDependency(SDNode *Def, SDNode *User, unsigned Op,
 static void AddFlags(SDNode *N, SDValue Flag, bool AddFlag,
                      SelectionDAG *DAG) {
   SmallVector<EVT, 4> VTs;
-  for (unsigned i = 0, e = N->getNumValues(); i != e; ++i)
-    VTs.push_back(N->getValueType(i));
+  SDNode *FlagDestNode = Flag.getNode();
+
+  // Don't add a flag from a node to itself.
+  if (FlagDestNode == N) return;
+
+  // Don't add a flag to something which already has a flag.
+  if (N->getValueType(N->getNumValues() - 1) == MVT::Flag) return;
+
+  for (unsigned I = 0, E = N->getNumValues(); I != E; ++I)
+    VTs.push_back(N->getValueType(I));
+
   if (AddFlag)
     VTs.push_back(MVT::Flag);
+
   SmallVector<SDValue, 4> Ops;
-  for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i)
-    Ops.push_back(N->getOperand(i));
-  if (Flag.getNode())
+  for (unsigned I = 0, E = N->getNumOperands(); I != E; ++I)
+    Ops.push_back(N->getOperand(I));
+
+  if (FlagDestNode)
     Ops.push_back(Flag);
+
   SDVTList VTList = DAG->getVTList(&VTs[0], VTs.size());
+  MachineSDNode::mmo_iterator Begin = 0, End = 0;
+  MachineSDNode *MN = dyn_cast<MachineSDNode>(N);
+
+  // Store memory references.
+  if (MN) {
+    Begin = MN->memoperands_begin();
+    End = MN->memoperands_end();
+  }
+
   DAG->MorphNodeTo(N, N->getOpcode(), VTList, &Ops[0], Ops.size());
+
+  // Reset the memory references
+  if (MN)
+    MN->setMemRefs(Begin, End);
 }
 
 /// ClusterNeighboringLoads - Force nearby loads together by "flagging" them.
@@ -143,7 +168,6 @@ void ScheduleDAGSDNodes::ClusterNeighboringLoads(SDNode *Node) {
   DenseMap<long long, SDNode*> O2SMap;  // Map from offset to SDNode.
   bool Cluster = false;
   SDNode *Base = Node;
-  int64_t BaseOffset;
   for (SDNode::use_iterator I = Chain->use_begin(), E = Chain->use_end();
        I != E; ++I) {
     SDNode *User = *I;
@@ -159,12 +183,8 @@ void ScheduleDAGSDNodes::ClusterNeighboringLoads(SDNode *Node) {
       Offsets.push_back(Offset1);
     O2SMap.insert(std::make_pair(Offset2, User));
     Offsets.push_back(Offset2);
-    if (Offset2 < Offset1) {
+    if (Offset2 < Offset1)
       Base = User;
-      BaseOffset = Offset2;
-    } else {
-      BaseOffset = Offset1;
-    }
     Cluster = true;
   }
 
@@ -195,14 +215,18 @@ void ScheduleDAGSDNodes::ClusterNeighboringLoads(SDNode *Node) {
   // Cluster loads by adding MVT::Flag outputs and inputs. This also
   // ensure they are scheduled in order of increasing addresses.
   SDNode *Lead = Loads[0];
-  AddFlags(Lead, SDValue(0,0), true, DAG);
-  SDValue InFlag = SDValue(Lead, Lead->getNumValues()-1);
-  for (unsigned i = 1, e = Loads.size(); i != e; ++i) {
-    bool OutFlag = i < e-1;
-    SDNode *Load = Loads[i];
+  AddFlags(Lead, SDValue(0, 0), true, DAG);
+
+  SDValue InFlag = SDValue(Lead, Lead->getNumValues() - 1);
+  for (unsigned I = 1, E = Loads.size(); I != E; ++I) {
+    bool OutFlag = I < E - 1;
+    SDNode *Load = Loads[I];
+
     AddFlags(Load, InFlag, OutFlag, DAG);
+
     if (OutFlag)
-      InFlag = SDValue(Load, Load->getNumValues()-1);
+      InFlag = SDValue(Load, Load->getNumValues() - 1);
+
     ++LoadsClustered;
   }
 }
@@ -596,7 +620,6 @@ MachineBasicBlock *ScheduleDAGSDNodes::EmitSchedule() {
     SDDbgInfo::DbgIterator DE = DAG->DbgEnd();
     // Now emit the rest according to source order.
     unsigned LastOrder = 0;
-    MachineInstr *LastMI = 0;
     for (unsigned i = 0, e = Orders.size(); i != e && DI != DE; ++i) {
       unsigned Order = Orders[i].first;
       MachineInstr *MI = Orders[i].second;
@@ -628,7 +651,6 @@ MachineBasicBlock *ScheduleDAGSDNodes::EmitSchedule() {
         }
       }
       LastOrder = Order;
-      LastMI = MI;
     }
     // Add trailing DbgValue's before the terminator. FIXME: May want to add
     // some of them before one or more conditional branches?
