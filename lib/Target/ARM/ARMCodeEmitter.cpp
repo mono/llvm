@@ -139,7 +139,10 @@ namespace {
 
     void emitMiscInstruction(const MachineInstr &MI);
 
-    void emitNEON1RegModImm(const MachineInstr &MI);
+    void emitNEONGetLaneInstruction(const MachineInstr &MI);
+    void emitNEON1RegModImmInstruction(const MachineInstr &MI);
+    void emitNEON2RegInstruction(const MachineInstr &MI);
+    void emitNEON3RegInstruction(const MachineInstr &MI);
 
     /// getMachineOpValue - Return binary encoding of operand. If the machine
     /// operand requires relocation, record the relocation and return zero.
@@ -411,8 +414,17 @@ void ARMCodeEmitter::emitInstruction(const MachineInstr &MI) {
     emitMiscInstruction(MI);
     break;
   // NEON instructions.
+  case ARMII::NGetLnFrm:
+    emitNEONGetLaneInstruction(MI);
+    break;
   case ARMII::N1RegModImmFrm:
-    emitNEON1RegModImm(MI);
+    emitNEON1RegModImmInstruction(MI);
+    break;
+  case ARMII::N2RegFrm:
+    emitNEON2RegInstruction(MI);
+    break;
+  case ARMII::N3RegFrm:
+    emitNEON3RegInstruction(MI);
     break;
   }
   MCE.processDebugLoc(MI.getDebugLoc(), false);
@@ -1555,7 +1567,54 @@ static unsigned encodeNEONRd(const MachineInstr &MI, unsigned OpIdx) {
   return Binary;
 }
 
-void ARMCodeEmitter::emitNEON1RegModImm(const MachineInstr &MI) {
+static unsigned encodeNEONRn(const MachineInstr &MI, unsigned OpIdx) {
+  unsigned RegN = MI.getOperand(OpIdx).getReg();
+  unsigned Binary = 0;
+  RegN = ARMRegisterInfo::getRegisterNumbering(RegN);
+  Binary |= (RegN & 0xf) << ARMII::RegRnShift;
+  Binary |= ((RegN >> 4) & 1) << ARMII::N_BitShift;
+  return Binary;
+}
+
+static unsigned encodeNEONRm(const MachineInstr &MI, unsigned OpIdx) {
+  unsigned RegM = MI.getOperand(OpIdx).getReg();
+  unsigned Binary = 0;
+  RegM = ARMRegisterInfo::getRegisterNumbering(RegM);
+  Binary |= (RegM & 0xf);
+  Binary |= ((RegM >> 4) & 1) << ARMII::M_BitShift;
+  return Binary;
+}
+
+void ARMCodeEmitter::emitNEONGetLaneInstruction(const MachineInstr &MI) {
+  unsigned Binary = getBinaryCodeForInstr(MI);
+
+  // Set the conditional execution predicate
+  Binary |= II->getPredicate(&MI) << ARMII::CondShift;
+
+  unsigned RegT = MI.getOperand(0).getReg();
+  RegT = ARMRegisterInfo::getRegisterNumbering(RegT);
+  Binary |= (RegT << ARMII::RegRdShift);
+  Binary |= encodeNEONRn(MI, 1);
+
+  unsigned LaneShift;
+  if ((Binary & (1 << 22)) != 0)
+    LaneShift = 0; // 8-bit elements
+  else if ((Binary & (1 << 5)) != 0)
+    LaneShift = 1; // 16-bit elements
+  else
+    LaneShift = 2; // 32-bit elements
+
+  unsigned Lane = MI.getOperand(2).getImm() << LaneShift;
+  unsigned Opc1 = Lane >> 2;
+  unsigned Opc2 = Lane & 3;
+  assert((Opc1 & 3) == 0 && "out-of-range lane number operand");
+  Binary |= (Opc1 << 21);
+  Binary |= (Opc2 << 5);
+
+  emitWordLE(Binary);
+}
+
+void ARMCodeEmitter::emitNEON1RegModImmInstruction(const MachineInstr &MI) {
   unsigned Binary = getBinaryCodeForInstr(MI);
   // Destination register is encoded in Dd.
   Binary |= encodeNEONRd(MI, 0);
@@ -1571,6 +1630,35 @@ void ARMCodeEmitter::emitNEON1RegModImm(const MachineInstr &MI) {
   Binary |= (Imm3 << 16);
   unsigned Imm4 = Imm & 0xf;
   Binary |= Imm4;
+  emitWordLE(Binary);
+}
+
+void ARMCodeEmitter::emitNEON2RegInstruction(const MachineInstr &MI) {
+  const TargetInstrDesc &TID = MI.getDesc();
+  unsigned Binary = getBinaryCodeForInstr(MI);
+  // Destination register is encoded in Dd; source register in Dm.
+  unsigned OpIdx = 0;
+  Binary |= encodeNEONRd(MI, OpIdx++);
+  if (TID.getOperandConstraint(OpIdx, TOI::TIED_TO) != -1)
+    ++OpIdx;
+  Binary |= encodeNEONRm(MI, OpIdx);
+  // FIXME: This does not handle VDUPfdf or VDUPfqf.
+  emitWordLE(Binary);
+}
+
+void ARMCodeEmitter::emitNEON3RegInstruction(const MachineInstr &MI) {
+  const TargetInstrDesc &TID = MI.getDesc();
+  unsigned Binary = getBinaryCodeForInstr(MI);
+  // Destination register is encoded in Dd; source registers in Dn and Dm.
+  unsigned OpIdx = 0;
+  Binary |= encodeNEONRd(MI, OpIdx++);
+  if (TID.getOperandConstraint(OpIdx, TOI::TIED_TO) != -1)
+    ++OpIdx;
+  Binary |= encodeNEONRn(MI, OpIdx++);
+  if (TID.getOperandConstraint(OpIdx, TOI::TIED_TO) != -1)
+    ++OpIdx;
+  Binary |= encodeNEONRm(MI, OpIdx);
+  // FIXME: This does not handle VMOVDneon or VMOVQ.
   emitWordLE(Binary);
 }
 

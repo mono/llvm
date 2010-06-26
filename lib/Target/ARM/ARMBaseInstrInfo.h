@@ -116,23 +116,25 @@ namespace ARMII {
     // Thumb format
     ThumbFrm      = 24 << FormShift,
 
+    // Miscelleaneous format
+    MiscFrm       = 25 << FormShift,
+
     // NEON formats
-    NEONFrm       = 25 << FormShift,
-    NEONGetLnFrm  = 26 << FormShift,
-    NEONSetLnFrm  = 27 << FormShift,
-    NEONDupFrm    = 28 << FormShift,
-    NLdStFrm      = 31 << FormShift,
-    N1RegModImmFrm= 32 << FormShift,
-    N2RegFrm      = 33 << FormShift,
-    NVCVTFrm      = 34 << FormShift,
-    NVDupLnFrm    = 35 << FormShift,
-    N2RegVShLFrm  = 36 << FormShift,
-    N2RegVShRFrm  = 37 << FormShift,
-    N3RegFrm      = 38 << FormShift,
-    N3RegVShFrm   = 39 << FormShift,
-    NVExtFrm      = 40 << FormShift,
-    NVMulSLFrm    = 41 << FormShift,
-    NVTBLFrm      = 42 << FormShift,
+    NGetLnFrm     = 26 << FormShift,
+    NSetLnFrm     = 27 << FormShift,
+    NDupFrm       = 28 << FormShift,
+    NLdStFrm      = 29 << FormShift,
+    N1RegModImmFrm= 30 << FormShift,
+    N2RegFrm      = 31 << FormShift,
+    NVCVTFrm      = 32 << FormShift,
+    NVDupLnFrm    = 33 << FormShift,
+    N2RegVShLFrm  = 34 << FormShift,
+    N2RegVShRFrm  = 35 << FormShift,
+    N3RegFrm      = 36 << FormShift,
+    N3RegVShFrm   = 37 << FormShift,
+    NVExtFrm      = 38 << FormShift,
+    NVMulSLFrm    = 39 << FormShift,
+    NVTBLFrm      = 40 << FormShift,
 
     //===------------------------------------------------------------------===//
     // Misc flags.
@@ -343,6 +345,17 @@ public:
   virtual bool isSchedulingBoundary(const MachineInstr *MI,
                                     const MachineBasicBlock *MBB,
                                     const MachineFunction &MF) const;
+
+  virtual bool isProfitableToIfCvt(MachineBasicBlock &MBB,
+                                   unsigned NumInstrs) const;
+
+  virtual bool isProfitableToIfCvt(MachineBasicBlock &TMBB,unsigned NumT,
+                                   MachineBasicBlock &FMBB,unsigned NumF) const;
+
+  virtual bool isProfitableToDupForIfCvt(MachineBasicBlock &MBB,
+                                         unsigned NumInstrs) const {
+    return NumInstrs && NumInstrs == 1;
+  }
 };
 
 static inline

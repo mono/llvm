@@ -2839,15 +2839,9 @@ static bool DisassembleNVTBLFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
   return true;
 }
 
-static bool DisassembleNEONFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
-    unsigned short NumOps, unsigned &NumOpsAdded, BO) {
-  assert(0 && "Unreachable code!");
-  return false;
-}
-
 // Vector Get Lane (move scalar to ARM core register) Instructions.
 // VGETLNi32, VGETLNs16, VGETLNs8, VGETLNu16, VGETLNu8: Rt Dn index
-static bool DisassembleNEONGetLnFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
+static bool DisassembleNGetLnFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
   const TargetInstrDesc &TID = ARMInsts[Opcode];
@@ -2881,7 +2875,7 @@ static bool DisassembleNEONGetLnFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
 
 // Vector Set Lane (move ARM core register to scalar) Instructions.
 // VSETLNi16, VSETLNi32, VSETLNi8: Dd Dd (TIED_TO) Rt index
-static bool DisassembleNEONSetLnFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
+static bool DisassembleNSetLnFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
   const TargetInstrDesc &TID = ARMInsts[Opcode];
@@ -2920,7 +2914,7 @@ static bool DisassembleNEONSetLnFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
 
 // Vector Duplicate Instructions (from ARM core register to all elements).
 // VDUP8d, VDUP16d, VDUP32d, VDUP8q, VDUP16q, VDUP32q: Qd/Dd Rt
-static bool DisassembleNEONDupFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
+static bool DisassembleNDupFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
   const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
@@ -3060,13 +3054,6 @@ static bool DisassembleMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
   return false;
 }
 
-static bool DisassembleThumbMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
-    unsigned short NumOps, unsigned &NumOpsAdded, BO) {
-
-  assert(0 && "Unexpected thumb misc. instruction!");
-  return false;
-}
-
 /// FuncPtrs - FuncPtrs maps ARMFormat to its corresponding DisassembleFP.
 /// We divide the disassembly task into different categories, with each one
 /// corresponding to a specific instruction encoding format.  There could be
@@ -3098,12 +3085,10 @@ static const DisassembleFP FuncPtrs[] = {
   &DisassembleVFPLdStMulFrm,
   &DisassembleVFPMiscFrm,
   &DisassembleThumbFrm,
-  &DisassembleNEONFrm,
-  &DisassembleNEONGetLnFrm,
-  &DisassembleNEONSetLnFrm,
-  &DisassembleNEONDupFrm,
   &DisassembleMiscFrm,
-  &DisassembleThumbMiscFrm,
+  &DisassembleNGetLnFrm,
+  &DisassembleNSetLnFrm,
+  &DisassembleNDupFrm,
 
   // VLD and VST (including one lane) Instructions.
   &DisassembleNLdSt,

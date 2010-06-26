@@ -683,19 +683,6 @@ public:
     return JumpBufAlignment;
   }
 
-  /// getIfCvtBlockLimit - returns the target specific if-conversion block size
-  /// limit. Any block whose size is greater should not be predicated.
-  unsigned getIfCvtBlockSizeLimit() const {
-    return IfCvtBlockSizeLimit;
-  }
-
-  /// getIfCvtDupBlockLimit - returns the target specific size limit for a
-  /// block to be considered for duplication. Any block whose size is greater
-  /// should not be duplicated to facilitate its predication.
-  unsigned getIfCvtDupBlockSizeLimit() const {
-    return IfCvtDupBlockSizeLimit;
-  }
-
   /// getPrefLoopAlignment - return the preferred loop alignment.
   ///
   unsigned getPrefLoopAlignment() const {
@@ -1078,19 +1065,6 @@ protected:
     JumpBufAlignment = Align;
   }
 
-  /// setIfCvtBlockSizeLimit - Set the target's if-conversion block size
-  /// limit (in number of instructions); default is 2.
-  void setIfCvtBlockSizeLimit(unsigned Limit) {
-    IfCvtBlockSizeLimit = Limit;
-  }
-
-  /// setIfCvtDupBlockSizeLimit - Set the target's block size limit (in number
-  /// of instructions) to be considered for code duplication during
-  /// if-conversion; default is 2.
-  void setIfCvtDupBlockSizeLimit(unsigned Limit) {
-    IfCvtDupBlockSizeLimit = Limit;
-  }
-
   /// setPrefLoopAlignment - Set the target's preferred loop alignment. Default
   /// alignment is zero, it means the target does not care about loop alignment.
   void setPrefLoopAlignment(unsigned Align) {
@@ -1310,11 +1284,9 @@ public:
   /// type to use for the specific AsmOperandInfo, setting
   /// OpInfo.ConstraintCode and OpInfo.ConstraintType.  If the actual operand
   /// being passed in is available, it can be passed in as Op, otherwise an
-  /// empty SDValue can be passed. If hasMemory is true it means one of the asm
-  /// constraint of the inline asm instruction being processed is 'm'.
+  /// empty SDValue can be passed. 
   virtual void ComputeConstraintToUse(AsmOperandInfo &OpInfo,
                                       SDValue Op,
-                                      bool hasMemory,
                                       SelectionDAG *DAG = 0) const;
 
   /// getConstraintType - Given a constraint, return the type of constraint it
@@ -1349,11 +1321,8 @@ public:
   virtual const char *LowerXConstraint(EVT ConstraintVT) const;
 
   /// LowerAsmOperandForConstraint - Lower the specified operand into the Ops
-  /// vector.  If it is invalid, don't add anything to Ops. If hasMemory is true
-  /// it means one of the asm constraint of the inline asm instruction being
-  /// processed is 'm'.
+  /// vector.  If it is invalid, don't add anything to Ops.
   virtual void LowerAsmOperandForConstraint(SDValue Op, char ConstraintLetter,
-                                            bool hasMemory,
                                             std::vector<SDValue> &Ops,
                                             SelectionDAG &DAG) const;
 
@@ -1542,14 +1511,6 @@ private:
   /// JumpBufAlignment - The alignment, in bytes, of the target's jmp_buf
   /// buffers
   unsigned JumpBufAlignment;
-
-  /// IfCvtBlockSizeLimit - The maximum allowed size for a block to be
-  /// if-converted.
-  unsigned IfCvtBlockSizeLimit;
-
-  /// IfCvtDupBlockSizeLimit - The maximum allowed size for a block to be
-  /// duplicated during if-conversion.
-  unsigned IfCvtDupBlockSizeLimit;
 
   /// PrefLoopAlignment - The perferred loop alignment.
   ///

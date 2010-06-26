@@ -8496,21 +8496,41 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   MachineBasicBlock *sinkMBB = F->CreateMachineBasicBlock(LLVM_BB);
   unsigned Opc =
     X86::GetCondBranchFromCond((X86::CondCode)MI->getOperand(3).getImm());
+
   BuildMI(BB, DL, TII->get(Opc)).addMBB(sinkMBB);
   F->insert(It, copy0MBB);
   F->insert(It, sinkMBB);
+
   // Update machine-CFG edges by first adding all successors of the current
   // block to the new block which will contain the Phi node for the select.
   for (MachineBasicBlock::succ_iterator I = BB->succ_begin(),
          E = BB->succ_end(); I != E; ++I)
     sinkMBB->addSuccessor(*I);
+
   // Next, remove all successors of the current block, and add the true
   // and fallthrough blocks as its successors.
   while (!BB->succ_empty())
     BB->removeSuccessor(BB->succ_begin());
+
   // Add the true and fallthrough blocks as its successors.
   BB->addSuccessor(copy0MBB);
   BB->addSuccessor(sinkMBB);
+
+  // If the EFLAGS register isn't dead in the terminator, then claim that it's
+  // live into the sink and copy blocks.
+  const MachineFunction *MF = BB->getParent();
+  const TargetRegisterInfo *TRI = MF->getTarget().getRegisterInfo();
+  BitVector ReservedRegs = TRI->getReservedRegs(*MF);
+  const MachineInstr *Term = BB->getFirstTerminator();
+
+  for (unsigned I = 0, E = Term->getNumOperands(); I != E; ++I) {
+    const MachineOperand &MO = Term->getOperand(I);
+    if (!MO.isReg() || MO.isKill() || MO.isDead()) continue;
+    unsigned Reg = MO.getReg();
+    if (Reg != X86::EFLAGS) continue;
+    copy0MBB->addLiveIn(Reg);
+    sinkMBB->addLiveIn(Reg);
+  }
 
   //  copy0MBB:
   //   %FalseValue = ...
@@ -10021,7 +10041,7 @@ static bool LowerToBSwap(CallInst *CI) {
 
   // Verify this is a simple bswap.
   if (CI->getNumOperands() != 2 ||
-      CI->getType() != CI->getOperand(1)->getType() ||
+      CI->getType() != CI->getArgOperand(0)->getType() ||
       !CI->getType()->isIntegerTy())
     return false;
 
@@ -10034,7 +10054,7 @@ static bool LowerToBSwap(CallInst *CI) {
   Module *M = CI->getParent()->getParent()->getParent();
   Constant *Int = Intrinsic::getDeclaration(M, Intrinsic::bswap, Tys, 1);
 
-  Value *Op = CI->getOperand(1);
+  Value *Op = CI->getArgOperand(0);
   Op = CallInst::Create(Int, Op, CI->getName(), CI);
 
   CI->replaceAllUsesWith(Op);
@@ -10167,7 +10187,6 @@ LowerXConstraint(EVT ConstraintVT) const {
 /// vector.  If it is invalid, don't add anything to Ops.
 void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
                                                      char Constraint,
-                                                     bool hasMemory,
                                                      std::vector<SDValue>&Ops,
                                                      SelectionDAG &DAG) const {
   SDValue Result(0, 0);
@@ -10283,11 +10302,7 @@ void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
                                                         getTargetMachine())))
       return;
 
-    if (hasMemory)
-      Op = LowerGlobalAddress(GV, Op.getDebugLoc(), Offset, DAG);
-    else
-      Op = DAG.getTargetGlobalAddress(GV, GA->getValueType(0), Offset);
-    Result = Op;
+    Result = DAG.getTargetGlobalAddress(GV, GA->getValueType(0), Offset);
     break;
   }
   }
@@ -10296,8 +10311,7 @@ void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
     Ops.push_back(Result);
     return;
   }
-  return TargetLowering::LowerAsmOperandForConstraint(Op, Constraint, hasMemory,
-                                                      Ops, DAG);
+  return TargetLowering::LowerAsmOperandForConstraint(Op, Constraint, Ops, DAG);
 }
 
 std::vector<unsigned> X86TargetLowering::
