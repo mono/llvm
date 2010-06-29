@@ -210,7 +210,7 @@ class DwarfDebug {
   DenseMap<DIE *, const MDNode *> ContainingTypeMap;
 
   typedef SmallVector<DbgScope *, 2> ScopeVector;
-  SmallPtrSet<const MachineInstr *, 8> InsnsBeginScopeSet;
+
   SmallPtrSet<const MachineInstr *, 8> InsnsEndScopeSet;
 
   /// InlineInfo - Keep track of inlined functions and their location.  This
@@ -218,6 +218,10 @@ class DwarfDebug {
   typedef std::pair<const MCSymbol *, DIE *> InlineInfoLabels;
   DenseMap<const MDNode *, SmallVector<InlineInfoLabels, 4> > InlineInfo;
   SmallVector<const MDNode *, 4> InlinedSPNodes;
+
+  // ProcessedSPNodes - This is a collection of subprogram MDNodes that
+  // are processed to create DIEs.
+  SmallPtrSet<const MDNode *, 16> ProcessedSPNodes;
 
   /// LabelsBeforeInsn - Maps instruction with label emitted before 
   /// instruction.

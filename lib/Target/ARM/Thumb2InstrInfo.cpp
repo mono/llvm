@@ -29,12 +29,14 @@
 using namespace llvm;
 
 static cl::opt<unsigned>
-IfCvtLimit("thumb2-ifcvt-limit (default 3)",
-           cl::Hidden, cl::init(3));
+IfCvtLimit("thumb2-ifcvt-limit", cl::Hidden,
+           cl::desc("Thumb2 if-conversion limit (default 3)"),
+           cl::init(3));
 
 static cl::opt<unsigned>
-IfCvtDiamondLimit("thumb2-ifcvt-diamond-limit (default 3)",
-                  cl::Hidden, cl::init(3));
+IfCvtDiamondLimit("thumb2-ifcvt-diamond-limit", cl::Hidden,
+                  cl::desc("Thumb2 diamond if-conversion limit (default 3)"),
+                  cl::init(3));
 
 Thumb2InstrInfo::Thumb2InstrInfo(const ARMSubtarget &STI)
   : ARMBaseInstrInfo(STI), RI(*this, STI) {
@@ -222,14 +224,14 @@ void llvm::emitT2RegPlusImmediate(MachineBasicBlock &MBB,
       // Use a movw to materialize the 16-bit constant.
       BuildMI(MBB, MBBI, dl, TII.get(ARM::t2MOVi16), DestReg)
         .addImm(NumBytes)
-        .addImm((unsigned)Pred).addReg(PredReg).addReg(0);
+        .addImm((unsigned)Pred).addReg(PredReg);
       Fits = true;
     } else if ((NumBytes & 0xffff) == 0) {
       // Use a movt to materialize the 32-bit constant.
       BuildMI(MBB, MBBI, dl, TII.get(ARM::t2MOVTi16), DestReg)
         .addReg(DestReg)
         .addImm(NumBytes >> 16)
-        .addImm((unsigned)Pred).addReg(PredReg).addReg(0);
+        .addImm((unsigned)Pred).addReg(PredReg);
       Fits = true;
     }
 

@@ -1691,6 +1691,7 @@ DIE *DwarfDebug::constructScopeDIE(DbgScope *Scope) {
   if (Scope->getInlinedAt())
     ScopeDIE = constructInlinedScopeDIE(Scope);
   else if (DS.isSubprogram()) {
+    ProcessedSPNodes.insert(DS);
     if (Scope->isAbstractScope())
       ScopeDIE = getCompileUnit(DS)->getDIE(DS);
     else
@@ -1791,7 +1792,7 @@ void DwarfDebug::constructCompileUnit(const MDNode *N) {
   addString(Die, dwarf::DW_AT_name, dwarf::DW_FORM_string, FN);
   // Use DW_AT_entry_pc instead of DW_AT_low_pc/DW_AT_high_pc pair. This
   // simplifies debug range entries.
-  addUInt(Die, dwarf::DW_AT_entry_pc, dwarf::DW_FORM_data4, 0);
+  addUInt(Die, dwarf::DW_AT_entry_pc, dwarf::DW_FORM_addr, 0);
   // DW_AT_stmt_list is a offset of line number information for this
   // compile unit in debug_line section. It is always zero when only one
   // compile unit is emitted in one object file.
@@ -2005,6 +2006,40 @@ void DwarfDebug::beginModule(Module *M) {
 ///
 void DwarfDebug::endModule() {
   if (!FirstCU) return;
+  const Module *M = MMI->getModule();
+  if (NamedMDNode *AllSPs = M->getNamedMetadata("llvm.dbg.sp")) {
+    for (unsigned SI = 0, SE = AllSPs->getNumOperands(); SI != SE; ++SI) {
+      if (ProcessedSPNodes.count(AllSPs->getOperand(SI)) != 0) continue;
+      DISubprogram SP(AllSPs->getOperand(SI));
+      if (!SP.Verify()) continue;
+
+      // Collect info for variables that were optimized out.
+      StringRef FName = SP.getLinkageName();
+      if (FName.empty())
+        FName = SP.getName();
+      NamedMDNode *NMD = 
+        M->getNamedMetadata(Twine("llvm.dbg.lv.", getRealLinkageName(FName)));
+      if (!NMD) continue;
+      unsigned E = NMD->getNumOperands();
+      if (!E) continue;
+      DbgScope *Scope = new DbgScope(NULL, DIDescriptor(SP), NULL);
+      for (unsigned I = 0; I != E; ++I) {
+        DIVariable DV(NMD->getOperand(I));
+        if (!DV.Verify()) continue;
+        Scope->addVariable(new DbgVariable(DV));
+      }
+      
+      // Construct subprogram DIE and add variables DIEs.
+      constructSubprogramDIE(SP);
+      DIE *ScopeDIE = getCompileUnit(SP)->getDIE(SP);
+      const SmallVector<DbgVariable *, 8> &Variables = Scope->getVariables();
+      for (unsigned i = 0, N = Variables.size(); i < N; ++i) {
+        DIE *VariableDIE = constructVariableDIE(Variables[i], Scope);
+        if (VariableDIE)
+          ScopeDIE->addChild(VariableDIE);
+      }
+    }
+  }
 
   // Attach DW_AT_inline attribute with inlined subprogram DIEs.
   for (SmallPtrSet<DIE *, 4>::iterator AI = InlinedSubprogramDIEs.begin(),
@@ -2589,7 +2624,6 @@ void DwarfDebug::identifyScopeMarkers() {
            RE = Ranges.end(); RI != RE; ++RI) {
       assert(RI->first && "DbgRange does not have first instruction!");      
       assert(RI->second && "DbgRange does not have second instruction!");      
-      InsnsBeginScopeSet.insert(RI->first);
       InsnsEndScopeSet.insert(RI->second);
     }
   }
@@ -2753,7 +2787,6 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
   DbgVariableToDbgInstMap.clear();
   DbgVariableLabelsMap.clear();
   DeleteContainerSeconds(DbgScopeMap);
-  InsnsBeginScopeSet.clear();
   InsnsEndScopeSet.clear();
   ConcreteScopes.clear();
   DeleteContainerSeconds(AbstractScopes);

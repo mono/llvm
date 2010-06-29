@@ -1036,10 +1036,6 @@ bool IfConverter::IfConvertSimple(BBInfo &BBI, IfcvtKind Kind) {
     IterIfcvt = false;
   }
 
-  // RemoveExtraEdges won't work if the block has an unanalyzable branch,
-  // which is typically the case for IfConvertSimple, so explicitly remove
-  // CvtBBI as a successor.
-  BBI.BB->removeSuccessor(CvtBBI->BB);
   RemoveExtraEdges(BBI);
 
   // Update block info. BB can be iteratively if-converted.
@@ -1231,11 +1227,10 @@ bool IfConverter::IfConvertDiamond(BBInfo &BBI, IfcvtKind Kind,
     ++DI2;
   BBI1->NonPredSize -= NumDups1;
   BBI2->NonPredSize -= NumDups1;
-  
+
   // Skip past the dups on each side separately since there may be
   // differing dbg_value entries.
-  for (unsigned i = 0; i < NumDups1; ++i) {
-    ++DI1;
+  for (unsigned i = 0; i < NumDups1; ++DI1) {
     if (!DI1->isDebugValue())
       ++i;
   }
@@ -1288,7 +1283,18 @@ bool IfConverter::IfConvertDiamond(BBInfo &BBI, IfcvtKind Kind,
   // tail, add a unconditional branch to it.
   if (TailBB) {
     BBInfo TailBBI = BBAnalysis[TailBB->getNumber()];
-    if (TailBB->pred_size() == 1 && !TailBBI.HasFallThrough) {
+    bool CanMergeTail = !TailBBI.HasFallThrough;
+    // There may still be a fall-through edge from BBI1 or BBI2 to TailBB;
+    // check if there are any other predecessors besides those.
+    unsigned NumPreds = TailBB->pred_size();
+    if (NumPreds > 1)
+      CanMergeTail = false;
+    else if (NumPreds == 1 && CanMergeTail) {
+      MachineBasicBlock::pred_iterator PI = TailBB->pred_begin();
+      if (*PI != BBI1->BB && *PI != BBI2->BB)
+        CanMergeTail = false;
+    }
+    if (CanMergeTail) {
       MergeBlocks(BBI, TailBBI);
       TailBBI.IsDone = true;
     } else {

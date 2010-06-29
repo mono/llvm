@@ -24,6 +24,7 @@
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetAsmParser.h"
 using namespace llvm;
@@ -780,6 +781,10 @@ bool AsmParser::ParseStatement() {
       return ParseDirectiveDarwinDumpOrLoad(IDLoc, /*IsDump=*/true);
     if (IDVal == ".load")
       return ParseDirectiveDarwinDumpOrLoad(IDLoc, /*IsLoad=*/false);
+    if (IDVal == ".secure_log_unique")
+      return ParseDirectiveDarwinSecureLogUnique(IDLoc);
+    if (IDVal == ".secure_log_reset")
+      return ParseDirectiveDarwinSecureLogReset(IDLoc);
 
     // Look up the handler in the handler table, 
     bool(AsmParser::*Handler)(StringRef, SMLoc) = DirectiveMap[IDVal];
@@ -839,7 +844,6 @@ bool AsmParser::ParseAssignment(const StringRef &Name) {
   SMLoc EqualLoc = Lexer.getLoc();
 
   const MCExpr *Value;
-  SMLoc StartLoc = Lexer.getLoc();
   if (ParseExpression(Value))
     return true;
   
@@ -1111,7 +1115,6 @@ bool AsmParser::ParseDirectiveSpace() {
     return true;
 
   int64_t FillExpr = 0;
-  bool HasFillExpr = false;
   if (Lexer.isNot(AsmToken::EndOfStatement)) {
     if (Lexer.isNot(AsmToken::Comma))
       return TokError("unexpected token in '.space' directive");
@@ -1119,8 +1122,6 @@ bool AsmParser::ParseDirectiveSpace() {
     
     if (ParseAbsoluteExpression(FillExpr))
       return true;
-
-    HasFillExpr = true;
 
     if (Lexer.isNot(AsmToken::EndOfStatement))
       return TokError("unexpected token in '.space' directive");
@@ -1178,7 +1179,6 @@ bool AsmParser::ParseDirectiveFill() {
 ///  ::= .org expression [ , expression ]
 bool AsmParser::ParseDirectiveOrg() {
   const MCExpr *Offset;
-  SMLoc StartLoc = Lexer.getLoc();
   if (ParseExpression(Offset))
     return true;
 
@@ -1382,7 +1382,6 @@ bool AsmParser::ParseDirectiveDarwinSymbolDesc() {
     return TokError("unexpected token in '.desc' directive");
   Lex();
 
-  SMLoc DescLoc = Lexer.getLoc();
   int64_t DescValue;
   if (ParseAbsoluteExpression(DescValue))
     return true;
@@ -1668,7 +1667,6 @@ bool AsmParser::ParseDirectiveDarwinLsym() {
   Lex();
 
   const MCExpr *Value;
-  SMLoc StartLoc = Lexer.getLoc();
   if (ParseExpression(Value))
     return true;
 
@@ -1731,6 +1729,64 @@ bool AsmParser::ParseDirectiveDarwinDumpOrLoad(SMLoc IDLoc, bool IsDump) {
     Warning(IDLoc, "ignoring directive .dump for now");
   else
     Warning(IDLoc, "ignoring directive .load for now");
+
+  return false;
+}
+
+/// ParseDirectiveDarwinSecureLogUnique
+///  ::= .secure_log_unique "log message"
+bool AsmParser::ParseDirectiveDarwinSecureLogUnique(SMLoc IDLoc) {
+  std::string LogMessage;
+
+  if (Lexer.isNot(AsmToken::String))
+    LogMessage = "";
+  else{
+    LogMessage = getTok().getString();
+    Lex();
+  }
+
+  if (Lexer.isNot(AsmToken::EndOfStatement))
+    return TokError("unexpected token in '.secure_log_unique' directive");
+  
+  if (getContext().getSecureLogUsed() != false)
+    return Error(IDLoc, ".secure_log_unique specified multiple times");
+
+  char *SecureLogFile = getContext().getSecureLogFile();
+  if (SecureLogFile == NULL)
+    return Error(IDLoc, ".secure_log_unique used but AS_SECURE_LOG_FILE "
+                 "environment variable unset.");
+
+  raw_ostream *OS = getContext().getSecureLog();
+  if (OS == NULL) {
+    std::string Err;
+    OS = new raw_fd_ostream(SecureLogFile, Err, raw_fd_ostream::F_Append);
+    if (!Err.empty()) {
+       delete OS;
+       return Error(IDLoc, Twine("can't open secure log file: ") +
+                    SecureLogFile + " (" + Err + ")");
+    }
+    getContext().setSecureLog(OS);
+  }
+
+  int CurBuf = SrcMgr.FindBufferContainingLoc(IDLoc);
+  *OS << SrcMgr.getBufferInfo(CurBuf).Buffer->getBufferIdentifier() << ":"
+      << SrcMgr.FindLineNumber(IDLoc, CurBuf) << ":"
+      << LogMessage + "\n";
+
+  getContext().setSecureLogUsed(true);
+
+  return false;
+}
+
+/// ParseDirectiveDarwinSecureLogReset
+///  ::= .secure_log_reset
+bool AsmParser::ParseDirectiveDarwinSecureLogReset(SMLoc IDLoc) {
+  if (Lexer.isNot(AsmToken::EndOfStatement))
+    return TokError("unexpected token in '.secure_log_reset' directive");
+  
+  Lex();
+
+  getContext().setSecureLogUsed(false);
 
   return false;
 }

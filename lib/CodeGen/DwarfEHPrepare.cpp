@@ -153,7 +153,7 @@ namespace {
         Changed = true;
       }
 
-      return false;
+      return Changed;
     }
 
   public:
@@ -246,10 +246,10 @@ bool DwarfEHPrepare::CleanupSelectors() {
     if (!Sel || Sel->getParent()->getParent() != F) continue;
 
     // Index of the ".llvm.eh.catch.all.value" variable.
-    unsigned OpIdx = Sel->getNumOperands() - 1;
-    GlobalVariable *GV = dyn_cast<GlobalVariable>(Sel->getOperand(OpIdx));
+    unsigned OpIdx = Sel->getNumArgOperands() - 1;
+    GlobalVariable *GV = dyn_cast<GlobalVariable>(Sel->getArgOperand(OpIdx));
     if (GV != EHCatchAllValue) continue;
-    Sel->setOperand(OpIdx, EHCatchAllValue->getInitializer());
+    Sel->setArgOperand(OpIdx, EHCatchAllValue->getInitializer());
     Changed = true;
   }
 
@@ -383,24 +383,21 @@ bool DwarfEHPrepare::HandleURoRInvokes() {
            SI = SelsToConvert.begin(), SE = SelsToConvert.end();
          SI != SE; ++SI) {
       IntrinsicInst *II = *SI;
-      SmallVector<Value*, 8> Args;
 
       // Use the exception object pointer and the personality function
       // from the original selector.
       CallSite CS(II);
       IntrinsicInst::op_iterator I = CS.arg_begin();
-      Args.push_back(*I++); // Exception object pointer.
-      Args.push_back(*I++); // Personality function.
-
       IntrinsicInst::op_iterator E = CS.arg_end();
       IntrinsicInst::op_iterator B = prior(E);
 
       // Exclude last argument if it is an integer.
       if (isa<ConstantInt>(B)) E = B;
 
-      // Add in any filter IDs.
-      for (; I != E; ++I)
-        Args.push_back(*I);
+      // Add exception object pointer (front).
+      // Add personality function (next).
+      // Add in any filter IDs (rest).
+      SmallVector<Value*, 8> Args(I, E);
 
       Args.push_back(EHCatchAllValue->getInitializer()); // Catch-all indicator.
 

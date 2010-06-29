@@ -235,6 +235,9 @@ public:
 
   void setAlignment(unsigned Align);
 
+  Value *getValueOperand() { return getOperand(0); }
+  const Value *getValueOperand() const { return getOperand(0); }
+  
   Value *getPointerOperand() { return getOperand(1); }
   const Value *getPointerOperand() const { return getOperand(1); }
   static unsigned getPointerOperandIndex() { return 1U; }
@@ -940,8 +943,10 @@ public:
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
+  enum { ArgOffset = 1 }; ///< temporary, do not use for new code!
   unsigned getNumArgOperands() const { return getNumOperands() - 1; }
-  Value *getArgOperand(unsigned i) const { return getOperand(i + 1); }
+  Value *getArgOperand(unsigned i) const { return getOperand(i + ArgOffset); }
+  void setArgOperand(unsigned i, Value *v) { setOperand(i + ArgOffset, v); }
 
   /// getCallingConv/setCallingConv - Get or set the calling convention of this
   /// function call.
@@ -1034,17 +1039,17 @@ public:
   /// indirect function invocation.
   ///
   Function *getCalledFunction() const {
-    return dyn_cast<Function>(Op<0>());
+    return dyn_cast<Function>(Op<ArgOffset -1>());
   }
 
   /// getCalledValue - Get a pointer to the function that is invoked by this
   /// instruction.
-  const Value *getCalledValue() const { return Op<0>(); }
-        Value *getCalledValue()       { return Op<0>(); }
+  const Value *getCalledValue() const { return Op<ArgOffset -1>(); }
+        Value *getCalledValue()       { return Op<ArgOffset -1>(); }
 
   /// setCalledFunction - Set the function called.
   void setCalledFunction(Value* Fn) {
-    Op<0>() = Fn;
+    Op<ArgOffset -1>() = Fn;
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
@@ -1074,7 +1079,7 @@ CallInst::CallInst(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
                                    ->getElementType())->getReturnType(),
                 Instruction::Call,
                 OperandTraits<CallInst>::op_end(this) - (ArgEnd - ArgBegin + 1),
-                (unsigned)(ArgEnd - ArgBegin + 1), InsertAtEnd) {
+                unsigned(ArgEnd - ArgBegin + 1), InsertAtEnd) {
   init(Func, ArgBegin, ArgEnd, NameStr,
        typename std::iterator_traits<InputIterator>::iterator_category());
 }
@@ -2437,6 +2442,7 @@ public:
 
   unsigned getNumArgOperands() const { return getNumOperands() - 3; }
   Value *getArgOperand(unsigned i) const { return getOperand(i); }
+  void setArgOperand(unsigned i, Value *v) { setOperand(i, v); }
 
   /// getCallingConv/setCallingConv - Get or set the calling convention of this
   /// function call.

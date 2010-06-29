@@ -141,7 +141,6 @@ void Thumb2ITBlockPass::FindITBlockRanges(MachineBasicBlock &MBB,
                                        SmallVector<MachineInstr*,4> &FirstUses,
                                        SmallVector<MachineInstr*,4> &LastUses) {
   bool SeenUse = false;
-  MachineOperand *LastDef = 0;
   MachineOperand *LastUse = 0;
   MachineBasicBlock::iterator MBBI = MBB.begin(), E = MBB.end();
   while (MBBI != E) {
@@ -175,7 +174,6 @@ void Thumb2ITBlockPass::FindITBlockRanges(MachineBasicBlock &MBB,
         LastUses.push_back(LastUse->getParent());
         LastUse = 0;
       }
-      LastDef = Def;
       SeenUse = false;
     }
   }
@@ -373,7 +371,7 @@ bool Thumb2ITBlockPass::InsertITInstructions(MachineBasicBlock &MBB) {
         Mask |= (NCC & 1) << Pos;
         // Add implicit use of ITSTATE.
         NMI->addOperand(MachineOperand::CreateReg(ARM::ITSTATE, false/*ifDef*/,
-                                                true/*isImp*/, false/*isKill*/));
+                                               true/*isImp*/, false/*isKill*/));
         LastITMI = NMI;
       } else {
         if (NCC == ARMCC::AL &&
