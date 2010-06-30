@@ -37,3 +37,13 @@ void ARMElfTargetObjectFile::Initialize(MCContext &Ctx,
                                  SectionKind::getDataRel());
   }
 }
+
+unsigned ARMElfTargetObjectFile::getPersonalityEncoding() const {
+    return DW_EH_PE_indirect | DW_EH_PE_pcrel | DW_EH_PE_sdata4;
+}
+
+unsigned ARMElfTargetObjectFile::getLSDAEncoding() const {
+    return DW_EH_PE_pcrel | DW_EH_PE_sdata4;
+}
+
+

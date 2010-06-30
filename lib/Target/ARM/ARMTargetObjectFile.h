@@ -22,6 +22,10 @@ public:
   ARMElfTargetObjectFile() : TargetLoweringObjectFileELF() {}
 
   virtual void Initialize(MCContext &Ctx, const TargetMachine &TM);
+
+  unsigned getPersonalityEncoding() const;
+
+  unsigned getLSDAEncoding() const;
 };
 
 } // end namespace llvm
