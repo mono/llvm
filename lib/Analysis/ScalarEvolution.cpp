@@ -1552,9 +1552,11 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
                                              AddRec->op_end());
       AddRecOps[0] = getAddExpr(LIOps);
 
-      // It's tempting to propagate NUW/NSW flags here, but nuw/nsw addition
-      // is not associative so this isn't necessarily safe.
-      const SCEV *NewRec = getAddRecExpr(AddRecOps, AddRecLoop);
+      // Build the new addrec. Propagate the NUW and NSW flags if both the
+      // outer add and the inner addrec are guaranteed to have no overflow.
+      const SCEV *NewRec = getAddRecExpr(AddRecOps, AddRecLoop,
+                                         HasNUW && AddRec->hasNoUnsignedWrap(),
+                                         HasNSW && AddRec->hasNoSignedWrap());
 
       // If all of the other operands were loop invariant, we are done.
       if (Ops.size() == 1) return NewRec;
@@ -1754,11 +1756,11 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
       for (unsigned i = 0, e = AddRec->getNumOperands(); i != e; ++i)
         NewOps.push_back(getMulExpr(Scale, AddRec->getOperand(i)));
 
-      // It's tempting to propagate the NSW flag here, but nsw multiplication
-      // is not associative so this isn't necessarily safe.
+      // Build the new addrec. Propagate the NUW and NSW flags if both the
+      // outer mul and the inner addrec are guaranteed to have no overflow.
       const SCEV *NewRec = getAddRecExpr(NewOps, AddRec->getLoop(),
                                          HasNUW && AddRec->hasNoUnsignedWrap(),
-                                         /*HasNSW=*/false);
+                                         HasNSW && AddRec->hasNoSignedWrap());
 
       // If all of the other operands were loop invariant, we are done.
       if (Ops.size() == 1) return NewRec;
@@ -2758,15 +2760,49 @@ const SCEV *ScalarEvolution::createNodeForPHI(PHINode *PN) {
   return getUnknown(PN);
 }
 
+/// UseFlag - When creating an operator with operands L and R based on an
+/// LLVM IR instruction in basic block BB where the instruction has
+/// nsw, nuw, or inbounds, test whether the corresponding flag can be
+/// set for the resulting SCEV.
+static bool
+UseFlag(bool Flag, const SCEV *L, const SCEV *R, const Value *Inst) {
+  // If the flag is not set, don't use it. This is included here to reduce
+  // clutter in the callers.
+  if (!Flag)
+    return false;
+
+  // Determine the block which contains the instruction with the flag.
+  const Instruction *I = dyn_cast<Instruction>(Inst);
+  if (!I)
+    return false;
+  const BasicBlock *BB = I->getParent();
+
+  // Handle an easy case: test if exactly one of the operands is an addrec
+  // and that the instruction is trivially control-equivalent to the addrec's
+  // loop's header.
+  if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(L)) {
+    if (!isa<SCEVAddRecExpr>(R) &&
+        AR->getLoop()->getHeader() == BB)
+      return true;
+  } else if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(R)) {
+    if (AR->getLoop()->getHeader() == BB)
+      return true;
+  }
+
+  return false;
+}
+
 /// createNodeForGEP - Expand GEP instructions into add and multiply
 /// operations. This allows them to be analyzed by regular SCEV code.
 ///
 const SCEV *ScalarEvolution::createNodeForGEP(GEPOperator *GEP) {
 
-  // Don't transfer the inbounds flag from the GEP instruction to the
-  // Add expression, because the Instruction may be guarded by control
-  // flow and the no-overflow bits may not be valid for the expression in
-  // any context.
+  // Don't blindly transfer the inbounds flag from the GEP instruction to the
+  // Add expression, because the Instruction may be guarded by control flow
+  // and the no-overflow bits may not be valid for the expression in any
+  // context. However, in the special case where the GEP is in the loop header,
+  // we know it's trivially control-equivalent to any addrecs for that loop.
+  bool InBounds = GEP->isInBounds();
 
   const Type *IntPtrTy = getEffectiveSCEVType(GEP->getType());
   Value *Base = GEP->getOperand(0);
@@ -2783,23 +2819,49 @@ const SCEV *ScalarEvolution::createNodeForGEP(GEPOperator *GEP) {
     if (const StructType *STy = dyn_cast<StructType>(*GTI++)) {
       // For a struct, add the member offset.
       unsigned FieldNo = cast<ConstantInt>(Index)->getZExtValue();
-      TotalOffset = getAddExpr(TotalOffset,
-                               getOffsetOfExpr(STy, FieldNo),
-                               /*HasNUW=*/false, /*HasNSW=*/false);
+      const SCEV *FieldOffset = getOffsetOfExpr(STy, FieldNo);
+
+      // Test if the GEP has the inbounds keyword and is control-equivalent
+      // to the addrec.
+      bool HasNUW = UseFlag(InBounds, TotalOffset, FieldOffset, GEP);
+
+      // Add the field offset to the running total offset.
+      TotalOffset = getAddExpr(TotalOffset, FieldOffset,
+                               HasNUW, /*HasNSW=*/false);
     } else {
       // For an array, add the element offset, explicitly scaled.
-      const SCEV *LocalOffset = getSCEV(Index);
+      const SCEV *ElementSize = getSizeOfExpr(*GTI);
+      const SCEV *IndexS = getSCEV(Index);
       // Getelementptr indices are signed.
-      LocalOffset = getTruncateOrSignExtend(LocalOffset, IntPtrTy);
-      // Lower "inbounds" GEPs to NSW arithmetic.
-      LocalOffset = getMulExpr(LocalOffset, getSizeOfExpr(*GTI),
-                               /*HasNUW=*/false, /*HasNSW=*/false);
+      IndexS = getTruncateOrSignExtend(IndexS, IntPtrTy);
+
+      // Test if the GEP has the inbounds keyword and is control-equivalent
+      // to the addrec.
+      bool HasNUW = UseFlag(InBounds, IndexS, ElementSize, GEP);
+
+      // Multiply the index by the element size to compute the element offset.
+      const SCEV *LocalOffset = getMulExpr(IndexS, ElementSize,
+                                           HasNUW, /*HasNSW=*/false);
+
+      // Test if the GEP has the inbounds keyword and is control-equivalent
+      // to the addrec.
+      HasNUW = UseFlag(InBounds, TotalOffset, LocalOffset, GEP);
+
+      // Add the element offset to the running total offset.
       TotalOffset = getAddExpr(TotalOffset, LocalOffset,
-                               /*HasNUW=*/false, /*HasNSW=*/false);
+                               HasNUW, /*HasNSW=*/false);
     }
   }
-  return getAddExpr(getSCEV(Base), TotalOffset,
-                    /*HasNUW=*/false, /*HasNSW=*/false);
+
+  // Get the SCEV for the GEP base.
+  const SCEV *BaseS = getSCEV(Base);
+
+  // Test if the GEP has the inbounds keyword and is control-equivalent
+  // to the addrec.
+  bool HasNUW = UseFlag(InBounds, BaseS, TotalOffset, GEP);
+
+  // Add the total offset from all the GEP indices to the base.
+  return getAddExpr(BaseS, TotalOffset, HasNUW, /*HasNSW=*/false);
 }
 
 /// GetMinTrailingZeros - Determine the minimum number of zero bits that S is
@@ -2958,7 +3020,8 @@ ScalarEvolution::getUnsignedRange(const SCEV *S) {
       if (const SCEVConstant *C = dyn_cast<SCEVConstant>(AddRec->getStart()))
         if (!C->getValue()->isZero())
           ConservativeResult =
-            ConstantRange(C->getValue()->getValue(), APInt(BitWidth, 0));
+            ConservativeResult.intersectWith(
+              ConstantRange(C->getValue()->getValue(), APInt(BitWidth, 0)));
 
     // TODO: non-affine addrec
     if (AddRec->isAffine()) {
@@ -3190,18 +3253,30 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
 
   Operator *U = cast<Operator>(V);
   switch (Opcode) {
-  case Instruction::Add:
+  case Instruction::Add: {
+    const SCEV *LHS = getSCEV(U->getOperand(0));
+    const SCEV *RHS = getSCEV(U->getOperand(1));
+
     // Don't transfer the NSW and NUW bits from the Add instruction to the
-    // Add expression, because the Instruction may be guarded by control
-    // flow and the no-overflow bits may not be valid for the expression in
-    // any context.
-    return getAddExpr(getSCEV(U->getOperand(0)),
-                      getSCEV(U->getOperand(1)));
-  case Instruction::Mul:
+    // Add expression unless we can prove that it's safe.
+    AddOperator *Add = cast<AddOperator>(U);
+    bool HasNUW = UseFlag(Add->hasNoUnsignedWrap(), LHS, RHS, Add);
+    bool HasNSW = UseFlag(Add->hasNoSignedWrap(), LHS, RHS, Add);
+
+    return getAddExpr(LHS, RHS, HasNUW, HasNSW);
+  }
+  case Instruction::Mul: {
+    const SCEV *LHS = getSCEV(U->getOperand(0));
+    const SCEV *RHS = getSCEV(U->getOperand(1));
+
     // Don't transfer the NSW and NUW bits from the Mul instruction to the
-    // Mul expression, as with Add.
-    return getMulExpr(getSCEV(U->getOperand(0)),
-                      getSCEV(U->getOperand(1)));
+    // Mul expression unless we can prove that it's safe.
+    MulOperator *Mul = cast<MulOperator>(U);
+    bool HasNUW = UseFlag(Mul->hasNoUnsignedWrap(), LHS, RHS, Mul);
+    bool HasNSW = UseFlag(Mul->hasNoSignedWrap(), LHS, RHS, Mul);
+
+    return getMulExpr(LHS, RHS, HasNUW, HasNSW);
+  }
   case Instruction::UDiv:
     return getUDivExpr(getSCEV(U->getOperand(0)),
                        getSCEV(U->getOperand(1)));
@@ -4337,54 +4412,51 @@ const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
       // the arguments into constants, and if so, try to constant propagate the
       // result.  This is particularly useful for computing loop exit values.
       if (CanConstantFold(I)) {
-        std::vector<Constant*> Operands;
-        Operands.reserve(I->getNumOperands());
+        SmallVector<Constant *, 4> Operands;
+        bool MadeImprovement = false;
         for (unsigned i = 0, e = I->getNumOperands(); i != e; ++i) {
           Value *Op = I->getOperand(i);
           if (Constant *C = dyn_cast<Constant>(Op)) {
             Operands.push_back(C);
-          } else {
-            // If any of the operands is non-constant and if they are
-            // non-integer and non-pointer, don't even try to analyze them
-            // with scev techniques.
-            if (!isSCEVable(Op->getType()))
-              return V;
-
-            const SCEV *OpV = getSCEVAtScope(Op, L);
-            if (const SCEVConstant *SC = dyn_cast<SCEVConstant>(OpV)) {
-              Constant *C = SC->getValue();
-              if (C->getType() != Op->getType())
-                C = ConstantExpr::getCast(CastInst::getCastOpcode(C, false,
-                                                                  Op->getType(),
-                                                                  false),
-                                          C, Op->getType());
-              Operands.push_back(C);
-            } else if (const SCEVUnknown *SU = dyn_cast<SCEVUnknown>(OpV)) {
-              if (Constant *C = dyn_cast<Constant>(SU->getValue())) {
-                if (C->getType() != Op->getType())
-                  C =
-                    ConstantExpr::getCast(CastInst::getCastOpcode(C, false,
-                                                                  Op->getType(),
-                                                                  false),
-                                          C, Op->getType());
-                Operands.push_back(C);
-              } else
-                return V;
-            } else {
-              return V;
-            }
+            continue;
           }
+
+          // If any of the operands is non-constant and if they are
+          // non-integer and non-pointer, don't even try to analyze them
+          // with scev techniques.
+          if (!isSCEVable(Op->getType()))
+            return V;
+
+          const SCEV *OrigV = getSCEV(Op);
+          const SCEV *OpV = getSCEVAtScope(OrigV, L);
+          MadeImprovement |= OrigV != OpV;
+
+          Constant *C = 0;
+          if (const SCEVConstant *SC = dyn_cast<SCEVConstant>(OpV))
+            C = SC->getValue();
+          if (const SCEVUnknown *SU = dyn_cast<SCEVUnknown>(OpV))
+            C = dyn_cast<Constant>(SU->getValue());
+          if (!C) return V;
+          if (C->getType() != Op->getType())
+            C = ConstantExpr::getCast(CastInst::getCastOpcode(C, false,
+                                                              Op->getType(),
+                                                              false),
+                                      C, Op->getType());
+          Operands.push_back(C);
         }
 
-        Constant *C = 0;
-        if (const CmpInst *CI = dyn_cast<CmpInst>(I))
-          C = ConstantFoldCompareInstOperands(CI->getPredicate(),
-                                              Operands[0], Operands[1], TD);
-        else
-          C = ConstantFoldInstOperands(I->getOpcode(), I->getType(),
-                                       &Operands[0], Operands.size(), TD);
-        if (C)
+        // Check to see if getSCEVAtScope actually made an improvement.
+        if (MadeImprovement) {
+          Constant *C = 0;
+          if (const CmpInst *CI = dyn_cast<CmpInst>(I))
+            C = ConstantFoldCompareInstOperands(CI->getPredicate(),
+                                                Operands[0], Operands[1], TD);
+          else
+            C = ConstantFoldInstOperands(I->getOpcode(), I->getType(),
+                                         &Operands[0], Operands.size(), TD);
+          if (!C) return V;
           return getSCEV(C);
+        }
       }
     }
 
@@ -4434,7 +4506,29 @@ const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
   // If this is a loop recurrence for a loop that does not contain L, then we
   // are dealing with the final value computed by the loop.
   if (const SCEVAddRecExpr *AddRec = dyn_cast<SCEVAddRecExpr>(V)) {
-    if (!L || !AddRec->getLoop()->contains(L)) {
+    // First, attempt to evaluate each operand.
+    // Avoid performing the look-up in the common case where the specified
+    // expression has no loop-variant portions.
+    for (unsigned i = 0, e = AddRec->getNumOperands(); i != e; ++i) {
+      const SCEV *OpAtScope = getSCEVAtScope(AddRec->getOperand(i), L);
+      if (OpAtScope == AddRec->getOperand(i))
+        continue;
+
+      // Okay, at least one of these operands is loop variant but might be
+      // foldable.  Build a new instance of the folded commutative expression.
+      SmallVector<const SCEV *, 8> NewOps(AddRec->op_begin(),
+                                          AddRec->op_begin()+i);
+      NewOps.push_back(OpAtScope);
+      for (++i; i != e; ++i)
+        NewOps.push_back(getSCEVAtScope(AddRec->getOperand(i), L));
+
+      AddRec = cast<SCEVAddRecExpr>(getAddRecExpr(NewOps, AddRec->getLoop()));
+      break;
+    }
+
+    // If the scope is outside the addrec's loop, evaluate it by using the
+    // loop exit value of the addrec.
+    if (!AddRec->getLoop()->contains(L)) {
       // To evaluate this recurrence, we need to know how many times the AddRec
       // loop iterates.  Compute this now.
       const SCEV *BackedgeTakenCount = getBackedgeTakenCount(AddRec->getLoop());
@@ -4443,6 +4537,7 @@ const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
       // Then, evaluate the AddRec.
       return AddRec->evaluateAtIteration(BackedgeTakenCount, *this);
     }
+
     return AddRec;
   }
 

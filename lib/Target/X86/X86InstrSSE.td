@@ -2019,6 +2019,8 @@ defm RSQRT : sse1_fp_unop_s<0x52, "rsqrt", X86frsqrt, int_x86_sse_rsqrt_ss>,
 defm RCP   : sse1_fp_unop_s<0x53, "rcp", X86frcp, int_x86_sse_rcp_ss>,
              sse1_fp_unop_p<0x53, "rcp", X86frcp, int_x86_sse_rcp_ps>;
 
+// There is no f64 version of the reciprocal approximation instructions.
+
 //===----------------------------------------------------------------------===//
 // SSE 1 & 2 - Non-temporal stores
 //===----------------------------------------------------------------------===//
@@ -2111,7 +2113,7 @@ def MOVNTImr_Int  :   I<0xC3, MRMDestMem, (outs), (ins i32mem:$dst, GR32:$src),
                   TB, Requires<[HasSSE2]>;
 
 //===----------------------------------------------------------------------===//
-// SSE 1 & 2 - Misc Instructions
+// SSE 1 & 2 - Misc Instructions (No AVX form)
 //===----------------------------------------------------------------------===//
 
 // Prefetch intrinsic.
@@ -2127,12 +2129,6 @@ def PREFETCHNTA  : PSI<0x18, MRM0m, (outs), (ins i8mem:$src),
 // Load, store, and memory fence
 def SFENCE : I<0xAE, MRM_F8, (outs), (ins), "sfence", [(int_x86_sse_sfence)]>,
              TB, Requires<[HasSSE1]>;
-
-// MXCSR register
-def LDMXCSR : PSI<0xAE, MRM2m, (outs), (ins i32mem:$src),
-                  "ldmxcsr\t$src", [(int_x86_sse_ldmxcsr addr:$src)]>;
-def STMXCSR : PSI<0xAE, MRM3m, (outs), (ins i32mem:$dst),
-                  "stmxcsr\t$dst", [(int_x86_sse_stmxcsr addr:$dst)]>;
 
 // Alias instructions that map zero vector to pxor / xorp* for sse.
 // We set canFoldAsLoad because this can be converted to a constant-pool
@@ -2156,41 +2152,94 @@ def : Pat<(v16i8 immAllZerosV), (V_SET0PI)>;
 def : Pat<(f32 (vector_extract (v4f32 VR128:$src), (iPTR 0))),
           (f32 (EXTRACT_SUBREG (v4f32 VR128:$src), sub_ss))>;
 
+//===----------------------------------------------------------------------===//
+// SSE 1 & 2 - Load/Store XCSR register
+//===----------------------------------------------------------------------===//
+
+let isAsmParserOnly = 1 in {
+  def VLDMXCSR : VPSI<0xAE, MRM2m, (outs), (ins i32mem:$src),
+                    "ldmxcsr\t$src", [(int_x86_sse_ldmxcsr addr:$src)]>, VEX;
+  def VSTMXCSR : VPSI<0xAE, MRM3m, (outs), (ins i32mem:$dst),
+                    "stmxcsr\t$dst", [(int_x86_sse_stmxcsr addr:$dst)]>, VEX;
+}
+
+def LDMXCSR : PSI<0xAE, MRM2m, (outs), (ins i32mem:$src),
+                  "ldmxcsr\t$src", [(int_x86_sse_ldmxcsr addr:$src)]>;
+def STMXCSR : PSI<0xAE, MRM3m, (outs), (ins i32mem:$dst),
+                  "stmxcsr\t$dst", [(int_x86_sse_stmxcsr addr:$dst)]>;
+
 //===---------------------------------------------------------------------===//
-// SSE2 Instructions
+// SSE2 - Move Aligned/Unaligned Packed Integer Instructions
 //===---------------------------------------------------------------------===//
+let ExeDomain = SSEPackedInt in { // SSE integer instructions
 
+let isAsmParserOnly = 1 in {
+  let neverHasSideEffects = 1 in
+  def VMOVDQArr : VPDI<0x6F, MRMSrcReg, (outs VR128:$dst), (ins VR128:$src),
+                     "movdqa\t{$src, $dst|$dst, $src}", []>, VEX;
+  def VMOVDQUrr : VPDI<0x6F, MRMSrcReg, (outs VR128:$dst), (ins VR128:$src),
+                     "movdqu\t{$src, $dst|$dst, $src}", []>, XS, VEX;
 
-// There is no f64 version of the reciprocal approximation instructions.
+  let canFoldAsLoad = 1, mayLoad = 1 in {
+  def VMOVDQArm : VPDI<0x6F, MRMSrcMem, (outs VR128:$dst), (ins i128mem:$src),
+                     "movdqa\t{$src, $dst|$dst, $src}",
+                     [/*(set VR128:$dst, (alignedloadv2i64 addr:$src))*/]>,
+                     VEX;
+  def VMOVDQUrm :  I<0x6F, MRMSrcMem, (outs VR128:$dst), (ins i128mem:$src),
+                     "vmovdqu\t{$src, $dst|$dst, $src}",
+                     [/*(set VR128:$dst, (loadv2i64 addr:$src))*/]>,
+                   XS, VEX, Requires<[HasAVX, HasSSE2]>;
+  }
 
-//===---------------------------------------------------------------------===//
-// SSE integer instructions
-let ExeDomain = SSEPackedInt in {
+  let mayStore = 1 in {
+  def VMOVDQAmr : VPDI<0x7F, MRMDestMem, (outs),
+                     (ins i128mem:$dst, VR128:$src),
+                     "movdqa\t{$src, $dst|$dst, $src}",
+                     [/*(alignedstore (v2i64 VR128:$src), addr:$dst)*/]>, VEX;
+  def VMOVDQUmr :  I<0x7F, MRMDestMem, (outs), (ins i128mem:$dst, VR128:$src),
+                     "vmovdqu\t{$src, $dst|$dst, $src}",
+                     [/*(store (v2i64 VR128:$src), addr:$dst)*/]>,
+                   XS, VEX, Requires<[HasAVX, HasSSE2]>;
+  }
+}
 
-// Move Instructions
 let neverHasSideEffects = 1 in
 def MOVDQArr : PDI<0x6F, MRMSrcReg, (outs VR128:$dst), (ins VR128:$src),
                    "movdqa\t{$src, $dst|$dst, $src}", []>;
-let canFoldAsLoad = 1, mayLoad = 1 in
+
+let canFoldAsLoad = 1, mayLoad = 1 in {
 def MOVDQArm : PDI<0x6F, MRMSrcMem, (outs VR128:$dst), (ins i128mem:$src),
                    "movdqa\t{$src, $dst|$dst, $src}",
                    [/*(set VR128:$dst, (alignedloadv2i64 addr:$src))*/]>;
-let mayStore = 1 in
-def MOVDQAmr : PDI<0x7F, MRMDestMem, (outs), (ins i128mem:$dst, VR128:$src),
-                   "movdqa\t{$src, $dst|$dst, $src}",
-                   [/*(alignedstore (v2i64 VR128:$src), addr:$dst)*/]>;
-let canFoldAsLoad = 1, mayLoad = 1 in
 def MOVDQUrm :   I<0x6F, MRMSrcMem, (outs VR128:$dst), (ins i128mem:$src),
                    "movdqu\t{$src, $dst|$dst, $src}",
                    [/*(set VR128:$dst, (loadv2i64 addr:$src))*/]>,
                  XS, Requires<[HasSSE2]>;
-let mayStore = 1 in
+}
+
+let mayStore = 1 in {
+def MOVDQAmr : PDI<0x7F, MRMDestMem, (outs), (ins i128mem:$dst, VR128:$src),
+                   "movdqa\t{$src, $dst|$dst, $src}",
+                   [/*(alignedstore (v2i64 VR128:$src), addr:$dst)*/]>;
 def MOVDQUmr :   I<0x7F, MRMDestMem, (outs), (ins i128mem:$dst, VR128:$src),
                    "movdqu\t{$src, $dst|$dst, $src}",
                    [/*(store (v2i64 VR128:$src), addr:$dst)*/]>,
                  XS, Requires<[HasSSE2]>;
+}
 
 // Intrinsic forms of MOVDQU load and store
+let isAsmParserOnly = 1 in {
+let canFoldAsLoad = 1 in
+def VMOVDQUrm_Int : I<0x6F, MRMSrcMem, (outs VR128:$dst), (ins i128mem:$src),
+                       "vmovdqu\t{$src, $dst|$dst, $src}",
+                       [(set VR128:$dst, (int_x86_sse2_loadu_dq addr:$src))]>,
+                     XS, VEX, Requires<[HasAVX, HasSSE2]>;
+def VMOVDQUmr_Int : I<0x7F, MRMDestMem, (outs), (ins i128mem:$dst, VR128:$src),
+                       "vmovdqu\t{$src, $dst|$dst, $src}",
+                       [(int_x86_sse2_storeu_dq addr:$dst, VR128:$src)]>,
+                     XS, VEX, Requires<[HasAVX, HasSSE2]>;
+}
+
 let canFoldAsLoad = 1 in
 def MOVDQUrm_Int :   I<0x6F, MRMSrcMem, (outs VR128:$dst), (ins i128mem:$src),
                        "movdqu\t{$src, $dst|$dst, $src}",
@@ -2201,55 +2250,70 @@ def MOVDQUmr_Int :   I<0x7F, MRMDestMem, (outs), (ins i128mem:$dst, VR128:$src),
                        [(int_x86_sse2_storeu_dq addr:$dst, VR128:$src)]>,
                      XS, Requires<[HasSSE2]>;
 
-let Constraints = "$src1 = $dst" in {
+} // ExeDomain = SSEPackedInt
+
+//===---------------------------------------------------------------------===//
+// SSE2 - Packed Integer Arithmetic Instructions
+//===---------------------------------------------------------------------===//
+
+let ExeDomain = SSEPackedInt in { // SSE integer instructions
 
 multiclass PDI_binop_rm_int<bits<8> opc, string OpcodeStr, Intrinsic IntId,
-                            bit Commutable = 0> {
+                            bit Is2Addr = 1> {
   def rr : PDI<opc, MRMSrcReg, (outs VR128:$dst),
-                               (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (IntId VR128:$src1, VR128:$src2))]> {
-    let isCommutable = Commutable;
-  }
+       (ins VR128:$src1, VR128:$src2),
+       !if(Is2Addr,
+           !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
+           !strconcat(OpcodeStr, "\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+       [(set VR128:$dst, (IntId VR128:$src1, VR128:$src2))]>;
   def rm : PDI<opc, MRMSrcMem, (outs VR128:$dst),
-                               (ins VR128:$src1, i128mem:$src2),
-               !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (IntId VR128:$src1,
-                                        (bitconvert (memopv2i64
-                                                     addr:$src2))))]>;
+       (ins VR128:$src1, i128mem:$src2),
+       !if(Is2Addr,
+           !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
+           !strconcat(OpcodeStr, "\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+       [(set VR128:$dst, (IntId VR128:$src1,
+                                (bitconvert (memopv2i64 addr:$src2))))]>;
 }
 
 multiclass PDI_binop_rmi_int<bits<8> opc, bits<8> opc2, Format ImmForm,
-                             string OpcodeStr,
-                             Intrinsic IntId, Intrinsic IntId2> {
+                             string OpcodeStr, Intrinsic IntId,
+                             Intrinsic IntId2, bit Is2Addr = 1> {
   def rr : PDI<opc, MRMSrcReg, (outs VR128:$dst),
-                               (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (IntId VR128:$src1, VR128:$src2))]>;
+       (ins VR128:$src1, VR128:$src2),
+       !if(Is2Addr,
+           !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
+           !strconcat(OpcodeStr, "\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+       [(set VR128:$dst, (IntId VR128:$src1, VR128:$src2))]>;
   def rm : PDI<opc, MRMSrcMem, (outs VR128:$dst),
-                               (ins VR128:$src1, i128mem:$src2),
-               !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (IntId VR128:$src1,
+       (ins VR128:$src1, i128mem:$src2),
+       !if(Is2Addr,
+           !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
+           !strconcat(OpcodeStr, "\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+       [(set VR128:$dst, (IntId VR128:$src1,
                                       (bitconvert (memopv2i64 addr:$src2))))]>;
   def ri : PDIi8<opc2, ImmForm, (outs VR128:$dst),
-                                (ins VR128:$src1, i32i8imm:$src2),
-               !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (IntId2 VR128:$src1, (i32 imm:$src2)))]>;
+       (ins VR128:$src1, i32i8imm:$src2),
+       !if(Is2Addr,
+           !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
+           !strconcat(OpcodeStr, "\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+       [(set VR128:$dst, (IntId2 VR128:$src1, (i32 imm:$src2)))]>;
 }
 
 /// PDI_binop_rm - Simple SSE2 binary operator.
 multiclass PDI_binop_rm<bits<8> opc, string OpcodeStr, SDNode OpNode,
-                        ValueType OpVT, bit Commutable = 0> {
+                        ValueType OpVT, bit Is2Addr = 1> {
   def rr : PDI<opc, MRMSrcReg, (outs VR128:$dst),
-                               (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (OpVT (OpNode VR128:$src1, VR128:$src2)))]> {
-    let isCommutable = Commutable;
-  }
+       (ins VR128:$src1, VR128:$src2),
+       !if(Is2Addr,
+           !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
+           !strconcat(OpcodeStr, "\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+       [(set VR128:$dst, (OpVT (OpNode VR128:$src1, VR128:$src2)))]>;
   def rm : PDI<opc, MRMSrcMem, (outs VR128:$dst),
-                               (ins VR128:$src1, i128mem:$src2),
-               !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (OpVT (OpNode VR128:$src1,
+       (ins VR128:$src1, i128mem:$src2),
+       !if(Is2Addr,
+           !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
+           !strconcat(OpcodeStr, "\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+       [(set VR128:$dst, (OpVT (OpNode VR128:$src1,
                                      (bitconvert (memopv2i64 addr:$src2)))))]>;
 }
 
@@ -2259,64 +2323,186 @@ multiclass PDI_binop_rm<bits<8> opc, string OpcodeStr, SDNode OpNode,
 /// to collapse (bitconvert VT to VT) into its operand.
 ///
 multiclass PDI_binop_rm_v2i64<bits<8> opc, string OpcodeStr, SDNode OpNode,
-                              bit Commutable = 0> {
+                              bit Is2Addr = 1> {
   def rr : PDI<opc, MRMSrcReg, (outs VR128:$dst),
-               (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (v2i64 (OpNode VR128:$src1, VR128:$src2)))]> {
-    let isCommutable = Commutable;
-  }
+       (ins VR128:$src1, VR128:$src2),
+       !if(Is2Addr,
+           !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
+           !strconcat(OpcodeStr, "\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+       [(set VR128:$dst, (v2i64 (OpNode VR128:$src1, VR128:$src2)))]>;
   def rm : PDI<opc, MRMSrcMem, (outs VR128:$dst),
-               (ins VR128:$src1, i128mem:$src2),
-               !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (OpNode VR128:$src1,
-               (memopv2i64 addr:$src2)))]>;
+       (ins VR128:$src1, i128mem:$src2),
+       !if(Is2Addr,
+           !strconcat(OpcodeStr, "\t{$src2, $dst|$dst, $src2}"),
+           !strconcat(OpcodeStr, "\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+       [(set VR128:$dst, (OpNode VR128:$src1, (memopv2i64 addr:$src2)))]>;
 }
 
-} // Constraints = "$src1 = $dst"
 } // ExeDomain = SSEPackedInt
 
 // 128-bit Integer Arithmetic
 
-defm PADDB : PDI_binop_rm<0xFC, "paddb", add, v16i8, 1>;
-defm PADDW : PDI_binop_rm<0xFD, "paddw", add, v8i16, 1>;
-defm PADDD : PDI_binop_rm<0xFE, "paddd", add, v4i32, 1>;
-defm PADDQ : PDI_binop_rm_v2i64<0xD4, "paddq", add, 1>;
+let isAsmParserOnly = 1, Predicates = [HasAVX, HasSSE2] in {
+let isCommutable = 1 in {
+defm VPADDB  : PDI_binop_rm<0xFC, "vpaddb", add, v16i8, 0 /* 3 addr */>, VEX_4V;
+defm VPADDW  : PDI_binop_rm<0xFD, "vpaddw", add, v8i16, 0>, VEX_4V;
+defm VPADDD  : PDI_binop_rm<0xFE, "vpaddd", add, v4i32, 0>, VEX_4V;
+defm VPADDQ  : PDI_binop_rm_v2i64<0xD4, "vpaddq", add, 0>, VEX_4V;
+defm VPMULLW : PDI_binop_rm<0xD5, "vpmullw", mul, v8i16, 0>, VEX_4V;
+}
+defm VPSUBB : PDI_binop_rm<0xF8, "vpsubb", sub, v16i8, 0>, VEX_4V;
+defm VPSUBW : PDI_binop_rm<0xF9, "vpsubw", sub, v8i16, 0>, VEX_4V;
+defm VPSUBD : PDI_binop_rm<0xFA, "vpsubd", sub, v4i32, 0>, VEX_4V;
+defm VPSUBQ : PDI_binop_rm_v2i64<0xFB, "vpsubq", sub, 0>, VEX_4V;
 
-defm PADDSB  : PDI_binop_rm_int<0xEC, "paddsb" , int_x86_sse2_padds_b, 1>;
-defm PADDSW  : PDI_binop_rm_int<0xED, "paddsw" , int_x86_sse2_padds_w, 1>;
-defm PADDUSB : PDI_binop_rm_int<0xDC, "paddusb", int_x86_sse2_paddus_b, 1>;
-defm PADDUSW : PDI_binop_rm_int<0xDD, "paddusw", int_x86_sse2_paddus_w, 1>;
+// Intrinsic forms
+defm VPSUBSB  : PDI_binop_rm_int<0xE8, "vpsubsb" , int_x86_sse2_psubs_b, 0>,
+                                 VEX_4V;
+defm VPSUBSW  : PDI_binop_rm_int<0xE9, "vpsubsw" , int_x86_sse2_psubs_w, 0>,
+                                 VEX_4V;
+defm VPSUBUSB : PDI_binop_rm_int<0xD8, "vpsubusb", int_x86_sse2_psubus_b, 0>,
+                                 VEX_4V;
+defm VPSUBUSW : PDI_binop_rm_int<0xD9, "vpsubusw", int_x86_sse2_psubus_w, 0>,
+                                 VEX_4V;
+let isCommutable = 1 in {
+defm VPADDSB  : PDI_binop_rm_int<0xEC, "vpaddsb" , int_x86_sse2_padds_b, 0>,
+                                 VEX_4V;
+defm VPADDSW  : PDI_binop_rm_int<0xED, "vpaddsw" , int_x86_sse2_padds_w, 0>,
+                                 VEX_4V;
+defm VPADDUSB : PDI_binop_rm_int<0xDC, "vpaddusb", int_x86_sse2_paddus_b, 0>,
+                                 VEX_4V;
+defm VPADDUSW : PDI_binop_rm_int<0xDD, "vpaddusw", int_x86_sse2_paddus_w, 0>,
+                                 VEX_4V;
+defm VPMULHUW : PDI_binop_rm_int<0xE4, "vpmulhuw", int_x86_sse2_pmulhu_w, 0>,
+                                 VEX_4V;
+defm VPMULHW  : PDI_binop_rm_int<0xE5, "vpmulhw" , int_x86_sse2_pmulh_w, 0>,
+                                 VEX_4V;
+defm VPMULUDQ : PDI_binop_rm_int<0xF4, "vpmuludq", int_x86_sse2_pmulu_dq, 0>,
+                                 VEX_4V;
+defm VPMADDWD : PDI_binop_rm_int<0xF5, "vpmaddwd", int_x86_sse2_pmadd_wd, 0>,
+                                 VEX_4V;
+defm VPAVGB   : PDI_binop_rm_int<0xE0, "vpavgb", int_x86_sse2_pavg_b, 0>,
+                                 VEX_4V;
+defm VPAVGW   : PDI_binop_rm_int<0xE3, "vpavgw", int_x86_sse2_pavg_w, 0>,
+                                 VEX_4V;
+defm VPMINUB  : PDI_binop_rm_int<0xDA, "vpminub", int_x86_sse2_pminu_b, 0>,
+                                 VEX_4V;
+defm VPMINSW  : PDI_binop_rm_int<0xEA, "vpminsw", int_x86_sse2_pmins_w, 0>,
+                                 VEX_4V;
+defm VPMAXUB  : PDI_binop_rm_int<0xDE, "vpmaxub", int_x86_sse2_pmaxu_b, 0>,
+                                 VEX_4V;
+defm VPMAXSW  : PDI_binop_rm_int<0xEE, "vpmaxsw", int_x86_sse2_pmaxs_w, 0>,
+                                 VEX_4V;
+defm VPSADBW  : PDI_binop_rm_int<0xF6, "vpsadbw", int_x86_sse2_psad_bw, 0>,
+                                 VEX_4V;
+}
+}
 
+let Constraints = "$src1 = $dst" in {
+let isCommutable = 1 in {
+defm PADDB  : PDI_binop_rm<0xFC, "paddb", add, v16i8>;
+defm PADDW  : PDI_binop_rm<0xFD, "paddw", add, v8i16>;
+defm PADDD  : PDI_binop_rm<0xFE, "paddd", add, v4i32>;
+defm PADDQ  : PDI_binop_rm_v2i64<0xD4, "paddq", add>;
+defm PMULLW : PDI_binop_rm<0xD5, "pmullw", mul, v8i16>;
+}
 defm PSUBB : PDI_binop_rm<0xF8, "psubb", sub, v16i8>;
 defm PSUBW : PDI_binop_rm<0xF9, "psubw", sub, v8i16>;
 defm PSUBD : PDI_binop_rm<0xFA, "psubd", sub, v4i32>;
 defm PSUBQ : PDI_binop_rm_v2i64<0xFB, "psubq", sub>;
 
+// Intrinsic forms
 defm PSUBSB  : PDI_binop_rm_int<0xE8, "psubsb" , int_x86_sse2_psubs_b>;
 defm PSUBSW  : PDI_binop_rm_int<0xE9, "psubsw" , int_x86_sse2_psubs_w>;
 defm PSUBUSB : PDI_binop_rm_int<0xD8, "psubusb", int_x86_sse2_psubus_b>;
 defm PSUBUSW : PDI_binop_rm_int<0xD9, "psubusw", int_x86_sse2_psubus_w>;
+let isCommutable = 1 in {
+defm PADDSB  : PDI_binop_rm_int<0xEC, "paddsb" , int_x86_sse2_padds_b>;
+defm PADDSW  : PDI_binop_rm_int<0xED, "paddsw" , int_x86_sse2_padds_w>;
+defm PADDUSB : PDI_binop_rm_int<0xDC, "paddusb", int_x86_sse2_paddus_b>;
+defm PADDUSW : PDI_binop_rm_int<0xDD, "paddusw", int_x86_sse2_paddus_w>;
+defm PMULHUW : PDI_binop_rm_int<0xE4, "pmulhuw", int_x86_sse2_pmulhu_w>;
+defm PMULHW  : PDI_binop_rm_int<0xE5, "pmulhw" , int_x86_sse2_pmulh_w>;
+defm PMULUDQ : PDI_binop_rm_int<0xF4, "pmuludq", int_x86_sse2_pmulu_dq>;
+defm PMADDWD : PDI_binop_rm_int<0xF5, "pmaddwd", int_x86_sse2_pmadd_wd>;
+defm PAVGB   : PDI_binop_rm_int<0xE0, "pavgb", int_x86_sse2_pavg_b>;
+defm PAVGW   : PDI_binop_rm_int<0xE3, "pavgw", int_x86_sse2_pavg_w>;
+defm PMINUB  : PDI_binop_rm_int<0xDA, "pminub", int_x86_sse2_pminu_b>;
+defm PMINSW  : PDI_binop_rm_int<0xEA, "pminsw", int_x86_sse2_pmins_w>;
+defm PMAXUB  : PDI_binop_rm_int<0xDE, "pmaxub", int_x86_sse2_pmaxu_b>;
+defm PMAXSW  : PDI_binop_rm_int<0xEE, "pmaxsw", int_x86_sse2_pmaxs_w>;
+defm PSADBW  : PDI_binop_rm_int<0xF6, "psadbw", int_x86_sse2_psad_bw>;
+}
 
-defm PMULLW : PDI_binop_rm<0xD5, "pmullw", mul, v8i16, 1>;
+} // Constraints = "$src1 = $dst"
 
-defm PMULHUW : PDI_binop_rm_int<0xE4, "pmulhuw", int_x86_sse2_pmulhu_w, 1>;
-defm PMULHW  : PDI_binop_rm_int<0xE5, "pmulhw" , int_x86_sse2_pmulh_w , 1>;
-defm PMULUDQ : PDI_binop_rm_int<0xF4, "pmuludq", int_x86_sse2_pmulu_dq, 1>;
+//===---------------------------------------------------------------------===//
+// SSE2 - Packed Integer Logical Instructions
+//===---------------------------------------------------------------------===//
 
-defm PMADDWD : PDI_binop_rm_int<0xF5, "pmaddwd", int_x86_sse2_pmadd_wd, 1>;
+let isAsmParserOnly = 1, Predicates = [HasAVX, HasSSE2] in {
+defm VPSLLW : PDI_binop_rmi_int<0xF1, 0x71, MRM6r, "vpsllw",
+                                int_x86_sse2_psll_w, int_x86_sse2_pslli_w, 0>,
+                                VEX_4V;
+defm VPSLLD : PDI_binop_rmi_int<0xF2, 0x72, MRM6r, "vpslld",
+                                int_x86_sse2_psll_d, int_x86_sse2_pslli_d, 0>,
+                                VEX_4V;
+defm VPSLLQ : PDI_binop_rmi_int<0xF3, 0x73, MRM6r, "vpsllq",
+                                int_x86_sse2_psll_q, int_x86_sse2_pslli_q, 0>,
+                                VEX_4V;
 
-defm PAVGB  : PDI_binop_rm_int<0xE0, "pavgb", int_x86_sse2_pavg_b, 1>;
-defm PAVGW  : PDI_binop_rm_int<0xE3, "pavgw", int_x86_sse2_pavg_w, 1>;
+defm VPSRLW : PDI_binop_rmi_int<0xD1, 0x71, MRM2r, "vpsrlw",
+                                int_x86_sse2_psrl_w, int_x86_sse2_psrli_w, 0>,
+                                VEX_4V;
+defm VPSRLD : PDI_binop_rmi_int<0xD2, 0x72, MRM2r, "vpsrld",
+                                int_x86_sse2_psrl_d, int_x86_sse2_psrli_d, 0>,
+                                VEX_4V;
+defm VPSRLQ : PDI_binop_rmi_int<0xD3, 0x73, MRM2r, "vpsrlq",
+                                int_x86_sse2_psrl_q, int_x86_sse2_psrli_q, 0>,
+                                VEX_4V;
 
+defm VPSRAW : PDI_binop_rmi_int<0xE1, 0x71, MRM4r, "vpsraw",
+                                int_x86_sse2_psra_w, int_x86_sse2_psrai_w, 0>,
+                                VEX_4V;
+defm VPSRAD : PDI_binop_rmi_int<0xE2, 0x72, MRM4r, "vpsrad",
+                                int_x86_sse2_psra_d, int_x86_sse2_psrai_d, 0>,
+                                VEX_4V;
 
-defm PMINUB : PDI_binop_rm_int<0xDA, "pminub", int_x86_sse2_pminu_b, 1>;
-defm PMINSW : PDI_binop_rm_int<0xEA, "pminsw", int_x86_sse2_pmins_w, 1>;
-defm PMAXUB : PDI_binop_rm_int<0xDE, "pmaxub", int_x86_sse2_pmaxu_b, 1>;
-defm PMAXSW : PDI_binop_rm_int<0xEE, "pmaxsw", int_x86_sse2_pmaxs_w, 1>;
-defm PSADBW : PDI_binop_rm_int<0xF6, "psadbw", int_x86_sse2_psad_bw, 1>;
+let isCommutable = 1 in {
+defm VPAND : PDI_binop_rm_v2i64<0xDB, "vpand", and, 0>, VEX_4V;
+defm VPOR  : PDI_binop_rm_v2i64<0xEB, "vpor" , or, 0>, VEX_4V;
+defm VPXOR : PDI_binop_rm_v2i64<0xEF, "vpxor", xor, 0>, VEX_4V;
+}
 
+let ExeDomain = SSEPackedInt in {
+  let neverHasSideEffects = 1 in {
+    // 128-bit logical shifts.
+    def VPSLLDQri : PDIi8<0x73, MRM7r,
+                      (outs VR128:$dst), (ins VR128:$src1, i32i8imm:$src2),
+                      "vpslldq\t{$src2, $src1, $dst|$dst, $src1, $src2}", []>,
+                      VEX_4V;
+    def VPSRLDQri : PDIi8<0x73, MRM3r,
+                      (outs VR128:$dst), (ins VR128:$src1, i32i8imm:$src2),
+                      "vpsrldq\t{$src2, $src1, $dst|$dst, $src1, $src2}", []>,
+                      VEX_4V;
+    // PSRADQri doesn't exist in SSE[1-3].
+  }
+  def VPANDNrr : PDI<0xDF, MRMSrcReg,
+                    (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
+                    "vpandn\t{$src2, $src1, $dst|$dst, $src1, $src2}",
+                    [(set VR128:$dst, (v2i64 (and (vnot VR128:$src1),
+                                              VR128:$src2)))]>, VEX_4V;
 
+  def VPANDNrm : PDI<0xDF, MRMSrcMem,
+                    (outs VR128:$dst), (ins VR128:$src1, i128mem:$src2),
+                    "vpandn\t{$src2, $src1, $dst|$dst, $src1, $src2}",
+                    [(set VR128:$dst, (v2i64 (and (vnot VR128:$src1),
+                                              (memopv2i64 addr:$src2))))]>,
+                                              VEX_4V;
+}
+}
+
+let Constraints = "$src1 = $dst" in {
 defm PSLLW : PDI_binop_rmi_int<0xF1, 0x71, MRM6r, "psllw",
                                int_x86_sse2_psll_w, int_x86_sse2_pslli_w>;
 defm PSLLD : PDI_binop_rmi_int<0xF2, 0x72, MRM6r, "pslld",
@@ -2336,17 +2522,36 @@ defm PSRAW : PDI_binop_rmi_int<0xE1, 0x71, MRM4r, "psraw",
 defm PSRAD : PDI_binop_rmi_int<0xE2, 0x72, MRM4r, "psrad",
                                int_x86_sse2_psra_d, int_x86_sse2_psrai_d>;
 
-// 128-bit logical shifts.
-let Constraints = "$src1 = $dst", neverHasSideEffects = 1,
-    ExeDomain = SSEPackedInt in {
-  def PSLLDQri : PDIi8<0x73, MRM7r,
-                       (outs VR128:$dst), (ins VR128:$src1, i32i8imm:$src2),
-                       "pslldq\t{$src2, $dst|$dst, $src2}", []>;
-  def PSRLDQri : PDIi8<0x73, MRM3r,
-                       (outs VR128:$dst), (ins VR128:$src1, i32i8imm:$src2),
-                       "psrldq\t{$src2, $dst|$dst, $src2}", []>;
-  // PSRADQri doesn't exist in SSE[1-3].
+let isCommutable = 1 in {
+defm PAND : PDI_binop_rm_v2i64<0xDB, "pand", and>;
+defm POR  : PDI_binop_rm_v2i64<0xEB, "por" , or>;
+defm PXOR : PDI_binop_rm_v2i64<0xEF, "pxor", xor>;
 }
+
+let ExeDomain = SSEPackedInt in {
+  let neverHasSideEffects = 1 in {
+    // 128-bit logical shifts.
+    def PSLLDQri : PDIi8<0x73, MRM7r,
+                         (outs VR128:$dst), (ins VR128:$src1, i32i8imm:$src2),
+                         "pslldq\t{$src2, $dst|$dst, $src2}", []>;
+    def PSRLDQri : PDIi8<0x73, MRM3r,
+                         (outs VR128:$dst), (ins VR128:$src1, i32i8imm:$src2),
+                         "psrldq\t{$src2, $dst|$dst, $src2}", []>;
+    // PSRADQri doesn't exist in SSE[1-3].
+  }
+  def PANDNrr : PDI<0xDF, MRMSrcReg,
+                    (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
+                    "pandn\t{$src2, $dst|$dst, $src2}",
+                    [(set VR128:$dst, (v2i64 (and (vnot VR128:$src1),
+                                              VR128:$src2)))]>;
+
+  def PANDNrm : PDI<0xDF, MRMSrcMem,
+                    (outs VR128:$dst), (ins VR128:$src1, i128mem:$src2),
+                    "pandn\t{$src2, $dst|$dst, $src2}",
+                    [(set VR128:$dst, (v2i64 (and (vnot VR128:$src1),
+                                              (memopv2i64 addr:$src2))))]>;
+}
+} // Constraints = "$src1 = $dst"
 
 let Predicates = [HasSSE2] in {
   def : Pat<(int_x86_sse2_psll_dq VR128:$src1, imm:$src2),
@@ -2367,32 +2572,37 @@ let Predicates = [HasSSE2] in {
             (v2i64 (PSRLDQri VR128:$src, (BYTE_imm imm:$amt)))>;
 }
 
-// Logical
-defm PAND : PDI_binop_rm_v2i64<0xDB, "pand", and, 1>;
-defm POR  : PDI_binop_rm_v2i64<0xEB, "por" , or , 1>;
-defm PXOR : PDI_binop_rm_v2i64<0xEF, "pxor", xor, 1>;
+//===---------------------------------------------------------------------===//
+// SSE2 - Packed Integer Comparison Instructions
+//===---------------------------------------------------------------------===//
 
-let Constraints = "$src1 = $dst", ExeDomain = SSEPackedInt in {
-  def PANDNrr : PDI<0xDF, MRMSrcReg,
-                    (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
-                    "pandn\t{$src2, $dst|$dst, $src2}",
-                    [(set VR128:$dst, (v2i64 (and (vnot VR128:$src1),
-                                              VR128:$src2)))]>;
-
-  def PANDNrm : PDI<0xDF, MRMSrcMem,
-                    (outs VR128:$dst), (ins VR128:$src1, i128mem:$src2),
-                    "pandn\t{$src2, $dst|$dst, $src2}",
-                    [(set VR128:$dst, (v2i64 (and (vnot VR128:$src1),
-                                              (memopv2i64 addr:$src2))))]>;
+let isAsmParserOnly = 1, Predicates = [HasAVX, HasSSE2] in {
+  let isCommutable = 1 in {
+  defm VPCMPEQB  : PDI_binop_rm_int<0x74, "vpcmpeqb", int_x86_sse2_pcmpeq_b, 0>,
+                                   VEX_4V;
+  defm VPCMPEQW  : PDI_binop_rm_int<0x75, "vpcmpeqw", int_x86_sse2_pcmpeq_w, 0>,
+                                   VEX_4V;
+  defm VPCMPEQD  : PDI_binop_rm_int<0x76, "vpcmpeqd", int_x86_sse2_pcmpeq_d, 0>,
+                                   VEX_4V;
+  }
+  defm VPCMPGTB  : PDI_binop_rm_int<0x64, "vpcmpgtb", int_x86_sse2_pcmpgt_b, 0>,
+                                   VEX_4V;
+  defm VPCMPGTW  : PDI_binop_rm_int<0x65, "vpcmpgtw", int_x86_sse2_pcmpgt_w, 0>,
+                                   VEX_4V;
+  defm VPCMPGTD  : PDI_binop_rm_int<0x66, "vpcmpgtd", int_x86_sse2_pcmpgt_d, 0>,
+                                   VEX_4V;
 }
 
-// SSE2 Integer comparison
-defm PCMPEQB  : PDI_binop_rm_int<0x74, "pcmpeqb", int_x86_sse2_pcmpeq_b, 1>;
-defm PCMPEQW  : PDI_binop_rm_int<0x75, "pcmpeqw", int_x86_sse2_pcmpeq_w, 1>;
-defm PCMPEQD  : PDI_binop_rm_int<0x76, "pcmpeqd", int_x86_sse2_pcmpeq_d, 1>;
-defm PCMPGTB  : PDI_binop_rm_int<0x64, "pcmpgtb", int_x86_sse2_pcmpgt_b>;
-defm PCMPGTW  : PDI_binop_rm_int<0x65, "pcmpgtw", int_x86_sse2_pcmpgt_w>;
-defm PCMPGTD  : PDI_binop_rm_int<0x66, "pcmpgtd", int_x86_sse2_pcmpgt_d>;
+let Constraints = "$src1 = $dst" in {
+  let isCommutable = 1 in {
+  defm PCMPEQB  : PDI_binop_rm_int<0x74, "pcmpeqb", int_x86_sse2_pcmpeq_b>;
+  defm PCMPEQW  : PDI_binop_rm_int<0x75, "pcmpeqw", int_x86_sse2_pcmpeq_w>;
+  defm PCMPEQD  : PDI_binop_rm_int<0x76, "pcmpeqd", int_x86_sse2_pcmpeq_d>;
+  }
+  defm PCMPGTB  : PDI_binop_rm_int<0x64, "pcmpgtb", int_x86_sse2_pcmpgt_b>;
+  defm PCMPGTW  : PDI_binop_rm_int<0x65, "pcmpgtw", int_x86_sse2_pcmpgt_w>;
+  defm PCMPGTD  : PDI_binop_rm_int<0x66, "pcmpgtd", int_x86_sse2_pcmpgt_d>;
+} // Constraints = "$src1 = $dst"
 
 def : Pat<(v16i8 (X86pcmpeqb VR128:$src1, VR128:$src2)),
           (PCMPEQBrr VR128:$src1, VR128:$src2)>;
@@ -2420,72 +2630,138 @@ def : Pat<(v4i32 (X86pcmpgtd VR128:$src1, VR128:$src2)),
 def : Pat<(v4i32 (X86pcmpgtd VR128:$src1, (memop addr:$src2))),
           (PCMPGTDrm VR128:$src1, addr:$src2)>;
 
+//===---------------------------------------------------------------------===//
+// SSE2 - Packed Integer Pack Instructions
+//===---------------------------------------------------------------------===//
 
-// Pack instructions
+let isAsmParserOnly = 1, Predicates = [HasAVX, HasSSE2] in {
+defm VPACKSSWB : PDI_binop_rm_int<0x63, "vpacksswb", int_x86_sse2_packsswb_128,
+                                  0>, VEX_4V;
+defm VPACKSSDW : PDI_binop_rm_int<0x6B, "vpackssdw", int_x86_sse2_packssdw_128,
+                                  0>, VEX_4V;
+defm VPACKUSWB : PDI_binop_rm_int<0x67, "vpackuswb", int_x86_sse2_packuswb_128,
+                                  0>, VEX_4V;
+}
+
+let Constraints = "$src1 = $dst" in {
 defm PACKSSWB : PDI_binop_rm_int<0x63, "packsswb", int_x86_sse2_packsswb_128>;
 defm PACKSSDW : PDI_binop_rm_int<0x6B, "packssdw", int_x86_sse2_packssdw_128>;
 defm PACKUSWB : PDI_binop_rm_int<0x67, "packuswb", int_x86_sse2_packuswb_128>;
+} // Constraints = "$src1 = $dst"
+
+//===---------------------------------------------------------------------===//
+// SSE2 - Packed Integer Shuffle Instructions
+//===---------------------------------------------------------------------===//
 
 let ExeDomain = SSEPackedInt in {
+multiclass sse2_pshuffle<string OpcodeStr, ValueType vt, PatFrag pshuf_frag,
+                         PatFrag bc_frag> {
+def ri : Ii8<0x70, MRMSrcReg,
+              (outs VR128:$dst), (ins VR128:$src1, i8imm:$src2),
+              !strconcat(OpcodeStr,
+                         "\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+              [(set VR128:$dst, (vt (pshuf_frag:$src2 VR128:$src1,
+                                                      (undef))))]>;
+def mi : Ii8<0x70, MRMSrcMem,
+              (outs VR128:$dst), (ins i128mem:$src1, i8imm:$src2),
+              !strconcat(OpcodeStr,
+                         "\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
+              [(set VR128:$dst, (vt (pshuf_frag:$src2
+                                      (bc_frag (memopv2i64 addr:$src1)),
+                                      (undef))))]>;
+}
+} // ExeDomain = SSEPackedInt
 
-// Shuffle and unpack instructions
-let AddedComplexity = 5 in {
-def PSHUFDri : PDIi8<0x70, MRMSrcReg,
-                     (outs VR128:$dst), (ins VR128:$src1, i8imm:$src2),
-                     "pshufd\t{$src2, $src1, $dst|$dst, $src1, $src2}",
-                     [(set VR128:$dst, (v4i32 (pshufd:$src2
-                                               VR128:$src1, (undef))))]>;
-def PSHUFDmi : PDIi8<0x70, MRMSrcMem,
-                     (outs VR128:$dst), (ins i128mem:$src1, i8imm:$src2),
-                     "pshufd\t{$src2, $src1, $dst|$dst, $src1, $src2}",
-                     [(set VR128:$dst, (v4i32 (pshufd:$src2
-                                             (bc_v4i32 (memopv2i64 addr:$src1)),
-                                             (undef))))]>;
+let isAsmParserOnly = 1, Predicates = [HasAVX, HasSSE2] in {
+  let AddedComplexity = 5 in
+  defm VPSHUFD : sse2_pshuffle<"vpshufd", v4i32, pshufd, bc_v4i32>, OpSize,
+                               VEX;
+
+  // SSE2 with ImmT == Imm8 and XS prefix.
+  defm VPSHUFHW : sse2_pshuffle<"vpshufhw", v8i16, pshufhw, bc_v8i16>, XS,
+                               VEX;
+
+  // SSE2 with ImmT == Imm8 and XD prefix.
+  defm VPSHUFLW : sse2_pshuffle<"vpshuflw", v8i16, pshuflw, bc_v8i16>, XD,
+                               VEX;
 }
 
-// SSE2 with ImmT == Imm8 and XS prefix.
-def PSHUFHWri : Ii8<0x70, MRMSrcReg,
-                    (outs VR128:$dst), (ins VR128:$src1, i8imm:$src2),
-                    "pshufhw\t{$src2, $src1, $dst|$dst, $src1, $src2}",
-                    [(set VR128:$dst, (v8i16 (pshufhw:$src2 VR128:$src1,
-                                                            (undef))))]>,
-                XS, Requires<[HasSSE2]>;
-def PSHUFHWmi : Ii8<0x70, MRMSrcMem,
-                    (outs VR128:$dst), (ins i128mem:$src1, i8imm:$src2),
-                    "pshufhw\t{$src2, $src1, $dst|$dst, $src1, $src2}",
-                    [(set VR128:$dst, (v8i16 (pshufhw:$src2
-                                            (bc_v8i16 (memopv2i64 addr:$src1)),
-                                            (undef))))]>,
-                XS, Requires<[HasSSE2]>;
+let Predicates = [HasSSE2] in {
+  let AddedComplexity = 5 in
+  defm PSHUFD : sse2_pshuffle<"pshufd", v4i32, pshufd, bc_v4i32>, TB, OpSize;
 
-// SSE2 with ImmT == Imm8 and XD prefix.
-def PSHUFLWri : Ii8<0x70, MRMSrcReg,
-                    (outs VR128:$dst), (ins VR128:$src1, i8imm:$src2),
-                    "pshuflw\t{$src2, $src1, $dst|$dst, $src1, $src2}",
-                    [(set VR128:$dst, (v8i16 (pshuflw:$src2 VR128:$src1,
-                                                            (undef))))]>,
-                XD, Requires<[HasSSE2]>;
-def PSHUFLWmi : Ii8<0x70, MRMSrcMem,
-                    (outs VR128:$dst), (ins i128mem:$src1, i8imm:$src2),
-                    "pshuflw\t{$src2, $src1, $dst|$dst, $src1, $src2}",
-                    [(set VR128:$dst, (v8i16 (pshuflw:$src2
-                                             (bc_v8i16 (memopv2i64 addr:$src1)),
-                                             (undef))))]>,
-                XD, Requires<[HasSSE2]>;
+  // SSE2 with ImmT == Imm8 and XS prefix.
+  defm PSHUFHW : sse2_pshuffle<"pshufhw", v8i16, pshufhw, bc_v8i16>, XS;
 
-// Unpack instructions
+  // SSE2 with ImmT == Imm8 and XD prefix.
+  defm PSHUFLW : sse2_pshuffle<"pshuflw", v8i16, pshuflw, bc_v8i16>, XD;
+}
+
+//===---------------------------------------------------------------------===//
+// SSE2 - Packed Integer Unpack Instructions
+//===---------------------------------------------------------------------===//
+
+let ExeDomain = SSEPackedInt in {
 multiclass sse2_unpack<bits<8> opc, string OpcodeStr, ValueType vt,
-                       PatFrag unp_frag, PatFrag bc_frag> {
+                       PatFrag unp_frag, PatFrag bc_frag, bit Is2Addr = 1> {
   def rr : PDI<opc, MRMSrcReg,
-               (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
-               !strconcat(OpcodeStr,"\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (vt (unp_frag VR128:$src1, VR128:$src2)))]>;
+      (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
+      !if(Is2Addr,
+          !strconcat(OpcodeStr,"\t{$src2, $dst|$dst, $src2}"),
+          !strconcat(OpcodeStr,"\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+      [(set VR128:$dst, (vt (unp_frag VR128:$src1, VR128:$src2)))]>;
   def rm : PDI<opc, MRMSrcMem,
-               (outs VR128:$dst), (ins VR128:$src1, i128mem:$src2),
-               !strconcat(OpcodeStr,"\t{$src2, $dst|$dst, $src2}"),
-               [(set VR128:$dst, (unp_frag VR128:$src1,
-                                           (bc_frag (memopv2i64
-                                                        addr:$src2))))]>;
+      (outs VR128:$dst), (ins VR128:$src1, i128mem:$src2),
+      !if(Is2Addr,
+          !strconcat(OpcodeStr,"\t{$src2, $dst|$dst, $src2}"),
+          !strconcat(OpcodeStr,"\t{$src2, $src1, $dst|$dst, $src1, $src2}")),
+      [(set VR128:$dst, (unp_frag VR128:$src1,
+                                  (bc_frag (memopv2i64
+                                               addr:$src2))))]>;
+}
+
+let isAsmParserOnly = 1, Predicates = [HasAVX, HasSSE2] in {
+  defm VPUNPCKLBW  : sse2_unpack<0x60, "vpunpcklbw", v16i8, unpckl, bc_v16i8,
+                                 0>, VEX_4V;
+  defm VPUNPCKLWD  : sse2_unpack<0x61, "vpunpcklwd", v8i16, unpckl, bc_v8i16,
+                                 0>, VEX_4V;
+  defm VPUNPCKLDQ  : sse2_unpack<0x62, "vpunpckldq", v4i32, unpckl, bc_v4i32,
+                                 0>, VEX_4V;
+
+  /// FIXME: we could eliminate this and use sse2_unpack instead if tblgen
+  /// knew to collapse (bitconvert VT to VT) into its operand.
+  def VPUNPCKLQDQrr : PDI<0x6C, MRMSrcReg,
+                         (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
+                         "vpunpcklqdq\t{$src2, $src1, $dst|$dst, $src1, $src2}",
+                        [(set VR128:$dst,
+                          (v2i64 (unpckl VR128:$src1, VR128:$src2)))]>, VEX_4V;
+  def VPUNPCKLQDQrm : PDI<0x6C, MRMSrcMem,
+                         (outs VR128:$dst), (ins VR128:$src1, i128mem:$src2),
+                         "vpunpcklqdq\t{$src2, $src1, $dst|$dst, $src1, $src2}",
+                        [(set VR128:$dst,
+                          (v2i64 (unpckl VR128:$src1,
+                                         (memopv2i64 addr:$src2))))]>, VEX_4V;
+
+  defm VPUNPCKHBW  : sse2_unpack<0x68, "vpunpckhbw", v16i8, unpckh, bc_v16i8,
+                                 0>, VEX_4V;
+  defm VPUNPCKHWD  : sse2_unpack<0x69, "vpunpckhwd", v8i16, unpckh, bc_v8i16,
+                                 0>, VEX_4V;
+  defm VPUNPCKHDQ  : sse2_unpack<0x6A, "vpunpckhdq", v4i32, unpckh, bc_v4i32,
+                                 0>, VEX_4V;
+
+  /// FIXME: we could eliminate this and use sse2_unpack instead if tblgen
+  /// knew to collapse (bitconvert VT to VT) into its operand.
+  def VPUNPCKHQDQrr : PDI<0x6D, MRMSrcReg,
+                         (outs VR128:$dst), (ins VR128:$src1, VR128:$src2),
+                         "vpunpckhqdq\t{$src2, $src1, $dst|$dst, $src1, $src2}",
+                        [(set VR128:$dst,
+                          (v2i64 (unpckh VR128:$src1, VR128:$src2)))]>, VEX_4V;
+  def VPUNPCKHQDQrm : PDI<0x6D, MRMSrcMem,
+                        (outs VR128:$dst), (ins VR128:$src1, i128mem:$src2),
+                        "vpunpckhqdq\t{$src2, $src1, $dst|$dst, $src1, $src2}",
+                        [(set VR128:$dst,
+                          (v2i64 (unpckh VR128:$src1,
+                                         (memopv2i64 addr:$src2))))]>, VEX_4V;
 }
 
 let Constraints = "$src1 = $dst" in {
@@ -2525,6 +2801,14 @@ let Constraints = "$src1 = $dst" in {
                           (v2i64 (unpckh VR128:$src1,
                                          (memopv2i64 addr:$src2))))]>;
 }
+
+} // ExeDomain = SSEPackedInt
+
+//===---------------------------------------------------------------------===//
+// SSE2 - Packed Misc Integer Instructions
+//===---------------------------------------------------------------------===//
+
+let ExeDomain = SSEPackedInt in {
 
 // Extract / Insert
 def PEXTRWri : PDIi8<0xC5, MRMSrcReg,
