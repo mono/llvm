@@ -3164,7 +3164,6 @@ let isReMaterializable = 1, isAsCheapAsAMove = 1, canFoldAsLoad = 1,
 // SSE3 - Conversion Instructions
 //===---------------------------------------------------------------------===//
 
->>>>>>> master
 let isAsmParserOnly = 1, Predicates = [HasAVX, HasSSE3] in {
 def VCVTPD2DQrr  : S3DI<0xE6, MRMSrcReg, (outs VR128:$dst), (ins VR128:$src),
                        "vcvtpd2dq\t{$src, $dst|$dst, $src}", []>, VEX;
