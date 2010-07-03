@@ -227,7 +227,16 @@ public:
   bool isRegSequence() const {
     return getOpcode() == TargetOpcode::REG_SEQUENCE;
   }
-  
+  bool isCopy() const {
+    return getOpcode() == TargetOpcode::COPY;
+  }
+
+  /// isCopyLike - Return true if the instruction behaves like a copy.
+  /// This does not include native copy instructions.
+  bool isCopyLike() const {
+    return isCopy() || isSubregToReg() || isExtractSubreg() || isInsertSubreg();
+  }
+
   /// readsRegister - Return true if the MachineInstr reads the specified
   /// register. If TargetRegisterInfo is passed, then it also checks if there
   /// is a read of a super-register.
