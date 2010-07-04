@@ -406,9 +406,14 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::STACKSAVE,          MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE,       MVT::Other, Expand);
   setOperationAction(ISD::EHSELECTION,        MVT::i32,   Expand);
+  setOperationAction(ISD::EXCEPTIONADDR,      MVT::i32,   Expand);
   // FIXME: Shouldn't need this, since no register is used, but the legalizer
   // doesn't yet know how to not do that for SjLj.
-  setExceptionSelectorRegister(ARM::R0);
+  //
+  // For mono, we pass the exception object in R0
+  //
+  setExceptionPointerRegister(ARM::R0);
+  setExceptionSelectorRegister(ARM::R1);
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
   // Handle atomics directly for ARMv[67] (except for Thumb1), otherwise
   // use the default expansion.
@@ -883,6 +888,16 @@ CCAssignFn *ARMTargetLowering::CCAssignFnForNode(CallingConv::ID CC,
     return (Return ? RetCC_ARM_AAPCS: CC_ARM_AAPCS);
   case CallingConv::ARM_APCS:
     return (Return ? RetCC_ARM_APCS: CC_ARM_APCS);
+  case CallingConv::Mono1:
+      // FIXME:
+      assert(Subtarget->isAAPCS_ABI());
+      assert(!Subtarget->hasVFP2());
+      return (Return ? CCAssignFnForNode(CallingConv::C, true, isVarArg) : CC_ARM_Mono1);
+  case CallingConv::Mono2:
+      // FIXME:
+      assert(Subtarget->isAAPCS_ABI());
+      assert(!Subtarget->hasVFP2());
+      return (Return ? CCAssignFnForNode(CallingConv::C, true, isVarArg) : CC_ARM_Mono2);
   }
 }
 

@@ -46,4 +46,12 @@ unsigned ARMElfTargetObjectFile::getLSDAEncoding() const {
     return DW_EH_PE_pcrel | DW_EH_PE_sdata4;
 }
 
+unsigned ARMElfTargetObjectFile::getFDEEncoding() const {
+    return DW_EH_PE_pcrel | DW_EH_PE_sdata4;
+}
+
+unsigned ARMElfTargetObjectFile::getTTypeEncoding() const {
+  return DW_EH_PE_indirect | DW_EH_PE_pcrel | DW_EH_PE_sdata4;
+}
+
 

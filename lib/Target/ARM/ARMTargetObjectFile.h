@@ -26,6 +26,10 @@ public:
   unsigned getPersonalityEncoding() const;
 
   unsigned getLSDAEncoding() const;
+
+  unsigned getFDEEncoding() const;
+
+  unsigned getTTypeEncoding() const;
 };
 
 } // end namespace llvm
