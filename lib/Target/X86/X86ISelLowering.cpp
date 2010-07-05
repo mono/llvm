@@ -1416,8 +1416,6 @@ CCAssignFn *X86TargetLowering::CCAssignFnForNode(CallingConv::ID CC) const {
       return CC_X86_64_GHC;
     else if (CC == CallingConv::Mono1)
       return CC_X86_64_Mono1;
-    else if (CC == CallingConv::Mono2)
-      return CC_X86_64_Mono2;
     else if (Subtarget->isTargetWin64())
       return CC_X86_Win64_C;
     else
@@ -1428,8 +1426,6 @@ CCAssignFn *X86TargetLowering::CCAssignFnForNode(CallingConv::ID CC) const {
     return CC_X86_32_FastCall;
   else if (CC == CallingConv::Mono1)
       return CC_X86_32_Mono1;
-  else if (CC == CallingConv::Mono2)
-      return CC_X86_32_Mono2;
   else if (CC == CallingConv::X86_ThisCall)
     return CC_X86_32_ThisCall;
   else if (CC == CallingConv::Fast)

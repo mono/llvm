@@ -241,14 +241,7 @@ def CC_X86_64_GHC : CallingConv<[
 
 def CC_X86_64_Mono1 : CallingConv<[
 
-  CCIfInReg<CCAssignToReg<[R10,R11]>>,
-
-  CCDelegateTo<CC_X86_64_C>
-]>;
-
-def CC_X86_64_Mono2 : CallingConv<[
-
-  CCIfInReg<CCAssignToReg<[R11]>>,
+  CCIfInReg<CCAssignToReg<[R10]>>,
 
   CCDelegateTo<CC_X86_64_C>
 ]>;
@@ -376,15 +369,6 @@ def CC_X86_32_GHC : CallingConv<[
 ]>;
 
 def CC_X86_32_Mono1 : CallingConv<[
-
-	// Mono marks the parameter it wants to pass in this non-abi register with
-	// the 'inreg' attribute.
-  CCIfInReg<CCAssignToReg<[EDX]>>,
-
-  CCDelegateTo<CC_X86_32_C>
-]>;
-
-def CC_X86_32_Mono2 : CallingConv<[
 
 	// Mono marks the parameter it wants to pass in this non-abi register with
 	// the 'inreg' attribute.

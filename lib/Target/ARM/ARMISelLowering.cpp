@@ -893,11 +893,6 @@ CCAssignFn *ARMTargetLowering::CCAssignFnForNode(CallingConv::ID CC,
       assert(Subtarget->isAAPCS_ABI());
       assert(!Subtarget->hasVFP2());
       return (Return ? CCAssignFnForNode(CallingConv::C, true, isVarArg) : CC_ARM_Mono1);
-  case CallingConv::Mono2:
-      // FIXME:
-      assert(Subtarget->isAAPCS_ABI());
-      assert(!Subtarget->hasVFP2());
-      return (Return ? CCAssignFnForNode(CallingConv::C, true, isVarArg) : CC_ARM_Mono2);
   }
 }
 
