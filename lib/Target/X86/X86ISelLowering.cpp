@@ -62,21 +62,19 @@ static SDValue getMOVL(SelectionDAG &DAG, DebugLoc dl, EVT VT, SDValue V1,
                        SDValue V2);
 
 static TargetLoweringObjectFile *createTLOF(X86TargetMachine &TM) {
-  switch (TM.getSubtarget<X86Subtarget>().TargetType) {
-  default: llvm_unreachable("unknown subtarget type");
-  case X86Subtarget::isDarwin:
-    if (TM.getSubtarget<X86Subtarget>().is64Bit())
-      return new X8664_MachoTargetObjectFile();
+  
+  bool is64Bit = TM.getSubtarget<X86Subtarget>().is64Bit();
+  
+  if (TM.getSubtarget<X86Subtarget>().isTargetDarwin()) {
+    if (is64Bit) return new X8664_MachoTargetObjectFile();
     return new TargetLoweringObjectFileMachO();
-  case X86Subtarget::isELF:
-   if (TM.getSubtarget<X86Subtarget>().is64Bit())
-     return new X8664_ELFTargetObjectFile(TM);
+  } else if (TM.getSubtarget<X86Subtarget>().isTargetELF() ){
+    if (is64Bit) return new X8664_ELFTargetObjectFile(TM);
     return new X8632_ELFTargetObjectFile(TM);
-  case X86Subtarget::isMingw:
-  case X86Subtarget::isCygwin:
-  case X86Subtarget::isWindows:
+  } else if (TM.getSubtarget<X86Subtarget>().isTargetCOFF()) {
     return new TargetLoweringObjectFileCOFF();
-  }
+  }  
+  llvm_unreachable("unknown subtarget type");
 }
 
 X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
@@ -617,7 +615,7 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     addRegisterClass(MVT::v8i8,  X86::VR64RegisterClass, false);
     addRegisterClass(MVT::v4i16, X86::VR64RegisterClass, false);
     addRegisterClass(MVT::v2i32, X86::VR64RegisterClass, false);
-    addRegisterClass(MVT::v2f32, X86::VR64RegisterClass, false);
+    
     addRegisterClass(MVT::v1i64, X86::VR64RegisterClass, false);
 
     setOperationAction(ISD::ADD,                MVT::v8i8,  Legal);
@@ -663,14 +661,11 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     AddPromotedToType (ISD::LOAD,               MVT::v4i16, MVT::v1i64);
     setOperationAction(ISD::LOAD,               MVT::v2i32, Promote);
     AddPromotedToType (ISD::LOAD,               MVT::v2i32, MVT::v1i64);
-    setOperationAction(ISD::LOAD,               MVT::v2f32, Promote);
-    AddPromotedToType (ISD::LOAD,               MVT::v2f32, MVT::v1i64);
     setOperationAction(ISD::LOAD,               MVT::v1i64, Legal);
 
     setOperationAction(ISD::BUILD_VECTOR,       MVT::v8i8,  Custom);
     setOperationAction(ISD::BUILD_VECTOR,       MVT::v4i16, Custom);
     setOperationAction(ISD::BUILD_VECTOR,       MVT::v2i32, Custom);
-    setOperationAction(ISD::BUILD_VECTOR,       MVT::v2f32, Custom);
     setOperationAction(ISD::BUILD_VECTOR,       MVT::v1i64, Custom);
 
     setOperationAction(ISD::VECTOR_SHUFFLE,     MVT::v8i8,  Custom);
@@ -678,7 +673,6 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setOperationAction(ISD::VECTOR_SHUFFLE,     MVT::v2i32, Custom);
     setOperationAction(ISD::VECTOR_SHUFFLE,     MVT::v1i64, Custom);
 
-    setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v2f32, Custom);
     setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v8i8,  Custom);
     setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v4i16, Custom);
     setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v1i64, Custom);
@@ -697,7 +691,6 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
       setOperationAction(ISD::BIT_CONVERT,        MVT::v8i8,  Custom);
       setOperationAction(ISD::BIT_CONVERT,        MVT::v4i16, Custom);
       setOperationAction(ISD::BIT_CONVERT,        MVT::v2i32, Custom);
-      setOperationAction(ISD::BIT_CONVERT,        MVT::v2f32, Custom);
       setOperationAction(ISD::BIT_CONVERT,        MVT::v1i64, Custom);
     }
   }
@@ -798,9 +791,8 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
       EVT VT = SVT;
 
       // Do not attempt to promote non-128-bit vectors
-      if (!VT.is128BitVector()) {
+      if (!VT.is128BitVector())
         continue;
-      }
       
       setOperationAction(ISD::AND,    SVT, Promote);
       AddPromotedToType (ISD::AND,    SVT, MVT::v2i64);
@@ -1196,6 +1188,27 @@ getPICJumpTableRelocBaseExpr(const MachineFunction *MF, unsigned JTI,
 unsigned X86TargetLowering::getFunctionAlignment(const Function *F) const {
   return F->hasFnAttr(Attribute::OptimizeForSize) ? 0 : 4;
 }
+
+bool X86TargetLowering::getStackCookieLocation(unsigned &AddressSpace,
+                                               unsigned &Offset) const {
+  if (!Subtarget->isTargetLinux())
+    return false;
+
+  if (Subtarget->is64Bit()) {
+    // %fs:0x28, unless we're using a Kernel code model, in which case it's %gs:
+    Offset = 0x28;
+    if (getTargetMachine().getCodeModel() == CodeModel::Kernel)
+      AddressSpace = 256;
+    else
+      AddressSpace = 257;
+  } else {
+    // %gs:0x14 on i386
+    Offset = 0x14;
+    AddressSpace = 256;
+  }
+  return true;
+}
+
 
 //===----------------------------------------------------------------------===//
 //               Return Value Calling Convention Implementation
@@ -4458,7 +4471,7 @@ SDValue LowerVECTOR_SHUFFLEv16i8(ShuffleVectorSDNode *SVOp,
 }
 
 /// RewriteAsNarrowerShuffle - Try rewriting v8i16 and v16i8 shuffles as 4 wide
-/// ones, or rewriting v4i32 / v2f32 as 2 wide ones if possible. This can be
+/// ones, or rewriting v4i32 / v2i32 as 2 wide ones if possible. This can be
 /// done when every pair / quad of shuffle mask elements point to elements in
 /// the right sequence. e.g.
 /// vector_shuffle <>, <>, < 3, 4, | 10, 11, | 0, 1, | 14, 15>
@@ -5083,13 +5096,9 @@ X86TargetLowering::LowerINSERT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const {
 SDValue
 X86TargetLowering::LowerSCALAR_TO_VECTOR(SDValue Op, SelectionDAG &DAG) const {
   DebugLoc dl = Op.getDebugLoc();
-  if (Op.getValueType() == MVT::v2f32)
-    return DAG.getNode(ISD::BIT_CONVERT, dl, MVT::v2f32,
-                       DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, MVT::v2i32,
-                                   DAG.getNode(ISD::BIT_CONVERT, dl, MVT::i32,
-                                               Op.getOperand(0))));
-
-  if (Op.getValueType() == MVT::v1i64 && Op.getOperand(0).getValueType() == MVT::i64)
+  
+  if (Op.getValueType() == MVT::v1i64 &&
+      Op.getOperand(0).getValueType() == MVT::i64)
     return DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, MVT::v1i64, Op.getOperand(0));
 
   SDValue AnyExt = DAG.getNode(ISD::ANY_EXTEND, dl, MVT::i32, Op.getOperand(0));
