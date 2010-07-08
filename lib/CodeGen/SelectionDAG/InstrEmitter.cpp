@@ -604,9 +604,10 @@ InstrEmitter::EmitDbgValue(SDDbgValue *SD,
   } else if (SD->getKind() == SDDbgValue::CONST) {
     const Value *V = SD->getConst();
     if (const ConstantInt *CI = dyn_cast<ConstantInt>(V)) {
-      // FIXME: SDDbgValues aren't updated with legalization, so it's possible
-      // to have i128 values in them at this point. As a crude workaround, just
-      // drop the debug info if this happens.
+      // FIXME: SDDbgValue constants aren't updated with legalization, so it's 
+      // possible to have i128 constants in them at this point. Dwarf writer
+      // does not handle i128 constants at the moment so, as a crude workaround,
+      // just drop the debug info if this happens.
       if (!CI->getValue().isSignedIntN(64))
         MIB.addReg(0U);
       else
@@ -723,6 +724,11 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
   MI->setMemRefs(cast<MachineSDNode>(Node)->memoperands_begin(),
                  cast<MachineSDNode>(Node)->memoperands_end());
 
+  // Insert the instruction into position in the block. This needs to
+  // happen before any custom inserter hook is called so that the
+  // hook knows where in the block to insert the replacement code.
+  MBB->insert(InsertPos, MI);
+
   if (II.usesCustomInsertionHook()) {
     // Insert this instruction into the basic block using a target
     // specific inserter which may returns a new basic block.
@@ -731,8 +737,6 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
     return;
   }
   
-  MBB->insert(InsertPos, MI);
-
   // Additional results must be an physical register def.
   if (HasPhysRegOuts) {
     for (unsigned i = II.getNumDefs(); i < NumResults; ++i) {

@@ -284,6 +284,18 @@ MipsTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     MachineFunction *F = BB->getParent();
     MachineBasicBlock *copy0MBB = F->CreateMachineBasicBlock(LLVM_BB);
     MachineBasicBlock *sinkMBB  = F->CreateMachineBasicBlock(LLVM_BB);
+    F->insert(It, copy0MBB);
+    F->insert(It, sinkMBB);
+
+    // Transfer the remainder of BB and its successor edges to sinkMBB.
+    sinkMBB->splice(sinkMBB->begin(), BB,
+                    llvm::next(MachineBasicBlock::iterator(MI)),
+                    BB->end());
+    sinkMBB->transferSuccessorsAndUpdatePHIs(BB);
+
+    // Next, add the true and fallthrough blocks as its successors.
+    BB->addSuccessor(copy0MBB);
+    BB->addSuccessor(sinkMBB);
 
     // Emit the right instruction according to the type of the operands compared
     if (isFPCmp) {
@@ -295,20 +307,6 @@ MipsTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     } else
       BuildMI(BB, dl, TII->get(Mips::BNE)).addReg(MI->getOperand(1).getReg())
         .addReg(Mips::ZERO).addMBB(sinkMBB);
-
-    F->insert(It, copy0MBB);
-    F->insert(It, sinkMBB);
-    // Update machine-CFG edges by first adding all successors of the current
-    // block to the new block which will contain the Phi node for the select.
-    for(MachineBasicBlock::succ_iterator i = BB->succ_begin(),
-          e = BB->succ_end(); i != e; ++i)
-      sinkMBB->addSuccessor(*i);
-    // Next, remove all successors of the current block, and add the true
-    // and fallthrough blocks as its successors.
-    while(!BB->succ_empty())
-      BB->removeSuccessor(BB->succ_begin());
-    BB->addSuccessor(copy0MBB);
-    BB->addSuccessor(sinkMBB);
 
     //  copy0MBB:
     //   %FalseValue = ...
@@ -322,11 +320,12 @@ MipsTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     //   %Result = phi [ %FalseValue, copy0MBB ], [ %TrueValue, thisMBB ]
     //  ...
     BB = sinkMBB;
-    BuildMI(BB, dl, TII->get(Mips::PHI), MI->getOperand(0).getReg())
+    BuildMI(*BB, BB->begin(), dl,
+            TII->get(Mips::PHI), MI->getOperand(0).getReg())
       .addReg(MI->getOperand(2).getReg()).addMBB(copy0MBB)
       .addReg(MI->getOperand(3).getReg()).addMBB(thisMBB);
 
-    F->DeleteMachineInstr(MI);   // The pseudo instruction is gone now.
+    MI->eraseFromParent();   // The pseudo instruction is gone now.
     return BB;
   }
   }
@@ -490,21 +489,21 @@ SDValue MipsTargetLowering::LowerGlobalAddress(SDValue Op,
     
     // %gp_rel relocation
     if (TLOF.IsGlobalInSmallSection(GV, getTargetMachine())) { 
-      SDValue GA = DAG.getTargetGlobalAddress(GV, MVT::i32, 0, 
+      SDValue GA = DAG.getTargetGlobalAddress(GV, dl, MVT::i32, 0, 
                                               MipsII::MO_GPREL);
       SDValue GPRelNode = DAG.getNode(MipsISD::GPRel, dl, VTs, &GA, 1);
       SDValue GOT = DAG.getGLOBAL_OFFSET_TABLE(MVT::i32);
       return DAG.getNode(ISD::ADD, dl, MVT::i32, GOT, GPRelNode); 
     }
     // %hi/%lo relocation
-    SDValue GA = DAG.getTargetGlobalAddress(GV, MVT::i32, 0,
+    SDValue GA = DAG.getTargetGlobalAddress(GV, dl, MVT::i32, 0,
                                             MipsII::MO_ABS_HILO);
     SDValue HiPart = DAG.getNode(MipsISD::Hi, dl, VTs, &GA, 1);
     SDValue Lo = DAG.getNode(MipsISD::Lo, dl, MVT::i32, GA);
     return DAG.getNode(ISD::ADD, dl, MVT::i32, HiPart, Lo);
 
   } else {
-    SDValue GA = DAG.getTargetGlobalAddress(GV, MVT::i32, 0,
+    SDValue GA = DAG.getTargetGlobalAddress(GV, dl, MVT::i32, 0,
                                             MipsII::MO_GOT);
     SDValue ResNode = DAG.getLoad(MVT::i32, dl, 
                                   DAG.getEntryNode(), GA, NULL, 0,
@@ -768,6 +767,7 @@ MipsTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
                               CallingConv::ID CallConv, bool isVarArg,
                               bool &isTailCall,
                               const SmallVectorImpl<ISD::OutputArg> &Outs,
+                              const SmallVectorImpl<SDValue> &OutVals,
                               const SmallVectorImpl<ISD::InputArg> &Ins,
                               DebugLoc dl, SelectionDAG &DAG,
                               SmallVectorImpl<SDValue> &InVals) const {
@@ -808,7 +808,7 @@ MipsTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 
   // Walk the register/memloc assignments, inserting copies/loads.
   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
-    SDValue Arg = Outs[i].Val;
+    SDValue Arg = OutVals[i];
     CCValAssign &VA = ArgLocs[i];
 
     // Promote the value if needed.
@@ -889,7 +889,7 @@ MipsTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   // node so that legalize doesn't hack it. 
   unsigned char OpFlag = IsPIC ? MipsII::MO_GOT_CALL : MipsII::MO_NO_FLAG;
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) 
-    Callee = DAG.getTargetGlobalAddress(G->getGlobal(), 
+    Callee = DAG.getTargetGlobalAddress(G->getGlobal(), dl, 
                                 getPointerTy(), 0, OpFlag);
   else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(Callee))
     Callee = DAG.getTargetExternalSymbol(S->getSymbol(), 
@@ -1169,6 +1169,7 @@ SDValue
 MipsTargetLowering::LowerReturn(SDValue Chain,
                                 CallingConv::ID CallConv, bool isVarArg,
                                 const SmallVectorImpl<ISD::OutputArg> &Outs,
+                                const SmallVectorImpl<SDValue> &OutVals,
                                 DebugLoc dl, SelectionDAG &DAG) const {
 
   // CCValAssign - represent the assignment of
@@ -1198,7 +1199,7 @@ MipsTargetLowering::LowerReturn(SDValue Chain,
     assert(VA.isRegLoc() && "Can only return in registers!");
 
     Chain = DAG.getCopyToReg(Chain, dl, VA.getLocReg(), 
-                             Outs[i].Val, Flag);
+                             OutVals[i], Flag);
 
     // guarantee that all emitted copies are
     // stuck together, avoiding something bad

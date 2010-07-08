@@ -259,6 +259,11 @@ public:
   /// machine basic block (i.e., copies all the successors fromMBB and
   /// remove all the successors from fromMBB).
   void transferSuccessors(MachineBasicBlock *fromMBB);
+
+  /// transferSuccessorsAndUpdatePHIs - Transfers all the successors, as
+  /// in transferSuccessors, and update PHI operands in the successor blocks
+  /// which refer to fromMBB to refer to this.
+  void transferSuccessorsAndUpdatePHIs(MachineBasicBlock *fromMBB);
   
   /// isSuccessor - Return true if the specified MBB is a successor of this
   /// block.
@@ -276,6 +281,13 @@ public:
   /// return false if it can reach the block after it, but it uses an explicit
   /// branch to do so (e.g., a table jump).  True is a conservative answer.
   bool canFallThrough();
+
+  /// Returns a pointer to the first instructon in this block that is not a 
+  /// PHINode instruction. When adding instruction to the beginning of the
+  /// basic block, they should be added before the returned value, not before
+  /// the first instruction, which might be PHI.
+  /// Returns end() is there's no non-PHI instruction.
+  iterator getFirstNonPHI();
 
   /// getFirstTerminator - returns an iterator to the first terminator
   /// instruction of this basic block. If a terminator does not exist,

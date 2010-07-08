@@ -38,13 +38,14 @@ public:
   ~X86MCCodeEmitter() {}
 
   unsigned getNumFixupKinds() const {
-    return 4;
+    return 5;
   }
 
   const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const {
     const static MCFixupKindInfo Infos[] = {
       { "reloc_pcrel_4byte", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel },
       { "reloc_pcrel_1byte", 0, 1 * 8, MCFixupKindInfo::FKF_IsPCRel },
+      { "reloc_pcrel_2byte", 0, 2 * 8, MCFixupKindInfo::FKF_IsPCRel },
       { "reloc_riprel_4byte", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel },
       { "reloc_riprel_4byte_movq_load", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel }
     };
@@ -170,8 +171,8 @@ static MCFixupKind getImmFixupKind(uint64_t TSFlags) {
   switch (Size) {
   default: assert(0 && "Unknown immediate size");
   case 1: return isPCRel ? MCFixupKind(X86::reloc_pcrel_1byte) : FK_Data_1;
+  case 2: return isPCRel ? MCFixupKind(X86::reloc_pcrel_2byte) : FK_Data_2;
   case 4: return isPCRel ? MCFixupKind(X86::reloc_pcrel_4byte) : FK_Data_4;
-  case 2: assert(!isPCRel); return FK_Data_2;
   case 8: assert(!isPCRel); return FK_Data_8;
   }
 }
@@ -199,6 +200,8 @@ EmitImmediate(const MCOperand &DispOp, unsigned Size, MCFixupKind FixupKind,
       FixupKind == MCFixupKind(X86::reloc_riprel_4byte) ||
       FixupKind == MCFixupKind(X86::reloc_riprel_4byte_movq_load))
     ImmOffset -= 4;
+  if (FixupKind == MCFixupKind(X86::reloc_pcrel_2byte))
+    ImmOffset -= 2;
   if (FixupKind == MCFixupKind(X86::reloc_pcrel_1byte))
     ImmOffset -= 1;
   
@@ -500,6 +503,11 @@ void X86MCCodeEmitter::EmitVEXOpcodePrefix(uint64_t TSFlags, unsigned &CurByte,
       VEX_4V = getVEXRegisterEncoding(MI, CurOp);
       CurOp++;
     }
+
+    // If the last register should be encoded in the immediate field
+    // do not use any bit from VEX prefix to this register, ignore it
+    if ((TSFlags >> 32) & X86II::VEX_I8IMM)
+      NumOps--;
 
     for (; CurOp != NumOps; ++CurOp) {
       const MCOperand &MO = MI.getOperand(CurOp);
@@ -914,11 +922,24 @@ EncodeInstruction(const MCInst &MI, raw_ostream &OS,
   
   // If there is a remaining operand, it must be a trailing immediate.  Emit it
   // according to the right size for the instruction.
-  if (CurOp != NumOps)
-    EmitImmediate(MI.getOperand(CurOp++),
-                  X86II::getSizeOfImm(TSFlags), getImmFixupKind(TSFlags),
-                  CurByte, OS, Fixups);
-  
+  if (CurOp != NumOps) {
+    // The last source register of a 4 operand instruction in AVX is encoded
+    // in bits[7:4] of a immediate byte, and bits[3:0] are ignored.
+    if ((TSFlags >> 32) & X86II::VEX_I8IMM) {
+      const MCOperand &MO = MI.getOperand(CurOp++);
+      bool IsExtReg =
+        X86InstrInfo::isX86_64ExtendedReg(MO.getReg());
+      unsigned RegNum = (IsExtReg ? (1 << 7) : 0);
+      RegNum |= GetX86RegNum(MO) << 4;
+      EmitImmediate(MCOperand::CreateImm(RegNum), 1, FK_Data_1, CurByte, OS,
+                    Fixups);
+    } else
+      EmitImmediate(MI.getOperand(CurOp++),
+                    X86II::getSizeOfImm(TSFlags), getImmFixupKind(TSFlags),
+                    CurByte, OS, Fixups);
+  }
+
+
 #ifndef NDEBUG
   // FIXME: Verify.
   if (/*!Desc.isVariadic() &&*/ CurOp != NumOps) {

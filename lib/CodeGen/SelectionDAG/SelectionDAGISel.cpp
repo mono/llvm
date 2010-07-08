@@ -14,7 +14,7 @@
 #define DEBUG_TYPE "isel"
 #include "ScheduleDAGSDNodes.h"
 #include "SelectionDAGBuilder.h"
-#include "FunctionLoweringInfo.h"
+#include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DebugInfo.h"
@@ -321,7 +321,6 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
 
 MachineBasicBlock *
 SelectionDAGISel::SelectBasicBlock(MachineBasicBlock *BB,
-                                   const BasicBlock *LLVMBB,
                                    BasicBlock::const_iterator Begin,
                                    BasicBlock::const_iterator End,
                                    bool &HadTailCall) {
@@ -672,13 +671,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   // Initialize the Fast-ISel state, if needed.
   FastISel *FastIS = 0;
   if (EnableFastISel)
-    FastIS = TLI.createFastISel(*MF, FuncInfo->ValueMap, FuncInfo->MBBMap,
-                                FuncInfo->StaticAllocaMap,
-                                FuncInfo->PHINodesToUpdate
-#ifndef NDEBUG
-                                , FuncInfo->CatchInfoLost
-#endif
-                                );
+    FastIS = TLI.createFastISel(*FuncInfo);
 
   // Iterate over all basic blocks in the function.
   for (Function::const_iterator I = Fn.begin(), E = Fn.end(); I != E; ++I) {
@@ -736,7 +729,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
           }
 
           bool HadTailCall = false;
-          BB = SelectBasicBlock(BB, LLVMBB, BI, llvm::next(BI), HadTailCall);
+          BB = SelectBasicBlock(BB, BI, llvm::next(BI), HadTailCall);
 
           // If the call was emitted as a tail call, we're done with the block.
           if (HadTailCall) {
@@ -772,7 +765,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
     // block.
     if (BI != End) {
       bool HadTailCall;
-      BB = SelectBasicBlock(BB, LLVMBB, BI, End, HadTailCall);
+      BB = SelectBasicBlock(BB, BI, End, HadTailCall);
     }
 
     FinishBasicBlock(BB);

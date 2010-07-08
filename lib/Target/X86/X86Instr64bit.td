@@ -1900,8 +1900,6 @@ def : Pat<(i64 (X86Wrapper tjumptable  :$dst)),
           (MOV64ri tjumptable  :$dst)>, Requires<[FarData]>;
 def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
           (MOV64ri tglobaladdr :$dst)>, Requires<[FarData]>;
-def : Pat<(i64 (X86Wrapper tglobaltlsaddr :$dst)),
-          (MOV64ri tglobaltlsaddr :$dst)>, Requires<[FarData]>;
 def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
           (MOV64ri texternalsym:$dst)>, Requires<[FarData]>;
 def : Pat<(i64 (X86Wrapper tblockaddress:$dst)),
@@ -1916,8 +1914,6 @@ def : Pat<(i64 (X86Wrapper tjumptable  :$dst)),
           (MOV64ri64i32 tjumptable  :$dst)>, Requires<[SmallCode]>;
 def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
           (MOV64ri64i32 tglobaladdr :$dst)>, Requires<[SmallCode]>;
-def : Pat<(i64 (X86Wrapper tglobaltlsaddr :$dst)),
-          (MOV64ri64i32 tglobaltlsaddr :$dst)>, Requires<[SmallCode]>;
 def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
           (MOV64ri64i32 texternalsym:$dst)>, Requires<[SmallCode]>;
 def : Pat<(i64 (X86Wrapper tblockaddress:$dst)),
@@ -1932,8 +1928,6 @@ def : Pat<(i64 (X86Wrapper tjumptable  :$dst)),
           (MOV64ri32 tjumptable  :$dst)>, Requires<[KernelCode]>;
 def : Pat<(i64 (X86Wrapper tglobaladdr :$dst)),
           (MOV64ri32 tglobaladdr :$dst)>, Requires<[KernelCode]>;
-def : Pat<(i64 (X86Wrapper tglobaltlsaddr :$dst)),
-          (MOV64ri32 tglobaltlsaddr :$dst)>, Requires<[KernelCode]>;
 def : Pat<(i64 (X86Wrapper texternalsym:$dst)),
           (MOV64ri32 texternalsym:$dst)>, Requires<[KernelCode]>;
 def : Pat<(i64 (X86Wrapper tblockaddress:$dst)),
@@ -1950,9 +1944,6 @@ def : Pat<(store (i64 (X86Wrapper tjumptable:$src)), addr:$dst),
           Requires<[NearData, IsStatic]>;
 def : Pat<(store (i64 (X86Wrapper tglobaladdr:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, tglobaladdr:$src)>,
-          Requires<[NearData, IsStatic]>;
-def : Pat<(store (i64 (X86Wrapper tglobaltlsaddr:$src)), addr:$dst),
-          (MOV64mi32 addr:$dst, tglobaltlsaddr:$src)>,
           Requires<[NearData, IsStatic]>;
 def : Pat<(store (i64 (X86Wrapper texternalsym:$src)), addr:$dst),
           (MOV64mi32 addr:$dst, texternalsym:$src)>,
@@ -1990,6 +1981,17 @@ def : Pat<(X86tcret (i64 tglobaladdr:$dst), imm:$off),
 def : Pat<(X86tcret (i64 texternalsym:$dst), imm:$off),
           (TCRETURNdi64 texternalsym:$dst, imm:$off)>,
 	  Requires<[In64BitMode]>;
+
+// tls has some funny stuff here...
+// This corresponds to movabs $foo@tpoff, %rax
+def : Pat<(i64 (X86Wrapper tglobaltlsaddr :$dst)),
+          (MOV64ri tglobaltlsaddr :$dst)>;
+// This corresponds to add $foo@tpoff, %rax
+def : Pat<(add GR64:$src1, (X86Wrapper tglobaltlsaddr :$dst)),
+          (ADD64ri32 GR64:$src1, tglobaltlsaddr :$dst)>;
+// This corresponds to mov foo@tpoff(%rbx), %eax
+def : Pat<(load (i64 (X86Wrapper tglobaltlsaddr :$dst))),
+          (MOV64rm tglobaltlsaddr :$dst)>;
 
 // Comparisons.
 
@@ -2359,45 +2361,3 @@ def MOVSDto64mr  : RPDI<0x7E, MRMDestMem, (outs), (ins i64mem:$dst, FR64:$src),
                         "movq\t{$src, $dst|$dst, $src}",
                         [(store (i64 (bitconvert FR64:$src)), addr:$dst)]>;
 
-//===----------------------------------------------------------------------===//
-// X86-64 SSE4.1 Instructions
-//===----------------------------------------------------------------------===//
-
-/// SS41I_extract32 - SSE 4.1 extract 32 bits to int reg or memory destination
-multiclass SS41I_extract64<bits<8> opc, string OpcodeStr> {
-  def rr : SS4AIi8<opc, MRMDestReg, (outs GR64:$dst),
-                 (ins VR128:$src1, i32i8imm:$src2),
-                 !strconcat(OpcodeStr, 
-                  "\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
-                 [(set GR64:$dst,
-                  (extractelt (v2i64 VR128:$src1), imm:$src2))]>, OpSize, REX_W;
-  def mr : SS4AIi8<opc, MRMDestMem, (outs),
-                 (ins i64mem:$dst, VR128:$src1, i32i8imm:$src2),
-                 !strconcat(OpcodeStr, 
-                  "\t{$src2, $src1, $dst|$dst, $src1, $src2}"),
-                 [(store (extractelt (v2i64 VR128:$src1), imm:$src2),
-                          addr:$dst)]>, OpSize, REX_W;
-}
-
-defm PEXTRQ      : SS41I_extract64<0x16, "pextrq">;
-
-let Constraints = "$src1 = $dst" in {
-  multiclass SS41I_insert64<bits<8> opc, string OpcodeStr> {
-    def rr : SS4AIi8<opc, MRMSrcReg, (outs VR128:$dst),
-                   (ins VR128:$src1, GR64:$src2, i32i8imm:$src3),
-                   !strconcat(OpcodeStr, 
-                    "\t{$src3, $src2, $dst|$dst, $src2, $src3}"),
-                   [(set VR128:$dst, 
-                     (v2i64 (insertelt VR128:$src1, GR64:$src2, imm:$src3)))]>,
-                   OpSize, REX_W;
-    def rm : SS4AIi8<opc, MRMSrcMem, (outs VR128:$dst),
-                   (ins VR128:$src1, i64mem:$src2, i32i8imm:$src3),
-                   !strconcat(OpcodeStr,
-                    "\t{$src3, $src2, $dst|$dst, $src2, $src3}"),
-                   [(set VR128:$dst, 
-                     (v2i64 (insertelt VR128:$src1, (loadi64 addr:$src2),
-                                       imm:$src3)))]>, OpSize, REX_W;
-  }
-} // Constraints = "$src1 = $dst"
-
-defm PINSRQ      : SS41I_insert64<0x22, "pinsrq">;

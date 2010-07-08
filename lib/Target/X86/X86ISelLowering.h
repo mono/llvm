@@ -579,16 +579,7 @@ namespace llvm {
 
     /// createFastISel - This method returns a target specific FastISel object,
     /// or null if the target does not support "fast" ISel.
-    virtual FastISel *
-    createFastISel(MachineFunction &mf,
-                   DenseMap<const Value *, unsigned> &,
-                   DenseMap<const BasicBlock *, MachineBasicBlock *> &,
-                   DenseMap<const AllocaInst *, int> &,
-                   std::vector<std::pair<MachineInstr*, unsigned> > &
-#ifndef NDEBUG
-                   , SmallSet<const Instruction *, 8> &
-#endif
-                   ) const;
+    virtual FastISel *createFastISel(FunctionLoweringInfo &funcInfo) const;
 
     /// getFunctionAlignment - Return the Log2 alignment of this function.
     virtual unsigned getFunctionAlignment(const Function *F) const;
@@ -652,6 +643,7 @@ namespace llvm {
                                            bool isCalleeStructRet,
                                            bool isCallerStructRet,
                                     const SmallVectorImpl<ISD::OutputArg> &Outs,
+                                    const SmallVectorImpl<SDValue> &OutVals,
                                     const SmallVectorImpl<ISD::InputArg> &Ins,
                                            SelectionDAG& DAG) const;
     bool IsCalleePop(bool isVarArg, CallingConv::ID CallConv) const;
@@ -734,6 +726,7 @@ namespace llvm {
       LowerCall(SDValue Chain, SDValue Callee,
                 CallingConv::ID CallConv, bool isVarArg, bool &isTailCall,
                 const SmallVectorImpl<ISD::OutputArg> &Outs,
+                const SmallVectorImpl<SDValue> &OutVals,
                 const SmallVectorImpl<ISD::InputArg> &Ins,
                 DebugLoc dl, SelectionDAG &DAG,
                 SmallVectorImpl<SDValue> &InVals) const;
@@ -742,13 +735,14 @@ namespace llvm {
       LowerReturn(SDValue Chain,
                   CallingConv::ID CallConv, bool isVarArg,
                   const SmallVectorImpl<ISD::OutputArg> &Outs,
+                  const SmallVectorImpl<SDValue> &OutVals,
                   DebugLoc dl, SelectionDAG &DAG) const;
 
     virtual bool
       CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
                      const SmallVectorImpl<EVT> &OutTys,
                      const SmallVectorImpl<ISD::ArgFlagsTy> &ArgsFlags,
-                     SelectionDAG &DAG) const;
+                     LLVMContext &Context) const;
 
     void ReplaceATOMIC_BINARY_64(SDNode *N, SmallVectorImpl<SDValue> &Results,
                                  SelectionDAG &DAG, unsigned NewOp) const;
@@ -818,15 +812,7 @@ namespace llvm {
   };
 
   namespace X86 {
-    FastISel *createFastISel(MachineFunction &mf,
-                           DenseMap<const Value *, unsigned> &,
-                           DenseMap<const BasicBlock *, MachineBasicBlock *> &,
-                           DenseMap<const AllocaInst *, int> &,
-                           std::vector<std::pair<MachineInstr*, unsigned> > &
-#ifndef NDEBUG
-                           , SmallSet<const Instruction*, 8> &
-#endif
-                           );
+    FastISel *createFastISel(FunctionLoweringInfo &funcInfo);
   }
 }
 

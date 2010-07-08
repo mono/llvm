@@ -313,6 +313,7 @@ namespace llvm {
     SDValue LowerBR_JT(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerBR_CC(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG) const;
@@ -337,6 +338,7 @@ namespace llvm {
                 CallingConv::ID CallConv, bool isVarArg,
                 bool &isTailCall,
                 const SmallVectorImpl<ISD::OutputArg> &Outs,
+                const SmallVectorImpl<SDValue> &OutVals,
                 const SmallVectorImpl<ISD::InputArg> &Ins,
                 DebugLoc dl, SelectionDAG &DAG,
                 SmallVectorImpl<SDValue> &InVals) const;
@@ -350,15 +352,19 @@ namespace llvm {
                                            bool isCalleeStructRet,
                                            bool isCallerStructRet,
                                     const SmallVectorImpl<ISD::OutputArg> &Outs,
+                                    const SmallVectorImpl<SDValue> &OutVals,
                                     const SmallVectorImpl<ISD::InputArg> &Ins,
                                            SelectionDAG& DAG) const;
     virtual SDValue
       LowerReturn(SDValue Chain,
                   CallingConv::ID CallConv, bool isVarArg,
                   const SmallVectorImpl<ISD::OutputArg> &Outs,
+                  const SmallVectorImpl<SDValue> &OutVals,
                   DebugLoc dl, SelectionDAG &DAG) const;
 
     SDValue getARMCmp(SDValue LHS, SDValue RHS, ISD::CondCode CC,
+                      SDValue &ARMCC, SelectionDAG &DAG, DebugLoc dl) const;
+    SDValue getVFPCmp(SDValue &LHS, SDValue &RHS, ISD::CondCode CC,
                       SDValue &ARMCC, SelectionDAG &DAG, DebugLoc dl) const;
 
     MachineBasicBlock *EmitAtomicCmpSwap(MachineInstr *MI,

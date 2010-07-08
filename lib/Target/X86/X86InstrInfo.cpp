@@ -1913,6 +1913,9 @@ bool X86InstrInfo::copyRegToReg(MachineBasicBlock &MBB,
     else if (SrcRC->hasSuperClass(&X86::GR32RegClass) &&
              DestRC->hasSuperClass(&X86::GR32RegClass))
       CommonRC = &X86::GR32RegClass;
+    else if (SrcRC->hasSuperClass(&X86::GR8RegClass) &&
+             DestRC->hasSuperClass(&X86::GR8RegClass))
+      CommonRC = &X86::GR8RegClass;
     else
       CommonRC = 0;
   }
@@ -1929,7 +1932,9 @@ bool X86InstrInfo::copyRegToReg(MachineBasicBlock &MBB,
     } else if (CommonRC == &X86::GR8RegClass) {
       // Copying to or from a physical H register on x86-64 requires a NOREX
       // move.  Otherwise use a normal move.
-      if ((isHReg(DestReg) || isHReg(SrcReg)) &&
+      if ((isHReg(DestReg) || isHReg(SrcReg) ||
+           SrcRC == &X86::GR8_ABCD_HRegClass ||
+           DestRC == &X86::GR8_ABCD_HRegClass) &&
           TM.getSubtarget<X86Subtarget>().is64Bit())
         Opc = X86::MOV8rr_NOREX;
       else

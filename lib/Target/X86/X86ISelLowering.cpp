@@ -1220,10 +1220,10 @@ bool
 X86TargetLowering::CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
                         const SmallVectorImpl<EVT> &OutTys,
                         const SmallVectorImpl<ISD::ArgFlagsTy> &ArgsFlags,
-                        SelectionDAG &DAG) const {
+                        LLVMContext &Context) const {
   SmallVector<CCValAssign, 16> RVLocs;
   CCState CCInfo(CallConv, isVarArg, getTargetMachine(),
-                 RVLocs, *DAG.getContext());
+                 RVLocs, Context);
   return CCInfo.CheckReturn(OutTys, ArgsFlags, RetCC_X86);
 }
 
@@ -1231,6 +1231,7 @@ SDValue
 X86TargetLowering::LowerReturn(SDValue Chain,
                                CallingConv::ID CallConv, bool isVarArg,
                                const SmallVectorImpl<ISD::OutputArg> &Outs,
+                               const SmallVectorImpl<SDValue> &OutVals,
                                DebugLoc dl, SelectionDAG &DAG) const {
   MachineFunction &MF = DAG.getMachineFunction();
   X86MachineFunctionInfo *FuncInfo = MF.getInfo<X86MachineFunctionInfo>();
@@ -1258,7 +1259,7 @@ X86TargetLowering::LowerReturn(SDValue Chain,
   for (unsigned i = 0; i != RVLocs.size(); ++i) {
     CCValAssign &VA = RVLocs[i];
     assert(VA.isRegLoc() && "Can only return in registers!");
-    SDValue ValToCopy = Outs[i].Val;
+    SDValue ValToCopy = OutVals[i];
 
     // Returns in ST0/ST1 are handled specially: these are pushed as operands to
     // the RET instruction and handled by the FP Stackifier.
@@ -1820,6 +1821,7 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
                              CallingConv::ID CallConv, bool isVarArg,
                              bool &isTailCall,
                              const SmallVectorImpl<ISD::OutputArg> &Outs,
+                             const SmallVectorImpl<SDValue> &OutVals,
                              const SmallVectorImpl<ISD::InputArg> &Ins,
                              DebugLoc dl, SelectionDAG &DAG,
                              SmallVectorImpl<SDValue> &InVals) const {
@@ -1832,7 +1834,7 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     // Check if it's really possible to do a tail call.
     isTailCall = IsEligibleForTailCallOptimization(Callee, CallConv,
                     isVarArg, IsStructRet, MF.getFunction()->hasStructRetAttr(),
-                                                   Outs, Ins, DAG);
+                                                   Outs, OutVals, Ins, DAG);
 
     // Sibcalls are automatically detected tailcalls which do not require
     // ABI changes.
@@ -1892,7 +1894,7 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
     CCValAssign &VA = ArgLocs[i];
     EVT RegVT = VA.getLocVT();
-    SDValue Arg = Outs[i].Val;
+    SDValue Arg = OutVals[i];
     ISD::ArgFlagsTy Flags = Outs[i].Flags;
     bool isByVal = Flags.isByVal();
 
@@ -2031,7 +2033,7 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
         if (VA.isRegLoc())
           continue;
         assert(VA.isMemLoc());
-        SDValue Arg = Outs[i].Val;
+        SDValue Arg = OutVals[i];
         ISD::ArgFlagsTy Flags = Outs[i].Flags;
         // Create frame index.
         int32_t Offset = VA.getLocMemOffset()+FPDiff;
@@ -2122,7 +2124,7 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
         OpFlags = X86II::MO_DARWIN_STUB;
       }
 
-      Callee = DAG.getTargetGlobalAddress(GV, getPointerTy(),
+      Callee = DAG.getTargetGlobalAddress(GV, dl, getPointerTy(),
                                           G->getOffset(), OpFlags);
     }
   } else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(Callee)) {
@@ -2335,6 +2337,7 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
                                                      bool isCalleeStructRet,
                                                      bool isCallerStructRet,
                                     const SmallVectorImpl<ISD::OutputArg> &Outs,
+                                    const SmallVectorImpl<SDValue> &OutVals,
                                     const SmallVectorImpl<ISD::InputArg> &Ins,
                                                      SelectionDAG& DAG) const {
   if (!IsTailCallConvention(CalleeCC) &&
@@ -2448,7 +2451,7 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
         ((X86TargetMachine&)getTargetMachine()).getInstrInfo();
       for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
         CCValAssign &VA = ArgLocs[i];
-        SDValue Arg = Outs[i].Val;
+        SDValue Arg = OutVals[i];
         ISD::ArgFlagsTy Flags = Outs[i].Flags;
         if (VA.getLocInfo() == CCValAssign::Indirect)
           return false;
@@ -2483,20 +2486,8 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
 }
 
 FastISel *
-X86TargetLowering::createFastISel(MachineFunction &mf,
-                            DenseMap<const Value *, unsigned> &vm,
-                            DenseMap<const BasicBlock*, MachineBasicBlock*> &bm,
-                            DenseMap<const AllocaInst *, int> &am,
-                            std::vector<std::pair<MachineInstr*, unsigned> > &pn
-#ifndef NDEBUG
-                          , SmallSet<const Instruction *, 8> &cil
-#endif
-                                  ) const {
-  return X86::createFastISel(mf, vm, bm, am, pn
-#ifndef NDEBUG
-                             , cil
-#endif
-                             );
+X86TargetLowering::createFastISel(FunctionLoweringInfo &funcInfo) const {
+  return X86::createFastISel(funcInfo);
 }
 
 
@@ -5263,10 +5254,10 @@ X86TargetLowering::LowerGlobalAddress(const GlobalValue *GV, DebugLoc dl,
   if (OpFlags == X86II::MO_NO_FLAG &&
       X86::isOffsetSuitableForCodeModel(Offset, M)) {
     // A direct static reference to a global.
-    Result = DAG.getTargetGlobalAddress(GV, getPointerTy(), Offset);
+    Result = DAG.getTargetGlobalAddress(GV, dl, getPointerTy(), Offset);
     Offset = 0;
   } else {
-    Result = DAG.getTargetGlobalAddress(GV, getPointerTy(), 0, OpFlags);
+    Result = DAG.getTargetGlobalAddress(GV, dl, getPointerTy(), 0, OpFlags);
   }
 
   if (Subtarget->isPICStyleRIPRel() &&
@@ -5311,7 +5302,7 @@ GetTLSADDR(SelectionDAG &DAG, SDValue Chain, GlobalAddressSDNode *GA,
   MachineFrameInfo *MFI = DAG.getMachineFunction().getFrameInfo();
   SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Flag);
   DebugLoc dl = GA->getDebugLoc();
-  SDValue TGA = DAG.getTargetGlobalAddress(GA->getGlobal(),
+  SDValue TGA = DAG.getTargetGlobalAddress(GA->getGlobal(), dl,
                                            GA->getValueType(0),
                                            GA->getOffset(),
                                            OperandFlags);
@@ -5384,7 +5375,8 @@ static SDValue LowerToTLSExecModel(GlobalAddressSDNode *GA, SelectionDAG &DAG,
 
   // emit "addl x@ntpoff,%eax" (local exec) or "addl x@indntpoff,%eax" (initial
   // exec)
-  SDValue TGA = DAG.getTargetGlobalAddress(GA->getGlobal(), GA->getValueType(0),
+  SDValue TGA = DAG.getTargetGlobalAddress(GA->getGlobal(), dl, 
+                                           GA->getValueType(0),
                                            GA->getOffset(), OperandFlags);
   SDValue Offset = DAG.getNode(WrapperKind, dl, PtrVT, TGA);
 
@@ -5441,12 +5433,10 @@ X86TargetLowering::LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const {
       OpFlag = X86II::MO_TLVP_PIC_BASE;
     else
       OpFlag = X86II::MO_TLVP;
-    
-    SDValue Result = DAG.getTargetGlobalAddress(GA->getGlobal(), 
+    DebugLoc DL = Op.getDebugLoc();    
+    SDValue Result = DAG.getTargetGlobalAddress(GA->getGlobal(), DL,
                                                 getPointerTy(),
                                                 GA->getOffset(), OpFlag);
-    
-    DebugLoc DL = Op.getDebugLoc();
     SDValue Offset = DAG.getNode(WrapperKind, DL, getPointerTy(), Result);
   
     // With PIC32, the address is actually $g + Offset.
@@ -5795,7 +5785,7 @@ SDValue X86TargetLowering::LowerUINT_TO_FP(SDValue Op,
 
   // Load the value out, extending it from f32 to f80.
   // FIXME: Avoid the extend by constructing the right constant pool?
-  SDValue Fudge = DAG.getExtLoad(ISD::EXTLOAD, dl, MVT::f80, DAG.getEntryNode(),
+  SDValue Fudge = DAG.getExtLoad(ISD::EXTLOAD, MVT::f80, dl, DAG.getEntryNode(),
                                  FudgePtr, PseudoSourceValue::getConstantPool(),
                                  0, MVT::f32, false, false, 4);
   // Extend everything to 80 bits to force it to be done on x87.
@@ -8038,8 +8028,11 @@ X86TargetLowering::EmitAtomicBitwiseWithCustomInserter(MachineInstr *bInstr,
   F->insert(MBBIter, newMBB);
   F->insert(MBBIter, nextMBB);
 
-  // Move all successors to thisMBB to nextMBB
-  nextMBB->transferSuccessors(thisMBB);
+  // Transfer the remainder of thisMBB and its successor edges to nextMBB.
+  nextMBB->splice(nextMBB->begin(), thisMBB,
+                  llvm::next(MachineBasicBlock::iterator(bInstr)),
+                  thisMBB->end());
+  nextMBB->transferSuccessorsAndUpdatePHIs(thisMBB);
 
   // Update thisMBB to fall through to newMBB
   thisMBB->addSuccessor(newMBB);
@@ -8102,7 +8095,7 @@ X86TargetLowering::EmitAtomicBitwiseWithCustomInserter(MachineInstr *bInstr,
   // insert branch
   BuildMI(newMBB, dl, TII->get(X86::JNE_4)).addMBB(newMBB);
 
-  F->DeleteMachineInstr(bInstr);   // The pseudo instruction is gone now.
+  bInstr->eraseFromParent();   // The pseudo instruction is gone now.
   return nextMBB;
 }
 
@@ -8147,8 +8140,11 @@ X86TargetLowering::EmitAtomicBit6432WithCustomInserter(MachineInstr *bInstr,
   F->insert(MBBIter, newMBB);
   F->insert(MBBIter, nextMBB);
 
-  // Move all successors to thisMBB to nextMBB
-  nextMBB->transferSuccessors(thisMBB);
+  // Transfer the remainder of thisMBB and its successor edges to nextMBB.
+  nextMBB->splice(nextMBB->begin(), thisMBB,
+                  llvm::next(MachineBasicBlock::iterator(bInstr)),
+                  thisMBB->end());
+  nextMBB->transferSuccessorsAndUpdatePHIs(thisMBB);
 
   // Update thisMBB to fall through to newMBB
   thisMBB->addSuccessor(newMBB);
@@ -8265,7 +8261,7 @@ X86TargetLowering::EmitAtomicBit6432WithCustomInserter(MachineInstr *bInstr,
   // insert branch
   BuildMI(newMBB, dl, TII->get(X86::JNE_4)).addMBB(newMBB);
 
-  F->DeleteMachineInstr(bInstr);   // The pseudo instruction is gone now.
+  bInstr->eraseFromParent();   // The pseudo instruction is gone now.
   return nextMBB;
 }
 
@@ -8299,8 +8295,11 @@ X86TargetLowering::EmitAtomicMinMaxWithCustomInserter(MachineInstr *mInstr,
   F->insert(MBBIter, newMBB);
   F->insert(MBBIter, nextMBB);
 
-  // Move all successors of thisMBB to nextMBB
-  nextMBB->transferSuccessors(thisMBB);
+  // Transfer the remainder of thisMBB and its successor edges to nextMBB.
+  nextMBB->splice(nextMBB->begin(), thisMBB,
+                  llvm::next(MachineBasicBlock::iterator(mInstr)),
+                  thisMBB->end());
+  nextMBB->transferSuccessorsAndUpdatePHIs(thisMBB);
 
   // Update thisMBB to fall through to newMBB
   thisMBB->addSuccessor(newMBB);
@@ -8368,7 +8367,7 @@ X86TargetLowering::EmitAtomicMinMaxWithCustomInserter(MachineInstr *mInstr,
   // insert branch
   BuildMI(newMBB, dl, TII->get(X86::JNE_4)).addMBB(newMBB);
 
-  F->DeleteMachineInstr(mInstr);   // The pseudo instruction is gone now.
+  mInstr->eraseFromParent();   // The pseudo instruction is gone now.
   return nextMBB;
 }
 
@@ -8378,7 +8377,6 @@ MachineBasicBlock *
 X86TargetLowering::EmitPCMP(MachineInstr *MI, MachineBasicBlock *BB,
                             unsigned numArgs, bool memArg) const {
 
-  MachineFunction *F = BB->getParent();
   DebugLoc dl = MI->getDebugLoc();
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
 
@@ -8400,7 +8398,7 @@ X86TargetLowering::EmitPCMP(MachineInstr *MI, MachineBasicBlock *BB,
   BuildMI(BB, dl, TII->get(X86::MOVAPSrr), MI->getOperand(0).getReg())
     .addReg(X86::XMM0);
 
-  F->DeleteMachineInstr(MI);
+  MI->eraseFromParent();
 
   return BB;
 }
@@ -8429,9 +8427,12 @@ X86TargetLowering::EmitVAStartSaveXMMRegsWithCustomInserter(
   F->insert(MBBIter, XMMSaveMBB);
   F->insert(MBBIter, EndMBB);
 
-  // Set up the CFG.
-  // Move any original successors of MBB to the end block.
-  EndMBB->transferSuccessors(MBB);
+  // Transfer the remainder of MBB and its successor edges to EndMBB.
+  EndMBB->splice(EndMBB->begin(), MBB,
+                 llvm::next(MachineBasicBlock::iterator(MI)),
+                 MBB->end());
+  EndMBB->transferSuccessorsAndUpdatePHIs(MBB);
+
   // The original block will now fall through to the XMM save block.
   MBB->addSuccessor(XMMSaveMBB);
   // The XMMSaveMBB will fall through to the end block.
@@ -8470,7 +8471,7 @@ X86TargetLowering::EmitVAStartSaveXMMRegsWithCustomInserter(
       .addMemOperand(MMO);
   }
 
-  F->DeleteMachineInstr(MI);   // The pseudo instruction is gone now.
+  MI->eraseFromParent();   // The pseudo instruction is gone now.
 
   return EndMBB;
 }
@@ -8499,43 +8500,38 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   MachineFunction *F = BB->getParent();
   MachineBasicBlock *copy0MBB = F->CreateMachineBasicBlock(LLVM_BB);
   MachineBasicBlock *sinkMBB = F->CreateMachineBasicBlock(LLVM_BB);
-  unsigned Opc =
-    X86::GetCondBranchFromCond((X86::CondCode)MI->getOperand(3).getImm());
-
-  BuildMI(BB, DL, TII->get(Opc)).addMBB(sinkMBB);
   F->insert(It, copy0MBB);
   F->insert(It, sinkMBB);
-
-  // Update machine-CFG edges by first adding all successors of the current
-  // block to the new block which will contain the Phi node for the select.
-  for (MachineBasicBlock::succ_iterator I = BB->succ_begin(),
-         E = BB->succ_end(); I != E; ++I)
-    sinkMBB->addSuccessor(*I);
-
-  // Next, remove all successors of the current block, and add the true
-  // and fallthrough blocks as its successors.
-  while (!BB->succ_empty())
-    BB->removeSuccessor(BB->succ_begin());
-
-  // Add the true and fallthrough blocks as its successors.
-  BB->addSuccessor(copy0MBB);
-  BB->addSuccessor(sinkMBB);
 
   // If the EFLAGS register isn't dead in the terminator, then claim that it's
   // live into the sink and copy blocks.
   const MachineFunction *MF = BB->getParent();
   const TargetRegisterInfo *TRI = MF->getTarget().getRegisterInfo();
   BitVector ReservedRegs = TRI->getReservedRegs(*MF);
-  const MachineInstr *Term = BB->getFirstTerminator();
 
-  for (unsigned I = 0, E = Term->getNumOperands(); I != E; ++I) {
-    const MachineOperand &MO = Term->getOperand(I);
-    if (!MO.isReg() || MO.isKill() || MO.isDead()) continue;
+  for (unsigned I = 0, E = MI->getNumOperands(); I != E; ++I) {
+    const MachineOperand &MO = MI->getOperand(I);
+    if (!MO.isReg() || !MO.isUse() || MO.isKill()) continue;
     unsigned Reg = MO.getReg();
     if (Reg != X86::EFLAGS) continue;
     copy0MBB->addLiveIn(Reg);
     sinkMBB->addLiveIn(Reg);
   }
+
+  // Transfer the remainder of BB and its successor edges to sinkMBB.
+  sinkMBB->splice(sinkMBB->begin(), BB,
+                  llvm::next(MachineBasicBlock::iterator(MI)),
+                  BB->end());
+  sinkMBB->transferSuccessorsAndUpdatePHIs(BB);
+
+  // Add the true and fallthrough blocks as its successors.
+  BB->addSuccessor(copy0MBB);
+  BB->addSuccessor(sinkMBB);
+
+  // Create the conditional branch instruction.
+  unsigned Opc =
+    X86::GetCondBranchFromCond((X86::CondCode)MI->getOperand(3).getImm());
+  BuildMI(BB, DL, TII->get(Opc)).addMBB(sinkMBB);
 
   //  copy0MBB:
   //   %FalseValue = ...
@@ -8545,11 +8541,12 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
   //  sinkMBB:
   //   %Result = phi [ %FalseValue, copy0MBB ], [ %TrueValue, thisMBB ]
   //  ...
-  BuildMI(sinkMBB, DL, TII->get(X86::PHI), MI->getOperand(0).getReg())
+  BuildMI(*sinkMBB, sinkMBB->begin(), DL,
+          TII->get(X86::PHI), MI->getOperand(0).getReg())
     .addReg(MI->getOperand(1).getReg()).addMBB(copy0MBB)
     .addReg(MI->getOperand(2).getReg()).addMBB(thisMBB);
 
-  F->DeleteMachineInstr(MI);   // The pseudo instruction is gone now.
+  MI->eraseFromParent();   // The pseudo instruction is gone now.
   return sinkMBB;
 }
 
@@ -8558,21 +8555,20 @@ X86TargetLowering::EmitLoweredMingwAlloca(MachineInstr *MI,
                                           MachineBasicBlock *BB) const {
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
   DebugLoc DL = MI->getDebugLoc();
-  MachineFunction *F = BB->getParent();
 
   // The lowering is pretty easy: we're just emitting the call to _alloca.  The
   // non-trivial part is impdef of ESP.
   // FIXME: The code should be tweaked as soon as we'll try to do codegen for
   // mingw-w64.
 
-  BuildMI(BB, DL, TII->get(X86::CALLpcrel32))
+  BuildMI(*BB, MI, DL, TII->get(X86::CALLpcrel32))
     .addExternalSymbol("_alloca")
     .addReg(X86::EAX, RegState::Implicit)
     .addReg(X86::ESP, RegState::Implicit)
     .addReg(X86::EAX, RegState::Define | RegState::Implicit)
     .addReg(X86::ESP, RegState::Define | RegState::Implicit);
 
-  F->DeleteMachineInstr(MI);   // The pseudo instruction is gone now.
+  MI->eraseFromParent();   // The pseudo instruction is gone now.
   return BB;
 }
 
@@ -8591,35 +8587,38 @@ X86TargetLowering::EmitLoweredTLSCall(MachineInstr *MI,
   assert(MI->getOperand(3).isGlobal() && "This should be a global");
   
   if (Subtarget->is64Bit()) {
-    MachineInstrBuilder MIB = BuildMI(BB, DL, TII->get(X86::MOV64rm), X86::RDI)
+    MachineInstrBuilder MIB = BuildMI(*BB, MI, DL,
+                                      TII->get(X86::MOV64rm), X86::RDI)
     .addReg(X86::RIP)
     .addImm(0).addReg(0)
     .addGlobalAddress(MI->getOperand(3).getGlobal(), 0, 
                       MI->getOperand(3).getTargetFlags())
     .addReg(0);
-    MIB = BuildMI(BB, DL, TII->get(X86::CALL64m));
+    MIB = BuildMI(*BB, MI, DL, TII->get(X86::CALL64m));
     addDirectMem(MIB, X86::RDI).addReg(0);
   } else if (getTargetMachine().getRelocationModel() != Reloc::PIC_) {
-    MachineInstrBuilder MIB = BuildMI(BB, DL, TII->get(X86::MOV32rm), X86::EAX)
+    MachineInstrBuilder MIB = BuildMI(*BB, MI, DL,
+                                      TII->get(X86::MOV32rm), X86::EAX)
     .addReg(0)
     .addImm(0).addReg(0)
     .addGlobalAddress(MI->getOperand(3).getGlobal(), 0, 
                       MI->getOperand(3).getTargetFlags())
     .addReg(0);
-    MIB = BuildMI(BB, DL, TII->get(X86::CALL32m));
+    MIB = BuildMI(*BB, MI, DL, TII->get(X86::CALL32m));
     addDirectMem(MIB, X86::EAX).addReg(0);
   } else {
-    MachineInstrBuilder MIB = BuildMI(BB, DL, TII->get(X86::MOV32rm), X86::EAX)
+    MachineInstrBuilder MIB = BuildMI(*BB, MI, DL,
+                                      TII->get(X86::MOV32rm), X86::EAX)
     .addReg(TII->getGlobalBaseReg(F))
     .addImm(0).addReg(0)
     .addGlobalAddress(MI->getOperand(3).getGlobal(), 0, 
                       MI->getOperand(3).getTargetFlags())
     .addReg(0);
-    MIB = BuildMI(BB, DL, TII->get(X86::CALL32m));
+    MIB = BuildMI(*BB, MI, DL, TII->get(X86::CALL32m));
     addDirectMem(MIB, X86::EAX).addReg(0);
   }
   
-  F->DeleteMachineInstr(MI); // The pseudo instruction is gone now.
+  MI->eraseFromParent(); // The pseudo instruction is gone now.
   return BB;
 }
 
@@ -8663,23 +8662,25 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     // mode when truncating to an integer value.
     MachineFunction *F = BB->getParent();
     int CWFrameIdx = F->getFrameInfo()->CreateStackObject(2, 2, false);
-    addFrameReference(BuildMI(BB, DL, TII->get(X86::FNSTCW16m)), CWFrameIdx);
+    addFrameReference(BuildMI(*BB, MI, DL,
+                              TII->get(X86::FNSTCW16m)), CWFrameIdx);
 
     // Load the old value of the high byte of the control word...
     unsigned OldCW =
       F->getRegInfo().createVirtualRegister(X86::GR16RegisterClass);
-    addFrameReference(BuildMI(BB, DL, TII->get(X86::MOV16rm), OldCW),
+    addFrameReference(BuildMI(*BB, MI, DL, TII->get(X86::MOV16rm), OldCW),
                       CWFrameIdx);
 
     // Set the high part to be round to zero...
-    addFrameReference(BuildMI(BB, DL, TII->get(X86::MOV16mi)), CWFrameIdx)
+    addFrameReference(BuildMI(*BB, MI, DL, TII->get(X86::MOV16mi)), CWFrameIdx)
       .addImm(0xC7F);
 
     // Reload the modified control word now...
-    addFrameReference(BuildMI(BB, DL, TII->get(X86::FLDCW16m)), CWFrameIdx);
+    addFrameReference(BuildMI(*BB, MI, DL,
+                              TII->get(X86::FLDCW16m)), CWFrameIdx);
 
     // Restore the memory image of control word to original value
-    addFrameReference(BuildMI(BB, DL, TII->get(X86::MOV16mr)), CWFrameIdx)
+    addFrameReference(BuildMI(*BB, MI, DL, TII->get(X86::MOV16mr)), CWFrameIdx)
       .addReg(OldCW);
 
     // Get the X86 opcode to use.
@@ -8718,13 +8719,14 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     } else {
       AM.Disp = Op.getImm();
     }
-    addFullAddress(BuildMI(BB, DL, TII->get(Opc)), AM)
+    addFullAddress(BuildMI(*BB, MI, DL, TII->get(Opc)), AM)
                       .addReg(MI->getOperand(X86AddrNumOperands).getReg());
 
     // Reload the original control word now.
-    addFrameReference(BuildMI(BB, DL, TII->get(X86::FLDCW16m)), CWFrameIdx);
+    addFrameReference(BuildMI(*BB, MI, DL,
+                              TII->get(X86::FLDCW16m)), CWFrameIdx);
 
-    F->DeleteMachineInstr(MI);   // The pseudo instruction is gone now.
+    MI->eraseFromParent();   // The pseudo instruction is gone now.
     return BB;
   }
     // String/text processing lowering.
@@ -10268,8 +10270,7 @@ void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
     // In any sort of PIC mode addresses need to be computed at runtime by
     // adding in a register or some sort of table lookup.  These can't
     // be used as immediates.
-    if (Subtarget->isPICStyleGOT() || Subtarget->isPICStyleStubPIC() ||
-        Subtarget->isPICStyleRIPRel())
+    if (Subtarget->isPICStyleGOT() || Subtarget->isPICStyleStubPIC())
       return;
 
     // If we are in non-pic codegen mode, we allow the address of a global (with
@@ -10307,7 +10308,8 @@ void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
                                                         getTargetMachine())))
       return;
 
-    Result = DAG.getTargetGlobalAddress(GV, GA->getValueType(0), Offset);
+    Result = DAG.getTargetGlobalAddress(GV, Op.getDebugLoc(),
+                                        GA->getValueType(0), Offset);
     break;
   }
   }

@@ -718,6 +718,12 @@ ARMBaseInstrInfo::copyRegToReg(MachineBasicBlock &MBB,
   if (SrcRC == ARM::DPR_8RegisterClass)
     SrcRC = ARM::DPR_VFP2RegisterClass;
 
+  // NEONMoveFixPass will convert VFP moves to NEON moves when profitable.
+  if (DestRC == ARM::DPR_VFP2RegisterClass)
+    DestRC = ARM::DPRRegisterClass;
+  if (SrcRC == ARM::DPR_VFP2RegisterClass)
+    SrcRC = ARM::DPRRegisterClass;
+
   // Allow QPR / QPR_VFP2 / QPR_8 cross-class copies.
   if (DestRC == ARM::QPR_VFP2RegisterClass ||
       DestRC == ARM::QPR_8RegisterClass)
@@ -750,10 +756,6 @@ ARMBaseInstrInfo::copyRegToReg(MachineBasicBlock &MBB,
       Opc = (SrcRC == ARM::GPRRegisterClass ? ARM::VMOVSR : ARM::VMOVS);
     else if (DestRC == ARM::DPRRegisterClass)
       Opc = ARM::VMOVD;
-    else if (DestRC == ARM::DPR_VFP2RegisterClass ||
-             SrcRC == ARM::DPR_VFP2RegisterClass)
-      // Always use neon reg-reg move if source or dest is NEON-only regclass.
-      Opc = ARM::VMOVDneon;
     else if (DestRC == ARM::QPRRegisterClass)
       Opc = ARM::VMOVQ;
     else if (DestRC == ARM::QQPRRegisterClass)
@@ -830,7 +832,7 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
     // FIXME: Neon instructions should support predicates
     if (Align >= 16 && getRegisterInfo().canRealignStack(MF)) {
       AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VST1q))
-                     .addFrameIndex(FI).addImm(128)
+                     .addFrameIndex(FI).addImm(16)
                      .addReg(SrcReg, getKillRegState(isKill))
                      .addMemOperand(MMO));
     } else {
@@ -847,7 +849,7 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
       // FIXME: It's possible to only store part of the QQ register if the
       // spilled def has a sub-register index.
       MachineInstrBuilder MIB = BuildMI(MBB, I, DL, get(ARM::VST2q32))
-        .addFrameIndex(FI).addImm(128);
+        .addFrameIndex(FI).addImm(16);
       MIB = AddDReg(MIB, SrcReg, ARM::dsub_0, getKillRegState(isKill), TRI);
       MIB = AddDReg(MIB, SrcReg, ARM::dsub_1, 0, TRI);
       MIB = AddDReg(MIB, SrcReg, ARM::dsub_2, 0, TRI);
@@ -927,7 +929,7 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
   case ARM::QPR_8RegClassID:
     if (Align >= 16 && getRegisterInfo().canRealignStack(MF)) {
       AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VLD1q), DestReg)
-                     .addFrameIndex(FI).addImm(128)
+                     .addFrameIndex(FI).addImm(16)
                      .addMemOperand(MMO));
     } else {
       AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VLDMQ), DestReg)
@@ -944,7 +946,7 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
       MIB = AddDReg(MIB, DestReg, ARM::dsub_1, RegState::Define, TRI);
       MIB = AddDReg(MIB, DestReg, ARM::dsub_2, RegState::Define, TRI);
       MIB = AddDReg(MIB, DestReg, ARM::dsub_3, RegState::Define, TRI);
-      AddDefaultPred(MIB.addFrameIndex(FI).addImm(128).addMemOperand(MMO));
+      AddDefaultPred(MIB.addFrameIndex(FI).addImm(16).addMemOperand(MMO));
     } else {
       MachineInstrBuilder MIB =
         AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VLDMD))
@@ -1129,7 +1131,7 @@ foldMemoryOperandImpl(MachineFunction &MF, MachineInstr *MI,
       if (MFI.getObjectAlignment(FI) >= 16 &&
           getRegisterInfo().canRealignStack(MF)) {
         NewMI = BuildMI(MF, MI->getDebugLoc(), get(ARM::VST1q))
-          .addFrameIndex(FI).addImm(128)
+          .addFrameIndex(FI).addImm(16)
           .addReg(SrcReg,
                   getKillRegState(isKill) | getUndefRegState(isUndef),
                   SrcSubReg)
@@ -1155,7 +1157,7 @@ foldMemoryOperandImpl(MachineFunction &MF, MachineInstr *MI,
                   getDeadRegState(isDead) |
                   getUndefRegState(isUndef),
                   DstSubReg)
-          .addFrameIndex(FI).addImm(128).addImm(Pred).addReg(PredReg);
+          .addFrameIndex(FI).addImm(16).addImm(Pred).addReg(PredReg);
       } else {
         NewMI = BuildMI(MF, MI->getDebugLoc(), get(ARM::VLDMQ))
           .addReg(DstReg,

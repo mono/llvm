@@ -886,14 +886,14 @@ public:
                           InputIterator ArgBegin, InputIterator ArgEnd,
                           const Twine &NameStr = "",
                           Instruction *InsertBefore = 0) {
-    return new((unsigned)(ArgEnd - ArgBegin + 1))
+    return new(unsigned(ArgEnd - ArgBegin + 1))
       CallInst(Func, ArgBegin, ArgEnd, NameStr, InsertBefore);
   }
   template<typename InputIterator>
   static CallInst *Create(Value *Func,
                           InputIterator ArgBegin, InputIterator ArgEnd,
                           const Twine &NameStr, BasicBlock *InsertAtEnd) {
-    return new((unsigned)(ArgEnd - ArgBegin + 1))
+    return new(unsigned(ArgEnd - ArgBegin + 1))
       CallInst(Func, ArgBegin, ArgEnd, NameStr, InsertAtEnd);
   }
   static CallInst *Create(Value *F, Value *Actual,
@@ -940,8 +940,25 @@ public:
                                unsigned(isTC));
   }
 
+  /// @deprecated these "define hacks" will go away soon
+  /// @brief coerce out-of-tree code to abandon the low-level interfaces
+  /// @detail see below comments and update your code to high-level interfaces
+  ///    in LLVM v2.8-only code
+  ///    - getOperand(N+1)  --->  getArgOperand(N)
+  ///    - setOperand(N+1, V)  --->  setArgOperand(N, V)
+  ///    - getNumOperands()  --->  getNumArgOperands()+1  // note the "+1"!
+  ///
+  ///    in backward compatible code please consult llvm/Support/CallSite.h,
+  ///    you should create a callsite using the CallInst pointer and call its
+  ///    methods
+  ///
+# define public private
+# define protected private
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
+# undef public
+# undef protected
+public:
 
   enum { ArgOffset = 1 }; ///< temporary, do not use for new code!
   unsigned getNumArgOperands() const { return getNumOperands() - 1; }
@@ -951,11 +968,12 @@ public:
   /// Provide compile-time errors for accessing operand 0
   /// @deprecated these will go away soon
   /// @detail see below comments and update your code to high-level interfaces
-  ///    - getOperand(0)  --->  getCalledValue()
+  ///    - getOperand(0)  --->  getCalledValue(), or possibly getCalledFunction
   ///    - setOperand(0, V)  --->  setCalledFunction(V)
   ///
 private:
-  void getOperand(void*); // NO IMPL ---> use getCalledValue (or possibly getCalledFunction) instead
+  void getOperand(void*); // NO IMPL ---> use getCalledValue (or possibly
+                          //              getCalledFunction) instead
   void setOperand(void*, Value*); // NO IMPL ---> use setCalledFunction instead
 public:
 
@@ -1098,11 +1116,15 @@ CallInst::CallInst(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
                                    ->getElementType())->getReturnType(),
                 Instruction::Call,
                 OperandTraits<CallInst>::op_end(this) - (ArgEnd - ArgBegin + 1),
-                (unsigned)(ArgEnd - ArgBegin + 1), InsertBefore) {
+                unsigned(ArgEnd - ArgBegin + 1), InsertBefore) {
   init(Func, ArgBegin, ArgEnd, NameStr,
        typename std::iterator_traits<InputIterator>::iterator_category());
 }
 
+
+// Note: if you get compile errors about private methods then
+//       please update your code to use the high-level operand
+//       interfaces. See line 943 above.
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(CallInst, Value)
 
 //===----------------------------------------------------------------------===//

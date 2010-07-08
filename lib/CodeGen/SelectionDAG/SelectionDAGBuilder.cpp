@@ -14,7 +14,6 @@
 #define DEBUG_TYPE "isel"
 #include "SDNodeDbgValue.h"
 #include "SelectionDAGBuilder.h"
-#include "FunctionLoweringInfo.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -32,6 +31,7 @@
 #include "llvm/Module.h"
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/CodeGen/FastISel.h"
+#include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/GCStrategy.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -852,7 +852,7 @@ SDValue SelectionDAGBuilder::getValueImpl(const Value *V) {
       return DAG.getConstant(*CI, VT);
 
     if (const GlobalValue *GV = dyn_cast<GlobalValue>(C))
-      return DAG.getGlobalAddress(GV, VT);
+      return DAG.getGlobalAddress(GV, getCurDebugLoc(), VT);
 
     if (isa<ConstantPointerNull>(C))
       return DAG.getConstant(0, TLI.getPointerTy());
@@ -1027,6 +1027,7 @@ static void getReturnInfo(const Type* ReturnType,
 void SelectionDAGBuilder::visitRet(const ReturnInst &I) {
   SDValue Chain = getControlRoot();
   SmallVector<ISD::OutputArg, 8> Outs;
+  SmallVector<SDValue, 8> OutVals;
 
   if (!FuncInfo.CanLowerReturn) {
     unsigned DemoteReg = FuncInfo.DemoteRegister;
@@ -1105,8 +1106,11 @@ void SelectionDAGBuilder::visitRet(const ReturnInst &I) {
         else if (F->paramHasAttr(0, Attribute::ZExt))
           Flags.setZExt();
 
-        for (unsigned i = 0; i < NumParts; ++i)
-          Outs.push_back(ISD::OutputArg(Flags, Parts[i], /*isfixed=*/true));
+        for (unsigned i = 0; i < NumParts; ++i) {
+          Outs.push_back(ISD::OutputArg(Flags, Parts[i].getValueType(),
+                                        /*isfixed=*/true));
+          OutVals.push_back(Parts[i]);
+        }
       }
     }
   }
@@ -1115,7 +1119,7 @@ void SelectionDAGBuilder::visitRet(const ReturnInst &I) {
   CallingConv::ID CallConv =
     DAG.getMachineFunction().getFunction()->getCallingConv();
   Chain = TLI.LowerReturn(Chain, CallConv, isVarArg,
-                          Outs, getCurDebugLoc(), DAG);
+                          Outs, OutVals, getCurDebugLoc(), DAG);
 
   // Verify that the target's LowerReturn behaved as expected.
   assert(Chain.getNode() && Chain.getValueType() == MVT::Other &&
@@ -4727,7 +4731,7 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
                 OutVTs, OutsFlags, TLI, &Offsets);
 
   bool CanLowerReturn = TLI.CanLowerReturn(CS.getCallingConv(),
-                        FTy->isVarArg(), OutVTs, OutsFlags, DAG);
+                        FTy->isVarArg(), OutVTs, OutsFlags, FTy->getContext());
 
   SDValue DemoteStackSlot;
 
@@ -5909,6 +5913,7 @@ TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
                             DebugLoc dl) const {
   // Handle all of the outgoing arguments.
   SmallVector<ISD::OutputArg, 32> Outs;
+  SmallVector<SDValue, 32> OutVals;
   for (unsigned i = 0, e = Args.size(); i != e; ++i) {
     SmallVector<EVT, 4> ValueVTs;
     ComputeValueVTs(*this, Args[i].Ty, ValueVTs);
@@ -5962,13 +5967,15 @@ TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
 
       for (unsigned j = 0; j != NumParts; ++j) {
         // if it isn't first piece, alignment must be 1
-        ISD::OutputArg MyFlags(Flags, Parts[j], i < NumFixedArgs);
+        ISD::OutputArg MyFlags(Flags, Parts[j].getValueType(),
+                               i < NumFixedArgs);
         if (NumParts > 1 && j == 0)
           MyFlags.Flags.setSplit();
         else if (j != 0)
           MyFlags.Flags.setOrigAlign(1);
 
         Outs.push_back(MyFlags);
+        OutVals.push_back(Parts[j]);
       }
     }
   }
@@ -5997,7 +6004,7 @@ TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
 
   SmallVector<SDValue, 4> InVals;
   Chain = LowerCall(Chain, Callee, CallConv, isVarArg, isTailCall,
-                    Outs, Ins, dl, DAG, InVals);
+                    Outs, OutVals, Ins, dl, DAG, InVals);
 
   // Verify that the target's LowerCall behaved as expected.
   assert(Chain.getNode() && Chain.getValueType() == MVT::Other &&
@@ -6100,7 +6107,8 @@ void SelectionDAGISel::LowerArguments(const BasicBlock *LLVMBB) {
 
   FuncInfo->CanLowerReturn = TLI.CanLowerReturn(F.getCallingConv(),
                                                 F.isVarArg(),
-                                                OutVTs, OutsFlags, DAG);
+                                                OutVTs, OutsFlags,
+                                                F.getContext());
   if (!FuncInfo->CanLowerReturn) {
     // Put in an sret pointer parameter before all the other parameters.
     SmallVector<EVT, 1> ValueVTs;

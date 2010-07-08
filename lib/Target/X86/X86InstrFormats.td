@@ -50,9 +50,10 @@ def NoImm      : ImmType<0>;
 def Imm8       : ImmType<1>;
 def Imm8PCRel  : ImmType<2>;
 def Imm16      : ImmType<3>;
-def Imm32      : ImmType<4>;
-def Imm32PCRel : ImmType<5>;
-def Imm64      : ImmType<6>;
+def Imm16PCRel : ImmType<4>;
+def Imm32      : ImmType<5>;
+def Imm32PCRel : ImmType<6>;
+def Imm64      : ImmType<7>;
 
 // FPFormat - This specifies what form this FP instruction has.  This is used by
 // the Floating-Point stackifier pass.
@@ -104,6 +105,7 @@ class TF     { bits<4> Prefix = 15; }
 class VEX    { bit hasVEXPrefix = 1; }
 class VEX_W  { bit hasVEX_WPrefix = 1; }
 class VEX_4V : VEX { bit hasVEX_4VPrefix = 1; }
+class VEX_I8IMM { bit hasVEX_i8ImmReg = 1; }
 
 class X86Inst<bits<8> opcod, Format f, ImmType i, dag outs, dag ins,
               string AsmStr, Domain d = GenericDomain>
@@ -134,6 +136,8 @@ class X86Inst<bits<8> opcod, Format f, ImmType i, dag outs, dag ins,
   bit hasVEXPrefix = 0;     // Does this inst requires a VEX prefix?
   bit hasVEX_WPrefix = 0;   // Does this inst set the VEX_W field?
   bit hasVEX_4VPrefix = 0;  // Does this inst requires the VEX.VVVV field?
+  bit hasVEX_i8ImmReg = 0;  // Does this inst requires the last source register
+                            // to be encoded in a immediate field?
 
   // TSFlags layout should be kept in sync with X86InstrInfo.h.
   let TSFlags{5-0}   = FormBits;
@@ -150,6 +154,7 @@ class X86Inst<bits<8> opcod, Format f, ImmType i, dag outs, dag ins,
   let TSFlags{32}    = hasVEXPrefix;
   let TSFlags{33}    = hasVEX_WPrefix;
   let TSFlags{34}    = hasVEX_4VPrefix;
+  let TSFlags{35}    = hasVEX_i8ImmReg;
 }
 
 class I<bits<8> o, Format f, dag outs, dag ins, string asm,
@@ -179,6 +184,13 @@ class Ii16<bits<8> o, Format f, dag outs, dag ins, string asm,
 class Ii32<bits<8> o, Format f, dag outs, dag ins, string asm, 
            list<dag> pattern>
   : X86Inst<o, f, Imm32, outs, ins, asm> {
+  let Pattern = pattern;
+  let CodeSize = 3;
+}
+
+class Ii16PCRel<bits<8> o, Format f, dag outs, dag ins, string asm, 
+           list<dag> pattern>
+  : X86Inst<o, f, Imm16PCRel, outs, ins, asm> {
   let Pattern = pattern;
   let CodeSize = 3;
 }

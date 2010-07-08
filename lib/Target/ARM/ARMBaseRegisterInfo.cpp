@@ -1772,7 +1772,8 @@ emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const {
 
     // Jump to label or value in register.
     if (RetOpcode == ARM::TCRETURNdi) {
-      BuildMI(MBB, MBBI, dl, TII.get(ARM::TAILJMPd)).
+      BuildMI(MBB, MBBI, dl, 
+            TII.get(STI.isThumb() ? ARM::TAILJMPdt : ARM::TAILJMPd)).
         addGlobalAddress(JumpTarget.getGlobal(), JumpTarget.getOffset(),
                          JumpTarget.getTargetFlags());
     } else if (RetOpcode == ARM::TCRETURNdiND) {

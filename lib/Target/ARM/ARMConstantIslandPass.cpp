@@ -337,7 +337,7 @@ bool ARMConstantIslands::runOnMachineFunction(MachineFunction &MF) {
     if (CPChange && ++NoCPIters > 30)
       llvm_unreachable("Constant Island pass failed to converge!");
     DEBUG(dumpBBs());
-    
+
     // Clear NewWaterList now.  If we split a block for branches, it should
     // appear as "new water" for the next iteration of constant pool placement.
     NewWaterList.clear();
@@ -361,8 +361,8 @@ bool ARMConstantIslands::runOnMachineFunction(MachineFunction &MF) {
   // After a while, this might be made debug-only, but it is not expensive.
   verify(MF);
 
-  // If LR has been forced spilled and no far jumps (i.e. BL) has been issued.
-  // Undo the spill / restore of LR if possible.
+  // If LR has been forced spilled and no far jump (i.e. BL) has been issued,
+  // undo the spill / restore of LR if possible.
   if (isThumb && !HasFarJump && AFI->isLRSpilledForFarJump())
     MadeChange |= UndoLRSpillRestore();
 
@@ -1624,7 +1624,7 @@ bool ARMConstantIslands::OptimizeThumb2JumpTables(MachineFunction &MF) {
   // constantpool tables?
   MachineJumpTableInfo *MJTI = MF.getJumpTableInfo();
   if (MJTI == 0) return false;
-  
+
   const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
   for (unsigned i = 0, e = T2JumpTables.size(); i != e; ++i) {
     MachineInstr *MI = T2JumpTables[i];
@@ -1661,15 +1661,25 @@ bool ARMConstantIslands::OptimizeThumb2JumpTables(MachineFunction &MF) {
         continue;
       unsigned IdxReg = MI->getOperand(1).getReg();
       bool IdxRegKill = MI->getOperand(1).isKill();
+
+      // Scan backwards to find the instruction that defines the base
+      // register. Due to post-RA scheduling, we can't count on it
+      // immediately preceding the branch instruction.
       MachineBasicBlock::iterator PrevI = MI;
-      if (PrevI == MBB->begin())
+      MachineBasicBlock::iterator B = MBB->begin();
+      while (PrevI != B && !PrevI->definesRegister(BaseReg))
+        --PrevI;
+
+      // If for some reason we didn't find it, we can't do anything, so
+      // just skip this one.
+      if (!PrevI->definesRegister(BaseReg))
         continue;
 
-      MachineInstr *AddrMI = --PrevI;
+      MachineInstr *AddrMI = PrevI;
       bool OptOk = true;
-      // Examine the instruction that calculate the jumptable entry address.
-      // If it's not the one just before the t2BR_JT, we won't delete it, then
-      // it's not worth doing the optimization.
+      // Examine the instruction that calculates the jumptable entry address.
+      // Make sure it only defines the base register and kills any uses
+      // other than the index register.
       for (unsigned k = 0, eee = AddrMI->getNumOperands(); k != eee; ++k) {
         const MachineOperand &MO = AddrMI->getOperand(k);
         if (!MO.isReg() || !MO.getReg())
@@ -1686,9 +1696,14 @@ bool ARMConstantIslands::OptimizeThumb2JumpTables(MachineFunction &MF) {
       if (!OptOk)
         continue;
 
-      // The previous instruction should be a tLEApcrel or t2LEApcrelJT, we want
+      // Now scan back again to find the tLEApcrel or t2LEApcrelJT instruction
+      // that gave us the initial base register definition.
+      for (--PrevI; PrevI != B && !PrevI->definesRegister(BaseReg); --PrevI)
+        ;
+
+      // The instruction should be a tLEApcrel or t2LEApcrelJT; we want
       // to delete it as well.
-      MachineInstr *LeaMI = --PrevI;
+      MachineInstr *LeaMI = PrevI;
       if ((LeaMI->getOpcode() != ARM::tLEApcrelJT &&
            LeaMI->getOpcode() != ARM::t2LEApcrelJT) ||
           LeaMI->getOperand(0).getReg() != BaseReg)
@@ -1732,7 +1747,7 @@ bool ARMConstantIslands::ReorderThumb2JumpTables(MachineFunction &MF) {
 
   MachineJumpTableInfo *MJTI = MF.getJumpTableInfo();
   if (MJTI == 0) return false;
-  
+
   const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
   for (unsigned i = 0, e = T2JumpTables.size(); i != e; ++i) {
     MachineInstr *MI = T2JumpTables[i];
@@ -1772,7 +1787,7 @@ AdjustJTTargetBlockForward(MachineBasicBlock *BB, MachineBasicBlock *JTBB)
 {
   MachineFunction &MF = *BB->getParent();
 
-  // If it's the destination block is terminated by an unconditional branch,
+  // If the destination block is terminated by an unconditional branch,
   // try to move it; otherwise, create a new block following the jump
   // table that branches back to the actual target. This is a very simple
   // heuristic. FIXME: We can definitely improve it.

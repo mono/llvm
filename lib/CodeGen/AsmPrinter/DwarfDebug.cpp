@@ -44,7 +44,8 @@ using namespace llvm;
 static cl::opt<bool> PrintDbgScope("print-dbgscope", cl::Hidden,
      cl::desc("Print DbgScope information for each machine instruction"));
 
-static cl::opt<bool> DisableDebugInfoPrinting("disable-debug-info-print", cl::Hidden,
+static cl::opt<bool> DisableDebugInfoPrinting("disable-debug-info-print", 
+                                              cl::Hidden,
      cl::desc("Disable debug info printing"));
 
 static cl::opt<bool> UnknownLocations("use-unknown-locations", cl::Hidden,
@@ -79,15 +80,13 @@ class CompileUnit {
   /// IndexTyDie - An anonymous type for index type.  Owned by CUDie.
   DIE *IndexTyDie;
 
-  /// GVToDieMap - Tracks the mapping of unit level debug informaton
+  /// MDNodeToDieMap - Tracks the mapping of unit level debug informaton
   /// variables to debug information entries.
-  /// FIXME : Rename GVToDieMap -> NodeToDieMap
-  DenseMap<const MDNode *, DIE *> GVToDieMap;
+  DenseMap<const MDNode *, DIE *> MDNodeToDieMap;
 
-  /// GVToDIEEntryMap - Tracks the mapping of unit level debug informaton
+  /// MDNodeToDIEEntryMap - Tracks the mapping of unit level debug informaton
   /// descriptors to debug information entries using a DIEEntry proxy.
-  /// FIXME : Rename
-  DenseMap<const MDNode *, DIEEntry *> GVToDIEEntryMap;
+  DenseMap<const MDNode *, DIEEntry *> MDNodeToDIEEntryMap;
 
   /// Globals - A map of globally visible named entities for this unit.
   ///
@@ -123,25 +122,25 @@ public:
 
   /// getDIE - Returns the debug information entry map slot for the
   /// specified debug variable.
-  DIE *getDIE(const MDNode *N) { return GVToDieMap.lookup(N); }
+  DIE *getDIE(const MDNode *N) { return MDNodeToDieMap.lookup(N); }
 
   /// insertDIE - Insert DIE into the map.
   void insertDIE(const MDNode *N, DIE *D) {
-    GVToDieMap.insert(std::make_pair(N, D));
+    MDNodeToDieMap.insert(std::make_pair(N, D));
   }
 
   /// getDIEEntry - Returns the debug information entry for the speciefied
   /// debug variable.
   DIEEntry *getDIEEntry(const MDNode *N) { 
-    DenseMap<const MDNode *, DIEEntry *>::iterator I = GVToDIEEntryMap.find(N);
-    if (I == GVToDIEEntryMap.end())
+    DenseMap<const MDNode *, DIEEntry *>::iterator I = MDNodeToDIEEntryMap.find(N);
+    if (I == MDNodeToDIEEntryMap.end())
       return NULL;
     return I->second;
   }
 
   /// insertDIEEntry - Insert debug information entry into the map.
   void insertDIEEntry(const MDNode *N, DIEEntry *E) {
-    GVToDIEEntryMap.insert(std::make_pair(N, E));
+    MDNodeToDIEEntryMap.insert(std::make_pair(N, E));
   }
 
   /// addDie - Adds or interns the DIE to the compile unit.
@@ -1072,8 +1071,9 @@ void DwarfDebug::constructTypeDIE(DIE &Buffer, DICompositeType CTy) {
   if (!Name.empty())
     addString(&Buffer, dwarf::DW_AT_name, dwarf::DW_FORM_string, Name);
 
-  if (Tag == dwarf::DW_TAG_enumeration_type || Tag == dwarf::DW_TAG_class_type ||
-      Tag == dwarf::DW_TAG_structure_type || Tag == dwarf::DW_TAG_union_type) {
+  if (Tag == dwarf::DW_TAG_enumeration_type || Tag == dwarf::DW_TAG_class_type 
+      || Tag == dwarf::DW_TAG_structure_type || Tag == dwarf::DW_TAG_union_type)
+    {
     // Add size if non-zero (derived types might be zero-sized.)
     if (Size)
       addUInt(&Buffer, dwarf::DW_AT_byte_size, 0, Size);
@@ -1389,6 +1389,7 @@ static bool isSubprogramContext(const MDNode *Context) {
 DIE *DwarfDebug::updateSubprogramScopeDIE(const MDNode *SPNode) {
   CompileUnit *SPCU = getCompileUnit(SPNode);
   DIE *SPDie = SPCU->getDIE(SPNode);
+
   assert(SPDie && "Unable to find subprogram DIE!");
   DISubprogram SP(SPNode);
   
@@ -1422,6 +1423,14 @@ DIE *DwarfDebug::updateSubprogramScopeDIE(const MDNode *SPNode) {
     SPCU->addDie(SPDie);
   }
   
+  // Pick up abstract subprogram DIE.
+  if (DIE *AbsSPDIE = AbstractSPDies.lookup(SPNode)) {
+    SPDie = new DIE(dwarf::DW_TAG_subprogram);
+    addDIEEntry(SPDie, dwarf::DW_AT_abstract_origin,
+                dwarf::DW_FORM_ref4, AbsSPDIE);
+    SPCU->addDie(SPDie);
+  }
+
   addLabel(SPDie, dwarf::DW_AT_low_pc, dwarf::DW_FORM_addr,
            Asm->GetTempSymbol("func_begin", Asm->getFunctionNumber()));
   addLabel(SPDie, dwarf::DW_AT_high_pc, dwarf::DW_FORM_addr,
@@ -1615,11 +1624,13 @@ DIE *DwarfDebug::constructVariableDIE(DbgVariable *DV, DbgScope *Scope) {
     // FIXME : Handle getNumOperands != 3 
     if (DVInsn->getNumOperands() == 3) {
       if (DVInsn->getOperand(0).isReg())
-        updated = addRegisterAddress(VariableDie, DVLabel, DVInsn->getOperand(0));
+        updated = 
+          addRegisterAddress(VariableDie, DVLabel, DVInsn->getOperand(0));
       else if (DVInsn->getOperand(0).isImm())
         updated = addConstantValue(VariableDie, DVLabel, DVInsn->getOperand(0));
       else if (DVInsn->getOperand(0).isFPImm()) 
-        updated = addConstantFPValue(VariableDie, DVLabel, DVInsn->getOperand(0));
+        updated = 
+          addConstantFPValue(VariableDie, DVLabel, DVInsn->getOperand(0));
     } else {
       MachineLocation Location = Asm->getDebugValueLocation(DVInsn);
       if (Location.getReg()) {
@@ -1693,8 +1704,12 @@ DIE *DwarfDebug::constructScopeDIE(DbgScope *Scope) {
     ScopeDIE = constructInlinedScopeDIE(Scope);
   else if (DS.isSubprogram()) {
     ProcessedSPNodes.insert(DS);
-    if (Scope->isAbstractScope())
+    if (Scope->isAbstractScope()) {
       ScopeDIE = getCompileUnit(DS)->getDIE(DS);
+      // Note down abstract DIE.
+      if (ScopeDIE)
+        AbstractSPDies.insert(std::make_pair(DS, ScopeDIE));
+    }
     else
       ScopeDIE = updateSubprogramScopeDIE(DS);
   }
@@ -2270,7 +2285,8 @@ DwarfDebug::collectVariableInfo(const MachineFunction *MF,
     const MachineInstr *Begin = NULL;
     const MachineInstr *End = NULL;
     for (SmallVector<const MachineInstr *, 4>::iterator 
-           MVI = MultipleValues.begin(), MVE = MultipleValues.end(); MVI != MVE; ++MVI) {
+           MVI = MultipleValues.begin(), MVE = MultipleValues.end(); 
+         MVI != MVE; ++MVI) {
       if (!Begin) {
         Begin = *MVI;
         continue;
@@ -2375,7 +2391,8 @@ void DwarfDebug::endScope(const MachineInstr *MI) {
 }
 
 /// getOrCreateDbgScope - Create DbgScope for the scope.
-DbgScope *DwarfDebug::getOrCreateDbgScope(const MDNode *Scope, const MDNode *InlinedAt) {
+DbgScope *DwarfDebug::getOrCreateDbgScope(const MDNode *Scope, 
+                                          const MDNode *InlinedAt) {
   if (!InlinedAt) {
     DbgScope *WScope = DbgScopeMap.lookup(Scope);
     if (WScope)
@@ -2548,7 +2565,8 @@ bool DwarfDebug::extractScopeInformation() {
         // current instruction scope does not match scope of first instruction
         // in this range then create a new instruction range.
         DbgRange R(RangeBeginMI, PrevMI);
-        MI2ScopeMap[RangeBeginMI] = getOrCreateDbgScope(PrevScope, PrevInlinedAt);
+        MI2ScopeMap[RangeBeginMI] = getOrCreateDbgScope(PrevScope, 
+                                                        PrevInlinedAt);
         MIRanges.push_back(R);
       } 
 
@@ -2771,7 +2789,7 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
       if (ProcessedSPNodes.count((*AI)->getScopeNode()) == 0)
         constructScopeDIE(*AI);
     }
-    
+
     DIE *CurFnDIE = constructScopeDIE(CurrentFnDbgScope);
     
     if (!DisableFramePointerElim(*MF))
@@ -2852,7 +2870,8 @@ DbgScope *DwarfDebug::findDbgScope(const MachineInstr *MInsn) {
 /// recordSourceLine - Register a source line with debug info. Returns the
 /// unique label that was emitted and which provides correspondence to
 /// the source line list.
-MCSymbol *DwarfDebug::recordSourceLine(unsigned Line, unsigned Col, const MDNode *S) {
+MCSymbol *DwarfDebug::recordSourceLine(unsigned Line, unsigned Col, 
+                                       const MDNode *S) {
   StringRef Dir;
   StringRef Fn;
 
@@ -3597,8 +3616,9 @@ void DwarfDebug::emitDebugLoc() {
   unsigned char Size = Asm->getTargetData().getPointerSize();
   Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("debug_loc", 0));
   unsigned index = 1;
-  for (SmallVector<DotDebugLocEntry, 4>::iterator I = DotDebugLocEntries.begin(),
-         E = DotDebugLocEntries.end(); I != E; ++I, ++index) {
+  for (SmallVector<DotDebugLocEntry, 4>::iterator 
+         I = DotDebugLocEntries.begin(), E = DotDebugLocEntries.end(); 
+       I != E; ++I, ++index) {
     DotDebugLocEntry Entry = *I;
     if (Entry.isEmpty()) {
       Asm->OutStreamer.EmitIntValue(0, Size, /*addrspace*/0);

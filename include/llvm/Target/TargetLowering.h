@@ -32,6 +32,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/DebugLoc.h"
+#include "llvm/Target/TargetCallingConv.h"
 #include "llvm/Target/TargetMachine.h"
 #include <climits>
 #include <map>
@@ -42,6 +43,7 @@ namespace llvm {
   class CallInst;
   class Function;
   class FastISel;
+  class FunctionLoweringInfo;
   class MachineBasicBlock;
   class MachineFunction;
   class MachineFrameInfo;
@@ -1144,6 +1146,7 @@ public:
     LowerCall(SDValue Chain, SDValue Callee,
               CallingConv::ID CallConv, bool isVarArg, bool &isTailCall,
               const SmallVectorImpl<ISD::OutputArg> &Outs,
+              const SmallVectorImpl<SDValue> &OutVals,
               const SmallVectorImpl<ISD::InputArg> &Ins,
               DebugLoc dl, SelectionDAG &DAG,
               SmallVectorImpl<SDValue> &InVals) const {
@@ -1158,7 +1161,7 @@ public:
   virtual bool CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
                const SmallVectorImpl<EVT> &OutTys,
                const SmallVectorImpl<ISD::ArgFlagsTy> &ArgsFlags,
-               SelectionDAG &DAG) const
+               LLVMContext &Context) const
   {
     // Return true by default to get preexisting behavior.
     return true;
@@ -1172,6 +1175,7 @@ public:
   virtual SDValue
     LowerReturn(SDValue Chain, CallingConv::ID CallConv, bool isVarArg,
                 const SmallVectorImpl<ISD::OutputArg> &Outs,
+                const SmallVectorImpl<SDValue> &OutVals,
                 DebugLoc dl, SelectionDAG &DAG) const {
     assert(0 && "Not Implemented");
     return SDValue();    // this is here to silence compiler errors
@@ -1220,16 +1224,7 @@ public:
 
   /// createFastISel - This method returns a target specific FastISel object,
   /// or null if the target does not support "fast" ISel.
-  virtual FastISel *
-  createFastISel(MachineFunction &,
-                 DenseMap<const Value *, unsigned> &,
-                 DenseMap<const BasicBlock *, MachineBasicBlock *> &,
-                 DenseMap<const AllocaInst *, int> &,
-                 std::vector<std::pair<MachineInstr*, unsigned> > &
-#ifndef NDEBUG
-                 , SmallSet<const Instruction *, 8> &CatchInfoLost
-#endif
-                 ) const {
+  virtual FastISel *createFastISel(FunctionLoweringInfo &funcInfo) const {
     return 0;
   }
 

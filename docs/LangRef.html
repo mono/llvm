@@ -1062,7 +1062,15 @@ declare signext i8 @returns_signed_char()
       The caller shares the responsibility with the callee for ensuring that
       these requirements are met.
       For further details, please see the discussion of the NoAlias response in
-      <a href="AliasAnalysis.html#MustMayNo">alias analysis</a>.</dd>
+      <a href="AliasAnalysis.html#MustMayNo">alias analysis</a>.<br>
+<br>
+      Note that this definition of <tt>noalias</tt> is intentionally
+      similar to the definition of <tt>restrict</tt> in C99 for function
+      arguments, though it is slightly weaker.
+<br>
+      For function return values, C99's <tt>restrict</tt> is not meaningful,
+      while LLVM's <tt>noalias</tt> is.
+      </dd>
 
   <dt><tt><b><a name="nocapture">nocapture</a></b></tt></dt>
   <dd>This indicates that the callee does not make any copies of the pointer
@@ -1139,15 +1147,21 @@ define void @f() optsize { ... }
       this function is desirable (such as the "inline" keyword in C/C++).  It
       is just a hint; it imposes no requirements on the inliner.</dd>
 
+  <dt><tt><b>naked</b></tt></dt>
+  <dd>This attribute disables prologue / epilogue emission for the function.
+      This can have very system-specific consequences.</dd>
+
+  <dt><tt><b>noimplicitfloat</b></tt></dt>
+  <dd>This attributes disables implicit floating point instructions.</dd>
+
   <dt><tt><b>noinline</b></tt></dt>
   <dd>This attribute indicates that the inliner should never inline this
       function in any situation. This attribute may not be used together with
       the <tt>alwaysinline</tt> attribute.</dd>
 
-  <dt><tt><b>optsize</b></tt></dt>
-  <dd>This attribute suggests that optimization passes and code generator passes
-      make choices that keep the code size of this function low, and otherwise
-      do optimizations specifically to reduce code size.</dd>
+  <dt><tt><b>noredzone</b></tt></dt>
+  <dd>This attribute indicates that the code generator should not use a red
+      zone, even if the target-specific ABI normally permits it.</dd>
 
   <dt><tt><b>noreturn</b></tt></dt>
   <dd>This function attribute indicates that the function never returns
@@ -1158,6 +1172,11 @@ define void @f() optsize { ... }
   <dd>This function attribute indicates that the function never returns with an
       unwind or exceptional control flow.  If the function does unwind, its
       runtime behavior is undefined.</dd>
+
+  <dt><tt><b>optsize</b></tt></dt>
+  <dd>This attribute suggests that optimization passes and code generator passes
+      make choices that keep the code size of this function low, and otherwise
+      do optimizations specifically to reduce code size.</dd>
 
   <dt><tt><b>readnone</b></tt></dt>
   <dd>This attribute indicates that the function computes its result (or decides
@@ -1201,17 +1220,6 @@ define void @f() optsize { ... }
       function that doesn't have an <tt>sspreq</tt> attribute or which has
       an <tt>ssp</tt> attribute, then the resulting function will have
       an <tt>sspreq</tt> attribute.</dd>
-
-  <dt><tt><b>noredzone</b></tt></dt>
-  <dd>This attribute indicates that the code generator should not use a red
-      zone, even if the target-specific ABI normally permits it.</dd>
-
-  <dt><tt><b>noimplicitfloat</b></tt></dt>
-  <dd>This attributes disables implicit floating point instructions.</dd>
-
-  <dt><tt><b>naked</b></tt></dt>
-  <dd>This attribute disables prologue / epilogue emission for the function.
-      This can have very system-specific consequences.</dd>
 </dl>
 
 </div>
@@ -2397,7 +2405,8 @@ has undefined behavior.</p>
 
 <li>An instruction with externally visible side effects depends on the most
     recent preceding instruction with externally visible side effects, following
-    the order in the IR. (This includes volatile loads and stores.)</li>
+    the order in the IR. (This includes
+    <a href="#volatile">volatile operations</a>.)</li>
 
 <li>An instruction <i>control-depends</i> on a
     <a href="#terminators">terminator instruction</a>

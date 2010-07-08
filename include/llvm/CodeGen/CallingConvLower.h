@@ -17,14 +17,13 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/ValueTypes.h"
-#include "llvm/CodeGen/SelectionDAGNodes.h"
+#include "llvm/Target/TargetCallingConv.h"
 #include "llvm/CallingConv.h"
 
 namespace llvm {
   class TargetRegisterInfo;
   class TargetMachine;
   class CCState;
-  class SDNode;
 
 /// CCValAssign - Represent assignment of one arg/retval to a location.
 class CCValAssign {
@@ -35,6 +34,9 @@ public:
     ZExt,   // The value is zero extended in the location.
     AExt,   // The value is extended with undefined upper bits.
     BCvt,   // The value is bit-converted in the location.
+    VExt,   // The value is vector-widened in the location.
+            // FIXME: Not implemented yet. Code that uses AExt to mean
+            // vector-widen should be fixed to use VExt instead.
     Indirect // The location contains pointer to the value.
     // TODO: a subset of the value is in the location.
   };

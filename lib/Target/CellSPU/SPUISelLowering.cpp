@@ -953,7 +953,8 @@ LowerGlobalAddress(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
   EVT PtrVT = Op.getValueType();
   GlobalAddressSDNode *GSDN = cast<GlobalAddressSDNode>(Op);
   const GlobalValue *GV = GSDN->getGlobal();
-  SDValue GA = DAG.getTargetGlobalAddress(GV, PtrVT, GSDN->getOffset());
+  SDValue GA = DAG.getTargetGlobalAddress(GV, Op.getDebugLoc(),
+                                          PtrVT, GSDN->getOffset());
   const TargetMachine &TM = DAG.getTarget();
   SDValue Zero = DAG.getConstant(0, PtrVT);
   // FIXME there is no actual debug info here
@@ -1134,6 +1135,7 @@ SPUTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
                              CallingConv::ID CallConv, bool isVarArg,
                              bool &isTailCall,
                              const SmallVectorImpl<ISD::OutputArg> &Outs,
+                             const SmallVectorImpl<SDValue> &OutVals,
                              const SmallVectorImpl<ISD::InputArg> &Ins,
                              DebugLoc dl, SelectionDAG &DAG,
                              SmallVectorImpl<SDValue> &InVals) const {
@@ -1165,7 +1167,7 @@ SPUTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   SmallVector<SDValue, 8> MemOpChains;
 
   for (unsigned i = 0; i != NumOps; ++i) {
-    SDValue Arg = Outs[i].Val;
+    SDValue Arg = OutVals[i];
 
     // PtrOff will be used to store the current argument to the stack if a
     // register cannot be found for it.
@@ -1232,7 +1234,7 @@ SPUTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     const GlobalValue *GV = G->getGlobal();
     EVT CalleeVT = Callee.getValueType();
     SDValue Zero = DAG.getConstant(0, PtrVT);
-    SDValue GA = DAG.getTargetGlobalAddress(GV, CalleeVT);
+    SDValue GA = DAG.getTargetGlobalAddress(GV, dl, CalleeVT);
 
     if (!ST->usingLargeMem()) {
       // Turn calls to targets that are defined (i.e., have bodies) into BRSL
@@ -1338,6 +1340,7 @@ SDValue
 SPUTargetLowering::LowerReturn(SDValue Chain,
                                CallingConv::ID CallConv, bool isVarArg,
                                const SmallVectorImpl<ISD::OutputArg> &Outs,
+                               const SmallVectorImpl<SDValue> &OutVals,
                                DebugLoc dl, SelectionDAG &DAG) const {
 
   SmallVector<CCValAssign, 16> RVLocs;
@@ -1359,7 +1362,7 @@ SPUTargetLowering::LowerReturn(SDValue Chain,
     CCValAssign &VA = RVLocs[i];
     assert(VA.isRegLoc() && "Can only return in registers!");
     Chain = DAG.getCopyToReg(Chain, dl, VA.getLocReg(),
-                             Outs[i].Val, Flag);
+                             OutVals[i], Flag);
     Flag = Chain.getValue(1);
   }
 
