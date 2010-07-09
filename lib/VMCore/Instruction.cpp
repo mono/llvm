@@ -405,6 +405,11 @@ bool Instruction::isSafeToSpeculativelyExecute() const {
       return true;
     if (GlobalVariable *GV = dyn_cast<GlobalVariable>(getOperand(0)))
       return !GV->hasExternalWeakLinkage();
+    //
+    // Mono extension, the metadata identifies loads which can't fail.
+    //
+    if (getMetadata("mono.nofail.load"))
+      return true;
     // FIXME: Handle cases involving GEPs.  We have to be careful because
     // a load of a out-of-bounds GEP has undefined behavior.
     return false;

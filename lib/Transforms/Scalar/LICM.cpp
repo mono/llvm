@@ -377,7 +377,14 @@ bool LICM::canSinkOrHoistInst(Instruction &I) {
     // in the same alias set as something that ends up being modified.
     if (AA->pointsToConstantMemory(LI->getOperand(0)))
       return true;
-    
+
+    //
+    // Mono extension, the metadata identifies loads which load from constant memory,
+	// so they can't be alised by any stores.
+    //
+    if (I.getMetadata("mono.noalias"))
+      return true;
+
     // Don't hoist loads which have may-aliased stores in loop.
     unsigned Size = 0;
     if (LI->getType()->isSized())
