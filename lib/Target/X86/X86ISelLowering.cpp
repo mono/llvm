@@ -1218,13 +1218,12 @@ bool X86TargetLowering::getStackCookieLocation(unsigned &AddressSpace,
 
 bool 
 X86TargetLowering::CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
-                        const SmallVectorImpl<EVT> &OutTys,
-                        const SmallVectorImpl<ISD::ArgFlagsTy> &ArgsFlags,
+                        const SmallVectorImpl<ISD::OutputArg> &Outs,
                         LLVMContext &Context) const {
   SmallVector<CCValAssign, 16> RVLocs;
   CCState CCInfo(CallConv, isVarArg, getTargetMachine(),
                  RVLocs, Context);
-  return CCInfo.CheckReturn(OutTys, ArgsFlags, RetCC_X86);
+  return CCInfo.CheckReturn(Outs, RetCC_X86);
 }
 
 SDValue
@@ -1347,17 +1346,34 @@ X86TargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
       report_fatal_error("SSE register return with SSE disabled");
     }
 
-    // If this is a call to a function that returns an fp value on the floating
-    // point stack, but where we prefer to use the value in xmm registers, copy
-    // it out as F80 and use a truncate to move it from fp stack reg to xmm reg.
-    if ((VA.getLocReg() == X86::ST0 ||
-         VA.getLocReg() == X86::ST1) &&
-        isScalarFPTypeInSSEReg(VA.getValVT())) {
-      CopyVT = MVT::f80;
-    }
-
     SDValue Val;
-    if (Is64Bit && CopyVT.isVector() && CopyVT.getSizeInBits() == 64) {
+
+    // If this is a call to a function that returns an fp value on the floating
+    // point stack, we must guarantee the the value is popped from the stack, so
+    // a CopyFromReg is not good enough - the copy instruction may be eliminated
+    // if the return value is not used. We use the FpGET_ST0 instructions
+    // instead.
+    if (VA.getLocReg() == X86::ST0 || VA.getLocReg() == X86::ST1) {
+      // If we prefer to use the value in xmm registers, copy it out as f80 and
+      // use a truncate to move it from fp stack reg to xmm reg.
+      if (isScalarFPTypeInSSEReg(VA.getValVT())) CopyVT = MVT::f80;
+      bool isST0 = VA.getLocReg() == X86::ST0;
+      unsigned Opc = 0;
+      if (CopyVT == MVT::f32) Opc = isST0 ? X86::FpGET_ST0_32:X86::FpGET_ST1_32;
+      if (CopyVT == MVT::f64) Opc = isST0 ? X86::FpGET_ST0_64:X86::FpGET_ST1_64;
+      if (CopyVT == MVT::f80) Opc = isST0 ? X86::FpGET_ST0_80:X86::FpGET_ST1_80;
+      SDValue Ops[] = { Chain, InFlag };
+      Chain = SDValue(DAG.getMachineNode(Opc, dl, CopyVT, MVT::Other, MVT::Flag,
+                                         Ops, 2), 1);
+      Val = Chain.getValue(0);
+
+      // Round the f80 to the right size, which also moves it to the appropriate
+      // xmm register.
+      if (CopyVT != VA.getValVT())
+        Val = DAG.getNode(ISD::FP_ROUND, dl, VA.getValVT(), Val,
+                          // This truncation won't change the value.
+                          DAG.getIntPtrConstant(1));
+    } else if (Is64Bit && CopyVT.isVector() && CopyVT.getSizeInBits() == 64) {
       // For x86-64, MMX values are returned in XMM0 / XMM1 except for v1i64.
       if (VA.getLocReg() == X86::XMM0 || VA.getLocReg() == X86::XMM1) {
         Chain = DAG.getCopyFromReg(Chain, dl, VA.getLocReg(),
@@ -1377,15 +1393,6 @@ X86TargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
       Val = Chain.getValue(0);
     }
     InFlag = Chain.getValue(2);
-
-    if (CopyVT != VA.getValVT()) {
-      // Round the F80 the right size, which also moves to the appropriate xmm
-      // register.
-      Val = DAG.getNode(ISD::FP_ROUND, dl, VA.getValVT(), Val,
-                        // This truncation won't change the value.
-                        DAG.getIntPtrConstant(1));
-    }
-
     InVals.push_back(Val);
   }
 
@@ -6771,7 +6778,7 @@ SDValue X86TargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
   Store = DAG.getStore(Op.getOperand(0), dl,
                        DAG.getConstant(FuncInfo->getVarArgsFPOffset(),
                                        MVT::i32),
-                       FIN, SV, 0, false, false, 0);
+                       FIN, SV, 4, false, false, 0);
   MemOps.push_back(Store);
 
   // Store ptr to overflow_arg_area
@@ -6779,7 +6786,7 @@ SDValue X86TargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
                     FIN, DAG.getIntPtrConstant(4));
   SDValue OVFIN = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(),
                                     getPointerTy());
-  Store = DAG.getStore(Op.getOperand(0), dl, OVFIN, FIN, SV, 0,
+  Store = DAG.getStore(Op.getOperand(0), dl, OVFIN, FIN, SV, 8,
                        false, false, 0);
   MemOps.push_back(Store);
 
@@ -6788,7 +6795,7 @@ SDValue X86TargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
                     FIN, DAG.getIntPtrConstant(8));
   SDValue RSFIN = DAG.getFrameIndex(FuncInfo->getRegSaveFrameIndex(),
                                     getPointerTy());
-  Store = DAG.getStore(Op.getOperand(0), dl, RSFIN, FIN, SV, 0,
+  Store = DAG.getStore(Op.getOperand(0), dl, RSFIN, FIN, SV, 16,
                        false, false, 0);
   MemOps.push_back(Store);
   return DAG.getNode(ISD::TokenFactor, dl, MVT::Other,
@@ -8042,17 +8049,17 @@ X86TargetLowering::EmitAtomicBitwiseWithCustomInserter(MachineInstr *bInstr,
   newMBB->addSuccessor(newMBB);
 
   // Insert instructions into newMBB based on incoming instruction
-  assert(bInstr->getNumOperands() < X86AddrNumOperands + 4 &&
+  assert(bInstr->getNumOperands() < X86::AddrNumOperands + 4 &&
          "unexpected number of operands");
   DebugLoc dl = bInstr->getDebugLoc();
   MachineOperand& destOper = bInstr->getOperand(0);
-  MachineOperand* argOpers[2 + X86AddrNumOperands];
+  MachineOperand* argOpers[2 + X86::AddrNumOperands];
   int numArgs = bInstr->getNumOperands() - 1;
   for (int i=0; i < numArgs; ++i)
     argOpers[i] = &bInstr->getOperand(i+1);
 
   // x86 address has 4 operands: base, index, scale, and displacement
-  int lastAddrIndx = X86AddrNumOperands - 1; // [0,3]
+  int lastAddrIndx = X86::AddrNumOperands - 1; // [0,3]
   int valArgIndx = lastAddrIndx + 1;
 
   unsigned t1 = F->getRegInfo().createVirtualRegister(RC);
@@ -8156,12 +8163,12 @@ X86TargetLowering::EmitAtomicBit6432WithCustomInserter(MachineInstr *bInstr,
   DebugLoc dl = bInstr->getDebugLoc();
   // Insert instructions into newMBB based on incoming instruction
   // There are 8 "real" operands plus 9 implicit def/uses, ignored here.
-  assert(bInstr->getNumOperands() < X86AddrNumOperands + 14 &&
+  assert(bInstr->getNumOperands() < X86::AddrNumOperands + 14 &&
          "unexpected number of operands");
   MachineOperand& dest1Oper = bInstr->getOperand(0);
   MachineOperand& dest2Oper = bInstr->getOperand(1);
-  MachineOperand* argOpers[2 + X86AddrNumOperands];
-  for (int i=0; i < 2 + X86AddrNumOperands; ++i) {
+  MachineOperand* argOpers[2 + X86::AddrNumOperands];
+  for (int i=0; i < 2 + X86::AddrNumOperands; ++i) {
     argOpers[i] = &bInstr->getOperand(i+2);
 
     // We use some of the operands multiple times, so conservatively just
@@ -8171,7 +8178,7 @@ X86TargetLowering::EmitAtomicBit6432WithCustomInserter(MachineInstr *bInstr,
   }
 
   // x86 address has 5 operands: base, index, scale, displacement, and segment.
-  int lastAddrIndx = X86AddrNumOperands - 1; // [0,3]
+  int lastAddrIndx = X86::AddrNumOperands - 1; // [0,3]
 
   unsigned t1 = F->getRegInfo().createVirtualRegister(RC);
   MachineInstrBuilder MIB = BuildMI(thisMBB, dl, TII->get(LoadOpc), t1);
@@ -8310,16 +8317,16 @@ X86TargetLowering::EmitAtomicMinMaxWithCustomInserter(MachineInstr *mInstr,
 
   DebugLoc dl = mInstr->getDebugLoc();
   // Insert instructions into newMBB based on incoming instruction
-  assert(mInstr->getNumOperands() < X86AddrNumOperands + 4 &&
+  assert(mInstr->getNumOperands() < X86::AddrNumOperands + 4 &&
          "unexpected number of operands");
   MachineOperand& destOper = mInstr->getOperand(0);
-  MachineOperand* argOpers[2 + X86AddrNumOperands];
+  MachineOperand* argOpers[2 + X86::AddrNumOperands];
   int numArgs = mInstr->getNumOperands() - 1;
   for (int i=0; i < numArgs; ++i)
     argOpers[i] = &mInstr->getOperand(i+1);
 
   // x86 address has 4 operands: base, index, scale, and displacement
-  int lastAddrIndx = X86AddrNumOperands - 1; // [0,3]
+  int lastAddrIndx = X86::AddrNumOperands - 1; // [0,3]
   int valArgIndx = lastAddrIndx + 1;
 
   unsigned t1 = F->getRegInfo().createVirtualRegister(X86::GR32RegisterClass);
@@ -8595,7 +8602,7 @@ X86TargetLowering::EmitLoweredTLSCall(MachineInstr *MI,
                       MI->getOperand(3).getTargetFlags())
     .addReg(0);
     MIB = BuildMI(*BB, MI, DL, TII->get(X86::CALL64m));
-    addDirectMem(MIB, X86::RDI).addReg(0);
+    addDirectMem(MIB, X86::RDI);
   } else if (getTargetMachine().getRelocationModel() != Reloc::PIC_) {
     MachineInstrBuilder MIB = BuildMI(*BB, MI, DL,
                                       TII->get(X86::MOV32rm), X86::EAX)
@@ -8605,7 +8612,7 @@ X86TargetLowering::EmitLoweredTLSCall(MachineInstr *MI,
                       MI->getOperand(3).getTargetFlags())
     .addReg(0);
     MIB = BuildMI(*BB, MI, DL, TII->get(X86::CALL32m));
-    addDirectMem(MIB, X86::EAX).addReg(0);
+    addDirectMem(MIB, X86::EAX);
   } else {
     MachineInstrBuilder MIB = BuildMI(*BB, MI, DL,
                                       TII->get(X86::MOV32rm), X86::EAX)
@@ -8615,7 +8622,7 @@ X86TargetLowering::EmitLoweredTLSCall(MachineInstr *MI,
                       MI->getOperand(3).getTargetFlags())
     .addReg(0);
     MIB = BuildMI(*BB, MI, DL, TII->get(X86::CALL32m));
-    addDirectMem(MIB, X86::EAX).addReg(0);
+    addDirectMem(MIB, X86::EAX);
   }
   
   MI->eraseFromParent(); // The pseudo instruction is gone now.
@@ -8720,7 +8727,7 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
       AM.Disp = Op.getImm();
     }
     addFullAddress(BuildMI(*BB, MI, DL, TII->get(Opc)), AM)
-                      .addReg(MI->getOperand(X86AddrNumOperands).getReg());
+                      .addReg(MI->getOperand(X86::AddrNumOperands).getReg());
 
     // Reload the original control word now.
     addFrameReference(BuildMI(*BB, MI, DL,

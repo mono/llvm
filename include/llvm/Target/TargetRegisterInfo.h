@@ -115,6 +115,11 @@ public:
     return RegSet.count(Reg);
   }
 
+  /// contains - Return true if both registers are in this class.
+  bool contains(unsigned Reg1, unsigned Reg2) const {
+    return contains(Reg1) && contains(Reg2);
+  }
+
   /// hasType - return true if this TargetRegisterClass has the ValueType vt.
   ///
   bool hasType(EVT vt) const {
@@ -312,12 +317,6 @@ public:
     assert(Reg && "this is not a register!");
     return Reg >= FirstVirtualRegister;
   }
-
-  /// getPhysicalRegisterRegClass - Returns the Register Class of a physical
-  /// register of the given type. If type is EVT::Other, then just return any
-  /// register class the register belongs to.
-  virtual const TargetRegisterClass *
-    getPhysicalRegisterRegClass(unsigned Reg, EVT VT = MVT::Other) const;
 
   /// getMinimalPhysRegClass - Returns the Register Class of a physical
   /// register of the given type, picking the most sub register class of

@@ -47,9 +47,11 @@ static bool isUsedOutsideOfDefiningBlock(const Instruction *I) {
   if (isa<PHINode>(I)) return true;
   const BasicBlock *BB = I->getParent();
   for (Value::const_use_iterator UI = I->use_begin(), E = I->use_end();
-        UI != E; ++UI)
-    if (cast<Instruction>(*UI)->getParent() != BB || isa<PHINode>(*UI))
+        UI != E; ++UI) {
+    const User *U = *UI;
+    if (cast<Instruction>(U)->getParent() != BB || isa<PHINode>(U))
       return true;
+  }
   return false;
 }
 
@@ -64,9 +66,11 @@ static bool isOnlyUsedInEntryBlock(const Argument *A, bool EnableFastISel) {
 
   const BasicBlock *Entry = A->getParent()->begin();
   for (Value::const_use_iterator UI = A->use_begin(), E = A->use_end();
-       UI != E; ++UI)
-    if (cast<Instruction>(*UI)->getParent() != Entry || isa<SwitchInst>(*UI))
+       UI != E; ++UI) {
+    const User *U = *UI;
+    if (cast<Instruction>(U)->getParent() != Entry || isa<SwitchInst>(U))
       return false;  // Use not in entry block.
+  }
   return true;
 }
 
@@ -78,6 +82,13 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf) {
   Fn = &fn;
   MF = &mf;
   RegInfo = &MF->getRegInfo();
+
+  // Check whether the function can return without sret-demotion.
+  SmallVector<ISD::OutputArg, 4> Outs;
+  GetReturnInfo(Fn->getReturnType(),
+                Fn->getAttributes().getRetAttributes(), Outs, TLI);
+  CanLowerReturn = TLI.CanLowerReturn(Fn->getCallingConv(), Fn->isVarArg(),
+                                      Outs, Fn->getContext());
 
   // Create a vreg for each argument register that is not dead and is used
   // outside of the entry block for the function.
@@ -184,6 +195,7 @@ void FunctionLoweringInfo::clear() {
 #endif
   LiveOutRegInfo.clear();
   ArgDbgValues.clear();
+  RegFixups.clear();
 }
 
 /// CreateReg - Allocate a single virtual register for the given type.

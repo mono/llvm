@@ -24,6 +24,7 @@
 
 #include "llvm/CallingConv.h"
 #include "llvm/InlineAsm.h"
+#include "llvm/Attributes.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/RuntimeLibcalls.h"
 #include "llvm/ADT/APFloat.h"
@@ -685,6 +686,12 @@ public:
     return JumpBufAlignment;
   }
 
+  /// getMinStackArgumentAlignment - return the minimum stack alignment of an
+  /// argument.
+  unsigned getMinStackArgumentAlignment() const {
+    return MinStackArgumentAlignment;
+  }
+
   /// getPrefLoopAlignment - return the preferred loop alignment.
   ///
   unsigned getPrefLoopAlignment() const {
@@ -1081,6 +1088,12 @@ protected:
     PrefLoopAlignment = Align;
   }
 
+  /// setMinStackArgumentAlignment - Set the minimum stack alignment of an
+  /// argument.
+  void setMinStackArgumentAlignment(unsigned Align) {
+    MinStackArgumentAlignment = Align;
+  }
+
   /// setShouldFoldAtomicFences - Set if the target's implementation of the
   /// atomic operation intrinsics includes locking. Default is false.
   void setShouldFoldAtomicFences(bool fold) {
@@ -1159,8 +1172,7 @@ public:
   /// registers.  If false is returned, an sret-demotion is performed.
   ///
   virtual bool CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
-               const SmallVectorImpl<EVT> &OutTys,
-               const SmallVectorImpl<ISD::ArgFlagsTy> &ArgsFlags,
+               const SmallVectorImpl<ISD::OutputArg> &Outs,
                LLVMContext &Context) const
   {
     // Return true by default to get preexisting behavior.
@@ -1515,6 +1527,11 @@ private:
   /// buffers
   unsigned JumpBufAlignment;
 
+  /// MinStackArgumentAlignment - The minimum alignment that any argument
+  /// on the stack needs to have.
+  ///
+  unsigned MinStackArgumentAlignment;
+
   /// PrefLoopAlignment - The perferred loop alignment.
   ///
   unsigned PrefLoopAlignment;
@@ -1656,6 +1673,15 @@ protected:
   /// optimization.
   bool benefitFromCodePlacementOpt;
 };
+
+/// GetReturnInfo - Given an LLVM IR type and return type attributes,
+/// compute the return value EVTs and flags, and optionally also
+/// the offsets, if the return value is being lowered to memory.
+void GetReturnInfo(const Type* ReturnType, Attributes attr,
+                   SmallVectorImpl<ISD::OutputArg> &Outs,
+                   const TargetLowering &TLI,
+                   SmallVectorImpl<uint64_t> *Offsets = 0);
+
 } // end llvm namespace
 
 #endif

@@ -764,9 +764,9 @@ void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI,
   case X86II::MRMDestMem: {
     MCE.emitByte(BaseOpcode);
     emitMemModRMByte(MI, CurOp,
-                     getX86RegNum(MI.getOperand(CurOp + X86AddrNumOperands)
+                     getX86RegNum(MI.getOperand(CurOp + X86::AddrNumOperands)
                                   .getReg()));
-    CurOp +=  X86AddrNumOperands + 1;
+    CurOp +=  X86::AddrNumOperands + 1;
     if (CurOp != NumOps)
       emitConstant(MI.getOperand(CurOp++).getImm(),
                    X86II::getSizeOfImm(Desc->TSFlags));
@@ -784,13 +784,7 @@ void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI,
     break;
 
   case X86II::MRMSrcMem: {
-    // FIXME: Maybe lea should have its own form?
-    int AddrOperands;
-    if (Opcode == X86::LEA64r || Opcode == X86::LEA64_32r ||
-        Opcode == X86::LEA16r || Opcode == X86::LEA32r)
-      AddrOperands = X86AddrNumOperands - 1; // No segment register
-    else
-      AddrOperands = X86AddrNumOperands;
+    int AddrOperands = X86::AddrNumOperands;
 
     intptr_t PCAdj = (CurOp + AddrOperands + 1 != NumOps) ?
       X86II::getSizeOfImm(Desc->TSFlags) : 0;
@@ -844,14 +838,14 @@ void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI,
   case X86II::MRM2m: case X86II::MRM3m:
   case X86II::MRM4m: case X86II::MRM5m:
   case X86II::MRM6m: case X86II::MRM7m: {
-    intptr_t PCAdj = (CurOp + X86AddrNumOperands != NumOps) ?
-      (MI.getOperand(CurOp+X86AddrNumOperands).isImm() ? 
+    intptr_t PCAdj = (CurOp + X86::AddrNumOperands != NumOps) ?
+      (MI.getOperand(CurOp+X86::AddrNumOperands).isImm() ? 
           X86II::getSizeOfImm(Desc->TSFlags) : 4) : 0;
 
     MCE.emitByte(BaseOpcode);
     emitMemModRMByte(MI, CurOp, (Desc->TSFlags & X86II::FormMask)-X86II::MRM0m,
                      PCAdj);
-    CurOp += X86AddrNumOperands;
+    CurOp += X86::AddrNumOperands;
 
     if (CurOp == NumOps)
       break;

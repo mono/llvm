@@ -922,6 +922,7 @@ public:
   static Instruction *CreateMalloc(Instruction *InsertBefore,
                                    const Type *IntPtrTy, const Type *AllocTy,
                                    Value *AllocSize, Value *ArraySize = 0,
+                                   Function* MallocF = 0,
                                    const Twine &Name = "");
   static Instruction *CreateMalloc(BasicBlock *InsertAtEnd,
                                    const Type *IntPtrTy, const Type *AllocTy,
@@ -929,7 +930,7 @@ public:
                                    Function* MallocF = 0,
                                    const Twine &Name = "");
   /// CreateFree - Generate the IR for a call to the builtin free function.
-  static void CreateFree(Value* Source, Instruction *InsertBefore);
+  static Instruction* CreateFree(Value* Source, Instruction *InsertBefore);
   static Instruction* CreateFree(Value* Source, BasicBlock *InsertAtEnd);
 
   ~CallInst();
@@ -943,6 +944,9 @@ public:
   /// @deprecated these "define hacks" will go away soon
   /// @brief coerce out-of-tree code to abandon the low-level interfaces
   /// @detail see below comments and update your code to high-level interfaces
+  ///    - getOperand(0)  --->  getCalledValue(), or possibly getCalledFunction
+  ///    - setOperand(0, V)  --->  setCalledFunction(V)
+  ///
   ///    in LLVM v2.8-only code
   ///    - getOperand(N+1)  --->  getArgOperand(N)
   ///    - setOperand(N+1, V)  --->  setArgOperand(N, V)
@@ -960,22 +964,10 @@ public:
 # undef protected
 public:
 
-  enum { ArgOffset = 1 }; ///< temporary, do not use for new code!
+  enum { ArgOffset = 0 }; ///< temporary, do not use for new code!
   unsigned getNumArgOperands() const { return getNumOperands() - 1; }
   Value *getArgOperand(unsigned i) const { return getOperand(i + ArgOffset); }
   void setArgOperand(unsigned i, Value *v) { setOperand(i + ArgOffset, v); }
-
-  /// Provide compile-time errors for accessing operand 0
-  /// @deprecated these will go away soon
-  /// @detail see below comments and update your code to high-level interfaces
-  ///    - getOperand(0)  --->  getCalledValue(), or possibly getCalledFunction
-  ///    - setOperand(0, V)  --->  setCalledFunction(V)
-  ///
-private:
-  void getOperand(void*); // NO IMPL ---> use getCalledValue (or possibly
-                          //              getCalledFunction) instead
-  void setOperand(void*, Value*); // NO IMPL ---> use setCalledFunction instead
-public:
 
   /// getCallingConv/setCallingConv - Get or set the calling convention of this
   /// function call.

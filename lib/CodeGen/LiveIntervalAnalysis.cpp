@@ -192,6 +192,10 @@ bool LiveIntervals::conflictsWithPhysReg(const LiveInterval &li,
     if (tii_->isMoveInstr(MI, SrcReg, DstReg, SrcSubReg, DstSubReg))
       if (SrcReg == li.reg || DstReg == li.reg)
         continue;
+    if (MI.isCopy())
+      if (MI.getOperand(0).getReg() == li.reg ||
+          MI.getOperand(1).getReg() == li.reg)
+        continue;
 
     // Check for operands using reg
     for (unsigned i = 0, e = MI.getNumOperands(); i != e;  ++i) {
@@ -324,12 +328,6 @@ void LiveIntervals::handleVirtualRegisterDef(MachineBasicBlock *mbb,
     if (mi->isCopyLike() ||
         tii_->isMoveInstr(*mi, SrcReg, DstReg, SrcSubReg, DstSubReg)) {
       CopyMI = mi;
-
-      // Some of the REG_SEQUENCE lowering in TwoAddressInstrPass creates
-      // implicit defs without really knowing. It shows up as INSERT_SUBREG
-      // using an undefined register.
-      if (mi->isInsertSubreg())
-        mi->getOperand(1).setIsUndef();
     }
 
     VNInfo *ValNo = interval.getNextValue(defIndex, CopyMI, true,
@@ -949,22 +947,22 @@ bool LiveIntervals::tryFoldMemoryOperand(MachineInstr* &MI,
   if (DefMI && (MRInfo & VirtRegMap::isMod))
     return false;
 
-  MachineInstr *fmi = isSS ? tii_->foldMemoryOperand(*mf_, MI, FoldOps, Slot)
-                           : tii_->foldMemoryOperand(*mf_, MI, FoldOps, DefMI);
+  MachineInstr *fmi = isSS ? tii_->foldMemoryOperand(MI, FoldOps, Slot)
+                           : tii_->foldMemoryOperand(MI, FoldOps, DefMI);
   if (fmi) {
     // Remember this instruction uses the spill slot.
     if (isSS) vrm.addSpillSlotUse(Slot, fmi);
 
     // Attempt to fold the memory reference into the instruction. If
     // we can do this, we don't need to insert spill code.
-    MachineBasicBlock &MBB = *MI->getParent();
     if (isSS && !mf_->getFrameInfo()->isImmutableObjectIndex(Slot))
       vrm.virtFolded(Reg, MI, fmi, (VirtRegMap::ModRef)MRInfo);
     vrm.transferSpillPts(MI, fmi);
     vrm.transferRestorePts(MI, fmi);
     vrm.transferEmergencySpills(MI, fmi);
     ReplaceMachineInstrInMaps(MI, fmi);
-    MI = MBB.insert(MBB.erase(MI), fmi);
+    MI->eraseFromParent();
+    MI = fmi;
     ++numFolds;
     return true;
   }

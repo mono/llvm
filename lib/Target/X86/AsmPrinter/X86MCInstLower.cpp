@@ -349,6 +349,15 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   switch (OutMI.getOpcode()) {
   case X86::LEA64_32r: // Handle 'subreg rewriting' for the lea64_32mem operand.
     lower_lea64_32mem(&OutMI, 1);
+    // FALL THROUGH.
+  case X86::LEA64r:
+  case X86::LEA16r:
+  case X86::LEA32r:
+    // LEA should have a segment register, but it must be empty.
+    assert(OutMI.getNumOperands() == 1+X86::AddrNumOperands &&
+           "Unexpected # of LEA operands");
+    assert(OutMI.getOperand(1+X86::AddrSegmentReg).getReg() == 0 &&
+           "LEA has segment specified!");
     break;
   case X86::MOVZX16rr8:   LowerSubReg32_Op0(OutMI, X86::MOVZX32rr8); break;
   case X86::MOVZX16rm8:   LowerSubReg32_Op0(OutMI, X86::MOVZX32rm8); break;
@@ -386,10 +395,9 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     LowerUnaryToTwoAddr(OutMI, X86::XOR32rr); // MOV32r0 -> XOR32rr
     break;
 
-  // TAILJMPr, TAILJMPr64, CALL64r, CALL64pcrel32 - These instructions have
+  // TAILJMPr64, CALL64r, CALL64pcrel32 - These instructions have
   // register inputs modeled as normal uses instead of implicit uses.  As such,
   // truncate off all but the first operand (the callee).  FIXME: Change isel.
-  case X86::TAILJMPr:
   case X86::TAILJMPr64:
   case X86::CALL64r:
   case X86::CALL64pcrel32: {
@@ -402,11 +410,20 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
 
   // TAILJMPd, TAILJMPd64 - Lower to the correct jump instructions.
+  case X86::TAILJMPr:
   case X86::TAILJMPd:
   case X86::TAILJMPd64: {
+    unsigned Opcode;
+    switch (OutMI.getOpcode()) {
+    default: assert(0 && "Invalid opcode");
+    case X86::TAILJMPr: Opcode = X86::JMP32r; break;
+    case X86::TAILJMPd:
+    case X86::TAILJMPd64: Opcode = X86::JMP_1; break;
+    }
+    
     MCOperand Saved = OutMI.getOperand(0);
     OutMI = MCInst();
-    OutMI.setOpcode(X86::TAILJMP_1);
+    OutMI.setOpcode(Opcode);
     OutMI.addOperand(Saved);
     break;
   }
@@ -540,6 +557,13 @@ void X86AsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     return;
 
+  case X86::TAILJMPr:
+  case X86::TAILJMPd:
+  case X86::TAILJMPd64:
+    // Lower these as normal, but add some comments.
+    OutStreamer.AddComment("TAILCALL");
+    break;
+      
   case X86::MOVPC32r: {
     MCInst TmpInst;
     // This is a pseudo op for a two instruction sequence with a label, which
@@ -605,7 +629,6 @@ void X86AsmPrinter::EmitInstruction(const MachineInstr *MI) {
   
   MCInst TmpInst;
   MCInstLowering.Lower(MI, TmpInst);
-  
   OutStreamer.EmitInstruction(TmpInst);
 }
 

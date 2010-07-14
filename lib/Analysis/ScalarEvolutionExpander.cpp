@@ -21,18 +21,19 @@
 #include "llvm/ADT/STLExtras.h"
 using namespace llvm;
 
-/// ReuseOrCreateCast - Arange for there to be a cast of V to Ty at IP,
+/// ReuseOrCreateCast - Arrange for there to be a cast of V to Ty at IP,
 /// reusing an existing cast if a suitable one exists, moving an existing
 /// cast if a suitable one exists but isn't in the right place, or
-/// or creating a new one.
+/// creating a new one.
 Value *SCEVExpander::ReuseOrCreateCast(Value *V, const Type *Ty,
                                        Instruction::CastOps Op,
                                        BasicBlock::iterator IP) {
   // Check to see if there is already a cast!
   for (Value::use_iterator UI = V->use_begin(), E = V->use_end();
-       UI != E; ++UI)
-    if ((*UI)->getType() == Ty)
-      if (CastInst *CI = dyn_cast<CastInst>(cast<Instruction>(*UI)))
+       UI != E; ++UI) {
+    User *U = *UI;
+    if (U->getType() == Ty)
+      if (CastInst *CI = dyn_cast<CastInst>(U))
         if (CI->getOpcode() == Op) {
           // If the cast isn't where we want it, fix it.
           if (BasicBlock::iterator(CI) != IP) {
@@ -49,6 +50,7 @@ Value *SCEVExpander::ReuseOrCreateCast(Value *V, const Type *Ty,
           rememberInstruction(CI);
           return CI;
         }
+  }
 
   // Create a new cast.
   Instruction *I = CastInst::Create(Op, V, Ty, V->getName(), IP);
@@ -1118,17 +1120,19 @@ Value *SCEVExpander::visitAddRecExpr(const SCEVAddRecExpr *S) {
 
     Constant *One = ConstantInt::get(Ty, 1);
     for (pred_iterator HPI = pred_begin(Header), HPE = pred_end(Header);
-         HPI != HPE; ++HPI)
-      if (L->contains(*HPI)) {
+         HPI != HPE; ++HPI) {
+      BasicBlock *HP = *HPI;
+      if (L->contains(HP)) {
         // Insert a unit add instruction right before the terminator
         // corresponding to the back-edge.
         Instruction *Add = BinaryOperator::CreateAdd(PN, One, "indvar.next",
-                                                     (*HPI)->getTerminator());
+                                                           HP->getTerminator());
         rememberInstruction(Add);
-        PN->addIncoming(Add, *HPI);
+        PN->addIncoming(Add, HP);
       } else {
-        PN->addIncoming(Constant::getNullValue(Ty), *HPI);
+        PN->addIncoming(Constant::getNullValue(Ty), HP);
       }
+    }
   }
 
   // {0,+,F} --> {0,+,1} * F

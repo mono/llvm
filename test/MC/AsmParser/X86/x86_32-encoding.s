@@ -12305,3 +12305,624 @@
 // CHECK: vcmpps  $31, %xmm1, %xmm2, %xmm3
 // CHECK: encoding: [0xc5,0xe8,0xc2,0xd9,0x1f]
           vcmptrue_usps %xmm1, %xmm2, %xmm3
+
+// CHECK: vmovaps  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x28,0x10]
+          vmovaps  (%eax), %ymm2
+
+// CHECK: vmovaps  %ymm1, %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x28,0xd1]
+          vmovaps  %ymm1, %ymm2
+
+// CHECK: vmovaps  %ymm1, (%eax)
+// CHECK: encoding: [0xc5,0xfc,0x29,0x08]
+          vmovaps  %ymm1, (%eax)
+
+// CHECK: vmovapd  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfd,0x28,0x10]
+          vmovapd  (%eax), %ymm2
+
+// CHECK: vmovapd  %ymm1, %ymm2
+// CHECK: encoding: [0xc5,0xfd,0x28,0xd1]
+          vmovapd  %ymm1, %ymm2
+
+// CHECK: vmovapd  %ymm1, (%eax)
+// CHECK: encoding: [0xc5,0xfd,0x29,0x08]
+          vmovapd  %ymm1, (%eax)
+
+// CHECK: vmovups  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x10,0x10]
+          vmovups  (%eax), %ymm2
+
+// CHECK: vmovups  %ymm1, %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x10,0xd1]
+          vmovups  %ymm1, %ymm2
+
+// CHECK: vmovups  %ymm1, (%eax)
+// CHECK: encoding: [0xc5,0xfc,0x11,0x08]
+          vmovups  %ymm1, (%eax)
+
+// CHECK: vmovupd  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfd,0x10,0x10]
+          vmovupd  (%eax), %ymm2
+
+// CHECK: vmovupd  %ymm1, %ymm2
+// CHECK: encoding: [0xc5,0xfd,0x10,0xd1]
+          vmovupd  %ymm1, %ymm2
+
+// CHECK: vmovupd  %ymm1, (%eax)
+// CHECK: encoding: [0xc5,0xfd,0x11,0x08]
+          vmovupd  %ymm1, (%eax)
+
+// CHECK: vunpckhps  %ymm1, %ymm2, %ymm4
+// CHECK: encoding: [0xc5,0xec,0x15,0xe1]
+          vunpckhps  %ymm1, %ymm2, %ymm4
+
+// CHECK: vunpckhpd  %ymm1, %ymm2, %ymm4
+// CHECK: encoding: [0xc5,0xed,0x15,0xe1]
+          vunpckhpd  %ymm1, %ymm2, %ymm4
+
+// CHECK: vunpcklps  %ymm1, %ymm2, %ymm4
+// CHECK: encoding: [0xc5,0xec,0x14,0xe1]
+          vunpcklps  %ymm1, %ymm2, %ymm4
+
+// CHECK: vunpcklpd  %ymm1, %ymm2, %ymm4
+// CHECK: encoding: [0xc5,0xed,0x14,0xe1]
+          vunpcklpd  %ymm1, %ymm2, %ymm4
+
+// CHECK: vunpckhps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xec,0x15,0x6c,0xcb,0xfc]
+          vunpckhps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vunpckhpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xed,0x15,0x6c,0xcb,0xfc]
+          vunpckhpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vunpcklps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xec,0x14,0x6c,0xcb,0xfc]
+          vunpcklps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vunpcklpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xed,0x14,0x6c,0xcb,0xfc]
+          vunpcklpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vmovntdq  %ymm1, (%eax)
+// CHECK: encoding: [0xc5,0xfd,0xe7,0x08]
+          vmovntdq  %ymm1, (%eax)
+
+// CHECK: vmovntpd  %ymm1, (%eax)
+// CHECK: encoding: [0xc5,0xfd,0x2b,0x08]
+          vmovntpd  %ymm1, (%eax)
+
+// CHECK: vmovntps  %ymm1, (%eax)
+// CHECK: encoding: [0xc5,0xfc,0x2b,0x08]
+          vmovntps  %ymm1, (%eax)
+
+// CHECK: vmovmskps  %xmm2, %eax
+// CHECK: encoding: [0xc5,0xf8,0x50,0xc2]
+          vmovmskps  %xmm2, %eax
+
+// CHECK: vmovmskpd  %xmm2, %eax
+// CHECK: encoding: [0xc5,0xf9,0x50,0xc2]
+          vmovmskpd  %xmm2, %eax
+
+// CHECK: vmaxps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x5f,0xf2]
+          vmaxps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vmaxpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x5f,0xf2]
+          vmaxpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vminps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x5d,0xf2]
+          vminps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vminpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x5d,0xf2]
+          vminpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vsubps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x5c,0xf2]
+          vsubps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vsubpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x5c,0xf2]
+          vsubpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vdivps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x5e,0xf2]
+          vdivps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vdivpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x5e,0xf2]
+          vdivpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vaddps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x58,0xf2]
+          vaddps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vaddpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x58,0xf2]
+          vaddpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vmulps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x59,0xf2]
+          vmulps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vmulpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x59,0xf2]
+          vmulpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vmaxps  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x5f,0x30]
+          vmaxps  (%eax), %ymm4, %ymm6
+
+// CHECK: vmaxpd  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x5f,0x30]
+          vmaxpd  (%eax), %ymm4, %ymm6
+
+// CHECK: vminps  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x5d,0x30]
+          vminps  (%eax), %ymm4, %ymm6
+
+// CHECK: vminpd  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x5d,0x30]
+          vminpd  (%eax), %ymm4, %ymm6
+
+// CHECK: vsubps  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x5c,0x30]
+          vsubps  (%eax), %ymm4, %ymm6
+
+// CHECK: vsubpd  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x5c,0x30]
+          vsubpd  (%eax), %ymm4, %ymm6
+
+// CHECK: vdivps  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x5e,0x30]
+          vdivps  (%eax), %ymm4, %ymm6
+
+// CHECK: vdivpd  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x5e,0x30]
+          vdivpd  (%eax), %ymm4, %ymm6
+
+// CHECK: vaddps  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x58,0x30]
+          vaddps  (%eax), %ymm4, %ymm6
+
+// CHECK: vaddpd  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x58,0x30]
+          vaddpd  (%eax), %ymm4, %ymm6
+
+// CHECK: vmulps  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x59,0x30]
+          vmulps  (%eax), %ymm4, %ymm6
+
+// CHECK: vmulpd  (%eax), %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x59,0x30]
+          vmulpd  (%eax), %ymm4, %ymm6
+
+// CHECK: vsqrtpd  %ymm1, %ymm2
+// CHECK: encoding: [0xc5,0xfd,0x51,0xd1]
+          vsqrtpd  %ymm1, %ymm2
+
+// CHECK: vsqrtpd  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfd,0x51,0x10]
+          vsqrtpd  (%eax), %ymm2
+
+// CHECK: vsqrtps  %ymm1, %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x51,0xd1]
+          vsqrtps  %ymm1, %ymm2
+
+// CHECK: vsqrtps  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x51,0x10]
+          vsqrtps  (%eax), %ymm2
+
+// CHECK: vrsqrtps  %ymm1, %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x52,0xd1]
+          vrsqrtps  %ymm1, %ymm2
+
+// CHECK: vrsqrtps  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x52,0x10]
+          vrsqrtps  (%eax), %ymm2
+
+// CHECK: vrcpps  %ymm1, %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x53,0xd1]
+          vrcpps  %ymm1, %ymm2
+
+// CHECK: vrcpps  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x53,0x10]
+          vrcpps  (%eax), %ymm2
+
+// CHECK: vandps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x54,0xf2]
+          vandps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vandpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x54,0xf2]
+          vandpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vandps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xec,0x54,0x6c,0xcb,0xfc]
+          vandps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vandpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xed,0x54,0x6c,0xcb,0xfc]
+          vandpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vorps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x56,0xf2]
+          vorps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vorpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x56,0xf2]
+          vorpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vorps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xec,0x56,0x6c,0xcb,0xfc]
+          vorps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vorpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xed,0x56,0x6c,0xcb,0xfc]
+          vorpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vxorps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x57,0xf2]
+          vxorps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vxorpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x57,0xf2]
+          vxorpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vxorps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xec,0x57,0x6c,0xcb,0xfc]
+          vxorps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vxorpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xed,0x57,0x6c,0xcb,0xfc]
+          vxorpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vandnps  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdc,0x55,0xf2]
+          vandnps  %ymm2, %ymm4, %ymm6
+
+// CHECK: vandnpd  %ymm2, %ymm4, %ymm6
+// CHECK: encoding: [0xc5,0xdd,0x55,0xf2]
+          vandnpd  %ymm2, %ymm4, %ymm6
+
+// CHECK: vandnps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xec,0x55,0x6c,0xcb,0xfc]
+          vandnps  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vandnpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xed,0x55,0x6c,0xcb,0xfc]
+          vandnpd  -4(%ebx,%ecx,8), %ymm2, %ymm5
+
+// CHECK: vcvtps2pd  %xmm3, %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x5a,0xd3]
+          vcvtps2pd  %xmm3, %ymm2
+
+// CHECK: vcvtps2pd  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x5a,0x10]
+          vcvtps2pd  (%eax), %ymm2
+
+// CHECK: vcvtdq2pd  %xmm3, %ymm2
+// CHECK: encoding: [0xc5,0xfe,0xe6,0xd3]
+          vcvtdq2pd  %xmm3, %ymm2
+
+// CHECK: vcvtdq2pd  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfe,0xe6,0x10]
+          vcvtdq2pd  (%eax), %ymm2
+
+// CHECK: vcvtdq2ps  %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xfc,0x5b,0xea]
+          vcvtdq2ps  %ymm2, %ymm5
+
+// CHECK: vcvtdq2ps  (%eax), %ymm2
+// CHECK: encoding: [0xc5,0xfc,0x5b,0x10]
+          vcvtdq2ps  (%eax), %ymm2
+
+// CHECK: vcvtps2dq  %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xfd,0x5b,0xea]
+          vcvtps2dq  %ymm2, %ymm5
+
+// CHECK: vcvtps2dq  (%eax), %ymm5
+// CHECK: encoding: [0xc5,0xfd,0x5b,0x28]
+          vcvtps2dq  (%eax), %ymm5
+
+// CHECK: vcvttps2dq  %ymm2, %ymm5
+// CHECK: encoding: [0xc5,0xfe,0x5b,0xea]
+          vcvttps2dq  %ymm2, %ymm5
+
+// CHECK: vcvttps2dq  (%eax), %ymm5
+// CHECK: encoding: [0xc5,0xfe,0x5b,0x28]
+          vcvttps2dq  (%eax), %ymm5
+
+// CHECK: vcvttpd2dq  %xmm1, %xmm5
+// CHECK: encoding: [0xc5,0xf9,0xe6,0xe9]
+          vcvttpd2dq  %xmm1, %xmm5
+
+// CHECK: vcvttpd2dq  %ymm2, %xmm5
+// CHECK: encoding: [0xc5,0xfd,0xe6,0xea]
+          vcvttpd2dq  %ymm2, %xmm5
+
+// CHECK: vcvttpd2dqx  %xmm1, %xmm5
+// CHECK: encoding: [0xc5,0xf9,0xe6,0xe9]
+          vcvttpd2dqx  %xmm1, %xmm5
+
+// CHECK: vcvttpd2dqx  (%eax), %xmm1
+// CHECK: encoding: [0xc5,0xf9,0xe6,0x08]
+          vcvttpd2dqx  (%eax), %xmm1
+
+// CHECK: vcvttpd2dqy  %ymm2, %xmm1
+// CHECK: encoding: [0xc5,0xfd,0xe6,0xca]
+          vcvttpd2dqy  %ymm2, %xmm1
+
+// CHECK: vcvttpd2dqy  (%eax), %xmm1
+// CHECK: encoding: [0xc5,0xfd,0xe6,0x08]
+          vcvttpd2dqy  (%eax), %xmm1
+
+// CHECK: vcvtpd2ps  %ymm2, %xmm5
+// CHECK: encoding: [0xc5,0xfd,0x5a,0xea]
+          vcvtpd2ps  %ymm2, %xmm5
+
+// CHECK: vcvtpd2psx  %xmm1, %xmm5
+// CHECK: encoding: [0xc5,0xf9,0x5a,0xe9]
+          vcvtpd2psx  %xmm1, %xmm5
+
+// CHECK: vcvtpd2psx  (%eax), %xmm1
+// CHECK: encoding: [0xc5,0xf9,0x5a,0x08]
+          vcvtpd2psx  (%eax), %xmm1
+
+// CHECK: vcvtpd2psy  %ymm2, %xmm1
+// CHECK: encoding: [0xc5,0xfd,0x5a,0xca]
+          vcvtpd2psy  %ymm2, %xmm1
+
+// CHECK: vcvtpd2psy  (%eax), %xmm1
+// CHECK: encoding: [0xc5,0xfd,0x5a,0x08]
+          vcvtpd2psy  (%eax), %xmm1
+
+// CHECK: vcvtpd2dq  %ymm2, %xmm5
+// CHECK: encoding: [0xc5,0xff,0xe6,0xea]
+          vcvtpd2dq  %ymm2, %xmm5
+
+// CHECK: vcvtpd2dqy  %ymm2, %xmm1
+// CHECK: encoding: [0xc5,0xff,0xe6,0xca]
+          vcvtpd2dqy  %ymm2, %xmm1
+
+// CHECK: vcvtpd2dqy  (%eax), %xmm1
+// CHECK: encoding: [0xc5,0xff,0xe6,0x08]
+          vcvtpd2dqy  (%eax), %xmm1
+
+// CHECK: vcvtpd2dqx  %xmm1, %xmm5
+// CHECK: encoding: [0xc5,0xfb,0xe6,0xe9]
+          vcvtpd2dqx  %xmm1, %xmm5
+
+// CHECK: vcvtpd2dqx  (%eax), %xmm1
+// CHECK: encoding: [0xc5,0xfb,0xe6,0x08]
+          vcvtpd2dqx  (%eax), %xmm1
+
+// CHECK: vcmpps  $0, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x00]
+          vcmpeqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $2, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x02]
+          vcmpleps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $1, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x01]
+          vcmpltps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $4, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x04]
+          vcmpneqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $6, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x06]
+          vcmpnleps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $5, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x05]
+          vcmpnltps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $7, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x07]
+          vcmpordps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $3, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x03]
+          vcmpunordps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $0, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0x5c,0xcb,0xfc,0x00]
+          vcmpeqps -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmpps  $2, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0x5c,0xcb,0xfc,0x02]
+          vcmpleps -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmpps  $1, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0x5c,0xcb,0xfc,0x01]
+          vcmpltps -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmpps  $4, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0x5c,0xcb,0xfc,0x04]
+          vcmpneqps -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmpps  $6, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0x5c,0xcb,0xfc,0x06]
+          vcmpnleps -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmpps  $5, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0x5c,0xcb,0xfc,0x05]
+          vcmpnltps -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmpps  $7, -4(%ebx,%ecx,8), %ymm6, %ymm2
+// CHECK: encoding: [0xc5,0xcc,0xc2,0x54,0xcb,0xfc,0x07]
+          vcmpordps -4(%ebx,%ecx,8), %ymm6, %ymm2
+
+// CHECK: vcmpps  $3, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0x5c,0xcb,0xfc,0x03]
+          vcmpunordps -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmppd  $0, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0xd9,0x00]
+          vcmpeqpd %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmppd  $2, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0xd9,0x02]
+          vcmplepd %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmppd  $1, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0xd9,0x01]
+          vcmpltpd %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmppd  $4, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0xd9,0x04]
+          vcmpneqpd %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmppd  $6, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0xd9,0x06]
+          vcmpnlepd %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmppd  $5, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0xd9,0x05]
+          vcmpnltpd %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmppd  $7, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0xd9,0x07]
+          vcmpordpd %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmppd  $3, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0xd9,0x03]
+          vcmpunordpd %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmppd  $0, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0x5c,0xcb,0xfc,0x00]
+          vcmpeqpd -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmppd  $2, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0x5c,0xcb,0xfc,0x02]
+          vcmplepd -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmppd  $1, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0x5c,0xcb,0xfc,0x01]
+          vcmpltpd -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmppd  $4, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0x5c,0xcb,0xfc,0x04]
+          vcmpneqpd -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmppd  $6, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0x5c,0xcb,0xfc,0x06]
+          vcmpnlepd -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmppd  $5, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0x5c,0xcb,0xfc,0x05]
+          vcmpnltpd -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmppd  $7, -4(%ebx,%ecx,8), %ymm6, %ymm2
+// CHECK: encoding: [0xc5,0xcd,0xc2,0x54,0xcb,0xfc,0x07]
+          vcmpordpd -4(%ebx,%ecx,8), %ymm6, %ymm2
+
+// CHECK: vcmppd  $3, -4(%ebx,%ecx,8), %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xed,0xc2,0x5c,0xcb,0xfc,0x03]
+          vcmpunordpd -4(%ebx,%ecx,8), %ymm2, %ymm3
+
+// CHECK: vcmpps  $8, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x08]
+          vcmpeq_uqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $9, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x09]
+          vcmpngeps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $10, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x0a]
+          vcmpngtps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $11, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x0b]
+          vcmpfalseps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $12, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x0c]
+          vcmpneq_oqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $13, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x0d]
+          vcmpgeps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $14, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x0e]
+          vcmpgtps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $15, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x0f]
+          vcmptrueps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $16, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x10]
+          vcmpeq_osps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $17, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x11]
+          vcmplt_oqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $18, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x12]
+          vcmple_oqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $19, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x13]
+          vcmpunord_sps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $20, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x14]
+          vcmpneq_usps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $21, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x15]
+          vcmpnlt_uqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $22, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x16]
+          vcmpnle_uqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $23, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x17]
+          vcmpord_sps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $24, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x18]
+          vcmpeq_usps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $25, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x19]
+          vcmpnge_uqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $26, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x1a]
+          vcmpngt_uqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $27, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x1b]
+          vcmpfalse_osps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $28, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x1c]
+          vcmpneq_osps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $29, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x1d]
+          vcmpge_oqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $30, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x1e]
+          vcmpgt_oqps %ymm1, %ymm2, %ymm3
+
+// CHECK: vcmpps  $31, %ymm1, %ymm2, %ymm3
+// CHECK: encoding: [0xc5,0xec,0xc2,0xd9,0x1f]
+          vcmptrue_usps %ymm1, %ymm2, %ymm3
+

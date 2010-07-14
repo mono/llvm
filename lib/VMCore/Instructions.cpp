@@ -471,9 +471,10 @@ static Instruction *createMalloc(Instruction *InsertBefore,
 Instruction *CallInst::CreateMalloc(Instruction *InsertBefore,
                                     const Type *IntPtrTy, const Type *AllocTy,
                                     Value *AllocSize, Value *ArraySize,
+                                    Function * MallocF,
                                     const Twine &Name) {
   return createMalloc(InsertBefore, NULL, IntPtrTy, AllocTy, AllocSize,
-                      ArraySize, NULL, Name);
+                      ArraySize, MallocF, Name);
 }
 
 /// CreateMalloc - Generate the IR for a call to malloc:
@@ -525,8 +526,8 @@ static Instruction* createFree(Value* Source, Instruction *InsertBefore,
 }
 
 /// CreateFree - Generate the IR for a call to the builtin free function.
-void CallInst::CreateFree(Value* Source, Instruction *InsertBefore) {
-  createFree(Source, InsertBefore, NULL);
+Instruction * CallInst::CreateFree(Value* Source, Instruction *InsertBefore) {
+  return createFree(Source, InsertBefore, NULL);
 }
 
 /// CreateFree - Generate the IR for a call to the builtin free function.
@@ -2005,6 +2006,14 @@ unsigned CastInst::isEliminableCastPair(
     { 99,99,99,99,99,99,99,99,99,13,99,12 }, // IntToPtr    |
     {  5, 5, 5, 6, 6, 5, 5, 6, 6,11, 5, 1 }, // BitCast    -+
   };
+  
+  // If either of the casts are a bitcast from scalar to vector, disallow the
+  // merging.
+  if ((firstOp == Instruction::BitCast &&
+       isa<VectorType>(SrcTy) != isa<VectorType>(MidTy)) ||
+      (secondOp == Instruction::BitCast &&
+       isa<VectorType>(MidTy) != isa<VectorType>(DstTy)))
+    return 0; // Disallowed
 
   int ElimCase = CastResults[firstOp-Instruction::CastOpsBegin]
                             [secondOp-Instruction::CastOpsBegin];

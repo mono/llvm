@@ -253,17 +253,18 @@ void BitcodeReaderValueList::ResolveConstantForwardRefs() {
     // at once.
     while (!Placeholder->use_empty()) {
       Value::use_iterator UI = Placeholder->use_begin();
+      User *U = *UI;
 
       // If the using object isn't uniqued, just update the operands.  This
       // handles instructions and initializers for global variables.
-      if (!isa<Constant>(*UI) || isa<GlobalValue>(*UI)) {
+      if (!isa<Constant>(U) || isa<GlobalValue>(U)) {
         UI.getUse().set(RealVal);
         continue;
       }
 
       // Otherwise, we have a constant that uses the placeholder.  Replace that
       // constant with a new constant that has *all* placeholder uses updated.
-      Constant *UserC = cast<Constant>(*UI);
+      Constant *UserC = cast<Constant>(U);
       for (User::op_iterator I = UserC->op_begin(), E = UserC->op_end();
            I != E; ++I) {
         Value *NewOp;
@@ -819,7 +820,7 @@ bool BitcodeReader::ParseMetadata() {
       IsFunctionLocal = true;
       // fall-through
     case bitc::METADATA_NODE: {
-      if (Record.empty() || Record.size() % 2 == 1)
+      if (Record.size() % 2 == 1)
         return Error("Invalid METADATA_NODE record");
 
       unsigned Size = Record.size();
@@ -833,7 +834,8 @@ bool BitcodeReader::ParseMetadata() {
         else
           Elts.push_back(NULL);
       }
-      Value *V = MDNode::getWhenValsUnresolved(Context, &Elts[0], Elts.size(),
+      Value *V = MDNode::getWhenValsUnresolved(Context,
+                                               Elts.data(), Elts.size(),
                                                IsFunctionLocal);
       IsFunctionLocal = false;
       MDValueList.AssignValue(V, NextMDValueNo++);

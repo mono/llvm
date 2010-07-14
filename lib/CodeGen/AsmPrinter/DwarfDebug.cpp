@@ -322,6 +322,7 @@ DwarfDebug::DwarfDebug(AsmPrinter *A, Module *M)
   DwarfDebugRangeSectionSym = DwarfDebugLocSectionSym = 0; 
   DwarfDebugLineSectionSym = CurrentLineSectionSym = 0;
   FunctionBeginSym = FunctionEndSym = 0;
+  DIEIntegerOne = new (DIEValueAllocator) DIEInteger(1);
   {
     NamedRegionTimer T(DbgTimerName, DWARFGroupName, TimePassesIsEnabled);
     beginModule(M);
@@ -376,7 +377,8 @@ DIEEntry *DwarfDebug::createDIEEntry(DIE *Entry) {
 void DwarfDebug::addUInt(DIE *Die, unsigned Attribute,
                          unsigned Form, uint64_t Integer) {
   if (!Form) Form = DIEInteger::BestForm(false, Integer);
-  DIEValue *Value = new (DIEValueAllocator) DIEInteger(Integer);
+  DIEValue *Value = Integer == 1 ? 
+    DIEIntegerOne : new (DIEValueAllocator) DIEInteger(Integer);
   Die->addValue(Attribute, Form, Value);
 }
 
@@ -1502,7 +1504,7 @@ DIE *DwarfDebug::constructInlinedScopeDIE(DbgScope *Scope) {
   const MCSymbol *StartLabel = getLabelBeforeInsn(RI->first);
   const MCSymbol *EndLabel = getLabelAfterInsn(RI->second);
 
-  if (StartLabel == FunctionBeginSym || EndLabel == 0) {
+  if (StartLabel == 0 || EndLabel == 0) {
     assert (0 && "Unexpected Start and End  labels for a inlined scope!");
     return 0;
   }
