@@ -65,9 +65,10 @@ def SDTARMVGETLN  : SDTypeProfile<1, 2, [SDTCisVT<0, i32>, SDTCisInt<1>,
 def NEONvgetlaneu : SDNode<"ARMISD::VGETLANEu", SDTARMVGETLN>;
 def NEONvgetlanes : SDNode<"ARMISD::VGETLANEs", SDTARMVGETLN>;
 
-def NEONvmovImm   : SDNode<"ARMISD::VMOVIMM",
-                           SDTypeProfile<1, 1, [SDTCisVec<0>,
-                                                SDTCisVT<1, i32>]>>;
+def SDTARMVMOVIMM : SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisVT<1, i32>]>;
+def NEONvmovImm   : SDNode<"ARMISD::VMOVIMM", SDTARMVMOVIMM>;
+def NEONvmvnImm   : SDNode<"ARMISD::VMVNIMM", SDTARMVMOVIMM>;
+
 def NEONvdup      : SDNode<"ARMISD::VDUP", SDTypeProfile<1, 1, [SDTCisVec<0>]>>;
 
 // VDUPLANE can produce a quad-register result from a double-register source,
@@ -2383,6 +2384,28 @@ def  VORNq    : N3VX<0, 0, 0b11, 0b0001, 1, 1, (outs QPR:$dst),
                      [(set QPR:$dst, (v4i32 (or QPR:$src1,
                                                 (vnotq QPR:$src2))))]>;
 
+//   VMVN     : Vector Bitwise NOT (Immediate)
+
+let isReMaterializable = 1 in {
+def VMVNv4i16 : N1ModImm<1, 0b000, {1,0,?,0}, 0, 0, 1, 1, (outs DPR:$dst),
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
+                         "vmvn", "i16", "$dst, $SIMM", "",
+                         [(set DPR:$dst, (v4i16 (NEONvmvnImm timm:$SIMM)))]>;
+def VMVNv8i16 : N1ModImm<1, 0b000, {1,0,?,0}, 0, 1, 1, 1, (outs QPR:$dst),
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
+                         "vmvn", "i16", "$dst, $SIMM", "",
+                         [(set QPR:$dst, (v8i16 (NEONvmvnImm timm:$SIMM)))]>;
+
+def VMVNv2i32 : N1ModImm<1, 0b000, {?,?,?,?}, 0, 0, 1, 1, (outs DPR:$dst),
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
+                         "vmvn", "i32", "$dst, $SIMM", "",
+                         [(set DPR:$dst, (v2i32 (NEONvmvnImm timm:$SIMM)))]>;
+def VMVNv4i32 : N1ModImm<1, 0b000, {?,?,?,?}, 0, 1, 1, 1, (outs QPR:$dst),
+                         (ins nModImm:$SIMM), IIC_VMOVImm,
+                         "vmvn", "i32", "$dst, $SIMM", "",
+                         [(set QPR:$dst, (v4i32 (NEONvmvnImm timm:$SIMM)))]>;
+}
+
 //   VMVN     : Vector Bitwise NOT
 def  VMVNd    : N2VX<0b11, 0b11, 0b00, 0b00, 0b01011, 0, 0,
                      (outs DPR:$dst), (ins DPR:$src), IIC_VSUBiD,
@@ -2853,11 +2876,11 @@ def VMOVv8i16 : N1ModImm<1, 0b000, {1,0,?,0}, 0, 1, 0, 1, (outs QPR:$dst),
                          "vmov", "i16", "$dst, $SIMM", "",
                          [(set QPR:$dst, (v8i16 (NEONvmovImm timm:$SIMM)))]>;
 
-def VMOVv2i32 : N1ModImm<1, 0b000, {0,?,?,0}, 0, 0, 0, 1, (outs DPR:$dst),
+def VMOVv2i32 : N1ModImm<1, 0b000, {?,?,?,?}, 0, 0, 0, 1, (outs DPR:$dst),
                          (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i32", "$dst, $SIMM", "",
                          [(set DPR:$dst, (v2i32 (NEONvmovImm timm:$SIMM)))]>;
-def VMOVv4i32 : N1ModImm<1, 0b000, {0,?,?,0}, 0, 1, 0, 1, (outs QPR:$dst),
+def VMOVv4i32 : N1ModImm<1, 0b000, {?,?,?,?}, 0, 1, 0, 1, (outs QPR:$dst),
                          (ins nModImm:$SIMM), IIC_VMOVImm,
                          "vmov", "i32", "$dst, $SIMM", "",
                          [(set QPR:$dst, (v4i32 (NEONvmovImm timm:$SIMM)))]>;

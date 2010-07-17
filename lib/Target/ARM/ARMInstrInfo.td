@@ -61,6 +61,9 @@ def SDT_ARMSYNCBARRIERV6 : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
 
 def SDT_ARMTCRET : SDTypeProfile<0, 1, [SDTCisPtrTy<0>]>;
 
+def SDT_ARMBFI : SDTypeProfile<1, 3, [SDTCisVT<0, i32>, SDTCisVT<1, i32>,
+                                      SDTCisVT<2, i32>, SDTCisVT<3, i32>]>;
+
 // Node definitions.
 def ARMWrapper       : SDNode<"ARMISD::Wrapper",     SDTIntUnaryOp>;
 def ARMWrapperJT     : SDNode<"ARMISD::WrapperJT",   SDTIntBinOp>;
@@ -130,6 +133,9 @@ def ARMrbit          : SDNode<"ARMISD::RBIT", SDTIntUnaryOp>;
 
 def ARMtcret         : SDNode<"ARMISD::TC_RETURN", SDT_ARMTCRET, 
                         [SDNPHasChain,  SDNPOptInFlag, SDNPVariadic]>;
+
+
+def ARMbfi           : SDNode<"ARMISD::BFI", SDT_ARMBFI>;
 
 //===----------------------------------------------------------------------===//
 // ARM Instruction Predicate Definitions.
@@ -221,19 +227,7 @@ def sext_16_node : PatLeaf<(i32 GPR:$a), [{
 /// e.g., 0xf000ffff
 def bf_inv_mask_imm : Operand<i32>,
                       PatLeaf<(imm), [{
-  uint32_t v = (uint32_t)N->getZExtValue();
-  if (v == 0xffffffff)
-    return 0;
-  // there can be 1's on either or both "outsides", all the "inside"
-  // bits must be 0's
-  unsigned int lsb = 0, msb = 31;
-  while (v & (1 << msb)) --msb;
-  while (v & (1 << lsb)) ++lsb;
-  for (unsigned int i = lsb; i <= msb; ++i) {
-    if (v & (1 << i))
-      return 0;
-  }
-  return 1;
+  return ARM::isBitFieldInvertedMask(N->getZExtValue());
 }] > {
   let PrintMethod = "printBitfieldInvMaskImmOperand";
 }
@@ -1694,13 +1688,19 @@ def RSCSrs : AXI1<0b0111, (outs GPR:$dst), (ins GPR:$a, so_reg:$b),
 }
 
 // (sub X, imm) gets canonicalized to (add X, -imm).  Match this form.
+// The assume-no-carry-in form uses the negation of the input since add/sub
+// assume opposite meanings of the carry flag (i.e., carry == !borrow).
+// See the definition of AddWithCarry() in the ARM ARM A2.2.1 for the gory
+// details.
 def : ARMPat<(add    GPR:$src, so_imm_neg:$imm),
              (SUBri  GPR:$src, so_imm_neg:$imm)>;
-
-//def : ARMPat<(addc   GPR:$src, so_imm_neg:$imm),
-//             (SUBSri GPR:$src, so_imm_neg:$imm)>;
-//def : ARMPat<(adde   GPR:$src, so_imm_neg:$imm),
-//             (SBCri  GPR:$src, so_imm_neg:$imm)>;
+def : ARMPat<(addc   GPR:$src, so_imm_neg:$imm),
+             (SUBSri GPR:$src, so_imm_neg:$imm)>;
+// The with-carry-in form matches bitwise not instead of the negation.
+// Effectively, the inverse interpretation of the carry flag already accounts
+// for part of the negation.
+def : ARMPat<(adde   GPR:$src, so_imm_not:$imm),
+             (SBCri  GPR:$src, so_imm_not:$imm)>;
 
 // Note: These are implemented in C++ code, because they have to generate
 // ADD/SUBrs instructions, which use a complex pattern that a xform function
@@ -1852,11 +1852,11 @@ def BFC    : I<(outs GPR:$dst), (ins GPR:$src, bf_inv_mask_imm:$imm),
 }
 
 // A8.6.18  BFI - Bitfield insert (Encoding A1)
-// Added for disassembler with the pattern field purposely left blank.
-def BFI    : I<(outs GPR:$dst), (ins GPR:$src, bf_inv_mask_imm:$imm),
+def BFI    : I<(outs GPR:$dst), (ins GPR:$src, GPR:$val, bf_inv_mask_imm:$imm),
                AddrMode1, Size4Bytes, IndexModeNone, DPFrm, IIC_iUNAsi,
-               "bfi", "\t$dst, $src, $imm", "",
-               [/* For disassembly only; pattern left blank */]>,
+               "bfi", "\t$dst, $val, $imm", "$src = $dst",
+               [(set GPR:$dst, (ARMbfi GPR:$src, GPR:$val,
+                                bf_inv_mask_imm:$imm))]>,
                Requires<[IsARM, HasV6T2]> {
   let Inst{27-21} = 0b0111110;
   let Inst{6-4}   = 0b001; // Rn: Inst{3-0} != 15

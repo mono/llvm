@@ -178,7 +178,7 @@ bool AsmPrinter::doInitialization(Module &M) {
   if (!M.getModuleInlineAsm().empty()) {
     OutStreamer.AddComment("Start of file scope inline assembly");
     OutStreamer.AddBlankLine();
-    EmitInlineAsm(M.getModuleInlineAsm(), 0/*no loc cookie*/);
+    EmitInlineAsm(M.getModuleInlineAsm()+"\n", 0/*no loc cookie*/);
     OutStreamer.AddComment("End of file scope inline assembly");
     OutStreamer.AddBlankLine();
   }
@@ -510,12 +510,8 @@ static void EmitComments(const MachineInstr &MI, raw_ostream &CommentOS) {
   }
   
   // Check for spill-induced copies
-  unsigned SrcReg, DstReg, SrcSubIdx, DstSubIdx;
-  if (TM.getInstrInfo()->isMoveInstr(MI, SrcReg, DstReg,
-                                     SrcSubIdx, DstSubIdx)) {
-    if (MI.getAsmPrinterFlag(MachineInstr::ReloadReuse))
-      CommentOS << " Reload Reuse\n";
-  }
+  if (MI.getAsmPrinterFlag(MachineInstr::ReloadReuse))
+    CommentOS << " Reload Reuse\n";
 }
 
 /// EmitImplicitDef - This method emits the specified machine instruction
@@ -603,12 +599,15 @@ void AsmPrinter::EmitFunctionBody() {
   
   // Print out code for the function.
   bool HasAnyRealCode = false;
+  const MachineInstr *LastMI = 0;
   for (MachineFunction::const_iterator I = MF->begin(), E = MF->end();
        I != E; ++I) {
     // Print a label for the basic block.
     EmitBasicBlockStart(I);
     for (MachineBasicBlock::const_iterator II = I->begin(), IE = I->end();
          II != IE; ++II) {
+      LastMI = II;
+
       // Print the assembly for the instruction.
       if (!II->isLabel() && !II->isImplicitDef() && !II->isKill() &&
           !II->isDebugValue()) {
@@ -625,7 +624,7 @@ void AsmPrinter::EmitFunctionBody() {
         EmitComments(*II, OutStreamer.GetCommentOS());
 
       switch (II->getOpcode()) {
-      case TargetOpcode::DBG_LABEL:
+      case TargetOpcode::PROLOG_LABEL:
       case TargetOpcode::EH_LABEL:
       case TargetOpcode::GC_LABEL:
         OutStreamer.EmitLabel(II->getOperand(0).getMCSymbol());
@@ -656,11 +655,18 @@ void AsmPrinter::EmitFunctionBody() {
       }
     }
   }
-  
+
+  // If the last instruction was a prolog label, then we have a situation where
+  // we emitted a prolog but no function body. This results in the ending prolog
+  // label equaling the end of function label and an invalid "row" in the
+  // FDE. We need to emit a noop in this situation so that the FDE's rows are
+  // valid.
+  bool RequiresNoop = LastMI && LastMI->getOpcode()==TargetOpcode::PROLOG_LABEL;
+
   // If the function is empty and the object file uses .subsections_via_symbols,
   // then we need to emit *something* to the function body to prevent the
   // labels from collapsing together.  Just emit a noop.
-  if (MAI->hasSubsectionsViaSymbols() && !HasAnyRealCode) {
+  if ((MAI->hasSubsectionsViaSymbols() && !HasAnyRealCode) || RequiresNoop) {
     MCInst Noop;
     TM.getInstrInfo()->getNoopForMachoTarget(Noop);
     if (Noop.getOpcode()) {

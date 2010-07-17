@@ -646,7 +646,7 @@ void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI,
       if (MI.getOperand(0).getSymbolName()[0])
         report_fatal_error("JIT does not support inline asm!");
       break;
-    case TargetOpcode::DBG_LABEL:
+    case TargetOpcode::PROLOG_LABEL:
     case TargetOpcode::GC_LABEL:
     case TargetOpcode::EH_LABEL:
       MCE.emitLabel(MI.getOperand(0).getMCSymbol());
@@ -654,7 +654,6 @@ void Emitter<CodeEmitter>::emitInstruction(const MachineInstr &MI,
         
     case TargetOpcode::IMPLICIT_DEF:
     case TargetOpcode::KILL:
-    case X86::FP_REG_KILL:
       break;
     case X86::MOVPC32r: {
       // This emits the "call" portion of this pseudo instruction.

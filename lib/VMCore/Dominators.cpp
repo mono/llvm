@@ -17,6 +17,7 @@
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -147,11 +148,11 @@ void DominanceFrontier::splitBlock(BasicBlock *NewBB) {
   }
 
   // If NewBB dominates NewBBSucc, then DF(NewBB) is now going to be the
-  // DF(PredBlocks[0]) without the stuff that the new block does not dominate
+  // DF(NewBBSucc) without the stuff that the new block does not dominate
   // a predecessor of.
   DominatorTree &DT = getAnalysis<DominatorTree>();
   if (DT.dominates(NewBB, NewBBSucc)) {
-    DominanceFrontier::iterator DFI = find(PredBlocks[0]);
+    DominanceFrontier::iterator DFI = find(NewBBSucc);
     if (DFI != end()) {
       DominanceFrontier::DomSetType Set = DFI->second;
       // Filter out stuff in Set that we do not dominate a predecessor of.
@@ -341,5 +342,9 @@ void DominanceFrontierBase::print(raw_ostream &OS, const Module* ) const {
     }
     OS << "\n";
   }
+}
+
+void DominanceFrontierBase::dump() const {
+  print(dbgs());
 }
 

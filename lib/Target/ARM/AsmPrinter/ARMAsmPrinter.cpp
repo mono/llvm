@@ -602,12 +602,8 @@ void ARMAsmPrinter::printAddrMode6Operand(const MachineInstr *MI, int Op,
 
   O << "[" << getRegisterName(MO1.getReg());
   if (MO2.getImm()) {
-    unsigned Align = MO2.getImm();
-    assert((Align == 8 || Align == 16 || Align == 32) &&
-           "unexpected NEON load/store alignment");
-    Align <<= 3;
     // FIXME: Both darwin as and GNU as violate ARM docs here.
-    O << ", :" << Align;
+    O << ", :" << (MO2.getImm() << 3);
   }
   O << "]";
 }
@@ -1178,7 +1174,7 @@ void ARMAsmPrinter::EmitStartOfAsmFile(Module &M) {
                               Twine(ARMBuildAttrs::ABI_FP_exceptions) + ", 1");
     }
     
-    if (FiniteOnlyFPMath())
+    if (NoInfsFPMath && NoNaNsFPMath)
       OutStreamer.EmitRawText("\t.eabi_attribute " +
                               Twine(ARMBuildAttrs::ABI_FP_number_model)+ ", 1");
     else

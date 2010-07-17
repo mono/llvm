@@ -339,8 +339,17 @@ enum {
   STT_FUNC    = 2,   // Symbol is executable code (function, etc.)
   STT_SECTION = 3,   // Symbol refers to a section
   STT_FILE    = 4,   // Local, absolute symbol that refers to a file
+  STT_COMMON  = 5,   // An uninitialised common block
+  STT_TLS     = 6,   // Thread local data object
   STT_LOPROC  = 13,  // Lowest processor-specific symbol type
   STT_HIPROC  = 15   // Highest processor-specific symbol type
+};
+
+enum {
+  STV_DEFAULT   = 0,  // Visibility is specified by binding type
+  STV_INTERNAL  = 1,  // Defined by processor supplements
+  STV_HIDDEN    = 2,  // Not visible to other components
+  STV_PROTECTED = 3   // Visible in other components but not preemptable
 };
 
 // Relocation entry, without explicit addend.
@@ -356,7 +365,7 @@ struct Elf32_Rel {
   void setType(unsigned char t) { setSymbolAndType(getSymbol(), t); }
   void setSymbolAndType(Elf32_Word s, unsigned char t) {
     r_info = (s << 8) + t;
-  };
+  }
 };
 
 // Relocation entry with explicit addend.
@@ -373,7 +382,7 @@ struct Elf32_Rela {
   void setType(unsigned char t) { setSymbolAndType(getSymbol(), t); }
   void setSymbolAndType(Elf32_Word s, unsigned char t) {
     r_info = (s << 8) + t;
-  };
+  }
 };
 
 // Relocation entry, without explicit addend.
@@ -391,7 +400,7 @@ struct Elf64_Rel {
   void setType(unsigned char t) { setSymbolAndType(getSymbol(), t); }
   void setSymbolAndType(Elf64_Xword s, unsigned char t) {
     r_info = (s << 32) + (t&0xffffffffL);
-  };
+  }
 };
 
 // Relocation entry with explicit addend.
@@ -410,7 +419,7 @@ struct Elf64_Rela {
   void setType(unsigned char t) { setSymbolAndType(getSymbol(), t); }
   void setSymbolAndType(Elf64_Xword s, unsigned char t) {
     r_info = (s << 32) + (t&0xffffffffL);
-  };
+  }
 };
 
 // Program header for ELF32.

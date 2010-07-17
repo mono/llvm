@@ -667,46 +667,6 @@ X86InstrInfo::X86InstrInfo(X86TargetMachine &tm)
   assert(AmbEntries.empty() && "Duplicated entries in unfolding maps?");
 }
 
-bool X86InstrInfo::isMoveInstr(const MachineInstr& MI,
-                               unsigned &SrcReg, unsigned &DstReg,
-                               unsigned &SrcSubIdx, unsigned &DstSubIdx) const {
-  switch (MI.getOpcode()) {
-  default:
-    return false;
-  case X86::MOV8rr:
-  case X86::MOV8rr_NOREX:
-  case X86::MOV16rr:
-  case X86::MOV32rr: 
-  case X86::MOV64rr:
-  case X86::MOV32rr_TC: 
-  case X86::MOV64rr_TC:
-
-  // FP Stack register class copies
-  case X86::MOV_Fp3232: case X86::MOV_Fp6464: case X86::MOV_Fp8080:
-  case X86::MOV_Fp3264: case X86::MOV_Fp3280:
-  case X86::MOV_Fp6432: case X86::MOV_Fp8032:
-
-  // Note that MOVSSrr and MOVSDrr are not considered copies. FR32 and FR64
-  // copies are done with FsMOVAPSrr and FsMOVAPDrr.
-
-  case X86::FsMOVAPSrr:
-  case X86::FsMOVAPDrr:
-  case X86::MOVAPSrr:
-  case X86::MOVAPDrr:
-  case X86::MOVDQArr:
-  case X86::MMX_MOVQ64rr:
-    assert(MI.getNumOperands() >= 2 &&
-           MI.getOperand(0).isReg() &&
-           MI.getOperand(1).isReg() &&
-           "invalid register-register move instruction");
-    SrcReg = MI.getOperand(1).getReg();
-    DstReg = MI.getOperand(0).getReg();
-    SrcSubIdx = MI.getOperand(1).getSubReg();
-    DstSubIdx = MI.getOperand(0).getSubReg();
-    return true;
-  }
-}
-
 bool
 X86InstrInfo::isCoalescableExtInstr(const MachineInstr &MI,
                                     unsigned &SrcReg, unsigned &DstReg,
@@ -1664,14 +1624,6 @@ bool X86InstrInfo::isUnpredicatedTerminator(const MachineInstr *MI) const {
   return !isPredicated(MI);
 }
 
-// For purposes of branch analysis do not count FP_REG_KILL as a terminator.
-static bool isBrAnalysisUnpredicatedTerminator(const MachineInstr *MI,
-                                               const X86InstrInfo &TII) {
-  if (MI->getOpcode() == X86::FP_REG_KILL)
-    return false;
-  return TII.isUnpredicatedTerminator(MI);
-}
-
 bool X86InstrInfo::AnalyzeBranch(MachineBasicBlock &MBB, 
                                  MachineBasicBlock *&TBB,
                                  MachineBasicBlock *&FBB,
@@ -1688,7 +1640,7 @@ bool X86InstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,
 
     // Working from the bottom, when we see a non-terminator instruction, we're
     // done.
-    if (!isBrAnalysisUnpredicatedTerminator(I, *this))
+    if (!isUnpredicatedTerminator(I))
       break;
 
     // A terminator that isn't a branch can't easily be handled by this
@@ -3341,13 +3293,12 @@ static unsigned GetInstSizeWithDesc(const MachineInstr &MI,
                                           *MF->getTarget().getMCAsmInfo());
       break;
     }
-    case TargetOpcode::DBG_LABEL:
+    case TargetOpcode::PROLOG_LABEL:
     case TargetOpcode::EH_LABEL:
     case TargetOpcode::DBG_VALUE:
       break;
     case TargetOpcode::IMPLICIT_DEF:
     case TargetOpcode::KILL:
-    case X86::FP_REG_KILL:
       break;
     case X86::MOVPC32r: {
       // This emits the "call" portion of this pseudo instruction.

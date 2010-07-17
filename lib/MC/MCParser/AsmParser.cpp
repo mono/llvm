@@ -69,7 +69,7 @@ AsmParser::AsmParser(const Target &T, SourceMgr &_SM, MCContext &_Ctx,
                      MCStreamer &_Out, const MCAsmInfo &_MAI)
   : Lexer(_MAI), Ctx(_Ctx), Out(_Out), SrcMgr(_SM),
     GenericParser(new GenericAsmParser), PlatformParser(0),
-    TargetParser(0), CurBuffer(0) {
+    CurBuffer(0) {
   Lexer.setBuffer(SrcMgr.getMemoryBuffer(CurBuffer));
 
   // Initialize the generic parser.
@@ -91,12 +91,6 @@ AsmParser::AsmParser(const Target &T, SourceMgr &_SM, MCContext &_Ctx,
 AsmParser::~AsmParser() {
   delete PlatformParser;
   delete GenericParser;
-}
-
-void AsmParser::setTargetParser(TargetAsmParser &P) {
-  assert(!TargetParser && "Target parser is already initialized!");
-  TargetParser = &P;
-  TargetParser->Initialize(*this);
 }
 
 void AsmParser::Warning(SMLoc L, const Twine &Msg) {
@@ -712,7 +706,7 @@ bool AsmParser::ParseStatement() {
   return HadError;
 }
 
-bool AsmParser::ParseAssignment(const StringRef &Name) {
+bool AsmParser::ParseAssignment(StringRef Name) {
   // FIXME: Use better location, we should use proper tokens.
   SMLoc EqualLoc = Lexer.getLoc();
 
@@ -1081,13 +1075,14 @@ bool AsmParser::ParseDirectiveAlign(bool IsPow2, unsigned ValueSize) {
   bool UseCodeAlign = false;
   if (const MCSectionMachO *S = dyn_cast<MCSectionMachO>(
         getStreamer().getCurrentSection()))
-      UseCodeAlign = S->hasAttribute(MCSectionMachO::S_ATTR_PURE_INSTRUCTIONS);
+    UseCodeAlign = S->hasAttribute(MCSectionMachO::S_ATTR_PURE_INSTRUCTIONS);
   if ((!HasFillExpr || Lexer.getMAI().getTextAlignFillValue() == FillExpr) &&
       ValueSize == 1 && UseCodeAlign) {
     getStreamer().EmitCodeAlignment(Alignment, MaxBytesToFill);
   } else {
     // FIXME: Target specific behavior about how the "extra" bytes are filled.
-    getStreamer().EmitValueToAlignment(Alignment, FillExpr, ValueSize, MaxBytesToFill);
+    getStreamer().EmitValueToAlignment(Alignment, FillExpr, ValueSize,
+                                       MaxBytesToFill);
   }
 
   return false;
@@ -1486,3 +1481,10 @@ bool GenericAsmParser::ParseDirectiveLoc(StringRef, SMLoc DirectiveLoc) {
   return false;
 }
 
+
+/// \brief Create an MCAsmParser instance.
+MCAsmParser *llvm::createMCAsmParser(const Target &T, SourceMgr &SM,
+                                     MCContext &C, MCStreamer &Out,
+                                     const MCAsmInfo &MAI) {
+  return new AsmParser(T, SM, C, Out, MAI);
+}

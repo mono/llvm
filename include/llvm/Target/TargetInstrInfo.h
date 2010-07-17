@@ -92,15 +92,6 @@ private:
                                                 AliasAnalysis *AA) const;
 
 public:
-  /// isMoveInstr - Return true if the instruction is a register to register
-  /// move and return the source and dest operands and their sub-register
-  /// indices by reference.
-  virtual bool isMoveInstr(const MachineInstr& MI,
-                           unsigned& SrcReg, unsigned& DstReg,
-                           unsigned& SrcSubIdx, unsigned& DstSubIdx) const {
-    return false;
-  }
-
   /// isCoalescableExtInstr - Return true if the instruction is a "coalescable"
   /// extension instruction. That is, it's like a copy where it's legal for the
   /// source to overlap the destination. e.g. X86::MOVSX64rr32. If this returns
@@ -113,22 +104,6 @@ public:
     return false;
   }
 
-  /// isIdentityCopy - Return true if the instruction is a copy (or
-  /// extract_subreg, insert_subreg, subreg_to_reg) where the source and
-  /// destination registers are the same.
-  bool isIdentityCopy(const MachineInstr &MI) const {
-    unsigned SrcReg, DstReg, SrcSubIdx, DstSubIdx;
-    if (isMoveInstr(MI, SrcReg, DstReg, SrcSubIdx, DstSubIdx) &&
-        SrcReg == DstReg)
-      return true;
-
-    if ((MI.getOpcode() == TargetOpcode::INSERT_SUBREG ||
-         MI.getOpcode() == TargetOpcode::SUBREG_TO_REG) &&
-        MI.getOperand(0).getReg() == MI.getOperand(2).getReg())
-      return true;
-    return false;
-  }
-  
   /// isLoadFromStackSlot - If the specified machine instruction is a direct
   /// load from a stack slot, return the virtual or physical register number of
   /// the destination along with the FrameIndex of the loaded stack slot.  If
@@ -371,7 +346,7 @@ public:
                                    unsigned SrcReg, bool isKill, int FrameIndex,
                                    const TargetRegisterClass *RC,
                                    const TargetRegisterInfo *TRI) const {
-    assert(0 && "Target didn't implement TargetInstrInfo::storeRegToStackSlot!");
+  assert(0 && "Target didn't implement TargetInstrInfo::storeRegToStackSlot!");
   }
 
   /// loadRegFromStackSlot - Load the specified register of the given register
@@ -383,7 +358,7 @@ public:
                                     unsigned DestReg, int FrameIndex,
                                     const TargetRegisterClass *RC,
                                     const TargetRegisterInfo *TRI) const {
-    assert(0 && "Target didn't implement TargetInstrInfo::loadRegFromStackSlot!");
+  assert(0 && "Target didn't implement TargetInstrInfo::loadRegFromStackSlot!");
   }
   
   /// spillCalleeSavedRegisters - Issues instruction(s) to spill all callee
@@ -392,7 +367,7 @@ public:
   /// storeRegToStackSlot(). Returns false otherwise.
   virtual bool spillCalleeSavedRegisters(MachineBasicBlock &MBB,
                                          MachineBasicBlock::iterator MI,
-                                         const std::vector<CalleeSavedInfo> &CSI,
+                                        const std::vector<CalleeSavedInfo> &CSI,
                                          const TargetRegisterInfo *TRI) const {
     return false;
   }
@@ -457,7 +432,7 @@ protected:
   /// take care of adding a MachineMemOperand to the newly created instruction.
   virtual MachineInstr* foldMemoryOperandImpl(MachineFunction &MF,
                                               MachineInstr* MI,
-                                              const SmallVectorImpl<unsigned> &Ops,
+                                          const SmallVectorImpl<unsigned> &Ops,
                                               MachineInstr* LoadMI) const {
     return 0;
   }
@@ -501,7 +476,7 @@ public:
   /// only differences between the two addresses are the offset. It also returns
   /// the offsets by reference.
   virtual bool areLoadsFromSameBasePtr(SDNode *Load1, SDNode *Load2,
-                                       int64_t &Offset1, int64_t &Offset2) const {
+                                    int64_t &Offset1, int64_t &Offset2) const {
     return false;
   }
 

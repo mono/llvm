@@ -965,6 +965,12 @@ public:
   /// may be used.
   bool AllFixupsOutsideLoop;
 
+  /// WidestFixupType - This records the widest use type for any fixup using
+  /// this LSRUse. FindUseWithSimilarFormula can't consider uses with different
+  /// max fixup widths to be equivalent, because the narrower one may be relying
+  /// on the implicit truncation to truncate away bogus bits.
+  const Type *WidestFixupType;
+
   /// Formulae - A list of ways to build a value that can satisfy this user.
   /// After the list is populated, one of these is selected heuristically and
   /// used to formulate a replacement for OperandValToReplace in UserInst.
@@ -976,7 +982,8 @@ public:
   LSRUse(KindType K, const Type *T) : Kind(K), AccessTy(T),
                                       MinOffset(INT64_MAX),
                                       MaxOffset(INT64_MIN),
-                                      AllFixupsOutsideLoop(true) {}
+                                      AllFixupsOutsideLoop(true),
+                                      WidestFixupType(0) {}
 
   bool HasFormulaWithSameRegs(const Formula &F) const;
   bool InsertFormula(const Formula &F);
@@ -1083,6 +1090,9 @@ void LSRUse::print(raw_ostream &OS) const {
 
   if (AllFixupsOutsideLoop)
     OS << ", all-fixups-outside-loop";
+
+  if (WidestFixupType)
+    OS << ", widest fixup type: " << *WidestFixupType;
 }
 
 void LSRUse::dump() const {
@@ -1928,6 +1938,7 @@ LSRInstance::FindUseWithSimilarFormula(const Formula &OrigF,
     if (&LU != &OrigLU &&
         LU.Kind != LSRUse::ICmpZero &&
         LU.Kind == OrigLU.Kind && OrigLU.AccessTy == LU.AccessTy &&
+        LU.WidestFixupType == OrigLU.WidestFixupType &&
         LU.HasFormulaWithSameRegs(OrigF)) {
       for (SmallVectorImpl<Formula>::const_iterator I = LU.Formulae.begin(),
            E = LU.Formulae.end(); I != E; ++I) {
@@ -2066,6 +2077,10 @@ void LSRInstance::CollectFixupsAndInitialFormulae() {
     LF.Offset = P.second;
     LSRUse &LU = Uses[LF.LUIdx];
     LU.AllFixupsOutsideLoop &= LF.isUseFullyOutsideLoop(L);
+    if (!LU.WidestFixupType ||
+        SE.getTypeSizeInBits(LU.WidestFixupType) <
+        SE.getTypeSizeInBits(LF.OperandValToReplace->getType()))
+      LU.WidestFixupType = LF.OperandValToReplace->getType();
 
     // If this is the first use of this LSRUse, give it a formula.
     if (LU.Formulae.empty()) {
@@ -2195,6 +2210,10 @@ LSRInstance::CollectLoopInvariantFixupsAndFormulae() {
         LF.Offset = P.second;
         LSRUse &LU = Uses[LF.LUIdx];
         LU.AllFixupsOutsideLoop &= LF.isUseFullyOutsideLoop(L);
+        if (!LU.WidestFixupType ||
+            SE.getTypeSizeInBits(LU.WidestFixupType) <
+            SE.getTypeSizeInBits(LF.OperandValToReplace->getType()))
+          LU.WidestFixupType = LF.OperandValToReplace->getType();
         InsertSupplementalFormula(U, LU, LF.LUIdx);
         CountRegisters(LU.Formulae.back(), Uses.size() - 1);
         break;
@@ -2362,7 +2381,7 @@ void LSRInstance::GenerateConstantOffsets(LSRUse &LU, unsigned LUIdx,
                                           Formula Base) {
   // TODO: For now, just add the min and max offset, because it usually isn't
   // worthwhile looking at everything inbetween.
-  SmallVector<int64_t, 4> Worklist;
+  SmallVector<int64_t, 2> Worklist;
   Worklist.push_back(LU.MinOffset);
   if (LU.MaxOffset != LU.MinOffset)
     Worklist.push_back(LU.MaxOffset);
@@ -2376,7 +2395,14 @@ void LSRInstance::GenerateConstantOffsets(LSRUse &LU, unsigned LUIdx,
       F.AM.BaseOffs = (uint64_t)Base.AM.BaseOffs - *I;
       if (isLegalUse(F.AM, LU.MinOffset - *I, LU.MaxOffset - *I,
                      LU.Kind, LU.AccessTy, TLI)) {
-        F.BaseRegs[i] = SE.getAddExpr(G, SE.getConstant(G->getType(), *I));
+        // Add the offset to the base register.
+        const SCEV *NewG = SE.getAddExpr(G, SE.getConstant(G->getType(), *I));
+        // If it cancelled out, drop the base register, otherwise update it.
+        if (NewG->isZero()) {
+          std::swap(F.BaseRegs[i], F.BaseRegs.back());
+          F.BaseRegs.pop_back();
+        } else
+          F.BaseRegs[i] = NewG;
 
         (void)InsertFormula(LU, LUIdx, F);
       }
@@ -2981,7 +3007,7 @@ void LSRInstance::NarrowSearchSpaceUsingHeuristics() {
                 if (Fixup.LUIdx == LUIdx) {
                   Fixup.LUIdx = LUThatHas - &Uses.front();
                   Fixup.Offset += F.AM.BaseOffs;
-                  DEBUG(errs() << "New fixup has offset "
+                  DEBUG(dbgs() << "New fixup has offset "
                                << Fixup.Offset << '\n');
                 }
                 if (Fixup.LUIdx == NumUses-1)

@@ -124,8 +124,11 @@ namespace llvm {
       VGETLANEu,    // zero-extend vector extract element
       VGETLANEs,    // sign-extend vector extract element
 
-      // Vector duplicate:
+      // Vector move immediate and move negated immediate:
       VMOVIMM,
+      VMVNIMM,
+
+      // Vector duplicate:
       VDUP,
       VDUPLANE,
 
@@ -147,7 +150,10 @@ namespace llvm {
 
       // Floating-point max and min:
       FMAX,
-      FMIN
+      FMIN,
+
+      // Bit-field insert
+      BFI
     };
   }
 
@@ -159,6 +165,7 @@ namespace llvm {
     /// returns -1.
     int getVFPf32Imm(const APFloat &FPImm);
     int getVFPf64Imm(const APFloat &FPImm);
+    bool isBitFieldInvertedMask(unsigned v);
   }
 
   //===--------------------------------------------------------------------===//

@@ -701,6 +701,7 @@ void SelectionDAGBuilder::clear() {
   UnusedArgNodeMap.clear();
   PendingLoads.clear();
   PendingExports.clear();
+  DanglingDebugInfoMap.clear();
   CurDebugLoc = DebugLoc();
   HasTailCall = false;
 }
@@ -805,6 +806,33 @@ void SelectionDAGBuilder::visit(unsigned Opcode, const User &I) {
   }
 }
 
+// resolveDanglingDebugInfo - if we saw an earlier dbg_value referring to V,
+// generate the debug data structures now that we've seen its definition.
+void SelectionDAGBuilder::resolveDanglingDebugInfo(const Value *V,
+                                                   SDValue Val) {
+  DanglingDebugInfo &DDI = DanglingDebugInfoMap[V];
+  if (DDI.getDI()) {
+    const DbgValueInst *DI = DDI.getDI();
+    DebugLoc dl = DDI.getdl();
+    unsigned DbgSDNodeOrder = DDI.getSDNodeOrder();
+    MDNode *Variable = DI->getVariable();
+    uint64_t Offset = DI->getOffset();
+    SDDbgValue *SDV;
+    if (Val.getNode()) {
+      if (!EmitFuncArgumentDbgValue(*DI, V, Variable, Offset, Val)) {
+        SDV = DAG.getDbgValue(Variable, Val.getNode(),
+                              Val.getResNo(), Offset, dl, DbgSDNodeOrder);
+        DAG.AddDbgValue(SDV, Val.getNode(), false);
+      }
+    } else {
+      SDV = DAG.getDbgValue(Variable, UndefValue::get(V->getType()),
+                            Offset, dl, SDNodeOrder);
+      DAG.AddDbgValue(SDV, 0, false);
+    }
+    DanglingDebugInfoMap[V] = DanglingDebugInfo();
+  }
+}
+
 // getValue - Return an SDValue for the given Value.
 SDValue SelectionDAGBuilder::getValue(const Value *V) {
   // If we already have an SDValue for this value, use it. It's important
@@ -820,12 +848,13 @@ SDValue SelectionDAGBuilder::getValue(const Value *V) {
     unsigned InReg = It->second;
     RegsForValue RFV(*DAG.getContext(), TLI, InReg, V->getType());
     SDValue Chain = DAG.getEntryNode();
-    return N = RFV.getCopyFromRegs(DAG, FuncInfo, getCurDebugLoc(), Chain, NULL);
+    return N = RFV.getCopyFromRegs(DAG, FuncInfo, getCurDebugLoc(), Chain,NULL);
   }
 
   // Otherwise create a new SDValue and remember it.
   SDValue Val = getValueImpl(V);
   NodeMap[V] = Val;
+  resolveDanglingDebugInfo(V, Val);
   return Val;
 }
 
@@ -839,10 +868,11 @@ SDValue SelectionDAGBuilder::getNonRegisterValue(const Value *V) {
   // Otherwise create a new SDValue and remember it.
   SDValue Val = getValueImpl(V);
   NodeMap[V] = Val;
+  resolveDanglingDebugInfo(V, Val);
   return Val;
 }
 
-/// getValueImpl - Helper function for getValue and getMaterializedValue.
+/// getValueImpl - Helper function for getValue and getNonRegisterValue.
 /// Create an SDValue for the given value.
 SDValue SelectionDAGBuilder::getValueImpl(const Value *V) {
   if (const Constant *C = dyn_cast<Constant>(V)) {
@@ -2940,7 +2970,7 @@ void SelectionDAGBuilder::visitAlloca(const AllocaInst &I) {
 
   // Inform the Frame Information that we have just allocated a variable-sized
   // object.
-  FuncInfo.MF->getFrameInfo()->CreateVariableSizedObject();
+  FuncInfo.MF->getFrameInfo()->CreateVariableSizedObject(Align ? Align : 1);
 }
 
 void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
@@ -4077,7 +4107,8 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     if (AA->alias(I.getArgOperand(0), Size, I.getArgOperand(1), Size) ==
         AliasAnalysis::NoAlias) {
       DAG.setRoot(DAG.getMemcpy(getRoot(), dl, Op1, Op2, Op3, Align, isVol, 
-                                false, I.getArgOperand(0), 0, I.getArgOperand(1), 0));
+                                false, I.getArgOperand(0), 0,
+                                I.getArgOperand(1), 0));
       return 0;
     }
 
@@ -4100,20 +4131,6 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     if (const BitCastInst *BCI = dyn_cast<BitCastInst>(Address))
       Address = BCI->getOperand(0);
     const AllocaInst *AI = dyn_cast<AllocaInst>(Address);
-    if (AI) {
-      // Don't handle byval arguments or VLAs, for example.
-      // Non-byval arguments are handled here (they refer to the stack temporary
-      // alloca at this point).
-      DenseMap<const AllocaInst*, int>::iterator SI =
-        FuncInfo.StaticAllocaMap.find(AI);
-      if (SI == FuncInfo.StaticAllocaMap.end())
-        return 0; // VLAs.
-      int FI = SI->second;
-
-      MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
-      if (!DI.getDebugLoc().isUnknown() && MMI.hasDebugInfo())
-        MMI.setVariableDbgInfo(Variable, FI, DI.getDebugLoc());
-    }
 
     // Build an entry in DbgOrdering.  Debug info input nodes get an SDNodeOrder
     // but do not always have a corresponding SDNode built.  The SDNodeOrder
@@ -4170,7 +4187,8 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
       DAG.AddDbgValue(SDV, 0, false);
     } else {
       bool createUndef = false;
-      // FIXME : Why not use getValue() directly ?
+      // Do not use getValue() in here; we don't want to generate code at
+      // this point if it hasn't been done yet.
       SDValue N = NodeMap[V];
       if (!N.getNode() && isa<Argument>(V))
         // Check unused arguments map.
@@ -4181,16 +4199,11 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
                                 N.getResNo(), Offset, dl, SDNodeOrder);
           DAG.AddDbgValue(SDV, N.getNode(), false);
         }
-      } else if (isa<PHINode>(V) && !V->use_empty()) {
-        SDValue N = getValue(V);
-        if (N.getNode()) {
-          if (!EmitFuncArgumentDbgValue(DI, V, Variable, Offset, N)) {
-            SDV = DAG.getDbgValue(Variable, N.getNode(),
-                                  N.getResNo(), Offset, dl, SDNodeOrder);
-            DAG.AddDbgValue(SDV, N.getNode(), false);
-          }
-        } else
-          createUndef = true;
+      } else if (isa<PHINode>(V) && !V->use_empty() ) {
+        // Do not call getValue(V) yet, as we don't want to generate code.
+        // Remember it for later.
+        DanglingDebugInfo DDI(&DI, dl, SDNodeOrder);
+        DanglingDebugInfoMap[V] = DDI;
       } else
         createUndef = true;
       if (createUndef) {
