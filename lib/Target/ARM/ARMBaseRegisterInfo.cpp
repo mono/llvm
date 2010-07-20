@@ -1289,7 +1289,7 @@ emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
                  std::vector<MachineMove> &Moves,
                  int CfaOffset) {
   MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
 
   MachineLocation SPDst(MachineLocation::VirtualFP);
   MachineLocation SPSrc(MachineLocation::VirtualFP, -CfaOffset);
@@ -1304,7 +1304,7 @@ emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
            std::vector<MachineMove> &Moves,
            int CfaReg, int CfaOffset) {
   MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
 
   MachineLocation SPDst(MachineLocation::VirtualFP);
   MachineLocation SPSrc(CfaReg, CfaOffset);
@@ -1319,7 +1319,7 @@ emitCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
            std::vector<MachineMove> &Moves,
            int Reg, int Offset) {
   MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
 
   MachineLocation CSDst(MachineLocation::VirtualFP, Offset);
   MachineLocation CSSrc(Reg);
@@ -1570,7 +1570,7 @@ emitPrologue(MachineFunction &MF) const {
     emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, CfaOffset);
 
     MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-    BuildMI(MBB, MBBI, dl, TII.get(ARM::DBG_LABEL)).addSym(FrameLabel);
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
 
     // Emit moves for the registers in spill area 1
     for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
