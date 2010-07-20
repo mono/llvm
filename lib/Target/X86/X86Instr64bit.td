@@ -158,7 +158,7 @@ let isCall = 1 in
 
   // FIXME: We need to teach codegen about single list of call-clobbered 
   // registers.
-let isCall = 1 in
+let isCall = 1, isCodeGenOnly = 1 in
   // All calls clobber the non-callee saved registers. RSP is marked as
   // a use to prevent stack-pointer assignments that appear immediately
   // before calls from potentially appearing dead. Uses for argument
@@ -182,7 +182,8 @@ let isCall = 1 in
   }
 
 
-let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in
+let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1,
+    isCodeGenOnly = 1 in
   let Defs = [RAX, RCX, RDX, RSI, RDI, R8, R9, R10, R11,
               FP0, FP1, FP2, FP3, FP4, FP5, FP6, ST0, ST1,
               MM0, MM1, MM2, MM3, MM4, MM5, MM6, MM7,
@@ -216,9 +217,9 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
   def JMP64pcrel32 : I<0xE9, RawFrm, (outs), (ins brtarget:$dst), 
                        "jmp{q}\t$dst", []>;
   def JMP64r     : I<0xFF, MRM4r, (outs), (ins GR64:$dst), "jmp{q}\t{*}$dst",
-                     [(brind GR64:$dst)]>;
+                     [(brind GR64:$dst)]>, Requires<[In64BitMode]>;
   def JMP64m     : I<0xFF, MRM4m, (outs), (ins i64mem:$dst), "jmp{q}\t{*}$dst",
-                     [(brind (loadi64 addr:$dst))]>;
+                     [(brind (loadi64 addr:$dst))]>, Requires<[In64BitMode]>;
   def FARJMP64   : RI<0xFF, MRM5m, (outs), (ins opaque80mem:$dst),
                       "ljmp{q}\t{*}$dst", []>;
 }
@@ -246,7 +247,7 @@ def POPCNT64rm : RI<0xB8, MRMSrcMem, (outs GR64:$dst), (ins i64mem:$src),
 
 let Defs = [RBP,RSP], Uses = [RBP,RSP], mayLoad = 1, neverHasSideEffects = 1 in
 def LEAVE64  : I<0xC9, RawFrm,
-                 (outs), (ins), "leave", []>;
+                 (outs), (ins), "leave", []>, Requires<[In64BitMode]>;
 let Defs = [RSP], Uses = [RSP], neverHasSideEffects=1 in {
 let mayLoad = 1 in {
 def POP64r   : I<0x58, AddRegFrm,
@@ -330,7 +331,7 @@ def CMPS64 : RI<0xA7, RawFrm, (outs), (ins), "cmpsq", []>;
 
 // Fast system-call instructions
 def SYSEXIT64 : RI<0x35, RawFrm,
-                   (outs), (ins), "sysexit", []>, TB;
+                   (outs), (ins), "sysexit", []>, TB, Requires<[In64BitMode]>;
 
 //===----------------------------------------------------------------------===//
 //  Move Instructions...
@@ -374,6 +375,7 @@ def MOV64mi32 : RIi32<0xC7, MRM0m, (outs), (ins i64mem:$dst, i64i32imm:$src),
                       [(store i64immSExt32:$src, addr:$dst)]>;
 
 /// Versions of MOV64rr, MOV64rm, and MOV64mr for i64mem_TC and GR64_TC.
+let isCodeGenOnly = 1 in {
 let neverHasSideEffects = 1 in
 def MOV64rr_TC : RI<0x89, MRMDestReg, (outs GR64_TC:$dst), (ins GR64_TC:$src),
                 "mov{q}\t{$src, $dst|$dst, $src}", []>;
@@ -388,6 +390,7 @@ let mayStore = 1 in
 def MOV64mr_TC : RI<0x89, MRMDestMem, (outs), (ins i64mem_TC:$dst, GR64_TC:$src),
                 "mov{q}\t{$src, $dst|$dst, $src}",
                 []>;
+}
 
 def MOV64o8a : RIi8<0xA0, RawFrm, (outs), (ins offset8:$src),
                       "mov{q}\t{$src, %rax|%rax, $src}", []>;

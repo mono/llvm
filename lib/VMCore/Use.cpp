@@ -86,11 +86,17 @@ const Use *Use::getImpliedUser() const {
 //===----------------------------------------------------------------------===//
 
 Use *Use::initTags(Use * const Start, Use *Stop, ptrdiff_t Done) {
-  while (Done < 6) {
+  while (Done < 20) {
     if (Start == Stop--)
       return Start;
-    static const PrevPtrTag tags[6] = { fullStopTag, oneDigitTag, stopTag,
-                                        oneDigitTag, oneDigitTag, stopTag };
+    static const PrevPtrTag tags[20] = { fullStopTag, oneDigitTag, stopTag,
+                                         oneDigitTag, oneDigitTag, stopTag,
+                                         zeroDigitTag, oneDigitTag, oneDigitTag,
+                                         stopTag, zeroDigitTag, oneDigitTag,
+                                         zeroDigitTag, oneDigitTag, stopTag,
+                                         oneDigitTag, oneDigitTag, oneDigitTag,
+                                         oneDigitTag, stopTag
+                                       };
     Stop->Prev.setFromOpaqueValue(reinterpret_cast<Use**>(tags[Done++]));
     Stop->Val = 0;
   }
@@ -100,9 +106,7 @@ Use *Use::initTags(Use * const Start, Use *Stop, ptrdiff_t Done) {
     --Stop;
     Stop->Val = 0;
     if (!Count) {
-      Stop->Prev.setFromOpaqueValue(reinterpret_cast<Use**>(Done == 0
-                                                            ? fullStopTag
-                                                            : stopTag));
+      Stop->Prev.setFromOpaqueValue(reinterpret_cast<Use**>(stopTag));
       ++Done;
       Count = Done;
     } else {

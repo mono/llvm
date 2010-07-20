@@ -339,6 +339,7 @@ static int X86TypeFromOpName(LiteralConstantEmitter *type,
   MEM("f80mem");
   MEM("opaque80mem");
   MEM("i128mem");
+  MEM("i256mem");
   MEM("f128mem");
   MEM("f256mem");
   MEM("opaque512mem");
@@ -894,22 +895,4 @@ void EDEmitter::run(raw_ostream &o) {
   o << ";" << "\n";
   
   o << "}\n";
-}
-
-void EDEmitter::runHeader(raw_ostream &o) {
-  EmitSourceFileHeader("Enhanced Disassembly Info Header", o);
-  
-  o << "#ifndef EDInfo_" << "\n";
-  o << "#define EDInfo_" << "\n";
-  o << "\n";
-  o << "#define EDIS_MAX_OPERANDS " << format("%d", EDIS_MAX_OPERANDS) << "\n";
-  o << "#define EDIS_MAX_SYNTAXES " << format("%d", EDIS_MAX_SYNTAXES) << "\n";
-  o << "\n";
-  
-  unsigned int i = 0;
-  
-  emitCommonEnums(o, i);
-  
-  o << "\n";
-  o << "#endif" << "\n";
 }

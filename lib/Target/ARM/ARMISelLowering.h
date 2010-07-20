@@ -175,6 +175,8 @@ namespace llvm {
   public:
     explicit ARMTargetLowering(TargetMachine &TM);
 
+    virtual unsigned getJumpTableEncoding(void) const;
+
     virtual SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const;
 
     /// ReplaceNodeResults - Replace the results of node with an illegal result
@@ -268,6 +270,10 @@ namespace llvm {
     /// specified FP immediate natively. If false, the legalizer will
     /// materialize the FP immediate as a load from a constant pool.
     virtual bool isFPImmLegal(const APFloat &Imm, EVT VT) const;
+
+  protected:
+    const TargetRegisterClass *
+    findRepresentativeClass(const TargetRegisterClass *RC) const;
 
   private:
     /// Subtarget - Keep a pointer to the ARMSubtarget around so that we can

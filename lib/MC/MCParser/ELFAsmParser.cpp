@@ -14,11 +14,18 @@
 #include "llvm/MC/MCParser/MCAsmLexer.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/ADT/Twine.h"
 using namespace llvm;
 
 namespace {
 
 class ELFAsmParser : public MCAsmParserExtension {
+  template<bool (ELFAsmParser::*Handler)(StringRef, SMLoc)>
+  void AddDirectiveHandler(StringRef Directive) {
+    getParser().AddDirectiveHandler(this, Directive,
+                                    HandleDirective<ELFAsmParser, Handler>);
+  }
+
   bool ParseSectionSwitch(StringRef Section, unsigned Type,
                           unsigned Flags, SectionKind Kind);
 
@@ -29,18 +36,20 @@ public:
     // Call the base implementation.
     this->MCAsmParserExtension::Initialize(Parser);
 
-    Parser.AddDirectiveHandler(this, ".data", MCAsmParser::DirectiveHandler(
-                                 &ELFAsmParser::ParseSectionDirectiveData));
-    Parser.AddDirectiveHandler(this, ".text", MCAsmParser::DirectiveHandler(
-                                 &ELFAsmParser::ParseSectionDirectiveText));
-    Parser.AddDirectiveHandler(this, ".section", MCAsmParser::DirectiveHandler(
-                                 &ELFAsmParser::ParseDirectiveSection));
-    Parser.AddDirectiveHandler(this, ".size", MCAsmParser::DirectiveHandler(
-                                 &ELFAsmParser::ParseDirectiveSize));
-    Parser.AddDirectiveHandler(this, ".sleb128", MCAsmParser::DirectiveHandler(
-                                 &ELFAsmParser::ParseDirectiveLEB128));
-    Parser.AddDirectiveHandler(this, ".uleb128", MCAsmParser::DirectiveHandler(
-                                 &ELFAsmParser::ParseDirectiveLEB128));
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveData>(".data");
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveText>(".text");
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveBSS>(".bss");
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveRoData>(".rodata");
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveTData>(".tdata");
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveTBSS>(".tbss");
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveDataRel>(".data.rel");
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveDataRelRo>(".data.rel.ro");
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveDataRelRoLocal>(".data.rel.ro.local");
+    AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveEhFrame>(".eh_frame");
+    AddDirectiveHandler<&ELFAsmParser::ParseDirectiveSection>(".section");
+    AddDirectiveHandler<&ELFAsmParser::ParseDirectiveSize>(".size");
+    AddDirectiveHandler<&ELFAsmParser::ParseDirectiveLEB128>(".sleb128");
+    AddDirectiveHandler<&ELFAsmParser::ParseDirectiveLEB128>(".uleb128");
   }
 
   bool ParseSectionDirectiveData(StringRef, SMLoc) {
@@ -52,6 +61,52 @@ public:
     return ParseSectionSwitch(".text", MCSectionELF::SHT_PROGBITS,
                               MCSectionELF::SHF_EXECINSTR |
                               MCSectionELF::SHF_ALLOC, SectionKind::getText());
+  }
+  bool ParseSectionDirectiveBSS(StringRef, SMLoc) {
+    return ParseSectionSwitch(".bss", MCSectionELF::SHT_NOBITS,
+                              MCSectionELF::SHF_WRITE |
+                              MCSectionELF::SHF_ALLOC, SectionKind::getBSS());
+  }
+  bool ParseSectionDirectiveRoData(StringRef, SMLoc) {
+    return ParseSectionSwitch(".rodata", MCSectionELF::SHT_PROGBITS,
+                              MCSectionELF::SHF_ALLOC,
+                              SectionKind::getReadOnly());
+  }
+  bool ParseSectionDirectiveTData(StringRef, SMLoc) {
+    return ParseSectionSwitch(".tdata", MCSectionELF::SHT_PROGBITS,
+                              MCSectionELF::SHF_ALLOC |
+                              MCSectionELF::SHF_TLS | MCSectionELF::SHF_WRITE,
+                              SectionKind::getThreadData());
+  }
+  bool ParseSectionDirectiveTBSS(StringRef, SMLoc) {
+    return ParseSectionSwitch(".tbss", MCSectionELF::SHT_NOBITS,
+                              MCSectionELF::SHF_ALLOC |
+                              MCSectionELF::SHF_TLS | MCSectionELF::SHF_WRITE,
+                              SectionKind::getThreadBSS());
+  }
+  bool ParseSectionDirectiveDataRel(StringRef, SMLoc) {
+    return ParseSectionSwitch(".data.rel", MCSectionELF::SHT_PROGBITS,
+                              MCSectionELF::SHF_ALLOC |
+                              MCSectionELF::SHF_WRITE,
+                              SectionKind::getDataRel());
+  }
+  bool ParseSectionDirectiveDataRelRo(StringRef, SMLoc) {
+    return ParseSectionSwitch(".data.rel.ro", MCSectionELF::SHT_PROGBITS,
+                              MCSectionELF::SHF_ALLOC |
+                              MCSectionELF::SHF_WRITE,
+                              SectionKind::getReadOnlyWithRel());
+  }
+  bool ParseSectionDirectiveDataRelRoLocal(StringRef, SMLoc) {
+    return ParseSectionSwitch(".data.rel.ro.local", MCSectionELF::SHT_PROGBITS,
+                              MCSectionELF::SHF_ALLOC |
+                              MCSectionELF::SHF_WRITE,
+                              SectionKind::getReadOnlyWithRelLocal());
+  }
+  bool ParseSectionDirectiveEhFrame(StringRef, SMLoc) {
+    return ParseSectionSwitch(".eh_frame", MCSectionELF::SHT_PROGBITS,
+                              MCSectionELF::SHF_ALLOC |
+                              MCSectionELF::SHF_WRITE,
+                              SectionKind::getDataRel());
   }
   bool ParseDirectiveLEB128(StringRef, SMLoc);
   bool ParseDirectiveSection(StringRef, SMLoc);

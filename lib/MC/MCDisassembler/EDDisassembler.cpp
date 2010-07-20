@@ -15,9 +15,6 @@
 
 #include "EDDisassembler.h"
 #include "EDInst.h"
-
-#include "llvm/ADT/OwningPtr.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/EDInstInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -27,7 +24,6 @@
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCParser/AsmLexer.h"
-#include "llvm/MC/MCParser/AsmParser.h"
 #include "llvm/MC/MCParser/MCAsmParser.h"
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -39,7 +35,6 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSelect.h"
-
 using namespace llvm;
 
 bool EDDisassembler::sInitialized = false;
@@ -80,22 +75,22 @@ static const char *tripleFromArch(Triple::ArchType arch) {
 /// @arg arch   - The target architecture
 /// @arg syntax - The assembly syntax in sd form
 static int getLLVMSyntaxVariant(Triple::ArchType arch,
-                                EDAssemblySyntax_t syntax) {
+                                EDDisassembler::AssemblySyntax syntax) {
   switch (syntax) {
   default:
     return -1;
   // Mappings below from X86AsmPrinter.cpp
-  case kEDAssemblySyntaxX86ATT:
+  case EDDisassembler::kEDAssemblySyntaxX86ATT:
     if (arch == Triple::x86 || arch == Triple::x86_64)
       return 0;
     else
       return -1;
-  case kEDAssemblySyntaxX86Intel:
+  case EDDisassembler::kEDAssemblySyntaxX86Intel:
     if (arch == Triple::x86 || arch == Triple::x86_64)
       return 1;
     else
       return -1;
-  case kEDAssemblySyntaxARMUAL:
+  case EDDisassembler::kEDAssemblySyntaxARMUAL:
     if (arch == Triple::arm || arch == Triple::thumb)
       return 0;
     else
@@ -119,7 +114,7 @@ void EDDisassembler::initialize() {
 #undef BRINGUP_TARGET
 
 EDDisassembler *EDDisassembler::getDisassembler(Triple::ArchType arch,
-                                                EDAssemblySyntax_t syntax) {
+                                                AssemblySyntax syntax) {
   CPUKey key;
   key.Arch = arch;
   key.Syntax = syntax;
@@ -144,10 +139,8 @@ EDDisassembler *EDDisassembler::getDisassembler(Triple::ArchType arch,
 }
 
 EDDisassembler *EDDisassembler::getDisassembler(StringRef str,
-                                                EDAssemblySyntax_t syntax) {
-  Triple triple(str);
-  
-  return getDisassembler(triple.getArch(), syntax);
+                                                AssemblySyntax syntax) {
+  return getDisassembler(Triple(str).getArch(), syntax);
 }
 
 EDDisassembler::EDDisassembler(CPUKey &key) : 
@@ -176,11 +169,10 @@ EDDisassembler::EDDisassembler(CPUKey &key) :
   
   std::string featureString;
   
-  OwningPtr<const TargetMachine>
-    targetMachine(Tgt->createTargetMachine(tripleString,
-                                           featureString));
+  TargetMachine.reset(Tgt->createTargetMachine(tripleString,
+                                               featureString));
   
-  const TargetRegisterInfo *registerInfo = targetMachine->getRegisterInfo();
+  const TargetRegisterInfo *registerInfo = TargetMachine->getRegisterInfo();
   
   if (!registerInfo)
     return;
@@ -210,7 +202,7 @@ EDDisassembler::EDDisassembler(CPUKey &key) :
   SpecificAsmLexer.reset(Tgt->createAsmLexer(*AsmInfo));
   SpecificAsmLexer->InstallLexer(*GenericAsmLexer);
   
-  initMaps(*targetMachine->getRegisterInfo());
+  initMaps(*TargetMachine->getRegisterInfo());
     
   Valid = true;
 }
@@ -364,11 +356,14 @@ int EDDisassembler::parseInst(SmallVectorImpl<MCParsedAsmOperand*> &operands,
   sourceMgr.AddNewSourceBuffer(buf, SMLoc()); // ownership of buf handed over
   MCContext context(*AsmInfo);
   OwningPtr<MCStreamer> streamer(createNullStreamer(context));
-  AsmParser genericParser(*Tgt, sourceMgr, context, *streamer, *AsmInfo);
-  OwningPtr<TargetAsmParser> TargetParser(Tgt->createAsmParser(genericParser));
+  OwningPtr<MCAsmParser> genericParser(createMCAsmParser(*Tgt, sourceMgr,
+                                                         context, *streamer,
+                                                         *AsmInfo));
+  OwningPtr<TargetAsmParser> TargetParser(Tgt->createAsmParser(*genericParser,
+                                                               *TargetMachine));
   
-  AsmToken OpcodeToken = genericParser.Lex();
-  AsmToken NextToken = genericParser.Lex();  // consume next token, because specificParser expects us to
+  AsmToken OpcodeToken = genericParser->Lex();
+  AsmToken NextToken = genericParser->Lex();  // consume next token, because specificParser expects us to
     
   if (OpcodeToken.is(AsmToken::Identifier)) {
     instName = OpcodeToken.getString();

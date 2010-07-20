@@ -222,7 +222,7 @@ def i16mem  : X86MemOperand<"printi16mem">;
 def i32mem  : X86MemOperand<"printi32mem">;
 def i64mem  : X86MemOperand<"printi64mem">;
 def i128mem : X86MemOperand<"printi128mem">;
-//def i256mem : X86MemOperand<"printi256mem">;
+def i256mem : X86MemOperand<"printi256mem">;
 def f32mem  : X86MemOperand<"printf32mem">;
 def f64mem  : X86MemOperand<"printf64mem">;
 def f80mem  : X86MemOperand<"printf80mem">;
@@ -672,9 +672,9 @@ let Uses = [ECX], isBranch = 1, isTerminator = 1 in
 // Indirect branches
 let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
   def JMP32r     : I<0xFF, MRM4r, (outs), (ins GR32:$dst), "jmp{l}\t{*}$dst",
-                     [(brind GR32:$dst)]>;
+                     [(brind GR32:$dst)]>, Requires<[In32BitMode]>;
   def JMP32m     : I<0xFF, MRM4m, (outs), (ins i32mem:$dst), "jmp{l}\t{*}$dst",
-                     [(brind (loadi32 addr:$dst))]>;
+                     [(brind (loadi32 addr:$dst))]>, Requires<[In32BitMode]>;
                      
   def FARJMP16i  : Iseg16<0xEA, RawFrm, (outs), 
                           (ins i16imm:$seg, i16imm:$off),
@@ -743,7 +743,8 @@ def ENTER : I<0xC8, RawFrm, (outs), (ins i16imm:$len, i8imm:$lvl),
 
 // Tail call stuff.
 
-let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in
+let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1,
+    isCodeGenOnly = 1 in
   let Defs = [EAX, ECX, EDX, FP0, FP1, FP2, FP3, FP4, FP5, FP6, ST0,
               MM0, MM1, MM2, MM3, MM4, MM5, MM6, MM7,
               XMM0, XMM1, XMM2, XMM3, XMM4, XMM5, XMM6, XMM7,
@@ -778,7 +779,7 @@ let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in
 //
 let Defs = [EBP, ESP], Uses = [EBP, ESP], mayLoad = 1, neverHasSideEffects=1 in
 def LEAVE    : I<0xC9, RawFrm,
-                 (outs), (ins), "leave", []>;
+                 (outs), (ins), "leave", []>, Requires<[In32BitMode]>;
 
 def POPCNT16rr : I<0xB8, MRMSrcReg, (outs GR16:$dst), (ins GR16:$src),
                    "popcnt{w}\t{$src, $dst|$dst, $src}", []>, OpSize, XS;
@@ -956,7 +957,7 @@ def SYSRET   : I<0x07, RawFrm,
 def SYSENTER : I<0x34, RawFrm,
                  (outs), (ins), "sysenter", []>, TB;
 def SYSEXIT  : I<0x35, RawFrm,
-                 (outs), (ins), "sysexit", []>, TB;
+                 (outs), (ins), "sysexit", []>, TB, Requires<[In32BitMode]>;
 
 def WAIT : I<0x9B, RawFrm, (outs), (ins), "wait", []>;
 
@@ -1047,17 +1048,23 @@ def MOV32mi : Ii32<0xC7, MRM0m, (outs), (ins i32mem:$dst, i32imm:$src),
 /// moffs8, moffs16 and moffs32 versions of moves.  The immediate is a
 /// 32-bit offset from the PC.  These are only valid in x86-32 mode.
 def MOV8o8a : Ii32 <0xA0, RawFrm, (outs), (ins offset8:$src),
-                   "mov{b}\t{$src, %al|%al, $src}", []>;
+                   "mov{b}\t{$src, %al|%al, $src}", []>,
+                   Requires<[In32BitMode]>;
 def MOV16o16a : Ii32 <0xA1, RawFrm, (outs), (ins offset16:$src),
-                      "mov{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+                      "mov{w}\t{$src, %ax|%ax, $src}", []>, OpSize,
+                     Requires<[In32BitMode]>;
 def MOV32o32a : Ii32 <0xA1, RawFrm, (outs), (ins offset32:$src),
-                      "mov{l}\t{$src, %eax|%eax, $src}", []>;
+                      "mov{l}\t{$src, %eax|%eax, $src}", []>,
+                     Requires<[In32BitMode]>;
 def MOV8ao8 : Ii32 <0xA2, RawFrm, (outs offset8:$dst), (ins),
-                   "mov{b}\t{%al, $dst|$dst, %al}", []>;
+                   "mov{b}\t{%al, $dst|$dst, %al}", []>,
+                  Requires<[In32BitMode]>;
 def MOV16ao16 : Ii32 <0xA3, RawFrm, (outs offset16:$dst), (ins),
-                      "mov{w}\t{%ax, $dst|$dst, %ax}", []>, OpSize;
+                      "mov{w}\t{%ax, $dst|$dst, %ax}", []>, OpSize,
+                     Requires<[In32BitMode]>;
 def MOV32ao32 : Ii32 <0xA3, RawFrm, (outs offset32:$dst), (ins),
-                      "mov{l}\t{%eax, $dst|$dst, %eax}", []>;
+                      "mov{l}\t{%eax, $dst|$dst, %eax}", []>,
+                     Requires<[In32BitMode]>;
                       
 // Moves to and from segment registers
 def MOV16rs : I<0x8C, MRMDestReg, (outs GR16:$dst), (ins SEGMENT_REG:$src),
@@ -1109,6 +1116,7 @@ def MOV32mr : I<0x89, MRMDestMem, (outs), (ins i32mem:$dst, GR32:$src),
                 [(dsstore GR32:$src, addr:$dst)]>;
 
 /// Versions of MOV32rr, MOV32rm, and MOV32mr for i32mem_TC and GR32_TC.
+let isCodeGenOnly = 1 in {
 let neverHasSideEffects = 1 in
 def MOV32rr_TC : I<0x89, MRMDestReg, (outs GR32_TC:$dst), (ins GR32_TC:$src),
                 "mov{l}\t{$src, $dst|$dst, $src}", []>;
@@ -1123,10 +1131,12 @@ let mayStore = 1 in
 def MOV32mr_TC : I<0x89, MRMDestMem, (outs), (ins i32mem_TC:$dst, GR32_TC:$src),
                 "mov{l}\t{$src, $dst|$dst, $src}",
                 []>;
+}
 
 // Versions of MOV8rr, MOV8mr, and MOV8rm that use i8mem_NOREX and GR8_NOREX so
 // that they can be used for copying and storing h registers, which can't be
 // encoded when a REX prefix is present.
+let isCodeGenOnly = 1 in {
 let neverHasSideEffects = 1 in
 def MOV8rr_NOREX : I<0x88, MRMDestReg,
                      (outs GR8_NOREX:$dst), (ins GR8_NOREX:$src),
@@ -1140,6 +1150,7 @@ let mayLoad = 1,
 def MOV8rm_NOREX : I<0x8A, MRMSrcMem,
                      (outs GR8_NOREX:$dst), (ins i8mem_NOREX:$src),
                      "mov{b}\t{$src, $dst|$dst, $src}  # NOREX", []>;
+}
 
 // Moves to and from debug registers
 def MOV32rd : I<0x21, MRMDestReg, (outs GR32:$dst), (ins DEBUG_REG:$src),

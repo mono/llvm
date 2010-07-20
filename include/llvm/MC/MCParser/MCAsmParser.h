@@ -31,7 +31,7 @@ class Twine;
 /// assembly parsers.
 class MCAsmParser {
 public:
-  typedef bool (MCAsmParserExtension::*DirectiveHandler)(StringRef, SMLoc);
+  typedef bool (*DirectiveHandler)(MCAsmParserExtension*, StringRef, SMLoc);
 
 private:
   MCAsmParser(const MCAsmParser &);   // DO NOT IMPLEMENT
@@ -83,11 +83,16 @@ public:
   const AsmToken &getTok();
 
   /// \brief Report an error at the current lexer location.
-  bool TokError(const char *Msg);
+  bool TokError(const Twine &Msg);
 
   /// ParseIdentifier - Parse an identifier or string (as a quoted identifier)
   /// and set \arg Res to the identifier contents.
   virtual bool ParseIdentifier(StringRef &Res) = 0;
+
+  /// \brief Parse up to the end of statement and return the contents from the
+  /// current token until the end of the statement; the current token on exit
+  /// will be either the EndOfStatement or EOF.
+  virtual StringRef ParseStringToEndOfStatement() = 0;
 
   /// ParseExpression - Parse an arbitrary expression.
   ///

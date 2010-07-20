@@ -1097,6 +1097,33 @@ Instruction *InstCombiner::visitFPTrunc(FPTruncInst &CI) {
       break;  
     }
   }
+  
+  // Fold (fptrunc (sqrt (fpext x))) -> (sqrtf x)
+  // NOTE: This should be disabled by -fno-builtin-sqrt if we ever support it.
+  CallInst *Call = dyn_cast<CallInst>(CI.getOperand(0));
+  if (Call && Call->getCalledFunction() &&
+      Call->getCalledFunction()->getName() == "sqrt" &&
+      Call->getNumArgOperands() == 1) {
+    CastInst *Arg = dyn_cast<CastInst>(Call->getArgOperand(0));
+    if (Arg && Arg->getOpcode() == Instruction::FPExt &&
+        CI.getType()->isFloatTy() &&
+        Call->getType()->isDoubleTy() &&
+        Arg->getType()->isDoubleTy() &&
+        Arg->getOperand(0)->getType()->isFloatTy()) {
+      Function *Callee = Call->getCalledFunction();
+      Module *M = CI.getParent()->getParent()->getParent();
+      Constant* SqrtfFunc = M->getOrInsertFunction("sqrtf", 
+                                                   Callee->getAttributes(),
+                                                   Builder->getFloatTy(),
+                                                   Builder->getFloatTy(),
+                                                   NULL);
+      CallInst *ret = CallInst::Create(SqrtfFunc, Arg->getOperand(0),
+                                       "sqrtfcall");
+      ret->setAttributes(Callee->getAttributes());
+      return ret;
+    }
+  }
+  
   return 0;
 }
 

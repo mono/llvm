@@ -13,14 +13,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef EDToken_
-#define EDToken_
+#ifndef LLVM_EDTOKEN_H
+#define LLVM_EDTOKEN_H
 
-#include "llvm-c/EnhancedDisassembly.h"
 #include "llvm/ADT/StringRef.h"
-
+#include "llvm/System/DataTypes.h"
 #include <string>
 #include <vector>
+
+namespace llvm {
+  
+struct EDDisassembler;
 
 /// EDToken - Encapsulates a single token, which can provide a string
 ///   representation of itself or interpret itself in various ways, depending
@@ -132,4 +135,5 @@ struct EDToken {
   int getString(const char*& buf);
 };
 
+} // end namespace llvm
 #endif

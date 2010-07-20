@@ -555,6 +555,22 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
     benefitFromCodePlacementOpt = true;
 }
 
+const TargetRegisterClass *
+ARMTargetLowering::findRepresentativeClass(const TargetRegisterClass *RC) const{
+  switch (RC->getID()) {
+  default:
+    return RC;
+  case ARM::tGPRRegClassID:
+  case ARM::GPRRegClassID:
+    return ARM::GPRRegisterClass;
+  case ARM::SPRRegClassID:
+  case ARM::DPRRegClassID:
+    return ARM::DPRRegisterClass;
+  case ARM::QPRRegClassID:
+    return ARM::QPRRegisterClass;
+  }
+}
+
 const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
   switch (Opcode) {
   default: return 0;
@@ -1638,6 +1654,10 @@ static SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG) {
   return DAG.getNode(ARMISD::Wrapper, dl, MVT::i32, Res);
 }
 
+unsigned ARMTargetLowering::getJumpTableEncoding() const {
+  return MachineJumpTableInfo::EK_Inline;
+}
+
 SDValue ARMTargetLowering::LowerBlockAddress(SDValue Op,
                                              SelectionDAG &DAG) const {
   MachineFunction &MF = DAG.getMachineFunction();
@@ -1956,54 +1976,6 @@ static SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) {
   const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
   return DAG.getStore(Op.getOperand(0), dl, FR, Op.getOperand(1), SV, 0,
                       false, false, 0);
-}
-
-SDValue
-ARMTargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
-                                           SelectionDAG &DAG) const {
-  SDNode *Node = Op.getNode();
-  DebugLoc dl = Node->getDebugLoc();
-  EVT VT = Node->getValueType(0);
-  SDValue Chain = Op.getOperand(0);
-  SDValue Size  = Op.getOperand(1);
-  SDValue Align = Op.getOperand(2);
-
-  // Chain the dynamic stack allocation so that it doesn't modify the stack
-  // pointer when other instructions are using the stack.
-  Chain = DAG.getCALLSEQ_START(Chain, DAG.getIntPtrConstant(0, true));
-
-  unsigned AlignVal = cast<ConstantSDNode>(Align)->getZExtValue();
-  unsigned StackAlign = getTargetMachine().getFrameInfo()->getStackAlignment();
-  if (AlignVal > StackAlign)
-    // Do this now since selection pass cannot introduce new target
-    // independent node.
-    Align = DAG.getConstant(-(uint64_t)AlignVal, VT);
-
-  // In Thumb1 mode, there isn't a "sub r, sp, r" instruction, we will end up
-  // using a "add r, sp, r" instead. Negate the size now so we don't have to
-  // do even more horrible hack later.
-  MachineFunction &MF = DAG.getMachineFunction();
-  ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
-  if (AFI->isThumb1OnlyFunction()) {
-    bool Negate = true;
-    ConstantSDNode *C = dyn_cast<ConstantSDNode>(Size);
-    if (C) {
-      uint32_t Val = C->getZExtValue();
-      if (Val <= 508 && ((Val & 3) == 0))
-        Negate = false;
-    }
-    if (Negate)
-      Size = DAG.getNode(ISD::SUB, dl, VT, DAG.getConstant(0, VT), Size);
-  }
-
-  SDVTList VTList = DAG.getVTList(VT, MVT::Other);
-  SDValue Ops1[] = { Chain, Size, Align };
-  SDValue Res = DAG.getNode(ARMISD::DYN_ALLOC, dl, VTList, Ops1, 3);
-  Chain = Res.getValue(1);
-  Chain = DAG.getCALLSEQ_END(Chain, DAG.getIntPtrConstant(0, true),
-                             DAG.getIntPtrConstant(0, true), SDValue());
-  SDValue Ops2[] = { Res, Chain };
-  return DAG.getMergeValues(Ops2, 2, dl);
 }
 
 SDValue
@@ -3612,7 +3584,6 @@ SDValue ARMTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::SELECT_CC:     return LowerSELECT_CC(Op, DAG);
   case ISD::BR_CC:         return LowerBR_CC(Op, DAG);
   case ISD::BR_JT:         return LowerBR_JT(Op, DAG);
-  case ISD::DYNAMIC_STACKALLOC: return LowerDYNAMIC_STACKALLOC(Op, DAG);
   case ISD::VASTART:       return LowerVASTART(Op, DAG);
   case ISD::MEMBARRIER:    return LowerMEMBARRIER(Op, DAG, Subtarget);
   case ISD::SINT_TO_FP:

@@ -44,7 +44,7 @@ static inline bool isARMLowRegister(unsigned Reg) {
   }
 }
 
-struct ARMBaseRegisterInfo : public ARMGenRegisterInfo {
+class ARMBaseRegisterInfo : public ARMGenRegisterInfo {
 protected:
   const ARMBaseInstrInfo &TII;
   const ARMSubtarget &STI;
@@ -144,8 +144,8 @@ public:
 
   virtual bool requiresFrameIndexScavenging(const MachineFunction &MF) const;
 
-  virtual bool hasReservedCallFrame(MachineFunction &MF) const;
-  virtual bool canSimplifyCallFramePseudos(MachineFunction &MF) const;
+  virtual bool hasReservedCallFrame(const MachineFunction &MF) const;
+  virtual bool canSimplifyCallFramePseudos(const MachineFunction &MF) const;
 
   virtual void eliminateCallFramePseudoInstr(MachineFunction &MF,
                                            MachineBasicBlock &MBB,

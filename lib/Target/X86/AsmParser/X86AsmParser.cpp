@@ -9,6 +9,7 @@
 
 #include "llvm/Target/TargetAsmParser.h"
 #include "X86.h"
+#include "X86Subtarget.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
@@ -28,6 +29,7 @@ struct X86Operand;
 
 class X86ATTAsmParser : public TargetAsmParser {
   MCAsmParser &Parser;
+  TargetMachine &TM;
 
 protected:
   unsigned Is64Bit : 1;
@@ -48,13 +50,13 @@ private:
 
   bool ParseDirectiveWord(unsigned Size, SMLoc L);
 
-  void InstructionCleanup(MCInst &Inst);
-
-  /// @name Auto-generated Match Functions
-  /// {
-
   bool MatchInstruction(const SmallVectorImpl<MCParsedAsmOperand*> &Operands,
                         MCInst &Inst);
+
+  /// @name Auto-generated Matcher Functions
+  /// {
+
+  unsigned ComputeAvailableFeatures(const X86Subtarget *Subtarget) const;
 
   bool MatchInstructionImpl(
     const SmallVectorImpl<MCParsedAsmOperand*> &Operands, MCInst &Inst);
@@ -62,8 +64,13 @@ private:
   /// }
 
 public:
-  X86ATTAsmParser(const Target &T, MCAsmParser &_Parser)
-    : TargetAsmParser(T), Parser(_Parser) {}
+  X86ATTAsmParser(const Target &T, MCAsmParser &_Parser, TargetMachine &TM)
+    : TargetAsmParser(T), Parser(_Parser), TM(TM) {
+
+    // Initialize the set of available features.
+    setAvailableFeatures(ComputeAvailableFeatures(
+                           &TM.getSubtarget<X86Subtarget>()));
+  }
 
   virtual bool ParseInstruction(StringRef Name, SMLoc NameLoc,
                                 SmallVectorImpl<MCParsedAsmOperand*> &Operands);
@@ -73,16 +80,16 @@ public:
  
 class X86_32ATTAsmParser : public X86ATTAsmParser {
 public:
-  X86_32ATTAsmParser(const Target &T, MCAsmParser &_Parser)
-    : X86ATTAsmParser(T, _Parser) {
+  X86_32ATTAsmParser(const Target &T, MCAsmParser &_Parser, TargetMachine &TM)
+    : X86ATTAsmParser(T, _Parser, TM) {
     Is64Bit = false;
   }
 };
 
 class X86_64ATTAsmParser : public X86ATTAsmParser {
 public:
-  X86_64ATTAsmParser(const Target &T, MCAsmParser &_Parser)
-    : X86ATTAsmParser(T, _Parser) {
+  X86_64ATTAsmParser(const Target &T, MCAsmParser &_Parser, TargetMachine &TM)
+    : X86ATTAsmParser(T, _Parser, TM) {
     Is64Bit = true;
   }
 };
@@ -829,57 +836,6 @@ bool X86ATTAsmParser::ParseDirectiveWord(unsigned Size, SMLoc L) {
 
   Parser.Lex();
   return false;
-}
-
-/// LowerMOffset - Lower an 'moffset' form of an instruction, which just has a
-/// imm operand, to having "rm" or "mr" operands with the offset in the disp
-/// field.
-static void LowerMOffset(MCInst &Inst, unsigned Opc, unsigned RegNo,
-                         bool isMR) {
-  MCOperand Disp = Inst.getOperand(0);
-
-  // Start over with an empty instruction.
-  Inst = MCInst();
-  Inst.setOpcode(Opc);
-  
-  if (!isMR)
-    Inst.addOperand(MCOperand::CreateReg(RegNo));
-  
-  // Add the mem operand.
-  Inst.addOperand(MCOperand::CreateReg(0));  // Segment
-  Inst.addOperand(MCOperand::CreateImm(1));  // Scale
-  Inst.addOperand(MCOperand::CreateReg(0));  // IndexReg
-  Inst.addOperand(Disp);                     // Displacement
-  Inst.addOperand(MCOperand::CreateReg(0));  // BaseReg
- 
-  if (isMR)
-    Inst.addOperand(MCOperand::CreateReg(RegNo));
-}
-
-// FIXME: Custom X86 cleanup function to implement a temporary hack to handle
-// matching INCL/DECL correctly for x86_64. This needs to be replaced by a
-// proper mechanism for supporting (ambiguous) feature dependent instructions.
-void X86ATTAsmParser::InstructionCleanup(MCInst &Inst) {
-  if (!Is64Bit) return;
-
-  switch (Inst.getOpcode()) {
-  case X86::DEC16r: Inst.setOpcode(X86::DEC64_16r); break;
-  case X86::DEC16m: Inst.setOpcode(X86::DEC64_16m); break;
-  case X86::DEC32r: Inst.setOpcode(X86::DEC64_32r); break;
-  case X86::DEC32m: Inst.setOpcode(X86::DEC64_32m); break;
-  case X86::INC16r: Inst.setOpcode(X86::INC64_16r); break;
-  case X86::INC16m: Inst.setOpcode(X86::INC64_16m); break;
-  case X86::INC32r: Inst.setOpcode(X86::INC64_32r); break;
-  case X86::INC32m: Inst.setOpcode(X86::INC64_32m); break;
-      
-  // moffset instructions are x86-32 only.
-  case X86::MOV8o8a:   LowerMOffset(Inst, X86::MOV8rm , X86::AL , false); break;
-  case X86::MOV16o16a: LowerMOffset(Inst, X86::MOV16rm, X86::AX , false); break;
-  case X86::MOV32o32a: LowerMOffset(Inst, X86::MOV32rm, X86::EAX, false); break;
-  case X86::MOV8ao8:   LowerMOffset(Inst, X86::MOV8mr , X86::AL , true); break;
-  case X86::MOV16ao16: LowerMOffset(Inst, X86::MOV16mr, X86::AX , true); break;
-  case X86::MOV32ao32: LowerMOffset(Inst, X86::MOV32mr, X86::EAX, true); break;
-  }
 }
 
 bool

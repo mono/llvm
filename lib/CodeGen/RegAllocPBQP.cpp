@@ -34,6 +34,8 @@
 #include "PBQP/HeuristicSolver.h"
 #include "PBQP/Graph.h"
 #include "PBQP/Heuristics/Briggs.h"
+#include "RenderMachineFunction.h"
+#include "Splitter.h"
 #include "VirtRegMap.h"
 #include "VirtRegRewriter.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
@@ -64,6 +66,11 @@ static cl::opt<bool>
 pbqpCoalescing("pbqp-coalescing",
                 cl::desc("Attempt coalescing during PBQP register allocation."),
                 cl::init(false), cl::Hidden);
+
+static cl::opt<bool>
+pbqpPreSplitting("pbqp-pre-splitting",
+                 cl::desc("Pre-splite before PBQP register allocation."),
+                 cl::init(false), cl::Hidden);
 
 namespace {
 
@@ -96,7 +103,10 @@ namespace {
       au.addPreserved<LiveStacks>();
       au.addRequired<MachineLoopInfo>();
       au.addPreserved<MachineLoopInfo>();
+      if (pbqpPreSplitting)
+        au.addRequired<LoopSplitter>();
       au.addRequired<VirtRegMap>();
+      au.addRequired<RenderMachineFunction>();
       MachineFunctionPass::getAnalysisUsage(au);
     }
 
@@ -855,8 +865,10 @@ bool PBQPRegAlloc::runOnMachineFunction(MachineFunction &MF) {
   lis = &getAnalysis<LiveIntervals>();
   lss = &getAnalysis<LiveStacks>();
   loopInfo = &getAnalysis<MachineLoopInfo>();
+  RenderMachineFunction *rmf = &getAnalysis<RenderMachineFunction>();
 
   vrm = &getAnalysis<VirtRegMap>();
+
 
   DEBUG(dbgs() << "PBQP Register Allocating for " << mf->getFunction()->getName() << "\n");
 
@@ -893,6 +905,8 @@ bool PBQPRegAlloc::runOnMachineFunction(MachineFunction &MF) {
 
   // Finalise allocation, allocate empty ranges.
   finalizeAlloc();
+
+  rmf->renderMachineFunction("After PBQP register allocation.", vrm);
 
   vregIntervalsToAlloc.clear();
   emptyVRegIntervals.clear();

@@ -57,6 +57,7 @@ add_llvm_library(LLVMCodeGen
   RegAllocPBQP.cpp
   RegisterCoalescer.cpp
   RegisterScavenging.cpp
+  RenderMachineFunction.cpp
   ScheduleDAG.cpp
   ScheduleDAGEmit.cpp
   ScheduleDAGInstrs.cpp
@@ -67,6 +68,7 @@ add_llvm_library(LLVMCodeGen
   SjLjEHPrepare.cpp
   SlotIndexes.cpp
   Spiller.cpp
+  SplitKit.cpp
   Splitter.cpp
   StackProtector.cpp
   StackSlotColoring.cpp

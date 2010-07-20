@@ -134,6 +134,11 @@ N: Gabor Greif
 E: ggreif@gmail.com
 D: Improvements for space efficiency
 
+N: James Grosbach
+E: grosbach@apple.com
+D: SjLj exception handling support
+D: General fixes and improvements for the ARM back-end
+
 N: Lang Hames
 E: lhames@gmail.com
 D: PBQP-based register allocator
@@ -277,6 +282,11 @@ N: Sandeep Patel
 E: deeppatel1987@gmail.com
 D: ARM calling conventions rewrite, hard float support
 
+N: Wesley Peck
+E: peckw@wesleypeck.com
+W: http://wesleypeck.com/
+D: MicroBlaze backend
+
 N: Vladimir Prus
 W: http://vladimir_prus.blogspot.com
 E: ghost@cs.msu.su
@@ -306,6 +316,10 @@ N: Anand Shukla
 E: ashukla@cs.uiuc.edu
 D: The `paths' pass
 
+N: Michael J. Spencer
+E: bigcheesegs@gmail.com
+D: Shepherding Windows COFF support into MC.
+
 N: Reid Spencer
 E: rspencer@reidspencer.com
 W: http://reidspencer.com/
@@ -329,14 +343,9 @@ E: xerxes@zafena.se
 D: Cmake dependency chain and various bug fixes
 
 N: Bill Wendling
-E: isanbard@gmail.com
+E: wendling@apple.com
 D: Bunches of stuff
 
 N: Bob Wilson
 E: bob.wilson@acm.org
 D: Advanced SIMD (NEON) support in the ARM backend
-
-N: Wesley Peck
-E: peckw@wesleypeck.com
-W: http://wesleypeck.com/
-D: MicroBlaze backend
