@@ -62,8 +62,8 @@ namespace {
 }
 
 char SRETPromotion::ID = 0;
-static RegisterPass<SRETPromotion>
-X("sretpromotion", "Promote sret arguments to multiple ret values");
+INITIALIZE_PASS(SRETPromotion, "sretpromotion",
+                "Promote sret arguments to multiple ret values", false, false);
 
 Pass *llvm::createStructRetPromotionPass() {
   return new SRETPromotion();
@@ -187,7 +187,7 @@ bool SRETPromotion::isSafeToUpdateAllCallers(Function *F) {
           return false;
         for (Value::use_iterator GEPI = GEP->use_begin(), GEPE = GEP->use_end();
              GEPI != GEPE; ++GEPI) 
-          if (!isa<LoadInst>(GEPI))
+          if (!isa<LoadInst>(*GEPI))
             return false;
       } 
       // Any other FirstArg users make this function unsuitable for sret 

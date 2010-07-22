@@ -504,8 +504,8 @@ void Verifier::visitNamedMDNode(NamedMDNode &NMD) {
     if (!MD)
       continue;
 
-    Assert2(!MD->isFunctionLocal(),
-            "Named metadata operand cannot be function local!", &NMD, MD);
+    Assert1(!MD->isFunctionLocal(),
+            "Named metadata operand cannot be function local!", MD);
     visitMDNode(*MD, 0);
   }
 }
@@ -520,7 +520,7 @@ void Verifier::visitMDNode(MDNode &MD, Function *F) {
     Value *Op = MD.getOperand(i);
     if (!Op)
       continue;
-    if (isa<Constant>(Op) || isa<MDString>(Op) || isa<NamedMDNode>(Op))
+    if (isa<Constant>(Op) || isa<MDString>(Op))
       continue;
     if (MDNode *N = dyn_cast<MDNode>(Op)) {
       Assert2(MD.isFunctionLocal() || !N->isFunctionLocal(),

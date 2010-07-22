@@ -25,11 +25,13 @@ class MachineFunction;
 class MachineFunctionPass;
 class MachineLoop;
 class MachineLoopInfo;
+class TargetInstrInfo;
 
 class SplitAnalysis {
   const MachineFunction &mf_;
   const LiveIntervals &lis_;
   const MachineLoopInfo &loops_;
+  const TargetInstrInfo &tii_;
 
   // Current live interval.
   const LiveInterval *curli_;
@@ -49,9 +51,13 @@ class SplitAnalysis {
   // Sumarize statistics by counting instructions using curli_.
   void analyzeUses();
 
+  /// canAnalyzeBranch - Return true if MBB ends in a branch that can be
+  /// analyzed.
+  bool canAnalyzeBranch(const MachineBasicBlock *MBB);
+
 public:
-  SplitAnalysis(const MachineFunction *mf, const LiveIntervals *lis,
-                const MachineLoopInfo *mli);
+  SplitAnalysis(const MachineFunction &mf, const LiveIntervals &lis,
+                const MachineLoopInfo &mli);
 
   /// analyze - set curli to the specified interval, and analyze how it may be
   /// split.
@@ -60,6 +66,24 @@ public:
   /// clear - clear all data structures so SplitAnalysis is ready to analyze a
   /// new interval.
   void clear();
+
+  typedef SmallPtrSet<const MachineBasicBlock*, 16> BlockPtrSet;
+
+  // Sets of basic blocks surrounding a machine loop.
+  struct LoopBlocks {
+    BlockPtrSet Loop;  // Blocks in the loop.
+    BlockPtrSet Preds; // Loop predecessor blocks.
+    BlockPtrSet Exits; // Loop exit blocks.
+
+    void clear() {
+      Loop.clear();
+      Preds.clear();
+      Exits.clear();
+    }
+  };
+
+  // Calculate the block sets surrounding the loop.
+  void getLoopBlocks(const MachineLoop *Loop, LoopBlocks &Blocks);
 
   /// LoopPeripheralUse - how is a variable used in and around a loop?
   /// Peripheral blocks are the loop predecessors and exit blocks.
@@ -72,7 +96,17 @@ public:
 
   /// analyzeLoopPeripheralUse - Return an enum describing how curli_ is used in
   /// and around the Loop.
-  LoopPeripheralUse analyzeLoopPeripheralUse(const MachineLoop*);
+  LoopPeripheralUse analyzeLoopPeripheralUse(const LoopBlocks&);
+
+  /// getCriticalExits - It may be necessary to partially break critical edges
+  /// leaving the loop if an exit block has phi uses of curli. Collect the exit
+  /// blocks that need special treatment into CriticalExits.
+  void getCriticalExits(const LoopBlocks &Blocks, BlockPtrSet &CriticalExits);
+
+  /// canSplitCriticalExits - Return true if it is possible to insert new exit
+  /// blocks before the blocks in CriticalExits.
+  bool canSplitCriticalExits(const LoopBlocks &Blocks,
+                             BlockPtrSet &CriticalExits);
 
   /// getBestSplitLoop - Return the loop where curli may best be split to a
   /// separate register, or NULL.

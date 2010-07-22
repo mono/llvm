@@ -716,8 +716,7 @@ FunctionPass *llvm::createGVNPass(bool NoLoads) {
   return new GVN(NoLoads);
 }
 
-static RegisterPass<GVN> X("gvn",
-                           "Global Value Numbering");
+INITIALIZE_PASS(GVN, "gvn", "Global Value Numbering", false, false);
 
 void GVN::dump(DenseMap<uint32_t, Value*>& d) {
   errs() << "{\n";
@@ -735,7 +734,7 @@ static bool isSafeReplacement(PHINode* p, Instruction *inst) {
 
   for (Instruction::use_iterator UI = p->use_begin(), E = p->use_end();
        UI != E; ++UI)
-    if (PHINode* use_phi = dyn_cast<PHINode>(UI))
+    if (PHINode* use_phi = dyn_cast<PHINode>(*UI))
       if (use_phi->getParent() == inst->getParent())
         return false;
 

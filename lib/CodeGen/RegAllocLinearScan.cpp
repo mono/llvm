@@ -358,8 +358,8 @@ namespace {
   char RALinScan::ID = 0;
 }
 
-static RegisterPass<RALinScan>
-X("linearscan-regalloc", "Linear Scan Register Allocator");
+INITIALIZE_PASS(RALinScan, "linearscan-regalloc",
+                "Linear Scan Register Allocator", false, false);
 
 void RALinScan::ComputeRelatedRegClasses() {
   // First pass, add all reg classes to the union, and determine at least one
@@ -483,7 +483,7 @@ bool RALinScan::runOnMachineFunction(MachineFunction &fn) {
   vrm_ = &getAnalysis<VirtRegMap>();
   if (!rewriter_.get()) rewriter_.reset(createVirtRegRewriter());
   
-  spiller_.reset(createSpiller(mf_, li_, loopInfo, vrm_));
+  spiller_.reset(createSpiller(*this, *mf_, *vrm_));
   
   initIntervalSets();
 

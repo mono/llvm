@@ -555,20 +555,35 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
     benefitFromCodePlacementOpt = true;
 }
 
-const TargetRegisterClass *
-ARMTargetLowering::findRepresentativeClass(const TargetRegisterClass *RC) const{
-  switch (RC->getID()) {
+std::pair<const TargetRegisterClass*, uint8_t>
+ARMTargetLowering::findRepresentativeClass(EVT VT) const{
+  const TargetRegisterClass *RRC = 0;
+  uint8_t Cost = 1;
+  switch (VT.getSimpleVT().SimpleTy) {
   default:
-    return RC;
-  case ARM::tGPRRegClassID:
-  case ARM::GPRRegClassID:
-    return ARM::GPRRegisterClass;
-  case ARM::SPRRegClassID:
-  case ARM::DPRRegClassID:
-    return ARM::DPRRegisterClass;
-  case ARM::QPRRegClassID:
-    return ARM::QPRRegisterClass;
+    return TargetLowering::findRepresentativeClass(VT);
+  // Use DPR as representative register class for all floating point
+  // and vector types. Since there are 32 SPR registers and 32 DPR registers so
+  // the cost is 1 for both f32 and f64.
+  case MVT::f32: case MVT::f64: case MVT::v8i8: case MVT::v4i16:
+  case MVT::v2i32: case MVT::v1i64: case MVT::v2f32:
+    RRC = ARM::DPRRegisterClass;
+    break;
+  case MVT::v16i8: case MVT::v8i16: case MVT::v4i32: case MVT::v2i64:
+  case MVT::v4f32: case MVT::v2f64:
+    RRC = ARM::DPRRegisterClass;
+    Cost = 2;
+    break;
+  case MVT::v4i64:
+    RRC = ARM::DPRRegisterClass;
+    Cost = 4;
+    break;
+  case MVT::v8i64:
+    RRC = ARM::DPRRegisterClass;
+    Cost = 8;
+    break;
   }
+  return std::make_pair(RRC, Cost);
 }
 
 const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
@@ -679,6 +694,12 @@ TargetRegisterClass *ARMTargetLowering::getRegClassFor(EVT VT) const {
       return ARM::QQQQPRRegisterClass;
   }
   return TargetLowering::getRegClassFor(VT);
+}
+
+// Create a fast isel object.
+FastISel *
+ARMTargetLowering::createFastISel(FunctionLoweringInfo &funcInfo) const {
+  return ARM::createFastISel(funcInfo);
 }
 
 /// getFunctionAlignment - Return the Log2 alignment of this function.
@@ -818,8 +839,9 @@ static bool f64AssignAAPCS(unsigned &ValNo, EVT &ValVT, EVT &LocVT,
                            CCState &State, bool CanFail) {
   static const unsigned HiRegList[] = { ARM::R0, ARM::R2 };
   static const unsigned LoRegList[] = { ARM::R1, ARM::R3 };
+  static const unsigned ShadowRegList[] = { ARM::R0, ARM::R1 };
 
-  unsigned Reg = State.AllocateReg(HiRegList, LoRegList, 2);
+  unsigned Reg = State.AllocateReg(HiRegList, ShadowRegList, 2);
   if (Reg == 0) {
     // For the 2nd half of a v2f64, do not just fail.
     if (CanFail)
@@ -836,6 +858,10 @@ static bool f64AssignAAPCS(unsigned &ValNo, EVT &ValVT, EVT &LocVT,
   for (i = 0; i < 2; ++i)
     if (HiRegList[i] == Reg)
       break;
+
+  unsigned T = State.AllocateReg(LoRegList[i]);
+  (void)T;
+  assert(T == LoRegList[i] && "Could not allocate register");
 
   State.addLoc(CCValAssign::getCustomReg(ValNo, ValVT, Reg, LocVT, LocInfo));
   State.addLoc(CCValAssign::getCustomReg(ValNo, ValVT, LoRegList[i],

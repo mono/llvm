@@ -2082,8 +2082,9 @@ bool X86InstrInfo::spillCalleeSavedRegisters(MachineBasicBlock &MBB,
       CalleeFrameSize += SlotSize;
       BuildMI(MBB, MI, DL, get(Opc)).addReg(Reg, RegState::Kill);
     } else {
+      const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
       storeRegToStackSlot(MBB, MI, Reg, true, CSI[i-1].getFrameIdx(),
-                          &X86::VR128RegClass, &RI);
+                          RC, &RI);
     }
   }
 
@@ -2113,8 +2114,9 @@ bool X86InstrInfo::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
     if (!X86::VR128RegClass.contains(Reg) && !isWin64) {
       BuildMI(MBB, MI, DL, get(Opc), Reg);
     } else {
+      const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
       loadRegFromStackSlot(MBB, MI, Reg, CSI[i].getFrameIdx(),
-                           &X86::VR128RegClass, &RI);
+                           RC, &RI);
     }
   }
   return true;

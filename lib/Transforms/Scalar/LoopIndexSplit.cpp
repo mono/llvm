@@ -197,8 +197,8 @@ namespace {
 }
 
 char LoopIndexSplit::ID = 0;
-static RegisterPass<LoopIndexSplit>
-X("loop-index-split", "Index Split Loops");
+INITIALIZE_PASS(LoopIndexSplit, "loop-index-split",
+                "Index Split Loops", false, false);
 
 Pass *llvm::createLoopIndexSplitPass() {
   return new LoopIndexSplit();
@@ -1183,7 +1183,7 @@ bool LoopIndexSplit::cleanBlock(BasicBlock *BB) {
     bool usedOutsideBB = false;
     for (Value::use_iterator UI = I->use_begin(), UE = I->use_end(); 
          UI != UE; ++UI) {
-      Instruction *U = cast<Instruction>(UI);
+      Instruction *U = cast<Instruction>(*UI);
       if (U->getParent() != BB)
         usedOutsideBB = true;
     }

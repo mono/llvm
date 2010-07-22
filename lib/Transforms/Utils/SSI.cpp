@@ -80,12 +80,12 @@ void SSI::insertSigmaFunctions(SmallPtrSet<Instruction*, 4> &value) {
     for (Value::use_iterator begin = (*I)->use_begin(),
          end = (*I)->use_end(); begin != end; ++begin) {
       // Test if the Use of the Value is in a comparator
-      if (CmpInst *CI = dyn_cast<CmpInst>(begin)) {
+      if (CmpInst *CI = dyn_cast<CmpInst>(*begin)) {
         // Iterates through all uses of CmpInst
         for (Value::use_iterator begin_ci = CI->use_begin(),
              end_ci = CI->use_end(); begin_ci != end_ci; ++begin_ci) {
           // Test if any use of CmpInst is in a Terminator
-          if (TerminatorInst *TI = dyn_cast<TerminatorInst>(begin_ci)) {
+          if (TerminatorInst *TI = dyn_cast<TerminatorInst>(*begin_ci)) {
             insertSigma(TI, *I);
           }
         }
@@ -391,7 +391,8 @@ void SSI::clean() {
 FunctionPass *llvm::createSSIPass() { return new SSI(); }
 
 char SSI::ID = 0;
-static RegisterPass<SSI> X("ssi", "Static Single Information Construction");
+INITIALIZE_PASS(SSI, "ssi",
+                "Static Single Information Construction", false, false);
 
 /// SSIEverything - A pass that runs createSSI on every non-void variable,
 /// intended for debugging.
@@ -428,5 +429,5 @@ bool SSIEverything::runOnFunction(Function &F) {
 FunctionPass *llvm::createSSIEverythingPass() { return new SSIEverything(); }
 
 char SSIEverything::ID = 0;
-static RegisterPass<SSIEverything>
-Y("ssi-everything", "Static Single Information Construction");
+INITIALIZE_PASS(SSIEverything, "ssi-everything",
+                "Static Single Information Construction", false, false);

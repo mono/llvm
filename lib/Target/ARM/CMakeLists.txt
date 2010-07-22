@@ -11,6 +11,7 @@ tablegen(ARMGenDAGISel.inc -gen-dag-isel)
 tablegen(ARMGenCallingConv.inc -gen-callingconv)
 tablegen(ARMGenSubtarget.inc -gen-subtarget)
 tablegen(ARMGenEDInfo.inc -gen-enhanced-disassembly-info)
+tablegen(ARMGenFastISel.inc -gen-fast-isel)
 
 add_llvm_target(ARMCodeGen
   ARMAsmPrinter.cpp
@@ -20,6 +21,7 @@ add_llvm_target(ARMCodeGen
   ARMConstantIslandPass.cpp
   ARMConstantPoolValue.cpp
   ARMExpandPseudoInsts.cpp
+  ARMFastISel.cpp
   ARMISelDAGToDAG.cpp
   ARMISelLowering.cpp
   ARMInstrInfo.cpp
@@ -43,4 +45,4 @@ add_llvm_target(ARMCodeGen
   Thumb2SizeReduction.cpp
   )
 
-target_link_libraries (LLVMARMCodeGen LLVMSelectionDAG)
+target_link_libraries (LLVMARMCodeGen LLVMARMAsmPrinter LLVMSelectionDAG)

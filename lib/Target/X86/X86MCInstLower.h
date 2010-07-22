@@ -13,27 +13,33 @@
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
+  class MCAsmInfo;
   class MCContext;
   class MCInst;
   class MCOperand;
   class MCSymbol;
   class MachineInstr;
+  class MachineFunction;
   class MachineModuleInfoMachO;
   class MachineOperand;
   class Mangler;
+  class TargetMachine;
   class X86AsmPrinter;
-  class X86Subtarget;
   
 /// X86MCInstLower - This class is used to lower an MachineInstr into an MCInst.
 class LLVM_LIBRARY_VISIBILITY X86MCInstLower {
   MCContext &Ctx;
   Mangler *Mang;
-  X86AsmPrinter &AsmPrinter;
+  const MachineFunction &MF;
+  const TargetMachine &TM;
+  const MCAsmInfo &MAI;
 
-  const X86Subtarget &getSubtarget() const;
+  /// AsmPrinter - This is the asmprinter when emission is actually happening,
+  /// or null if an instruction is being lowered for some other reason.
+  X86AsmPrinter *AsmPrinter;
 public:
-  X86MCInstLower(MCContext &ctx, Mangler *mang, X86AsmPrinter &asmprinter)
-    : Ctx(ctx), Mang(mang), AsmPrinter(asmprinter) {}
+  X86MCInstLower(Mangler *mang, const MachineFunction &MF,
+                 X86AsmPrinter *asmprinter);
   
   void Lower(const MachineInstr *MI, MCInst &OutMI) const;
 

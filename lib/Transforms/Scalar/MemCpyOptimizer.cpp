@@ -331,8 +331,7 @@ namespace {
 // createMemCpyOptPass - The public interface to this file...
 FunctionPass *llvm::createMemCpyOptPass() { return new MemCpyOpt(); }
 
-static RegisterPass<MemCpyOpt> X("memcpyopt",
-                                 "MemCpy Optimization");
+INITIALIZE_PASS(MemCpyOpt, "memcpyopt", "MemCpy Optimization", false, false);
 
 
 
@@ -744,7 +743,8 @@ bool MemCpyOpt::processMemMove(MemMoveInst *M) {
   const Type *ArgTys[3] = { M->getRawDest()->getType(),
                             M->getRawSource()->getType(),
                             M->getLength()->getType() };
-  M->setCalledFunction(Intrinsic::getDeclaration(Mod, Intrinsic::memcpy, ArgTys, 3));
+  M->setCalledFunction(Intrinsic::getDeclaration(Mod, Intrinsic::memcpy,
+                                                 ArgTys, 3));
 
   // MemDep may have over conservative information about this instruction, just
   // conservatively flush it from the cache.

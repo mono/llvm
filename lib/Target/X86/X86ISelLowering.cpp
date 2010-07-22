@@ -343,8 +343,9 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   if (Subtarget->hasSSE1())
     setOperationAction(ISD::PREFETCH      , MVT::Other, Legal);
 
-  if (!Subtarget->hasSSE2())
-    setOperationAction(ISD::MEMBARRIER    , MVT::Other, Expand);
+  // We may not have a libcall for MEMBARRIER so we should lower this.
+  setOperationAction(ISD::MEMBARRIER    , MVT::Other, Custom);
+  
   // On X86 and X86-64, atomic operations are lowered to locked instructions.
   // Locked instructions, in turn, have implicit fence semantics (all memory
   // operations are flushed before issuing the locked instruction, and they
@@ -1280,7 +1281,8 @@ X86TargetLowering::LowerReturn(SDValue Chain,
       if (ValVT.isVector() && ValVT.getSizeInBits() == 64) {
         ValToCopy = DAG.getNode(ISD::BIT_CONVERT, dl, MVT::i64, ValToCopy);
         if (VA.getLocReg() == X86::XMM0 || VA.getLocReg() == X86::XMM1)
-          ValToCopy = DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, MVT::v2i64, ValToCopy);
+          ValToCopy = DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, MVT::v2i64,
+                                  ValToCopy);
       }
     }
 
@@ -1994,7 +1996,7 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     }
   }
 
-  if (Is64Bit && isVarArg) {
+  if (Is64Bit && isVarArg && !Subtarget->isTargetWin64()) {
     // From AMD64 ABI document:
     // For calls that may call functions that use varargs or stdargs
     // (prototype-less calls or calls to functions containing ellipsis (...) in
@@ -2003,7 +2005,6 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     // the number of registers, but must be an ubound on the number of SSE
     // registers used and is in the range 0 - 8 inclusive.
 
-    // FIXME: Verify this on Win64
     // Count the number of XMM registers allocated.
     static const unsigned XMMArgRegs[] = {
       X86::XMM0, X86::XMM1, X86::XMM2, X86::XMM3,
@@ -2371,8 +2372,8 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
   if (RegInfo->needsStackRealignment(MF))
     return false;
 
-  // Do not sibcall optimize vararg calls unless the call site is not passing any
-  // arguments.
+  // Do not sibcall optimize vararg calls unless the call site is not passing
+  // any arguments.
   if (isVarArg && !Outs.empty())
     return false;
 
@@ -7233,7 +7234,8 @@ SDValue X86TargetLowering::LowerTRAMPOLINE(SDValue Op,
             InRegCount += (TD->getTypeSizeInBits(*I) + 31) / 32;
 
         if (InRegCount > 2) {
-          report_fatal_error("Nest register in use - reduce number of inreg parameters!");
+          report_fatal_error("Nest register in use - reduce number of inreg"
+                             " parameters!");
         }
       }
       break;
@@ -7523,6 +7525,36 @@ SDValue X86TargetLowering::LowerXALUO(SDValue Op, SelectionDAG &DAG) const {
   return Sum;
 }
 
+SDValue X86TargetLowering::LowerMEMBARRIER(SDValue Op, SelectionDAG &DAG) const{
+  DebugLoc dl = Op.getDebugLoc();
+  
+  if (!Subtarget->hasSSE2())
+    return DAG.getNode(X86ISD::MEMBARRIER, dl, MVT::Other, Op.getOperand(0),
+                       DAG.getConstant(0, MVT::i32));
+  
+  unsigned isDev = cast<ConstantSDNode>(Op.getOperand(5))->getZExtValue();
+  if(!isDev)
+    return DAG.getNode(X86ISD::MEMBARRIER, dl, MVT::Other, Op.getOperand(0));
+  else {
+    unsigned Op1 = cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue();
+    unsigned Op2 = cast<ConstantSDNode>(Op.getOperand(2))->getZExtValue();
+    unsigned Op3 = cast<ConstantSDNode>(Op.getOperand(3))->getZExtValue();
+    unsigned Op4 = cast<ConstantSDNode>(Op.getOperand(4))->getZExtValue();
+    
+    // def : Pat<(membarrier (i8 0), (i8 0), (i8 0), (i8 1), (i8 1)), (SFENCE)>;
+    if (!Op1 && !Op2 && !Op3 && Op4)
+      return DAG.getNode(X86ISD::SFENCE, dl, MVT::Other, Op.getOperand(0));
+    
+    // def : Pat<(membarrier (i8 1), (i8 0), (i8 0), (i8 0), (i8 1)), (LFENCE)>;
+    if (Op1 && !Op2 && !Op3 && !Op4)
+      return DAG.getNode(X86ISD::LFENCE, dl, MVT::Other, Op.getOperand(0));
+    
+    // def : Pat<(membarrier (i8 imm), (i8 imm), (i8 imm), (i8 imm), (i8 1)), 
+    //           (MFENCE)>;
+    return DAG.getNode(X86ISD::MFENCE, dl, MVT::Other, Op.getOperand(0));
+  }
+}
+
 SDValue X86TargetLowering::LowerCMP_SWAP(SDValue Op, SelectionDAG &DAG) const {
   EVT T = Op.getValueType();
   DebugLoc dl = Op.getDebugLoc();
@@ -7612,6 +7644,7 @@ SDValue X86TargetLowering::LowerLOAD_SUB(SDValue Op, SelectionDAG &DAG) const {
 SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
   default: llvm_unreachable("Should not custom lower this!");
+  case ISD::MEMBARRIER:         return LowerMEMBARRIER(Op,DAG);
   case ISD::ATOMIC_CMP_SWAP:    return LowerCMP_SWAP(Op,DAG);
   case ISD::ATOMIC_LOAD_SUB:    return LowerLOAD_SUB(Op,DAG);
   case ISD::BUILD_VECTOR:       return LowerBUILD_VECTOR(Op, DAG);
@@ -9045,8 +9078,8 @@ static SDValue PerformEXTRACT_VECTOR_ELTCombine(SDNode *N, SelectionDAG &DAG,
 
   // Store the value to a temporary stack slot.
   SDValue StackPtr = DAG.CreateStackTemporary(InputVector.getValueType());
-  SDValue Ch = DAG.getStore(DAG.getEntryNode(), dl, InputVector, StackPtr, NULL, 0,
-                            false, false, 0);
+  SDValue Ch = DAG.getStore(DAG.getEntryNode(), dl, InputVector, StackPtr, NULL,
+                            0, false, false, 0);
 
   // Replace each use (extract) with a load of the appropriate element.
   for (SmallVectorImpl<SDNode *>::iterator UI = Uses.begin(),
@@ -9060,11 +9093,12 @@ static SDValue PerformEXTRACT_VECTOR_ELTCombine(SDNode *N, SelectionDAG &DAG,
     uint64_t Offset = EltSize * cast<ConstantSDNode>(Idx)->getZExtValue();
     SDValue OffsetVal = DAG.getConstant(Offset, TLI.getPointerTy());
 
-    SDValue ScalarAddr = DAG.getNode(ISD::ADD, dl, Idx.getValueType(), OffsetVal, StackPtr);
+    SDValue ScalarAddr = DAG.getNode(ISD::ADD, dl, Idx.getValueType(),
+                                     OffsetVal, StackPtr);
 
     // Load the scalar.
-    SDValue LoadScalar = DAG.getLoad(Extract->getValueType(0), dl, Ch, ScalarAddr,
-                          NULL, 0, false, false, 0);
+    SDValue LoadScalar = DAG.getLoad(Extract->getValueType(0), dl, Ch,
+                                     ScalarAddr, NULL, 0, false, false, 0);
 
     // Replace the exact with the load.
     DAG.ReplaceAllUsesOfValueWith(SDValue(Extract, 0), LoadScalar);

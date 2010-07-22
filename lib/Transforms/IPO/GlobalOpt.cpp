@@ -74,7 +74,8 @@ namespace {
 }
 
 char GlobalOpt::ID = 0;
-static RegisterPass<GlobalOpt> X("globalopt", "Global Variable Optimizer");
+INITIALIZE_PASS(GlobalOpt, "globalopt",
+                "Global Variable Optimizer", false, false);
 
 ModulePass *llvm::createGlobalOptimizerPass() { return new GlobalOpt(); }
 
@@ -2302,7 +2303,8 @@ static bool EvaluateFunction(Function *F, Constant *&RetVal,
       if (isa<InlineAsm>(CI->getCalledValue())) return false;
 
       // Resolve function pointers.
-      Function *Callee = dyn_cast<Function>(getVal(Values, CI->getCalledValue()));
+      Function *Callee = dyn_cast<Function>(getVal(Values,
+                                                   CI->getCalledValue()));
       if (!Callee) return false;  // Cannot resolve.
 
       SmallVector<Constant*, 8> Formals;

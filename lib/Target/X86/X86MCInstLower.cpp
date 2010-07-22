@@ -16,7 +16,6 @@
 #include "X86AsmPrinter.h"
 #include "X86COFFMachineModuleInfo.h"
 #include "X86MCAsmInfo.h"
-#include "llvm/Analysis/DebugInfo.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -29,21 +28,19 @@
 #include "llvm/Type.h"
 using namespace llvm;
 
-
-const X86Subtarget &X86MCInstLower::getSubtarget() const {
-  return AsmPrinter.getSubtarget();
-}
+X86MCInstLower::X86MCInstLower(Mangler *mang, const MachineFunction &mf,
+                               X86AsmPrinter *asmprinter)
+: Ctx(mf.getContext()), Mang(mang), MF(mf), TM(mf.getTarget()),
+  MAI(*TM.getMCAsmInfo()), AsmPrinter(asmprinter) {}
 
 MachineModuleInfoMachO &X86MCInstLower::getMachOMMI() const {
-  assert(getSubtarget().isTargetDarwin() &&"Can only get MachO info on darwin");
-  return AsmPrinter.MMI->getObjFileInfo<MachineModuleInfoMachO>(); 
+  return MF.getMMI().getObjFileInfo<MachineModuleInfoMachO>();
 }
 
 
 MCSymbol *X86MCInstLower::GetPICBaseSymbol() const {
-  const TargetLowering *TLI = AsmPrinter.TM.getTargetLowering();
-  return static_cast<const X86TargetLowering*>(TLI)->
-    getPICBaseSymbol(AsmPrinter.MF, Ctx);
+  return static_cast<const X86TargetLowering*>(TM.getTargetLowering())->
+    getPICBaseSymbol(&MF, Ctx);
 }
 
 /// GetSymbolFromOperand - Lower an MO_GlobalAddress or MO_ExternalSymbol
@@ -56,7 +53,7 @@ GetSymbolFromOperand(const MachineOperand &MO) const {
   
   if (!MO.isGlobal()) {
     assert(MO.isSymbol());
-    Name += AsmPrinter.MAI->getGlobalPrefix();
+    Name += MAI.getGlobalPrefix();
     Name += MO.getSymbolName();
   } else {    
     const GlobalValue *GV = MO.getGlobal();
@@ -91,7 +88,7 @@ GetSymbolFromOperand(const MachineOperand &MO) const {
       assert(MO.isGlobal() && "Extern symbol not handled yet");
       StubSym =
         MachineModuleInfoImpl::
-        StubValueTy(AsmPrinter.Mang->getSymbol(MO.getGlobal()),
+        StubValueTy(Mang->getSymbol(MO.getGlobal()),
                     !MO.getGlobal()->hasInternalLinkage());
     }
     return Sym;
@@ -105,7 +102,7 @@ GetSymbolFromOperand(const MachineOperand &MO) const {
       assert(MO.isGlobal() && "Extern symbol not handled yet");
       StubSym =
         MachineModuleInfoImpl::
-        StubValueTy(AsmPrinter.Mang->getSymbol(MO.getGlobal()),
+        StubValueTy(Mang->getSymbol(MO.getGlobal()),
                     !MO.getGlobal()->hasInternalLinkage());
     }
     return Sym;
@@ -121,7 +118,7 @@ GetSymbolFromOperand(const MachineOperand &MO) const {
     if (MO.isGlobal()) {
       StubSym =
         MachineModuleInfoImpl::
-        StubValueTy(AsmPrinter.Mang->getSymbol(MO.getGlobal()),
+        StubValueTy(Mang->getSymbol(MO.getGlobal()),
                     !MO.getGlobal()->hasInternalLinkage());
     } else {
       Name.erase(Name.end()-5, Name.end());
@@ -178,13 +175,13 @@ MCOperand X86MCInstLower::LowerSymbolOperand(const MachineOperand &MO,
     Expr = MCBinaryExpr::CreateSub(Expr, 
                                MCSymbolRefExpr::Create(GetPICBaseSymbol(), Ctx),
                                    Ctx);
-    if (MO.isJTI() && AsmPrinter.MAI->hasSetDirective()) {
+    if (MO.isJTI() && MAI.hasSetDirective()) {
       // If .set directive is supported, use it to reduce the number of
       // relocations the assembler will generate for differences between
       // local labels. This is only safe when the symbols are in the same
       // section so we are restricting it to jumptable references.
       MCSymbol *Label = Ctx.CreateTempSymbol();
-      AsmPrinter.OutStreamer.EmitAssignment(Label, Expr);
+      AsmPrinter->OutStreamer.EmitAssignment(Label, Expr);
       Expr = MCSymbolRefExpr::Create(Label, Ctx);
     }
     break;
@@ -323,20 +320,38 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
                        MO.getMBB()->getSymbol(), Ctx));
       break;
     case MachineOperand::MO_GlobalAddress:
-      MCOp = LowerSymbolOperand(MO, GetSymbolFromOperand(MO));
+      // If we don't have an asmprinter, we're converting to MCInst to get
+      // instruction sizes, which doesn't need precise value information for
+      // symbols, just lower to a 0 immediate.
+      if (AsmPrinter != 0)
+        MCOp = LowerSymbolOperand(MO, GetSymbolFromOperand(MO));
+      else
+        MCOp = MCOperand::CreateImm(0);
       break;
     case MachineOperand::MO_ExternalSymbol:
-      MCOp = LowerSymbolOperand(MO, GetSymbolFromOperand(MO));
+      if (AsmPrinter != 0)
+        MCOp = LowerSymbolOperand(MO, GetSymbolFromOperand(MO));
+      else
+        MCOp = MCOperand::CreateImm(0);
       break;
     case MachineOperand::MO_JumpTableIndex:
-      MCOp = LowerSymbolOperand(MO, AsmPrinter.GetJTISymbol(MO.getIndex()));
+      if (AsmPrinter != 0)
+        MCOp = LowerSymbolOperand(MO, AsmPrinter->GetJTISymbol(MO.getIndex()));
+      else
+        MCOp = MCOperand::CreateImm(0);
       break;
     case MachineOperand::MO_ConstantPoolIndex:
-      MCOp = LowerSymbolOperand(MO, AsmPrinter.GetCPISymbol(MO.getIndex()));
+      if (AsmPrinter != 0)
+        MCOp = LowerSymbolOperand(MO, AsmPrinter->GetCPISymbol(MO.getIndex()));
+      else
+        MCOp = MCOperand::CreateImm(0);
       break;
     case MachineOperand::MO_BlockAddress:
-      MCOp = LowerSymbolOperand(MO,
-                        AsmPrinter.GetBlockAddressSymbol(MO.getBlockAddress()));
+      if (AsmPrinter != 0)
+        MCOp = LowerSymbolOperand(MO,
+                       AsmPrinter->GetBlockAddressSymbol(MO.getBlockAddress()));
+      else
+        MCOp = MCOperand::CreateImm(0);
       break;
     }
     
@@ -505,46 +520,9 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
 }
 
-void X86AsmPrinter::PrintDebugValueComment(const MachineInstr *MI,
-                                           raw_ostream &O) {
-  // Only the target-dependent form of DBG_VALUE should get here.
-  // Referencing the offset and metadata as NOps-2 and NOps-1 is
-  // probably portable to other targets; frame pointer location is not.
-  unsigned NOps = MI->getNumOperands();
-  assert(NOps==7);
-  O << '\t' << MAI->getCommentString() << "DEBUG_VALUE: ";
-  // cast away const; DIetc do not take const operands for some reason.
-  DIVariable V(const_cast<MDNode *>(MI->getOperand(NOps-1).getMetadata()));
-  if (V.getContext().isSubprogram())
-    O << DISubprogram(V.getContext()).getDisplayName() << ":";
-  O << V.getName();
-  O << " <- ";
-  // Frame address.  Currently handles register +- offset only.
-  O << '['; 
-  if (MI->getOperand(0).isReg() && MI->getOperand(0).getReg())
-    printOperand(MI, 0, O); 
-  else
-    O << "undef";
-  O << '+'; printOperand(MI, 3, O);
-  O << ']';
-  O << "+";
-  printOperand(MI, NOps-2, O);
-}
-
-MachineLocation 
-X86AsmPrinter::getDebugValueLocation(const MachineInstr *MI) const {
-  MachineLocation Location;
-  assert (MI->getNumOperands() == 7 && "Invalid no. of machine operands!");
-  // Frame address.  Currently handles register +- offset only.
-
-  if (MI->getOperand(0).isReg() && MI->getOperand(3).isImm())
-    Location.set(MI->getOperand(0).getReg(), MI->getOperand(3).getImm());
-  return Location;
-}
-
 
 void X86AsmPrinter::EmitInstruction(const MachineInstr *MI) {
-  X86MCInstLower MCInstLowering(OutContext, Mang, *this);
+  X86MCInstLower MCInstLowering(Mang, *MF, this);
   switch (MI->getOpcode()) {
   case TargetOpcode::DBG_VALUE:
     if (isVerbose() && OutStreamer.hasRawTextSupport()) {
