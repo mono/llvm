@@ -838,6 +838,10 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     // FIXME: Do we need to handle scalar-to-vector here?
     setOperationAction(ISD::MUL,                MVT::v4i32, Legal);
 
+    // Can turn SHL into an integer multiply.
+    setOperationAction(ISD::SHL,                MVT::v4i32, Custom);
+    setOperationAction(ISD::SHL,                MVT::v16i8, Custom);
+
     // i8 and i16 vectors are custom , because the source register and source
     // source memory operand types are not the same width.  f32 vectors are
     // custom since the immediate controlling the insert encodes additional
@@ -1190,6 +1194,50 @@ unsigned X86TargetLowering::getFunctionAlignment(const Function *F) const {
   return F->hasFnAttr(Attribute::OptimizeForSize) ? 0 : 4;
 }
 
+std::pair<const TargetRegisterClass*, uint8_t>
+X86TargetLowering::findRepresentativeClass(EVT VT) const{
+  const TargetRegisterClass *RRC = 0;
+  uint8_t Cost = 1;
+  switch (VT.getSimpleVT().SimpleTy) {
+  default:
+    return TargetLowering::findRepresentativeClass(VT);
+  case MVT::i8: case MVT::i16: case MVT::i32: case MVT::i64:
+    RRC = (Subtarget->is64Bit()
+           ? X86::GR64RegisterClass : X86::GR32RegisterClass);
+    break;
+  case MVT::v8i8: case MVT::v4i16:
+  case MVT::v2i32: case MVT::v1i64: 
+    RRC = X86::VR64RegisterClass;
+    break;
+  case MVT::f32: case MVT::f64:
+  case MVT::v16i8: case MVT::v8i16: case MVT::v4i32: case MVT::v2i64:
+  case MVT::v4f32: case MVT::v2f64:
+  case MVT::v32i8: case MVT::v8i32: case MVT::v4i64: case MVT::v8f32:
+  case MVT::v4f64:
+    RRC = X86::VR128RegisterClass;
+    break;
+  }
+  return std::make_pair(RRC, Cost);
+}
+
+unsigned
+X86TargetLowering::getRegPressureLimit(const TargetRegisterClass *RC,
+                                       MachineFunction &MF) const {
+  unsigned FPDiff = RegInfo->hasFP(MF) ? 1 : 0;
+  switch (RC->getID()) {
+  default:
+    return 0;
+  case X86::GR32RegClassID:
+    return 4 - FPDiff;
+  case X86::GR64RegClassID:
+    return 8 - FPDiff;
+  case X86::VR128RegClassID:
+    return Subtarget->is64Bit() ? 10 : 4;
+  case X86::VR64RegClassID:
+    return 4;
+  }
+}
+
 bool X86TargetLowering::getStackCookieLocation(unsigned &AddressSpace,
                                                unsigned &Offset) const {
   if (!Subtarget->isTargetLinux())
@@ -1260,6 +1308,20 @@ X86TargetLowering::LowerReturn(SDValue Chain,
     CCValAssign &VA = RVLocs[i];
     assert(VA.isRegLoc() && "Can only return in registers!");
     SDValue ValToCopy = OutVals[i];
+    EVT ValVT = ValToCopy.getValueType();
+
+    // If this is x86-64, and we disabled SSE, we can't return FP values
+    if ((ValVT == MVT::f32 || ValVT == MVT::f64) &&
+        (Subtarget->is64Bit() && !Subtarget->hasSSE1())) {
+      report_fatal_error("SSE register return with SSE disabled");
+    }
+    // Likewise we can't return F64 values with SSE1 only.  gcc does so, but
+    // llvm-gcc has never done it right and no one has noticed, so this
+    // should be OK for now.
+    if (ValVT == MVT::f64 &&
+        (Subtarget->is64Bit() && !Subtarget->hasSSE2())) {
+      report_fatal_error("SSE2 register return with SSE2 disabled");
+    }
 
     // Returns in ST0/ST1 are handled specially: these are pushed as operands to
     // the RET instruction and handled by the FP Stackifier.
@@ -1277,7 +1339,6 @@ X86TargetLowering::LowerReturn(SDValue Chain,
     // 64-bit vector (MMX) values are returned in XMM0 / XMM1 except for v1i64
     // which is returned in RAX / RDX.
     if (Subtarget->is64Bit()) {
-      EVT ValVT = ValToCopy.getValueType();
       if (ValVT.isVector() && ValVT.getSizeInBits() == 64) {
         ValToCopy = DAG.getNode(ISD::BIT_CONVERT, dl, MVT::i64, ValToCopy);
         if (VA.getLocReg() == X86::XMM0 || VA.getLocReg() == X86::XMM1)
@@ -7456,6 +7517,86 @@ SDValue X86TargetLowering::LowerMUL_V2I64(SDValue Op, SelectionDAG &DAG) const {
   return Res;
 }
 
+SDValue X86TargetLowering::LowerSHL(SDValue Op, SelectionDAG &DAG) const {
+  EVT VT = Op.getValueType();
+  DebugLoc dl = Op.getDebugLoc();
+  SDValue R = Op.getOperand(0);
+
+  LLVMContext *Context = DAG.getContext();
+
+  assert(Subtarget->hasSSE41() && "Cannot lower SHL without SSE4.1 or later");
+
+  if (VT == MVT::v4i32) {
+    Op = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, VT,
+                     DAG.getConstant(Intrinsic::x86_sse2_pslli_d, MVT::i32),
+                     Op.getOperand(1), DAG.getConstant(23, MVT::i32));
+
+    ConstantInt *CI = ConstantInt::get(*Context, APInt(32, 0x3f800000U));
+    
+    std::vector<Constant*> CV(4, CI);
+    Constant *C = ConstantVector::get(CV);
+    SDValue CPIdx = DAG.getConstantPool(C, getPointerTy(), 16);
+    SDValue Addend = DAG.getLoad(VT, dl, DAG.getEntryNode(), CPIdx,
+                                 PseudoSourceValue::getConstantPool(), 0,
+                                 false, false, 16);
+
+    Op = DAG.getNode(ISD::ADD, dl, VT, Op, Addend);
+    Op = DAG.getNode(ISD::BIT_CONVERT, dl, MVT::v4f32, Op);
+    Op = DAG.getNode(ISD::FP_TO_SINT, dl, VT, Op);
+    return DAG.getNode(ISD::MUL, dl, VT, Op, R);
+  }
+  if (VT == MVT::v16i8) {
+    // a = a << 5;
+    Op = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, VT,
+                     DAG.getConstant(Intrinsic::x86_sse2_pslli_w, MVT::i32),
+                     Op.getOperand(1), DAG.getConstant(5, MVT::i32));
+
+    ConstantInt *CM1 = ConstantInt::get(*Context, APInt(8, 15));
+    ConstantInt *CM2 = ConstantInt::get(*Context, APInt(8, 63));
+
+    std::vector<Constant*> CVM1(16, CM1);
+    std::vector<Constant*> CVM2(16, CM2);
+    Constant *C = ConstantVector::get(CVM1);
+    SDValue CPIdx = DAG.getConstantPool(C, getPointerTy(), 16);
+    SDValue M = DAG.getLoad(VT, dl, DAG.getEntryNode(), CPIdx,
+                            PseudoSourceValue::getConstantPool(), 0,
+                            false, false, 16);
+
+    // r = pblendv(r, psllw(r & (char16)15, 4), a);
+    M = DAG.getNode(ISD::AND, dl, VT, R, M);
+    M = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, VT,
+                    DAG.getConstant(Intrinsic::x86_sse2_pslli_w, MVT::i32), M,
+                    DAG.getConstant(4, MVT::i32));
+    R = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, VT,
+                    DAG.getConstant(Intrinsic::x86_sse41_pblendvb, MVT::i32),
+                    R, M, Op);
+    // a += a
+    Op = DAG.getNode(ISD::ADD, dl, VT, Op, Op);
+    
+    C = ConstantVector::get(CVM2);
+    CPIdx = DAG.getConstantPool(C, getPointerTy(), 16);
+    M = DAG.getLoad(VT, dl, DAG.getEntryNode(), CPIdx,
+                    PseudoSourceValue::getConstantPool(), 0, false, false, 16);
+    
+    // r = pblendv(r, psllw(r & (char16)63, 2), a);
+    M = DAG.getNode(ISD::AND, dl, VT, R, M);
+    M = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, VT,
+                    DAG.getConstant(Intrinsic::x86_sse2_pslli_w, MVT::i32), M,
+                    DAG.getConstant(2, MVT::i32));
+    R = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, VT,
+                    DAG.getConstant(Intrinsic::x86_sse41_pblendvb, MVT::i32),
+                    R, M, Op);
+    // a += a
+    Op = DAG.getNode(ISD::ADD, dl, VT, Op, Op);
+    
+    // return pblendv(r, r+r, a);
+    R = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, VT,
+                    DAG.getConstant(Intrinsic::x86_sse41_pblendvb, MVT::i32),
+                    R, DAG.getNode(ISD::ADD, dl, VT, R, R), Op);
+    return R;
+  }
+  return SDValue();
+}
 
 SDValue X86TargetLowering::LowerXALUO(SDValue Op, SelectionDAG &DAG) const {
   // Lower the "add/sub/mul with overflow" instruction into a regular ins plus
@@ -7528,9 +7669,12 @@ SDValue X86TargetLowering::LowerXALUO(SDValue Op, SelectionDAG &DAG) const {
 SDValue X86TargetLowering::LowerMEMBARRIER(SDValue Op, SelectionDAG &DAG) const{
   DebugLoc dl = Op.getDebugLoc();
   
-  if (!Subtarget->hasSSE2())
+  if (!Subtarget->hasSSE2()) {
+    SDValue Zero = DAG.getConstant(0,
+                                   Subtarget->is64Bit() ? MVT::i64 : MVT::i32);
     return DAG.getNode(X86ISD::MEMBARRIER, dl, MVT::Other, Op.getOperand(0),
-                       DAG.getConstant(0, MVT::i32));
+                       Zero);
+  }
   
   unsigned isDev = cast<ConstantSDNode>(Op.getOperand(5))->getZExtValue();
   if(!isDev)
@@ -7688,6 +7832,7 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::CTLZ:               return LowerCTLZ(Op, DAG);
   case ISD::CTTZ:               return LowerCTTZ(Op, DAG);
   case ISD::MUL:                return LowerMUL_V2I64(Op, DAG);
+  case ISD::SHL:                return LowerSHL(Op, DAG);
   case ISD::SADDO:
   case ISD::UADDO:
   case ISD::SSUBO:
@@ -8416,19 +8561,31 @@ X86TargetLowering::EmitAtomicMinMaxWithCustomInserter(MachineInstr *mInstr,
 }
 
 // FIXME: When we get size specific XMM0 registers, i.e. XMM0_V16I8
-// all of this code can be replaced with that in the .td file.
+// or XMM0_V32I8 in AVX all of this code can be replaced with that
+// in the .td file.
 MachineBasicBlock *
 X86TargetLowering::EmitPCMP(MachineInstr *MI, MachineBasicBlock *BB,
                             unsigned numArgs, bool memArg) const {
+
+  assert((Subtarget->hasSSE42() || Subtarget->hasAVX()) &&
+         "Target must have SSE4.2 or AVX features enabled");
 
   DebugLoc dl = MI->getDebugLoc();
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
 
   unsigned Opc;
-  if (memArg)
-    Opc = numArgs == 3 ? X86::PCMPISTRM128rm : X86::PCMPESTRM128rm;
-  else
-    Opc = numArgs == 3 ? X86::PCMPISTRM128rr : X86::PCMPESTRM128rr;
+
+  if (!Subtarget->hasAVX()) {
+    if (memArg)
+      Opc = numArgs == 3 ? X86::PCMPISTRM128rm : X86::PCMPESTRM128rm;
+    else
+      Opc = numArgs == 3 ? X86::PCMPISTRM128rr : X86::PCMPESTRM128rr;
+  } else {
+    if (memArg)
+      Opc = numArgs == 3 ? X86::VPCMPISTRM128rm : X86::VPCMPESTRM128rm;
+    else
+      Opc = numArgs == 3 ? X86::VPCMPISTRM128rr : X86::VPCMPESTRM128rr;
+  }
 
   MachineInstrBuilder MIB = BuildMI(BB, dl, TII->get(Opc));
 
@@ -8775,12 +8932,16 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   }
     // String/text processing lowering.
   case X86::PCMPISTRM128REG:
+  case X86::VPCMPISTRM128REG:
     return EmitPCMP(MI, BB, 3, false /* in-mem */);
   case X86::PCMPISTRM128MEM:
+  case X86::VPCMPISTRM128MEM:
     return EmitPCMP(MI, BB, 3, true /* in-mem */);
   case X86::PCMPESTRM128REG:
+  case X86::VPCMPESTRM128REG:
     return EmitPCMP(MI, BB, 5, false /* in mem */);
   case X86::PCMPESTRM128MEM:
+  case X86::VPCMPESTRM128MEM:
     return EmitPCMP(MI, BB, 5, true /* in mem */);
 
     // Atomic Lowering.

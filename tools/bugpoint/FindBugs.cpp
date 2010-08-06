@@ -62,7 +62,7 @@ bool BugDriver::runManyPasses(const std::vector<const PassInfo*> &AllPasses,
     }
     
     std::string Filename;
-    if(runPasses(PassesToRun, Filename, false)) {
+    if(runPasses(Program, PassesToRun, Filename, false)) {
       outs() << "\n";
       outs() << "Optimizer passes caused failure!\n\n";
       debugOptimizerCrash();
@@ -89,7 +89,7 @@ bool BugDriver::runManyPasses(const std::vector<const PassInfo*> &AllPasses,
     // output (created above).
     //
     outs() << "*** Checking if passes caused miscompliation:\n";
-    bool Diff = diffProgram(Filename, "", false, &Error);
+    bool Diff = diffProgram(Program, Filename, "", false, &Error);
     if (Error.empty() && Diff) {
       outs() << "\n*** diffProgram returned true!\n";
       debugMiscompilation(&Error);

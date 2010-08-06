@@ -251,7 +251,7 @@ void SCEVCommutativeExpr::print(raw_ostream &OS) const {
   OS << "(";
   for (op_iterator I = op_begin(), E = op_end(); I != E; ++I) {
     OS << **I;
-    if (next(I) != E)
+    if (llvm::next(I) != E)
       OS << OpStr;
   }
   OS << ")";
@@ -337,12 +337,36 @@ void SCEVAddRecExpr::print(raw_ostream &OS) const {
   OS << ">";
 }
 
+void SCEVUnknown::deleted() {
+  // Clear this SCEVUnknown from ValuesAtScopes.
+  SE->ValuesAtScopes.erase(this);
+
+  // Remove this SCEVUnknown from the uniquing map.
+  SE->UniqueSCEVs.RemoveNode(this);
+
+  // Release the value.
+  setValPtr(0);
+}
+
+void SCEVUnknown::allUsesReplacedWith(Value *New) {
+  // Clear this SCEVUnknown from ValuesAtScopes.
+  SE->ValuesAtScopes.erase(this);
+
+  // Remove this SCEVUnknown from the uniquing map.
+  SE->UniqueSCEVs.RemoveNode(this);
+
+  // Update this SCEVUnknown to point to the new value. This is needed
+  // because there may still be outstanding SCEVs which still point to
+  // this SCEVUnknown.
+  setValPtr(New);
+}
+
 bool SCEVUnknown::isLoopInvariant(const Loop *L) const {
   // All non-instruction values are loop invariant.  All instructions are loop
   // invariant if they are not contained in the specified loop.
   // Instructions are never considered invariant in the function body
   // (null loop) because they are defined within the "loop".
-  if (Instruction *I = dyn_cast<Instruction>(V))
+  if (Instruction *I = dyn_cast<Instruction>(getValue()))
     return L && !L->contains(I);
   return true;
 }
@@ -360,11 +384,11 @@ bool SCEVUnknown::properlyDominates(BasicBlock *BB, DominatorTree *DT) const {
 }
 
 const Type *SCEVUnknown::getType() const {
-  return V->getType();
+  return getValue()->getType();
 }
 
 bool SCEVUnknown::isSizeOf(const Type *&AllocTy) const {
-  if (ConstantExpr *VCE = dyn_cast<ConstantExpr>(V))
+  if (ConstantExpr *VCE = dyn_cast<ConstantExpr>(getValue()))
     if (VCE->getOpcode() == Instruction::PtrToInt)
       if (ConstantExpr *CE = dyn_cast<ConstantExpr>(VCE->getOperand(0)))
         if (CE->getOpcode() == Instruction::GetElementPtr &&
@@ -381,7 +405,7 @@ bool SCEVUnknown::isSizeOf(const Type *&AllocTy) const {
 }
 
 bool SCEVUnknown::isAlignOf(const Type *&AllocTy) const {
-  if (ConstantExpr *VCE = dyn_cast<ConstantExpr>(V))
+  if (ConstantExpr *VCE = dyn_cast<ConstantExpr>(getValue()))
     if (VCE->getOpcode() == Instruction::PtrToInt)
       if (ConstantExpr *CE = dyn_cast<ConstantExpr>(VCE->getOperand(0)))
         if (CE->getOpcode() == Instruction::GetElementPtr &&
@@ -406,7 +430,7 @@ bool SCEVUnknown::isAlignOf(const Type *&AllocTy) const {
 }
 
 bool SCEVUnknown::isOffsetOf(const Type *&CTy, Constant *&FieldNo) const {
-  if (ConstantExpr *VCE = dyn_cast<ConstantExpr>(V))
+  if (ConstantExpr *VCE = dyn_cast<ConstantExpr>(getValue()))
     if (VCE->getOpcode() == Instruction::PtrToInt)
       if (ConstantExpr *CE = dyn_cast<ConstantExpr>(VCE->getOperand(0)))
         if (CE->getOpcode() == Instruction::GetElementPtr &&
@@ -448,7 +472,7 @@ void SCEVUnknown::print(raw_ostream &OS) const {
   }
 
   // Otherwise just print it normally.
-  WriteAsOperand(OS, V, false);
+  WriteAsOperand(OS, getValue(), false);
 }
 
 //===----------------------------------------------------------------------===//
@@ -495,9 +519,9 @@ namespace {
   /// than the complexity of the RHS.  This comparator is used to canonicalize
   /// expressions.
   class SCEVComplexityCompare {
-    LoopInfo *LI;
+    const LoopInfo *LI;
   public:
-    explicit SCEVComplexityCompare(LoopInfo *li) : LI(li) {}
+    explicit SCEVComplexityCompare(const LoopInfo *li) : LI(li) {}
 
     bool operator()(const SCEV *LHS, const SCEV *RHS) const {
       // Fast-path: SCEVs are uniqued so we can do a quick equality check.
@@ -505,8 +529,9 @@ namespace {
         return false;
 
       // Primarily, sort the SCEVs by their getSCEVType().
-      if (LHS->getSCEVType() != RHS->getSCEVType())
-        return LHS->getSCEVType() < RHS->getSCEVType();
+      unsigned LType = LHS->getSCEVType(), RType = RHS->getSCEVType();
+      if (LType != RType)
+        return LType < RType;
 
       // Aside from the getSCEVType() ordering, the particular ordering
       // isn't very important except that it's beneficial to be consistent,
@@ -519,14 +544,16 @@ namespace {
 
         // Order pointer values after integer values. This helps SCEVExpander
         // form GEPs.
-        if (LU->getType()->isPointerTy() && !RU->getType()->isPointerTy())
-          return false;
-        if (RU->getType()->isPointerTy() && !LU->getType()->isPointerTy())
-          return true;
+        bool LIsPointer = LU->getType()->isPointerTy(),
+             RIsPointer = RU->getType()->isPointerTy();
+        if (LIsPointer != RIsPointer)
+          return RIsPointer;
 
         // Compare getValueID values.
-        if (LU->getValue()->getValueID() != RU->getValue()->getValueID())
-          return LU->getValue()->getValueID() < RU->getValue()->getValueID();
+        unsigned LID = LU->getValue()->getValueID(),
+                 RID = RU->getValue()->getValueID();
+        if (LID != RID)
+          return LID < RID;
 
         // Sort arguments by their position.
         if (const Argument *LA = dyn_cast<Argument>(LU->getValue())) {
@@ -536,22 +563,20 @@ namespace {
 
         // For instructions, compare their loop depth, and their opcode.
         // This is pretty loose.
-        if (Instruction *LV = dyn_cast<Instruction>(LU->getValue())) {
-          Instruction *RV = cast<Instruction>(RU->getValue());
+        if (const Instruction *LV = dyn_cast<Instruction>(LU->getValue())) {
+          const Instruction *RV = cast<Instruction>(RU->getValue());
 
           // Compare loop depths.
-          if (LI->getLoopDepth(LV->getParent()) !=
-              LI->getLoopDepth(RV->getParent()))
-            return LI->getLoopDepth(LV->getParent()) <
-                   LI->getLoopDepth(RV->getParent());
-
-          // Compare opcodes.
-          if (LV->getOpcode() != RV->getOpcode())
-            return LV->getOpcode() < RV->getOpcode();
+          unsigned LDepth = LI->getLoopDepth(LV->getParent()),
+                   RDepth = LI->getLoopDepth(RV->getParent());
+          if (LDepth != RDepth)
+            return LDepth < RDepth;
 
           // Compare the number of operands.
-          if (LV->getNumOperands() != RV->getNumOperands())
-            return LV->getNumOperands() < RV->getNumOperands();
+          unsigned LNumOps = LV->getNumOperands(),
+                   RNumOps = RV->getNumOperands();
+          if (LNumOps != RNumOps)
+            return LNumOps < RNumOps;
         }
 
         return false;
@@ -560,42 +585,51 @@ namespace {
       // Compare constant values.
       if (const SCEVConstant *LC = dyn_cast<SCEVConstant>(LHS)) {
         const SCEVConstant *RC = cast<SCEVConstant>(RHS);
-        if (LC->getValue()->getBitWidth() != RC->getValue()->getBitWidth())
-          return LC->getValue()->getBitWidth() < RC->getValue()->getBitWidth();
-        return LC->getValue()->getValue().ult(RC->getValue()->getValue());
+        const ConstantInt *LCC = LC->getValue();
+        const ConstantInt *RCC = RC->getValue();
+        unsigned LBitWidth = LCC->getBitWidth(), RBitWidth = RCC->getBitWidth();
+        if (LBitWidth != RBitWidth)
+          return LBitWidth < RBitWidth;
+        return LCC->getValue().ult(RCC->getValue());
       }
 
       // Compare addrec loop depths.
       if (const SCEVAddRecExpr *LA = dyn_cast<SCEVAddRecExpr>(LHS)) {
         const SCEVAddRecExpr *RA = cast<SCEVAddRecExpr>(RHS);
-        if (LA->getLoop()->getLoopDepth() != RA->getLoop()->getLoopDepth())
-          return LA->getLoop()->getLoopDepth() < RA->getLoop()->getLoopDepth();
+        unsigned LDepth = LA->getLoop()->getLoopDepth(),
+                 RDepth = RA->getLoop()->getLoopDepth();
+        if (LDepth != RDepth)
+          return LDepth < RDepth;
       }
 
       // Lexicographically compare n-ary expressions.
       if (const SCEVNAryExpr *LC = dyn_cast<SCEVNAryExpr>(LHS)) {
         const SCEVNAryExpr *RC = cast<SCEVNAryExpr>(RHS);
-        for (unsigned i = 0, e = LC->getNumOperands(); i != e; ++i) {
-          if (i >= RC->getNumOperands())
+        unsigned LNumOps = LC->getNumOperands(), RNumOps = RC->getNumOperands();
+        for (unsigned i = 0; i != LNumOps; ++i) {
+          if (i >= RNumOps)
             return false;
-          if (operator()(LC->getOperand(i), RC->getOperand(i)))
+          const SCEV *LOp = LC->getOperand(i), *ROp = RC->getOperand(i);
+          if (operator()(LOp, ROp))
             return true;
-          if (operator()(RC->getOperand(i), LC->getOperand(i)))
+          if (operator()(ROp, LOp))
             return false;
         }
-        return LC->getNumOperands() < RC->getNumOperands();
+        return LNumOps < RNumOps;
       }
 
       // Lexicographically compare udiv expressions.
       if (const SCEVUDivExpr *LC = dyn_cast<SCEVUDivExpr>(LHS)) {
         const SCEVUDivExpr *RC = cast<SCEVUDivExpr>(RHS);
-        if (operator()(LC->getLHS(), RC->getLHS()))
+        const SCEV *LL = LC->getLHS(), *LR = LC->getRHS(),
+                   *RL = RC->getLHS(), *RR = RC->getRHS();
+        if (operator()(LL, RL))
           return true;
-        if (operator()(RC->getLHS(), LC->getLHS()))
+        if (operator()(RL, LL))
           return false;
-        if (operator()(LC->getRHS(), RC->getRHS()))
+        if (operator()(LR, RR))
           return true;
-        if (operator()(RC->getRHS(), LC->getRHS()))
+        if (operator()(RR, LR))
           return false;
         return false;
       }
@@ -1862,7 +1896,7 @@ const SCEV *ScalarEvolution::getUDivExpr(const SCEV *LHS,
       // TODO: Generalize this to non-constants by using known-bits information.
       const Type *Ty = LHS->getType();
       unsigned LZ = RHSC->getValue()->getValue().countLeadingZeros();
-      unsigned MaxShiftAmt = getTypeSizeInBits(Ty) - LZ;
+      unsigned MaxShiftAmt = getTypeSizeInBits(Ty) - LZ - 1;
       // For non-power-of-two values, effectively round the value up to the
       // nearest power of two.
       if (!RHSC->getValue()->getValue().isPowerOf2())
@@ -2340,8 +2374,14 @@ const SCEV *ScalarEvolution::getUnknown(Value *V) {
   ID.AddInteger(scUnknown);
   ID.AddPointer(V);
   void *IP = 0;
-  if (const SCEV *S = UniqueSCEVs.FindNodeOrInsertPos(ID, IP)) return S;
-  SCEV *S = new (SCEVAllocator) SCEVUnknown(ID.Intern(SCEVAllocator), V);
+  if (SCEV *S = UniqueSCEVs.FindNodeOrInsertPos(ID, IP)) {
+    assert(cast<SCEVUnknown>(S)->getValue() == V &&
+           "Stale SCEVUnknown in uniquing map!");
+    return S;
+  }
+  SCEV *S = new (SCEVAllocator) SCEVUnknown(ID.Intern(SCEVAllocator), V, this,
+                                            FirstUnknown);
+  FirstUnknown = cast<SCEVUnknown>(S);
   UniqueSCEVs.InsertNode(S, IP);
   return S;
 }
@@ -2795,7 +2835,7 @@ const SCEV *ScalarEvolution::createNodeForGEP(GEPOperator *GEP) {
     return getUnknown(GEP);
   const SCEV *TotalOffset = getConstant(IntPtrTy, 0);
   gep_type_iterator GTI = gep_type_begin(GEP);
-  for (GetElementPtrInst::op_iterator I = next(GEP->op_begin()),
+  for (GetElementPtrInst::op_iterator I = llvm::next(GEP->op_begin()),
                                       E = GEP->op_end();
        I != E; ++I) {
     Value *Index = *I;
@@ -3673,26 +3713,6 @@ void ScalarEvolution::forgetValue(Value *V) {
       Scalars.erase(It);
       if (PHINode *PN = dyn_cast<PHINode>(I))
         ConstantEvolutionLoopExitValue.erase(PN);
-    }
-
-    // If there's a SCEVUnknown tying this value into the SCEV
-    // space, remove it from the folding set map. The SCEVUnknown
-    // object and any other SCEV objects which reference it
-    // (transitively) remain allocated, effectively leaked until
-    // the underlying BumpPtrAllocator is freed.
-    //
-    // This permits SCEV pointers to be used as keys in maps
-    // such as the ValuesAtScopes map.
-    FoldingSetNodeID ID;
-    ID.AddInteger(scUnknown);
-    ID.AddPointer(I);
-    void *IP;
-    if (SCEV *S = UniqueSCEVs.FindNodeOrInsertPos(ID, IP)) {
-      UniqueSCEVs.RemoveNode(S);
-
-      // This isn't necessary, but we might as well remove the
-      // value from the ValuesAtScopes map too.
-      ValuesAtScopes.erase(S);
     }
 
     PushDefUseChildren(I, Worklist);
@@ -5680,16 +5700,15 @@ void ScalarEvolution::SCEVCallbackVH::deleted() {
   // this now dangles!
 }
 
-void ScalarEvolution::SCEVCallbackVH::allUsesReplacedWith(Value *) {
+void ScalarEvolution::SCEVCallbackVH::allUsesReplacedWith(Value *V) {
   assert(SE && "SCEVCallbackVH called with a null ScalarEvolution!");
 
   // Forget all the expressions associated with users of the old value,
   // so that future queries will recompute the expressions using the new
   // value.
+  Value *Old = getValPtr();
   SmallVector<User *, 16> Worklist;
   SmallPtrSet<User *, 8> Visited;
-  Value *Old = getValPtr();
-  bool DeleteOld = false;
   for (Value::use_iterator UI = Old->use_begin(), UE = Old->use_end();
        UI != UE; ++UI)
     Worklist.push_back(*UI);
@@ -5697,10 +5716,8 @@ void ScalarEvolution::SCEVCallbackVH::allUsesReplacedWith(Value *) {
     User *U = Worklist.pop_back_val();
     // Deleting the Old value will cause this to dangle. Postpone
     // that until everything else is done.
-    if (U == Old) {
-      DeleteOld = true;
+    if (U == Old)
       continue;
-    }
     if (!Visited.insert(U))
       continue;
     if (PHINode *PN = dyn_cast<PHINode>(U))
@@ -5710,14 +5727,11 @@ void ScalarEvolution::SCEVCallbackVH::allUsesReplacedWith(Value *) {
          UI != UE; ++UI)
       Worklist.push_back(*UI);
   }
-  // Delete the Old value if it (indirectly) references itself.
-  if (DeleteOld) {
-    if (PHINode *PN = dyn_cast<PHINode>(Old))
-      SE->ConstantEvolutionLoopExitValue.erase(PN);
-    SE->Scalars.erase(Old);
-    // this now dangles!
-  }
-  // this may dangle!
+  // Delete the Old value.
+  if (PHINode *PN = dyn_cast<PHINode>(Old))
+    SE->ConstantEvolutionLoopExitValue.erase(PN);
+  SE->Scalars.erase(Old);
+  // this now dangles!
 }
 
 ScalarEvolution::SCEVCallbackVH::SCEVCallbackVH(Value *V, ScalarEvolution *se)
@@ -5728,7 +5742,7 @@ ScalarEvolution::SCEVCallbackVH::SCEVCallbackVH(Value *V, ScalarEvolution *se)
 //===----------------------------------------------------------------------===//
 
 ScalarEvolution::ScalarEvolution()
-  : FunctionPass(&ID) {
+  : FunctionPass(&ID), FirstUnknown(0) {
 }
 
 bool ScalarEvolution::runOnFunction(Function &F) {
@@ -5740,6 +5754,12 @@ bool ScalarEvolution::runOnFunction(Function &F) {
 }
 
 void ScalarEvolution::releaseMemory() {
+  // Iterate through all the SCEVUnknown instances and call their
+  // destructors, so that they release their references to their values.
+  for (SCEVUnknown *U = FirstUnknown; U; U = U->Next)
+    U->~SCEVUnknown();
+  FirstUnknown = 0;
+
   Scalars.clear();
   BackedgeTakenCounts.clear();
   ConstantEvolutionLoopExitValue.clear();

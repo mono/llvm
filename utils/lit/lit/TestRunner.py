@@ -312,11 +312,6 @@ def executeTclScriptInternal(test, litConfig, tmpBase, commands, cwd):
         out,err,exitCode = executeCommand(command, cwd=cwd,
                                           env=test.config.environment)
 
-        # Tcl commands fail on standard error output.
-        if err:
-            exitCode = 1
-            out = 'Command has output on stderr!\n\n' + out
-
         return out,err,exitCode
     else:
         results = []
@@ -327,11 +322,6 @@ def executeTclScriptInternal(test, litConfig, tmpBase, commands, cwd):
             exitCode = 255
 
     out = err = ''
-
-    # Tcl commands fail on standard error output.
-    if [True for _,_,err,res in results if err]:
-        exitCode = 1
-        out += 'Command has output on stderr!\n\n'
 
     for i,(cmd, cmd_out, cmd_err, res) in enumerate(results):
         out += 'Command %d: %s\n' % (i, ' '.join('"%s"' % s for s in cmd.args))
@@ -480,21 +470,27 @@ def parseIntegratedTestScript(test, normalize_slashes=False):
     isXFail = isExpectedFail(xfails, xtargets, test.suite.config.target_triple)
     return script,isXFail,tmpBase,execdir
 
-def formatTestOutput(status, out, err, exitCode, script):
+def formatTestOutput(status, out, err, exitCode, failDueToStderr, script):
     output = StringIO.StringIO()
     print >>output, "Script:"
     print >>output, "--"
     print >>output, '\n'.join(script)
     print >>output, "--"
-    print >>output, "Exit Code: %r" % exitCode
-    print >>output, "Command Output (stdout):"
-    print >>output, "--"
-    output.write(out)
-    print >>output, "--"
-    print >>output, "Command Output (stderr):"
-    print >>output, "--"
-    output.write(err)
-    print >>output, "--"
+    print >>output, "Exit Code: %r" % exitCode,
+    if failDueToStderr:
+        print >>output, "(but there was output on stderr)"
+    else:
+        print >>output
+    if out:
+        print >>output, "Command Output (stdout):"
+        print >>output, "--"
+        output.write(out)
+        print >>output, "--"
+    if err:
+        print >>output, "Command Output (stderr):"
+        print >>output, "--"
+        output.write(err)
+        print >>output, "--"
     return (status, output.getvalue())
 
 def executeTclTest(test, litConfig):
@@ -519,18 +515,24 @@ def executeTclTest(test, litConfig):
     if len(res) == 2:
         return res
 
+    # Test for failure. In addition to the exit code, Tcl commands are
+    # considered to fail if there is any standard error output.
     out,err,exitCode = res
     if isXFail:
-        ok = exitCode != 0
-        status = (Test.XPASS, Test.XFAIL)[ok]
+        ok = exitCode != 0 or err
+        status = Test.XFAIL if ok else Test.XPASS
     else:
-        ok = exitCode == 0
-        status = (Test.FAIL, Test.PASS)[ok]
+        ok = exitCode == 0 and not err
+        status = Test.PASS if ok else Test.FAIL
 
     if ok:
         return (status,'')
 
-    return formatTestOutput(status, out, err, exitCode, script)
+    # Set a flag for formatTestOutput so it can explain why the test was
+    # considered to have failed, despite having an exit code of 0.
+    failDueToStderr = exitCode == 0 and err
+
+    return formatTestOutput(status, out, err, exitCode, failDueToStderr, script)
 
 def executeShTest(test, litConfig, useExternalSh):
     if test.config.unsupported:
@@ -558,12 +560,15 @@ def executeShTest(test, litConfig, useExternalSh):
     out,err,exitCode = res
     if isXFail:
         ok = exitCode != 0
-        status = (Test.XPASS, Test.XFAIL)[ok]
+        status = Test.XFAIL if ok else Test.XPASS
     else:
         ok = exitCode == 0
-        status = (Test.FAIL, Test.PASS)[ok]
+        status = Test.PASS if ok else Test.FAIL
 
     if ok:
         return (status,'')
 
-    return formatTestOutput(status, out, err, exitCode, script)
+    # Sh tests are not considered to fail just from stderr output.
+    failDueToStderr = False
+
+    return formatTestOutput(status, out, err, exitCode, failDueToStderr, script)

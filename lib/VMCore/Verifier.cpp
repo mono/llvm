@@ -331,6 +331,7 @@ namespace {
     void visitBranchInst(BranchInst &BI);
     void visitReturnInst(ReturnInst &RI);
     void visitSwitchInst(SwitchInst &SI);
+    void visitIndirectBrInst(IndirectBrInst &BI);
     void visitSelectInst(SelectInst &SI);
     void visitUserOp1(Instruction &I);
     void visitUserOp2(Instruction &I) { visitUserOp1(I); }
@@ -864,6 +865,16 @@ void Verifier::visitSwitchInst(SwitchInst &SI) {
   visitTerminatorInst(SI);
 }
 
+void Verifier::visitIndirectBrInst(IndirectBrInst &BI) {
+  Assert1(BI.getAddress()->getType()->isPointerTy(),
+          "Indirectbr operand must have pointer type!", &BI);
+  for (unsigned i = 0, e = BI.getNumDestinations(); i != e; ++i)
+    Assert1(BI.getDestination(i)->getType()->isLabelTy(),
+            "Indirectbr destinations must all have pointer type!", &BI);
+
+  visitTerminatorInst(BI);
+}
+
 void Verifier::visitSelectInst(SelectInst &SI) {
   Assert1(!SelectInst::areInvalidOperands(SI.getOperand(0), SI.getOperand(1),
                                           SI.getOperand(2)),
@@ -1202,6 +1213,7 @@ void Verifier::visitCallInst(CallInst &CI) {
 
 void Verifier::visitInvokeInst(InvokeInst &II) {
   VerifyCallSite(&II);
+  visitTerminatorInst(II);
 }
 
 /// visitBinaryOperator - Check that both arguments to the binary operator are
@@ -1407,10 +1419,6 @@ void Verifier::visitInstruction(Instruction &I) {
       Assert1(*UI != (User*)&I || !DT->isReachableFromEntry(BB),
               "Only PHI nodes may reference their own value!", &I);
   }
-
-  // Verify that if this is a terminator that it is at the end of the block.
-  if (isa<TerminatorInst>(I))
-    Assert1(BB->getTerminator() == &I, "Terminator not at end of block!", &I);
 
   // Check that void typed values don't have names
   Assert1(!I.getType()->isVoidTy() || !I.hasName(),

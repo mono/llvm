@@ -331,7 +331,7 @@ namespace llvm {
   /// InstPrint.
   ///
   /// \param CE - If given, a code emitter to use to show the instruction
-  /// encoding inline with the assembly.
+  /// encoding inline with the assembly. This method takes ownership of \arg CE.
   ///
   /// \param ShowInst - Whether to show the MCInst representation inline with
   /// the assembly.
@@ -343,15 +343,20 @@ namespace llvm {
 
   /// createMachOStreamer - Create a machine code streamer which will generate
   /// Mach-O format object files.
+  ///
+  /// Takes ownership of \arg TAB and \arg CE.
   MCStreamer *createMachOStreamer(MCContext &Ctx, TargetAsmBackend &TAB,
                                   raw_ostream &OS, MCCodeEmitter *CE,
                                   bool RelaxAll = false);
 
   /// createWinCOFFStreamer - Create a machine code streamer which will
   /// generate Microsoft COFF format object files.
+  ///
+  /// Takes ownership of \arg TAB and \arg CE.
   MCStreamer *createWinCOFFStreamer(MCContext &Ctx,
                                     TargetAsmBackend &TAB,
-                                    MCCodeEmitter &CE, raw_ostream &OS);
+                                    MCCodeEmitter &CE, raw_ostream &OS,
+                                    bool RelaxAll = false);
 
   /// createLoggingStreamer - Create a machine code streamer which just logs the
   /// API calls and then dispatches to another streamer.

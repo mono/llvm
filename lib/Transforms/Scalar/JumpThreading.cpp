@@ -45,7 +45,10 @@ Threshold("jump-threading-threshold",
 
 // Turn on use of LazyValueInfo.
 static cl::opt<bool>
-EnableLVI("enable-jump-threading-lvi", cl::ReallyHidden);
+EnableLVI("enable-jump-threading-lvi",
+          cl::desc("Use LVI for jump threading"),
+          cl::init(false),
+          cl::ReallyHidden);
 
 
 
@@ -1313,6 +1316,9 @@ bool JumpThreading::ThreadEdge(BasicBlock *BB,
         << SuccBB->getName() << "' with cost: " << JumpThreadCost
         << ", across block:\n    "
         << *BB << "\n");
+  
+  if (LVI)
+    LVI->threadEdge(PredBB, BB, SuccBB);
   
   // We are going to have to map operands from the original BB block to the new
   // copy of the block 'NewBB'.  If there are PHI nodes in BB, evaluate them to

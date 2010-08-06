@@ -14,6 +14,7 @@
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCLabel.h"
+#include "llvm/MC/MCDwarf.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 using namespace llvm;
@@ -180,4 +181,64 @@ const MCSection *MCContext::getCOFFSection(StringRef Section,
   
   Entry.setValue(Result);
   return Result;
+}
+
+//===----------------------------------------------------------------------===//
+// Dwarf Management
+//===----------------------------------------------------------------------===//
+
+/// GetDwarfFile - takes a file name an number to place in the dwarf file and
+/// directory tables.  If the file number has already been allocated it is an
+/// error and zero is returned and the client reports the error, else the
+/// allocated file number is returned.  The file numbers may be in any order.
+unsigned MCContext::GetDwarfFile(StringRef FileName, unsigned FileNumber) {
+  // TODO: a FileNumber of zero says to use the next available file number.
+  // Note: in GenericAsmParser::ParseDirectiveFile() FileNumber was checked
+  // to not be less than one.  This needs to be change to be not less than zero.
+
+  // Make space for this FileNumber in the MCDwarfFiles vector if needed.
+  if (FileNumber >= MCDwarfFiles.size()) {
+    MCDwarfFiles.resize(FileNumber + 1);
+  } else {
+    MCDwarfFile *&ExistingFile = MCDwarfFiles[FileNumber];
+    if (ExistingFile)
+      // It is an error to use see the same number more than once.
+      return 0;
+  }
+
+  // Get the new MCDwarfFile slot for this FileNumber.
+  MCDwarfFile *&File = MCDwarfFiles[FileNumber];
+
+  // Separate the directory part from the basename of the FileName.
+  std::pair<StringRef, StringRef> Slash = FileName.rsplit('/');
+
+  // Find or make a entry in the MCDwarfDirs vector for this Directory.
+  StringRef Name;
+  unsigned DirIndex;
+  // Capture directory name.
+  if (Slash.second.empty()) {
+    Name = Slash.first;
+    DirIndex = 0; // For FileNames with no directories a DirIndex of 0 is used.
+  } else {
+    StringRef Directory = Slash.first;
+    Name = Slash.second;
+    for (DirIndex = 1; DirIndex < MCDwarfDirs.size(); DirIndex++) {
+      if (Directory == MCDwarfDirs[DirIndex])
+	break;
+    }
+    if (DirIndex >= MCDwarfDirs.size()) {
+      char *Buf = static_cast<char *>(Allocate(Directory.size()));
+      memcpy(Buf, Directory.data(), Directory.size());
+      MCDwarfDirs.push_back(StringRef(Buf, Directory.size()));
+    }
+  }
+  
+  // Now make the MCDwarfFile entry and place it in the slot in the MCDwarfFiles
+  // vector.
+  char *Buf = static_cast<char *>(Allocate(Name.size()));
+  memcpy(Buf, Name.data(), Name.size());
+  File = new (*this) MCDwarfFile(StringRef(Buf, Name.size()), DirIndex);
+
+  // return the allocated FileNumber.
+  return FileNumber;
 }

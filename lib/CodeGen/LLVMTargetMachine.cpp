@@ -139,8 +139,6 @@ bool LLVMTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
       getTarget().createMCInstPrinter(MAI.getAssemblerDialect(), MAI);
 
     // Create a code emitter if asked to show the encoding.
-    //
-    // FIXME: These are currently leaked.
     MCCodeEmitter *MCE = 0;
     if (ShowMCEncoding)
       MCE = getTarget().createCodeEmitter(*this, *Context);
@@ -154,8 +152,6 @@ bool LLVMTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
   case CGFT_ObjectFile: {
     // Create the code emitter for the target if it exists.  If not, .o file
     // emission fails.
-    //
-    // FIXME: These are currently leaked.
     MCCodeEmitter *MCE = getTarget().createCodeEmitter(*this, *Context);
     TargetAsmBackend *TAB = getTarget().createAsmBackend(TargetTriple);
     if (MCE == 0 || TAB == 0)
@@ -240,13 +236,12 @@ static void printNoVerify(PassManagerBase &PM, const char *Banner) {
 }
 
 static void printAndVerify(PassManagerBase &PM,
-                           const char *Banner,
-                           bool allowDoubleDefs = false) {
+                           const char *Banner) {
   if (PrintMachineCode)
     PM.add(createMachineFunctionPrinterPass(dbgs(), Banner));
 
   if (VerifyMachineCode)
-    PM.add(createMachineVerifierPass(allowDoubleDefs));
+    PM.add(createMachineVerifierPass());
 }
 
 /// addCommonCodeGenPasses - Add standard LLVM codegen passes used for both
@@ -276,6 +271,11 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
       PM.add(createPrintFunctionPass("\n\n*** Code after LSR ***\n", &dbgs()));
   }
 
+  PM.add(createGCLoweringPass());
+
+  // Make sure that no unreachable blocks are instruction selected.
+  PM.add(createUnreachableBlockEliminationPass());
+
   // Turn exception handling constructs into something the code generators can
   // handle.
   switch (getMCAsmInfo()->getExceptionHandlingType()) {
@@ -287,25 +287,24 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
     // pad is shared by multiple invokes and is also a target of a normal
     // edge from elsewhere.
     PM.add(createSjLjEHPass(getTargetLowering()));
-    PM.add(createDwarfEHPass(this, OptLevel==CodeGenOpt::None));
-    break;
+    // FALLTHROUGH
   case ExceptionHandling::Dwarf:
     PM.add(createDwarfEHPass(this, OptLevel==CodeGenOpt::None));
     break;
   case ExceptionHandling::None:
     PM.add(createLowerInvokePass(getTargetLowering()));
+
+    // The lower invoke pass may create unreachable code. Remove it.
+    PM.add(createUnreachableBlockEliminationPass());
     break;
   }
-
-  PM.add(createGCLoweringPass());
-
-  // Make sure that no unreachable blocks are instruction selected.
-  PM.add(createUnreachableBlockEliminationPass());
 
   if (OptLevel != CodeGenOpt::None && !DisableCGP)
     PM.add(createCodeGenPreparePass(getTargetLowering()));
 
   PM.add(createStackProtectorPass(getTargetLowering()));
+
+  addPreISel(PM, OptLevel);
 
   if (PrintISelInput)
     PM.add(createPrintFunctionPass("\n\n"
@@ -339,8 +338,7 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
     return true;
 
   // Print the instruction selected machine code...
-  printAndVerify(PM, "After Instruction Selection",
-                 /* allowDoubleDefs= */ true);
+  printAndVerify(PM, "After Instruction Selection");
 
   // Optimize PHIs before DCE: removing dead PHI cycles may make more
   // instructions dead.
@@ -353,8 +351,7 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
     // used by tail calls, where the tail calls reuse the incoming stack
     // arguments directly (see t11 in test/CodeGen/X86/sibcall.ll).
     PM.add(createDeadMachineInstructionElimPass());
-    printAndVerify(PM, "After codegen DCE pass",
-                   /* allowDoubleDefs= */ true);
+    printAndVerify(PM, "After codegen DCE pass");
 
     PM.add(createOptimizeExtsPass());
     if (!DisableMachineLICM)
@@ -362,21 +359,18 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
     PM.add(createMachineCSEPass());
     if (!DisableMachineSink)
       PM.add(createMachineSinkingPass());
-    printAndVerify(PM, "After Machine LICM, CSE and Sinking passes",
-                   /* allowDoubleDefs= */ true);
+    printAndVerify(PM, "After Machine LICM, CSE and Sinking passes");
   }
 
   // Pre-ra tail duplication.
   if (OptLevel != CodeGenOpt::None && !DisableEarlyTailDup) {
     PM.add(createTailDuplicatePass(true));
-    printAndVerify(PM, "After Pre-RegAlloc TailDuplicate",
-                   /* allowDoubleDefs= */ true);
+    printAndVerify(PM, "After Pre-RegAlloc TailDuplicate");
   }
 
   // Run pre-ra passes.
   if (addPreRegAlloc(PM, OptLevel))
-    printAndVerify(PM, "After PreRegAlloc passes",
-                   /* allowDoubleDefs= */ true);
+    printAndVerify(PM, "After PreRegAlloc passes");
 
   // Perform register allocation.
   PM.add(createRegisterAllocator(OptLevel));

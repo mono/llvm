@@ -143,11 +143,9 @@ Module *BugDriver::ExtractLoop(Module *M) {
 
   Module *NewM = runPassesOn(M, LoopExtractPasses);
   if (NewM == 0) {
-    Module *Old = swapProgramIn(M);
     outs() << "*** Loop extraction failed: ";
-    EmitProgressBitcode("loopextraction", true);
+    EmitProgressBitcode(M, "loopextraction", true);
     outs() << "*** Sorry. :(  Please report a bug!\n";
-    swapProgramIn(Old);
     return 0;
   }
 
@@ -201,7 +199,7 @@ static Constant *GetTorInit(std::vector<std::pair<Function*, int> > &TorList) {
 /// static ctors/dtors, we need to add an llvm.global_[cd]tors global to M2, and
 /// prune appropriate entries out of M1s list.
 static void SplitStaticCtorDtor(const char *GlobalName, Module *M1, Module *M2,
-                                ValueMap<const Value*, Value*> VMap) {
+                                ValueMap<const Value*, Value*> &VMap) {
   GlobalVariable *GV = M1->getNamedGlobal(GlobalName);
   if (!GV || GV->isDeclaration() || GV->hasLocalLinkage() ||
       !GV->use_empty()) return;
@@ -327,9 +325,7 @@ Module *BugDriver::ExtractMappedBlocksFromModule(const
   if (uniqueFilename.createTemporaryFileOnDisk(true, &ErrMsg)) {
     outs() << "*** Basic Block extraction failed!\n";
     errs() << "Error creating temporary file: " << ErrMsg << "\n";
-    M = swapProgramIn(M);
-    EmitProgressBitcode("basicblockextractfail", true);
-    swapProgramIn(M);
+    EmitProgressBitcode(M, "basicblockextractfail", true);
     return 0;
   }
   sys::RemoveFileOnSignal(uniqueFilename);
@@ -340,9 +336,7 @@ Module *BugDriver::ExtractMappedBlocksFromModule(const
     outs() << "*** Basic Block extraction failed!\n";
     errs() << "Error writing list of blocks to not extract: " << ErrorInfo
            << "\n";
-    M = swapProgramIn(M);
-    EmitProgressBitcode("basicblockextractfail", true);
-    swapProgramIn(M);
+    EmitProgressBitcode(M, "basicblockextractfail", true);
     return 0;
   }
   for (std::vector<BasicBlock*>::const_iterator I = BBs.begin(), E = BBs.end();
@@ -360,17 +354,14 @@ Module *BugDriver::ExtractMappedBlocksFromModule(const
   const char *ExtraArg = uniqueFN.c_str();
 
   std::vector<const PassInfo*> PI;
-  std::vector<BasicBlock *> EmptyBBs; // This parameter is ignored.
-  PI.push_back(getPI(createBlockExtractorPass(EmptyBBs)));
+  PI.push_back(getPI(createBlockExtractorPass()));
   Module *Ret = runPassesOn(M, PI, false, 1, &ExtraArg);
 
   uniqueFilename.eraseFromDisk(); // Free disk space
 
   if (Ret == 0) {
     outs() << "*** Basic Block extraction failed, please report a bug!\n";
-    M = swapProgramIn(M);
-    EmitProgressBitcode("basicblockextractfail", true);
-    swapProgramIn(M);
+    EmitProgressBitcode(M, "basicblockextractfail", true);
   }
   return Ret;
 }

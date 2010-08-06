@@ -93,6 +93,9 @@ static unsigned getRegisterEnum(BO B, unsigned RegClassID, unsigned RawRegister,
     RegClassID = ARM::DPRRegClassID;
   }
 
+  // For this purpose, we can treat rGPR as if it were GPR.
+  if (RegClassID == ARM::rGPRRegClassID) RegClassID = ARM::GPRRegClassID;
+
   // See also decodeNEONRd(), decodeNEONRn(), decodeNEONRm().
   unsigned RegNum =
     RegClassID == ARM::QPRRegClassID ? RawRegister >> 1 : RawRegister;
@@ -887,7 +890,6 @@ static bool DisassembleBrMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     return true;
   }
 
-  assert(0 && "Unexpected BrMiscFrm Opcode");
   return false;
 }
 
@@ -2246,9 +2248,10 @@ static bool DisassembleNLdSt0(MCInst &MI, unsigned Opcode, uint32_t insn,
 
   // We have homogeneous NEON registers for Load/Store.
   unsigned RegClass = 0;
+  bool DRegPair = UseDRegPair(Opcode);
 
   // Double-spaced registers have increments of 2.
-  unsigned Inc = DblSpaced ? 2 : 1;
+  unsigned Inc = (DblSpaced || DRegPair) ? 2 : 1;
 
   unsigned Rn = decodeRn(insn);
   unsigned Rm = decodeRm(insn);
@@ -2294,8 +2297,7 @@ static bool DisassembleNLdSt0(MCInst &MI, unsigned Opcode, uint32_t insn,
     RegClass = OpInfo[OpIdx].RegClass;
     while (OpIdx < NumOps && (unsigned)OpInfo[OpIdx].RegClass == RegClass) {
       MI.addOperand(MCOperand::CreateReg(
-                      getRegisterEnum(B, RegClass, Rd,
-                                      UseDRegPair(Opcode))));
+                      getRegisterEnum(B, RegClass, Rd, DRegPair)));
       Rd += Inc;
       ++OpIdx;
     }
@@ -2314,8 +2316,7 @@ static bool DisassembleNLdSt0(MCInst &MI, unsigned Opcode, uint32_t insn,
 
     while (OpIdx < NumOps && (unsigned)OpInfo[OpIdx].RegClass == RegClass) {
       MI.addOperand(MCOperand::CreateReg(
-                      getRegisterEnum(B, RegClass, Rd,
-                                      UseDRegPair(Opcode))));
+                      getRegisterEnum(B, RegClass, Rd, DRegPair)));
       Rd += Inc;
       ++OpIdx;
     }
@@ -2352,6 +2353,11 @@ static bool DisassembleNLdSt0(MCInst &MI, unsigned Opcode, uint32_t insn,
       ++OpIdx;
     }
   }
+
+  // Accessing registers past the end of the NEON register file is not
+  // defined.
+  if (Rd > 32)
+    return false;
 
   return true;
 }
@@ -2425,10 +2431,14 @@ static bool DisassembleN1RegModImmFrm(MCInst &MI, unsigned Opcode,
     break;
   case ARM::VMOVv4i16:
   case ARM::VMOVv8i16:
+  case ARM::VMVNv4i16:
+  case ARM::VMVNv8i16:
     esize = ESize16;
     break;
   case ARM::VMOVv2i32:
   case ARM::VMOVv4i32:
+  case ARM::VMVNv2i32:
+  case ARM::VMVNv4i32:
     esize = ESize32;
     break;
   case ARM::VMOVv1i64:

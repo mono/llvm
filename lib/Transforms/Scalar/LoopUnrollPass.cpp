@@ -17,6 +17,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/InlineCost.h"
+#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -26,7 +27,7 @@
 using namespace llvm;
 
 static cl::opt<unsigned>
-UnrollThreshold("unroll-threshold", cl::init(100), cl::Hidden,
+UnrollThreshold("unroll-threshold", cl::init(200), cl::Hidden,
   cl::desc("The cut-off point for automatic loop unrolling"));
 
 static cl::opt<unsigned>
@@ -55,17 +56,19 @@ namespace {
     /// loop preheaders be inserted into the CFG...
     ///
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-      AU.addRequiredID(LoopSimplifyID);
-      AU.addRequiredID(LCSSAID);
       AU.addRequired<LoopInfo>();
-      AU.addPreservedID(LCSSAID);
       AU.addPreserved<LoopInfo>();
+      AU.addRequiredID(LoopSimplifyID);
+      AU.addPreservedID(LoopSimplifyID);
+      AU.addRequiredID(LCSSAID);
+      AU.addPreservedID(LCSSAID);
       // FIXME: Loop unroll requires LCSSA. And LCSSA requires dom info.
       // If loop unroll does not preserve dom info then LCSSA pass on next
       // loop will receive invalid dom info.
       // For now, recreate dom info, if loop is unrolled.
       AU.addPreserved<DominatorTree>();
       AU.addPreserved<DominanceFrontier>();
+      AU.addPreserved<ScalarEvolution>();
     }
   };
 }

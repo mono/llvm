@@ -820,15 +820,10 @@ public:
     if (!MO.isReg()) return false;
     return isX86_64ExtendedReg(MO.getReg());
   }
-  static unsigned determineREX(const MachineInstr &MI);
 
   /// isX86_64ExtendedReg - Is the MachineOperand a x86-64 extended (r8 or
   /// higher) register?  e.g. r8, xmm8, xmm13, etc.
   static bool isX86_64ExtendedReg(unsigned RegNo);
-
-  /// GetInstSize - Returns the size of the specified MachineInstr.
-  ///
-  virtual unsigned GetInstSizeInBytes(const MachineInstr *MI) const;
 
   /// getGlobalBaseReg - Return a virtual register initialized with the
   /// the global base register value. Output instructions required to

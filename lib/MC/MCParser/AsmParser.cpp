@@ -26,6 +26,7 @@
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCDwarf.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
@@ -278,6 +279,13 @@ AsmParser::AsmParser(const Target &T, SourceMgr &_SM, MCContext &_Ctx,
 }
 
 AsmParser::~AsmParser() {
+  assert(ActiveMacros.empty() && "Unexpected active macro instantiation!");
+
+  // Destroy any macros.
+  for (StringMap<Macro*>::iterator it = MacroMap.begin(),
+         ie = MacroMap.end(); it != ie; ++it)
+    delete it->getValue();
+
   delete PlatformParser;
   delete GenericParser;
 }
@@ -370,6 +378,16 @@ bool AsmParser::Run(bool NoInitialTextSection, bool NoFinalize) {
   if (TheCondState.TheCond != StartingCondState.TheCond ||
       TheCondState.Ignore != StartingCondState.Ignore)
     return TokError("unmatched .ifs or .elses");
+
+  // Check to see there are no empty DwarfFile slots.
+  const std::vector<MCDwarfFile *> &MCDwarfFiles =
+    getContext().getMCDwarfFiles();
+  for (unsigned i = 1; i < MCDwarfFiles.size(); i++) {
+    if (!MCDwarfFiles[i]){
+      TokError("unassigned file number: " + Twine(i) + " for .file directives");
+      HadError = true;
+    }
+  }
   
   // Finalize the output stream if there are no errors and if the client wants
   // us to.
@@ -1729,6 +1747,7 @@ bool AsmParser::ParseDirectiveEndIf(SMLoc DirectiveLoc) {
 bool GenericAsmParser::ParseDirectiveFile(StringRef, SMLoc DirectiveLoc) {
   // FIXME: I'm not sure what this is.
   int64_t FileNumber = -1;
+  SMLoc FileNumberLoc = getLexer().getLoc();
   if (getLexer().is(AsmToken::Integer)) {
     FileNumber = getTok().getIntVal();
     Lex();
@@ -1749,8 +1768,11 @@ bool GenericAsmParser::ParseDirectiveFile(StringRef, SMLoc DirectiveLoc) {
 
   if (FileNumber == -1)
     getStreamer().EmitFileDirective(Filename);
-  else
+  else {
+     if (getContext().GetDwarfFile(Filename, FileNumber) == 0)
+	Error(FileNumberLoc, "file number already allocated");
     getStreamer().EmitDwarfFileDirective(FileNumber, Filename);
+  }
 
   return false;
 }

@@ -5874,6 +5874,7 @@ std::string ISD::ArgFlagsTy::getArgFlagsString() {
 void SDNode::dump() const { dump(0); }
 void SDNode::dump(const SelectionDAG *G) const {
   print(dbgs(), G);
+  dbgs() << '\n';
 }
 
 void SDNode::print_types(raw_ostream &OS, const SelectionDAG *G) const {
@@ -5897,7 +5898,7 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
       for (MachineSDNode::mmo_iterator i = MN->memoperands_begin(),
            e = MN->memoperands_end(); i != e; ++i) {
         OS << **i;
-        if (next(i) != e)
+        if (llvm::next(i) != e)
           OS << " ";
       }
       OS << ">";

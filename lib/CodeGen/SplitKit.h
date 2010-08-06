@@ -14,19 +14,22 @@
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/CodeGen/SlotIndexes.h"
 
 namespace llvm {
 
 class LiveInterval;
 class LiveIntervals;
-class MachineBasicBlock;
 class MachineInstr;
-class MachineFunction;
-class MachineFunctionPass;
 class MachineLoop;
 class MachineLoopInfo;
+class MachineRegisterInfo;
 class TargetInstrInfo;
+class VirtRegMap;
+class VNInfo;
 
+/// SplitAnalysis - Analyze a LiveInterval, looking for live range splitting
+/// opportunities.
 class SplitAnalysis {
   const MachineFunction &mf_;
   const LiveIntervals &lis_;
@@ -62,6 +65,8 @@ public:
   /// analyze - set curli to the specified interval, and analyze how it may be
   /// split.
   void analyze(const LiveInterval *li);
+
+  const LiveInterval *getCurLI() { return curli_; }
 
   /// clear - clear all data structures so SplitAnalysis is ready to analyze a
   /// new interval.
@@ -113,8 +118,102 @@ public:
   const MachineLoop *getBestSplitLoop();
 };
 
-/// splitAroundLoop - Try to split curli into a separate live interval inside
-/// the loop. Retun true on success.
-bool splitAroundLoop(SplitAnalysis&, const MachineLoop*);
+/// SplitEditor - Edit machine code and LiveIntervals for live range
+/// splitting.
+///
+/// - Create a SplitEditor from a SplitAnalysis. This will create a new
+///   LiveInterval, dupli, that is identical to SA.curli.
+/// - Start a new live interval with openIntv.
+/// - Mark the places where the new interval is entered using enterIntv*
+/// - Mark the ranges where the new interval is used with useIntv* 
+/// - Mark the places where the interval is exited with exitIntv*.
+/// - Finish the current interval with closeIntv and repeat from 2.
+/// - Rewrite instructions with rewrite().
+///
+class SplitEditor {
+  SplitAnalysis &sa_;
+  LiveIntervals &lis_;
+  VirtRegMap &vrm_;
+  MachineRegisterInfo &mri_;
+  const TargetInstrInfo &tii_;
+
+  /// dupli_ - Created as a copy of sa_.curli_, ranges are carved out as new
+  /// intervals get added through openIntv / closeIntv.
+  LiveInterval *dupli_;
+
+  /// Currently open LiveInterval.
+  LiveInterval *openli_;
+
+  /// createInterval - Create a new virtual register and LiveInterval with same
+  /// register class and spill slot as curli.
+  LiveInterval *createInterval();
+
+	/// valueMap_ - Map values in dupli to values in openIntv. These are direct 1-1
+	/// mappings, and do not include values created by inserted copies.
+	DenseMap<VNInfo*,VNInfo*> valueMap_;
+
+	/// mapValue - Return the openIntv value that corresponds to the given dupli
+	/// value.
+	VNInfo *mapValue(VNInfo *dupliVNI);
+
+  /// A dupli value is live through openIntv.
+  bool liveThrough_;
+
+  /// All the new intervals created for this split are added to intervals_.
+  std::vector<LiveInterval*> &intervals_;
+
+  /// The index into intervals_ of the first interval we added. There may be
+  /// others from before we got it.
+  unsigned firstInterval;
+
+  /// Insert a COPY instruction curli -> li. Allocate a new value from li
+  /// defined by the COPY
+  VNInfo *insertCopy(LiveInterval &LI,
+                     MachineBasicBlock &MBB,
+                     MachineBasicBlock::iterator I);
+
+public:
+  /// Create a new SplitEditor for editing the LiveInterval analyzed by SA.
+  /// Newly created intervals will be appended to newIntervals.
+  SplitEditor(SplitAnalysis &SA, LiveIntervals&, VirtRegMap&,
+              std::vector<LiveInterval*> &newIntervals);
+
+	/// getAnalysis - Get the corresponding analysis.
+	SplitAnalysis &getAnalysis() { return sa_; }
+
+  /// Create a new virtual register and live interval.
+  void openIntv();
+
+  /// enterIntvAtEnd - Enter openli at the end of MBB.
+  /// PhiMBB is a successor inside openli where a PHI value is created.
+  /// Currently, all entries must share the same PhiMBB.
+  void enterIntvAtEnd(MachineBasicBlock &MBB, MachineBasicBlock &PhiMBB);
+
+  /// useIntv - indicate that all instructions in MBB should use openli.
+  void useIntv(const MachineBasicBlock &MBB);
+
+  /// useIntv - indicate that all instructions in range should use openli.
+  void useIntv(SlotIndex Start, SlotIndex End);
+
+  /// leaveIntvAtTop - Leave the interval at the top of MBB.
+  /// Currently, only one value can leave the interval.
+  void leaveIntvAtTop(MachineBasicBlock &MBB);
+
+  /// closeIntv - Indicate that we are done editing the currently open
+  /// LiveInterval, and ranges can be trimmed.
+  void closeIntv();
+
+  /// rewrite - after all the new live ranges have been created, rewrite
+  /// instructions using curli to use the new intervals.
+  void rewrite();
+
+  // ===--- High level methods ---===
+
+  /// splitAroundLoop - Split curli into a separate live interval inside
+  /// the loop.
+  void splitAroundLoop(const MachineLoop*);
+
+};
+
 
 }

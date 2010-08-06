@@ -44,6 +44,7 @@ namespace llvm {
   class Loop;
   class LoopInfo;
   class Operator;
+  class SCEVUnknown;
 
   /// SCEV - This class represents an analyzed expression in the program.  These
   /// are opaque objects that the client is not allowed to do much with
@@ -175,6 +176,7 @@ namespace llvm {
 
     friend class SCEVCallbackVH;
     friend class SCEVExpander;
+    friend class SCEVUnknown;
 
     /// F - The function we are analyzing.
     ///
@@ -659,6 +661,11 @@ namespace llvm {
   private:
     FoldingSet<SCEV> UniqueSCEVs;
     BumpPtrAllocator SCEVAllocator;
+
+    /// FirstUnknown - The head of a linked list of all SCEVUnknown
+    /// values that have been allocated. This is used by releaseMemory
+    /// to locate them all and call their destructors.
+    SCEVUnknown *FirstUnknown;
   };
 }
 

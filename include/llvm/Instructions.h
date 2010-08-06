@@ -941,30 +941,15 @@ public:
                                unsigned(isTC));
   }
 
-  /// @deprecated these "define hacks" will go away soon
-  /// @brief coerce out-of-tree code to abandon the low-level interfaces
-  /// @detail see below comments and update your code to high-level interfaces
-  ///    - getOperand(0)  --->  getCalledValue(), or possibly getCalledFunction
-  ///    - setOperand(0, V)  --->  setCalledFunction(V)
-  ///
-  ///    in LLVM v2.8-only code
-  ///    - getOperand(N+1)  --->  getArgOperand(N)
-  ///    - setOperand(N+1, V)  --->  setArgOperand(N, V)
-  ///    - getNumOperands()  --->  getNumArgOperands()+1  // note the "+1"!
-  ///
-  ///    in backward compatible code please consult llvm/Support/CallSite.h,
-  ///    you should create a callsite using the CallInst pointer and call its
-  ///    methods
-  ///
-# define public private
-# define protected private
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
-# undef public
-# undef protected
-public:
 
+  /// getNumArgOperands - Return the number of call arguments.
+  ///
   unsigned getNumArgOperands() const { return getNumOperands() - 1; }
+
+  /// getArgOperand/setArgOperand - Return/set the i-th call argument.
+  ///
   Value *getArgOperand(unsigned i) const { return getOperand(i); }
   void setArgOperand(unsigned i, Value *v) { setOperand(i, v); }
 
@@ -2460,7 +2445,12 @@ public:
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
+  /// getNumArgOperands - Return the number of invoke arguments.
+  ///
   unsigned getNumArgOperands() const { return getNumOperands() - 3; }
+
+  /// getArgOperand/setArgOperand - Return/set the i-th invoke argument.
+  ///
   Value *getArgOperand(unsigned i) const { return getOperand(i); }
   void setArgOperand(unsigned i, Value *v) { setOperand(i, v); }
 

@@ -33,7 +33,7 @@ using namespace llvm;
 User::op_iterator CallSite::getCallee() const {
   Instruction *II(getInstruction());
   return isCall()
-    ? cast</*FIXME: CallInst*/User>(II)->op_end() - 1 // Skip Callee
+    ? cast<CallInst>(II)->op_end() - 1 // Skip Callee
     : cast<InvokeInst>(II)->op_end() - 3; // Skip BB, BB, Callee
 }
 
@@ -891,6 +891,8 @@ AllocaInst::~AllocaInst() {
 
 void AllocaInst::setAlignment(unsigned Align) {
   assert((Align & (Align-1)) == 0 && "Alignment is not a power of 2!");
+  assert(Align <= MaximumAlignment &&
+         "Alignment is greater than MaximumAlignment!");
   setInstructionSubclassData(Log2_32(Align) + 1);
   assert(getAlignment() == Align && "Alignment representation error!");
 }
@@ -1026,8 +1028,11 @@ LoadInst::LoadInst(Value *Ptr, const char *Name, bool isVolatile,
 
 void LoadInst::setAlignment(unsigned Align) {
   assert((Align & (Align-1)) == 0 && "Alignment is not a power of 2!");
+  assert(Align <= MaximumAlignment &&
+         "Alignment is greater than MaximumAlignment!");
   setInstructionSubclassData((getSubclassDataFromInstruction() & 1) |
                              ((Log2_32(Align)+1)<<1));
+  assert(getAlignment() == Align && "Alignment representation error!");
 }
 
 //===----------------------------------------------------------------------===//
@@ -1122,8 +1127,11 @@ StoreInst::StoreInst(Value *val, Value *addr, bool isVolatile,
 
 void StoreInst::setAlignment(unsigned Align) {
   assert((Align & (Align-1)) == 0 && "Alignment is not a power of 2!");
+  assert(Align <= MaximumAlignment &&
+         "Alignment is greater than MaximumAlignment!");
   setInstructionSubclassData((getSubclassDataFromInstruction() & 1) |
                              ((Log2_32(Align)+1) << 1));
+  assert(getAlignment() == Align && "Alignment representation error!");
 }
 
 //===----------------------------------------------------------------------===//

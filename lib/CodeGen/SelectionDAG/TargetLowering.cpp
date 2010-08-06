@@ -1367,9 +1367,32 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
         }
       }      
       
-      if (SimplifyDemandedBits(Op.getOperand(0), NewMask.lshr(ShAmt),
+      if (SimplifyDemandedBits(InOp, NewMask.lshr(ShAmt),
                                KnownZero, KnownOne, TLO, Depth+1))
         return true;
+
+      // Convert (shl (anyext x, c)) to (anyext (shl x, c)) if the high bits
+      // are not demanded. This will likely allow the anyext to be folded away.
+      if (InOp.getNode()->getOpcode() == ISD::ANY_EXTEND) {
+        SDValue InnerOp = InOp.getNode()->getOperand(0);
+        EVT InnerVT = InnerOp.getValueType();
+        if ((APInt::getHighBitsSet(BitWidth,
+                                   BitWidth - InnerVT.getSizeInBits()) &
+               DemandedMask) == 0 &&
+            isTypeDesirableForOp(ISD::SHL, InnerVT)) {
+          EVT ShTy = getShiftAmountTy();
+          if (!APInt(BitWidth, ShAmt).isIntN(ShTy.getSizeInBits()))
+            ShTy = InnerVT;
+          SDValue NarrowShl =
+            TLO.DAG.getNode(ISD::SHL, dl, InnerVT, InnerOp,
+                            TLO.DAG.getConstant(ShAmt, ShTy));
+          return
+            TLO.CombineTo(Op,
+                          TLO.DAG.getNode(ISD::ANY_EXTEND, dl, Op.getValueType(),
+                                          NarrowShl));
+        }
+      }
+
       KnownZero <<= SA->getZExtValue();
       KnownOne  <<= SA->getZExtValue();
       // low bits known zero.
@@ -1474,11 +1497,10 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
     // present in the input.
     APInt NewBits =
       APInt::getHighBitsSet(BitWidth,
-                            BitWidth - EVT.getScalarType().getSizeInBits()) &
-      NewMask;
+                            BitWidth - EVT.getScalarType().getSizeInBits());
     
     // If none of the extended bits are demanded, eliminate the sextinreg.
-    if (NewBits == 0)
+    if ((NewBits & NewMask) == 0)
       return TLO.CombineTo(Op, Op.getOperand(0));
 
     APInt InSignBit = APInt::getSignBit(EVT.getScalarType().getSizeInBits());
@@ -1945,12 +1967,9 @@ TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
       EVT ExtDstTy = N0.getValueType();
       unsigned ExtDstTyBits = ExtDstTy.getSizeInBits();
 
-      // If the extended part has any inconsistent bits, it cannot ever
-      // compare equal.  In other words, they have to be all ones or all
-      // zeros.
-      APInt ExtBits =
-        APInt::getHighBitsSet(ExtDstTyBits, ExtDstTyBits - ExtSrcTyBits);
-      if ((C1 & ExtBits) != 0 && (C1 & ExtBits) != ExtBits)
+      // If the constant doesn't fit into the number of bits for the source of
+      // the sign extension, it is impossible for both sides to be equal.
+      if (C1.getMinSignedBits() > ExtSrcTyBits)
         return DAG.getConstant(Cond == ISD::SETNE, VT);
       
       SDValue ZextOp;

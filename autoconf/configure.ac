@@ -101,7 +101,6 @@ for i in `ls ${srcdir}/projects`
 do
   if test -d ${srcdir}/projects/${i} ; then
     case ${i} in
-      CVS) ;;
       sample)       AC_CONFIG_SUBDIRS([projects/sample])    ;;
       privbracket)  AC_CONFIG_SUBDIRS([projects/privbracket]) ;;
       llvm-stacker) AC_CONFIG_SUBDIRS([projects/llvm-stacker]) ;;
@@ -299,7 +298,7 @@ dnl Set the LINKALL and NOLINKALL Makefile variables based on the platform
 AC_SUBST(LINKALL,$llvm_cv_link_all_option)
 AC_SUBST(NOLINKALL,$llvm_cv_no_link_all_option)
 
-dnl Set the "LLVM_ON_*" variables based on llvm_cvs_platform_type
+dnl Set the "LLVM_ON_*" variables based on llvm_cv_platform_type
 dnl This is used by lib/System to determine the basic kind of implementation
 dnl to use.
 case $llvm_cv_platform_type in
@@ -369,13 +368,13 @@ else
   AC_SUBST(LLVM_CROSS_COMPILING, [0])
 fi
 
-dnl Check to see if there's a "CVS" (or .svn or .git) directory indicating
-dnl that this build is being done from a checkout. This sets up several
-dnl defaults for the command line switches. When we build with a CVS directory,
+dnl Check to see if there's a .svn or .git directory indicating that this
+dnl build is being done from a checkout. This sets up several defaults for
+dnl the command line switches. When we build with a checkout directory,
 dnl we get a debug with assertions turned on. Without, we assume a source
 dnl release and we get an optimized build without assertions.
 dnl See --enable-optimized and --enable-assertions below
-if test -d "CVS" -o -d "${srcdir}/CVS" -o -d ".svn" -o -d "${srcdir}/.svn" -o -d ".git" -o -d "${srcdir}/.git"; then
+if test -d ".svn" -o -d "${srcdir}/.svn" -o -d ".git" -o -d "${srcdir}/.git"; then
   cvsbuild="yes"
   optimize="no"
   AC_SUBST(CVSBUILD,[[CVSBUILD=1]])
@@ -599,6 +598,8 @@ AC_SUBST(TARGETS_TO_BUILD,$TARGETS_TO_BUILD)
 for a_target in $TARGETS_TO_BUILD; do
   if test "$a_target" = "$LLVM_NATIVE_ARCH"; then
     LLVM_NATIVE_ARCHTARGET="${LLVM_NATIVE_ARCH}Target"
+    AC_DEFINE_UNQUOTED(LLVM_NATIVE_ARCHNAME,$LLVM_NATIVE_ARCH,
+      [Short LLVM architecture name for the native architecture, if available])
     AC_DEFINE_UNQUOTED(LLVM_NATIVE_ARCH,$LLVM_NATIVE_ARCHTARGET,
       [LLVM architecture name for the native architecture, if available])
   fi
@@ -1011,6 +1012,13 @@ fi
 
 dnl Find the install program
 AC_PROG_INSTALL
+dnl Prepend src dir to install path dir if it's a relative path
+dnl This is a hack for installs that take place in something other
+dnl than the top level.
+case "$INSTALL" in
+ [[\\/$]]* | ?:[[\\/]]* ) ;;
+ *)  INSTALL="\\\$(TOPSRCDIR)/$INSTALL" ;;
+esac
 
 dnl Checks for documentation and testing tools that we can do without. If these
 dnl are not found then they are set to "true" which always succeeds but does
@@ -1348,6 +1356,9 @@ fi
 
 dnl atomic builtins are required for threading support.
 AC_MSG_CHECKING(for GCC atomic builtins)
+dnl Since we'll be using these atomic builtins in C++ files we should test
+dnl the C++ compiler.
+AC_LANG_PUSH([C++])
 AC_LINK_IFELSE(
   AC_LANG_SOURCE(
     [[int main() {
@@ -1359,6 +1370,7 @@ AC_LINK_IFELSE(
         return 0;
       }
     ]]),
+  AC_LANG_POP([C++])
   AC_MSG_RESULT(yes)
   AC_DEFINE(LLVM_MULTITHREADED, 1, Build multithreading support into LLVM),
   AC_MSG_RESULT(no)

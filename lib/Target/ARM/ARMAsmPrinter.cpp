@@ -47,6 +47,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cctype>
@@ -204,6 +205,18 @@ namespace {
     virtual void EmitFunctionEntryLabel();
     void EmitStartOfAsmFile(Module &M);
     void EmitEndOfAsmFile(Module &M);
+
+    MachineLocation getDebugValueLocation(const MachineInstr *MI) const {
+      MachineLocation Location;
+      assert (MI->getNumOperands() == 4 && "Invalid no. of machine operands!");
+      // Frame address.  Currently handles register +- offset only.
+      if (MI->getOperand(0).isReg() && MI->getOperand(1).isImm())
+        Location.set(MI->getOperand(0).getReg(), MI->getOperand(1).getImm());
+      else {
+        DEBUG(dbgs() << "DBG_VALUE instruction ignored! " << *MI << "\n");
+      }
+      return Location;
+    }
 
     virtual unsigned getISAEncoding() {
       // ARM/Darwin adds ISA to the DWARF info for each function.
@@ -455,15 +468,13 @@ void ARMAsmPrinter::printSORegOperand(const MachineInstr *MI, int Op,
   O << getRegisterName(MO1.getReg());
 
   // Print the shift opc.
-  O << ", "
-    << ARM_AM::getShiftOpcStr(ARM_AM::getSORegShOp(MO3.getImm()))
-    << " ";
-
+  ARM_AM::ShiftOpc ShOpc = ARM_AM::getSORegShOp(MO3.getImm());
+  O << ", " << ARM_AM::getShiftOpcStr(ShOpc);
   if (MO2.getReg()) {
-    O << getRegisterName(MO2.getReg());
+    O << ' ' << getRegisterName(MO2.getReg());
     assert(ARM_AM::getSORegOffset(MO3.getImm()) == 0);
-  } else {
-    O << "#" << ARM_AM::getSORegOffset(MO3.getImm());
+  } else if (ShOpc != ARM_AM::rrx) {
+    O << " #" << ARM_AM::getSORegOffset(MO3.getImm());
   }
 }
 
@@ -754,12 +765,11 @@ void ARMAsmPrinter::printT2SOOperand(const MachineInstr *MI, int OpNum,
   O << getRegisterName(Reg);
 
   // Print the shift opc.
-  O << ", "
-    << ARM_AM::getShiftOpcStr(ARM_AM::getSORegShOp(MO2.getImm()))
-    << " ";
-
   assert(MO2.isImm() && "Not a valid t2_so_reg value!");
-  O << "#" << ARM_AM::getSORegOffset(MO2.getImm());
+  ARM_AM::ShiftOpc ShOpc = ARM_AM::getSORegShOp(MO2.getImm());
+  O << ", " << ARM_AM::getShiftOpcStr(ShOpc);
+  if (ShOpc != ARM_AM::rrx)
+    O << " #" << ARM_AM::getSORegOffset(MO2.getImm());
 }
 
 void ARMAsmPrinter::printT2AddrModeImm12Operand(const MachineInstr *MI,
@@ -938,7 +948,7 @@ void ARMAsmPrinter::printJTBlockOperand(const MachineInstr *MI, int OpNum,
   MCSymbol *JTISymbol = GetARMJTIPICJumpTableLabel2(JTI, MO2.getImm());
   // Can't use EmitLabel until instprinter happens, label comes out in the wrong
   // order.
-  O << *JTISymbol << ":\n";
+  O << "\n" << *JTISymbol << ":\n";
 
   const char *JTEntryDirective = MAI->getData32bitsDirective();
 
@@ -980,7 +990,7 @@ void ARMAsmPrinter::printJT2BlockOperand(const MachineInstr *MI, int OpNum,
   
   // Can't use EmitLabel until instprinter happens, label comes out in the wrong
   // order.
-  O << *JTISymbol << ":\n";
+  O << "\n" << *JTISymbol << ":\n";
 
   const MachineJumpTableInfo *MJTI = MF->getJumpTableInfo();
   const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
@@ -1165,6 +1175,12 @@ void ARMAsmPrinter::EmitStartOfAsmFile(Module &M) {
                                      16, SectionKind::getText());
         OutStreamer.SwitchSection(sect);
       }
+      const MCSection *StaticInitSect =
+        OutContext.getMachOSection("__TEXT", "__StaticInit",
+                                   MCSectionMachO::S_REGULAR |
+                                   MCSectionMachO::S_ATTR_PURE_INSTRUCTIONS,
+                                   SectionKind::getText());
+      OutStreamer.SwitchSection(StaticInitSect);
     }
   }
 

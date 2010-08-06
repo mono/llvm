@@ -404,7 +404,6 @@ void MachineFunction::viewCFGOnly() const
 /// create a corresponding virtual register for it.
 unsigned MachineFunction::addLiveIn(unsigned PReg,
                                     const TargetRegisterClass *RC) {
-  assert(RC->contains(PReg) && "Not the correct regclass!");
   MachineRegisterInfo &MRI = getRegInfo();
   unsigned VReg = MRI.getLiveInVirtReg(PReg);
   if (VReg) {
@@ -454,7 +453,7 @@ int MachineFrameInfo::CreateFixedObject(uint64_t Size, int64_t SPOffset,
   unsigned StackAlign = TFI.getStackAlignment();
   unsigned Align = MinAlign(SPOffset, StackAlign);
   Objects.insert(Objects.begin(), StackObject(Size, Align, SPOffset, Immutable,
-                                              /*isSS*/false));
+                                              /*isSS*/false, false));
   return -++NumFixedObjects;
 }
 

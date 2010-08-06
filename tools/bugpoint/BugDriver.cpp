@@ -172,7 +172,7 @@ bool BugDriver::run(std::string &ErrMsg) {
   // miscompilation.
   if (!PassesToRun.empty()) {
     outs() << "Running selected passes on program to test for crash: ";
-    if (runPasses(PassesToRun))
+    if (runPasses(Program, PassesToRun))
       return debugOptimizerCrash();
   }
 
@@ -211,7 +211,7 @@ bool BugDriver::run(std::string &ErrMsg) {
   // matches, then we assume there is a miscompilation bug and try to 
   // diagnose it.
   outs() << "*** Checking the code generator...\n";
-  bool Diff = diffProgram("", "", false, &Error);
+  bool Diff = diffProgram(Program, "", "", false, &Error);
   if (!Error.empty()) {
     errs() << Error;
     return debugCodeGeneratorCrash(ErrMsg);

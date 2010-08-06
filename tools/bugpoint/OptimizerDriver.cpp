@@ -51,13 +51,13 @@ namespace {
 /// file.  If an error occurs, true is returned.
 ///
 bool BugDriver::writeProgramToFile(const std::string &Filename,
-                                   Module *M) const {
+                                   const Module *M) const {
   std::string ErrInfo;
   raw_fd_ostream Out(Filename.c_str(), ErrInfo,
                      raw_fd_ostream::F_Binary);
   if (!ErrInfo.empty()) return true;
   
-  WriteBitcodeToFile(M ? M : Program, Out);
+  WriteBitcodeToFile(M, Out);
   return false;
 }
 
@@ -65,12 +65,14 @@ bool BugDriver::writeProgramToFile(const std::string &Filename,
 /// EmitProgressBitcode - This function is used to output the current Program
 /// to a file named "bugpoint-ID.bc".
 ///
-void BugDriver::EmitProgressBitcode(const std::string &ID, bool NoFlyer) {
+void BugDriver::EmitProgressBitcode(const Module *M,
+                                    const std::string &ID,
+                                    bool NoFlyer)  const {
   // Output the input to the current pass to a bitcode file, emit a message
   // telling the user how to reproduce it: opt -foo blah.bc
   //
   std::string Filename = OutputPrefix + "-" + ID + ".bc";
-  if (writeProgramToFile(Filename)) {
+  if (writeProgramToFile(Filename, M)) {
     errs() <<  "Error opening file '" << Filename << "' for writing!\n";
     return;
   }
@@ -124,7 +126,8 @@ cl::opt<bool> SilencePasses("silence-passes", cl::desc("Suppress output of runni
 /// outs() a single line message indicating whether compilation was successful
 /// or failed.
 ///
-bool BugDriver::runPasses(const std::vector<const PassInfo*> &Passes,
+bool BugDriver::runPasses(Module *Program,
+                          const std::vector<const PassInfo*> &Passes,
                           std::string &OutputFilename, bool DeleteOutput,
                           bool Quiet, unsigned NumExtraArgs,
                           const char * const *ExtraArgs) const {
@@ -238,23 +241,18 @@ Module *BugDriver::runPassesOn(Module *M,
                                const std::vector<const PassInfo*> &Passes,
                                bool AutoDebugCrashes, unsigned NumExtraArgs,
                                const char * const *ExtraArgs) {
-  Module *OldProgram = swapProgramIn(M);
   std::string BitcodeResult;
-  if (runPasses(Passes, BitcodeResult, false/*delete*/, true/*quiet*/,
+  if (runPasses(M, Passes, BitcodeResult, false/*delete*/, true/*quiet*/,
                 NumExtraArgs, ExtraArgs)) {
     if (AutoDebugCrashes) {
       errs() << " Error running this sequence of passes"
              << " on the input program!\n";
-      delete OldProgram;
-      EmitProgressBitcode("pass-error",  false);
+      delete swapProgramIn(M);
+      EmitProgressBitcode(M, "pass-error",  false);
       exit(debugOptimizerCrash());
     }
-    swapProgramIn(OldProgram);
     return 0;
   }
-
-  // Restore the current program.
-  swapProgramIn(OldProgram);
 
   Module *Ret = ParseInputFile(BitcodeResult, Context);
   if (Ret == 0) {

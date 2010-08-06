@@ -307,6 +307,10 @@ public:
     return const_cast<Value*>(this)->DoPHITranslation(CurBB, PredBB);
   }
   
+  /// MaximumAlignment - This is the greatest alignment value supported by
+  /// load, store, and alloca instructions, and global values.
+  static const unsigned MaximumAlignment = 1u << 29;
+  
 protected:
   unsigned short getSubclassDataFromValue() const { return SubclassData; }
   void setValueSubclassData(unsigned short D) { SubclassData = D; }

@@ -373,7 +373,7 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
       // If the call is readnone, ignore it, otherwise bail out.  We don't even
       // allow readonly here because we don't want something like:
       // A[1] = 2; strlen(A); A[2] = 2; -> memcpy(A, ...); strlen(A).
-      if (AA.getModRefBehavior(CallSite::get(BI)) ==
+      if (AA.getModRefBehavior(CallSite(BI)) ==
             AliasAnalysis::DoesNotAccessMemory)
         continue;
       
@@ -508,7 +508,7 @@ bool MemCpyOpt::performCallSlotOptzn(MemCpyInst *cpy, CallInst *C) {
   // because we'll need to do type comparisons based on the underlying type.
   Value *cpyDest = cpy->getDest();
   Value *cpySrc = cpy->getSource();
-  CallSite CS = CallSite::get(C);
+  CallSite CS(C);
 
   // We need to be able to reason about the size of the memcpy, so we require
   // that it be a constant.
@@ -636,10 +636,11 @@ bool MemCpyOpt::performCallSlotOptzn(MemCpyInst *cpy, CallInst *C) {
   return true;
 }
 
-/// processMemCpy - perform simplication of memcpy's.  If we have memcpy A which
-/// copies X to Y, and memcpy B which copies Y to Z, then we can rewrite B to be
-/// a memcpy from X to Z (or potentially a memmove, depending on circumstances).
-///  This allows later passes to remove the first memcpy altogether.
+/// processMemCpy - perform simplification of memcpy's.  If we have memcpy A
+/// which copies X to Y, and memcpy B which copies Y to Z, then we can rewrite
+/// B to be a memcpy from X to Z (or potentially a memmove, depending on
+/// circumstances). This allows later passes to remove the first memcpy
+/// altogether.
 bool MemCpyOpt::processMemCpy(MemCpyInst *M) {
   MemoryDependenceAnalysis &MD = getAnalysis<MemoryDependenceAnalysis>();
 

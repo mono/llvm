@@ -10,10 +10,10 @@
 LEVEL = ..
 DIRS  =
 
-#
-# Make Dejagnu the default for testing
-#
 all:: check-local
+
+# 'lit' is the default test runner.
+check-local:: check-local-lit
 
 # Include other test rules
 include Makefile.tests
@@ -84,18 +84,18 @@ else # !SunOS
 ifeq ($(HOST_OS),AuroraUX)
 ULIMIT=ulimit -t 600 ; ulimit -d 512000 ; ulimit -v 512000 ;
 else # !AuroraUX
-# Fedora 13 x86-64 python fails with -v 51200
-ULIMIT=ulimit -t 600 ; ulimit -d 512000 ; ulimit -m 512000 ; ulimit -v 768000 ;
+# Fedora 13 x86-64 python fails with -v 76800
+ULIMIT=ulimit -t 600 ; ulimit -d 512000 ; ulimit -m 512000 ; ulimit -v 1024000 ;
 endif # AuroraUX
 endif # SunOS
 
 ifneq ($(RUNTEST),)
-check-local:: site.exp
+check-local-dg:: site.exp
 	( $(ULIMIT) \
 	  PATH="$(LLVMToolDir):$(LLVM_SRC_ROOT)/test/Scripts:$(LLVMGCCDIR)/bin:$(PATH)" \
 	  $(RUNTEST) $(RUNTESTFLAGS) )
 else
-check-local:: site.exp
+check-local-dg:: site.exp
 	@echo "*** dejagnu not found.  Make sure 'runtest' is in your PATH, then reconfigure LLVM."
 endif
 
@@ -106,26 +106,6 @@ check-local-lit:: lit.site.cfg Unit/lit.site.cfg
 check-local-all:: lit.site.cfg Unit/lit.site.cfg extra-lit-site-cfgs
 	( $(ULIMIT) \
 	  $(LLVM_SRC_ROOT)/utils/lit/lit.py $(LIT_ARGS) $(LIT_ALL_TESTSUITES) )
-
-ifdef TESTONE
-CLEANED_TESTONE := $(patsubst %/,%,$(TESTONE))
-CLEANED_TESTONE := $(patsubst test/%,%,$(CLEANED_TESTONE))
-SUBDIR := $(shell dirname $(CLEANED_TESTONE))
-TESTPATH := $(LLVM_SRC_ROOT)/test/$(CLEANED_TESTONE)
-check-one: site.exp $(TCLSH)
-	$(Verb)( echo "source $(LLVM_OBJ_ROOT)/test/site.exp" ; \
-	  echo "set subdir $(SUBDIR)" ; \
-	  echo "proc pass  { msg } { puts \"PASS: \$$msg\" } "; \
-	  echo "proc fail  { msg } { puts \"FAIL: \$$msg\" }" ; \
-	  echo "proc xfail { msg } { puts \"XFAIL: \$$msg\" }" ; \
-	  echo "proc xpass { msg } { puts \"XPASS: \$$msg\" }" ; \
-	  echo "proc verbose args { }" ; \
-	  echo "source $(LLVM_SRC_ROOT)/test/lib/llvm.exp" ; \
-	  echo "RunLLVMTests $(TESTPATH)" ) | \
-	( $(ULIMIT) \
-	  PATH="$(LLVMToolDir):$(LLVM_SRC_ROOT)/test/Scripts:$(PATH)" \
-	  $(TCLSH) )
-endif
 
 clean::
 	$(RM) -rf `find $(LLVM_OBJ_ROOT)/test -name Output -type d -print`

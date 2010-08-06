@@ -460,7 +460,7 @@ public:
 /// blocks each of which is a successor of the specified BB and has no other
 /// predecessor.
 static void findSinglePredSuccessor(MachineBasicBlock *MBB,
-                                   SmallVectorImpl<MachineBasicBlock *> &Succs) {
+                                   SmallVectorImpl<MachineBasicBlock *> &Succs){
   for (MachineBasicBlock::succ_iterator SI = MBB->succ_begin(),
          SE = MBB->succ_end(); SI != SE; ++SI) {
     MachineBasicBlock *SuccMBB = *SI;
@@ -852,8 +852,8 @@ unsigned ReuseInfo::GetRegForReload(const TargetRegisterClass *RC,
       // Yup, use the reload register that we didn't use before.
       unsigned NewReg = Op.AssignedPhysReg;
       Rejected.insert(PhysReg);
-      return GetRegForReload(RC, NewReg, MF, MI, Spills, MaybeDeadStores, Rejected,
-                             RegKills, KillOps, VRM);
+      return GetRegForReload(RC, NewReg, MF, MI, Spills, MaybeDeadStores,
+                             Rejected, RegKills, KillOps, VRM);
     } else {
       // Otherwise, we might also have a problem if a previously reused
       // value aliases the new register. If so, codegen the previous reload
@@ -1864,7 +1864,7 @@ bool LocalRewriter::InsertSpills(MachineInstr *MI) {
 
 
 /// rewriteMBB - Keep track of which spills are available even after the
-/// register allocator is done with them.  If possible, avid reloading vregs.
+/// register allocator is done with them.  If possible, avoid reloading vregs.
 void
 LocalRewriter::RewriteMBB(LiveIntervals *LIs,
                           AvailableSpills &Spills, BitVector &RegKills,
@@ -1914,7 +1914,6 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
     if (InsertSpills(MII))
       NextMII = llvm::next(MII);
 
-    VirtRegMap::MI2VirtMapTy::const_iterator I, End;
     bool Erased = false;
     bool BackTracked = false;
     MachineInstr &MI = *MII;
@@ -2248,15 +2247,22 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
     // If we have folded references to memory operands, make sure we clear all
     // physical registers that may contain the value of the spilled virtual
     // register
+
+    // Copy the folded virts to a small vector, we may change MI2VirtMap.
+    SmallVector<std::pair<unsigned, VirtRegMap::ModRef>, 4> FoldedVirts;
+    // C++0x FTW!
+    for (std::pair<VirtRegMap::MI2VirtMapTy::const_iterator,
+                   VirtRegMap::MI2VirtMapTy::const_iterator> FVRange =
+           VRM->getFoldedVirts(&MI);
+         FVRange.first != FVRange.second; ++FVRange.first)
+      FoldedVirts.push_back(FVRange.first->second);
+
     SmallSet<int, 2> FoldedSS;
-    for (tie(I, End) = VRM->getFoldedVirts(&MI); I != End; ) {
-      unsigned VirtReg = I->second.first;
-      VirtRegMap::ModRef MR = I->second.second;
+    for (unsigned FVI = 0, FVE = FoldedVirts.size(); FVI != FVE; ++FVI) {
+      unsigned VirtReg = FoldedVirts[FVI].first;
+      VirtRegMap::ModRef MR = FoldedVirts[FVI].second;
       DEBUG(dbgs() << "Folded vreg: " << VirtReg << "  MR: " << MR);
 
-      // MI2VirtMap be can updated which invalidate the iterator.
-      // Increment the iterator first.
-      ++I;
       int SS = VRM->getStackSlot(VirtReg);
       if (SS == VirtRegMap::NO_STACK_SLOT)
         continue;
@@ -2302,7 +2308,7 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
           unsigned PhysReg = Spills.getSpillSlotOrReMatPhysReg(SS);
           SmallVector<MachineInstr*, 4> NewMIs;
           if (PhysReg &&
-              TII->unfoldMemoryOperand(MF, &MI, PhysReg, false, false, NewMIs)) {
+              TII->unfoldMemoryOperand(MF, &MI, PhysReg, false, false, NewMIs)){
             MBB->insert(MII, NewMIs[0]);
             InvalidateKills(MI, TRI, RegKills, KillOps);
             VRM->RemoveMachineInstrFromMaps(&MI);
