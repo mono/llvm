@@ -15,5 +15,5 @@ def int_mono_store : Intrinsic<[],
                               [llvm_anyint_ty,
                                LLVMAnyPointerType<LLVMMatchType<0>>,
 							   llvm_i32_ty, llvm_i1_ty],
-                              [IntrWriteMem, IntrUnwind]>;
+                              [IntrReadWriteArgMem, IntrUnwind]>;
 

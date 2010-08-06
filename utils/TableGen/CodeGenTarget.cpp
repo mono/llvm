@@ -434,7 +434,7 @@ std::vector<CodeGenIntrinsic> llvm::LoadIntrinsics(const RecordKeeper &RC,
 CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
   TheDef = R;
   std::string DefName = R->getName();
-  ModRef = WriteMem;
+  ModRef = ReadWriteMem;
   isOverloaded = false;
   isCommutative = false;
   canThrow = false;
@@ -556,10 +556,8 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
       ModRef = ReadArgMem;
     else if (Property->getName() == "IntrReadMem")
       ModRef = ReadMem;
-    else if (Property->getName() == "IntrWriteArgMem")
-      ModRef = WriteArgMem;
-    else if (Property->getName() == "IntrWriteMem")
-      ModRef = WriteMem;
+    else if (Property->getName() == "IntrReadWriteArgMem")
+      ModRef = ReadWriteArgMem;
     else if (Property->getName() == "Commutative")
       isCommutative = true;
     else if (Property->getName() == "IntrUnwind")
