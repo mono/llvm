@@ -30,55 +30,55 @@ namespace llvm {
   /// createUnreachableBlockEliminationPass - The LLVM code generator does not
   /// work well with unreachable basic blocks (what live ranges make sense for a
   /// block that cannot be reached?).  As such, a code generator should either
-  /// not instruction select unreachable blocks, or it can run this pass as it's
+  /// not instruction select unreachable blocks, or run this pass as its
   /// last LLVM modifying pass to clean up blocks that are not reachable from
   /// the entry block.
   FunctionPass *createUnreachableBlockEliminationPass();
 
   /// MachineFunctionPrinter pass - This pass prints out the machine function to
-  /// the given stream, as a debugging tool.
+  /// the given stream as a debugging tool.
   MachineFunctionPass *
   createMachineFunctionPrinterPass(raw_ostream &OS,
                                    const std::string &Banner ="");
 
   /// MachineLoopInfo pass - This pass is a loop analysis pass.
-  /// 
-  extern const PassInfo *const MachineLoopInfoID;
+  ///
+  extern char &MachineLoopInfoID;
 
   /// MachineDominators pass - This pass is a machine dominators analysis pass.
-  /// 
-  extern const PassInfo *const MachineDominatorsID;
+  ///
+  extern char &MachineDominatorsID;
 
   /// PHIElimination pass - This pass eliminates machine instruction PHI nodes
   /// by inserting copy instructions.  This destroys SSA information, but is the
   /// desired input for some register allocators.  This pass is "required" by
   /// these register allocator like this: AU.addRequiredID(PHIEliminationID);
   ///
-  extern const PassInfo *const PHIEliminationID;
-  
+  extern char &PHIEliminationID;
+
   /// StrongPHIElimination pass - This pass eliminates machine instruction PHI
   /// nodes by inserting copy instructions.  This destroys SSA information, but
   /// is the desired input for some register allocators.  This pass is
   /// "required" by these register allocator like this:
   ///    AU.addRequiredID(PHIEliminationID);
   ///  This pass is still in development
-  extern const PassInfo *const StrongPHIEliminationID;
+  extern char &StrongPHIEliminationID;
 
-  extern const PassInfo *const PreAllocSplittingID;
+  extern char &PreAllocSplittingID;
 
   /// SimpleRegisterCoalescing pass.  Aggressively coalesces every register
   /// copy it can.
   ///
-  extern const PassInfo *const SimpleRegisterCoalescingID;
+  extern char &SimpleRegisterCoalescingID;
 
   /// TwoAddressInstruction pass - This pass reduces two-address instructions to
   /// use two operands. This destroys SSA information but it is desired by
   /// register allocators.
-  extern const PassInfo *const TwoAddressInstructionPassID;
+  extern char &TwoAddressInstructionPassID;
 
   /// UnreachableMachineBlockElimination pass - This pass removes unreachable
   /// machine basic blocks.
-  extern const PassInfo *const UnreachableMachineBlockElimID;
+  extern char &UnreachableMachineBlockElimID;
 
   /// DeadMachineInstructionElim pass - This pass removes dead machine
   /// instructions.
@@ -114,7 +114,7 @@ namespace llvm {
   /// and eliminates abstract frame references.
   ///
   FunctionPass *createPrologEpilogCodeInserter();
-  
+
   /// LowerSubregs Pass - This pass lowers subregs to register-register copies
   /// which yields suboptimal, but correct code if the register allocator
   /// cannot coalesce all subreg operations during allocation.
@@ -145,27 +145,27 @@ namespace llvm {
   /// IntrinsicLowering Pass - Performs target-independent LLVM IR
   /// transformations for highly portable strategies.
   FunctionPass *createGCLoweringPass();
-  
+
   /// MachineCodeAnalysis Pass - Target-independent pass to mark safe points in
   /// machine code. Must be added very late during code generation, just prior
   /// to output, and importantly after all CFG transformations (such as branch
   /// folding).
   FunctionPass *createGCMachineCodeAnalysisPass();
-  
+
   /// Deleter Pass - Releases GC metadata.
-  /// 
+  ///
   FunctionPass *createGCInfoDeleter();
-  
+
   /// Creates a pass to print GC metadata.
-  /// 
+  ///
   FunctionPass *createGCInfoPrinter(raw_ostream &OS);
-  
+
   /// createMachineCSEPass - This pass performs global CSE on machine
   /// instructions.
   FunctionPass *createMachineCSEPass();
 
   /// createMachineLICMPass - This pass performs LICM on machine instructions.
-  /// 
+  ///
   FunctionPass *createMachineLICMPass(bool PreRegAlloc = true);
 
   /// createMachineSinkingPass - This pass performs sinking on machine

@@ -21,6 +21,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Constants.h"
 #include "llvm/Support/ConstantRange.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -650,6 +651,17 @@ ConstantRange::lshr(const ConstantRange &Amount) const {
   APInt min = getUnsignedMax().lshr(Amount.getUnsignedMin());
   APInt max = getUnsignedMin().lshr(Amount.getUnsignedMax());
   return ConstantRange(min, max);
+}
+
+ConstantRange ConstantRange::inverse() const {
+  if (isFullSet()) {
+    return ConstantRange(APInt::getNullValue(Lower.getBitWidth()),
+      APInt::getNullValue(Lower.getBitWidth()));
+  } else if (isEmptySet()) {
+    return ConstantRange(APInt::getAllOnesValue(Lower.getBitWidth()),
+      APInt::getAllOnesValue(Lower.getBitWidth()));
+  }
+  return ConstantRange(Upper, Lower);
 }
 
 /// print - Print out the bounds to a stream...

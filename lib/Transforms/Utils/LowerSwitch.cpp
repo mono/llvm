@@ -34,14 +34,14 @@ namespace {
   class LowerSwitch : public FunctionPass {
   public:
     static char ID; // Pass identification, replacement for typeid
-    LowerSwitch() : FunctionPass(&ID) {} 
+    LowerSwitch() : FunctionPass(ID) {} 
 
     virtual bool runOnFunction(Function &F);
     
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       // This is a cluster of orthogonal Transforms
       AU.addPreserved<UnifyFunctionExitNodes>();
-      AU.addPreservedID(PromoteMemoryToRegisterID);
+      AU.addPreserved("mem2reg");
       AU.addPreservedID(LowerInvokePassID);
     }
 
@@ -85,7 +85,7 @@ static RegisterPass<LowerSwitch>
 X("lowerswitch", "Lower SwitchInst's to branches");
 
 // Publically exposed interface to pass...
-const PassInfo *const llvm::LowerSwitchID = &X;
+char &llvm::LowerSwitchID = LowerSwitch::ID;
 // createLowerSwitchPass - Interface to this file...
 FunctionPass *llvm::createLowerSwitchPass() {
   return new LowerSwitch();

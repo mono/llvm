@@ -26,8 +26,6 @@
 
 namespace llvm {
 
-class TargetMachine;
-
 //===---------------------------------------------------------------------------
 /// PassInfo class - An instance of this class exists for every pass known by
 /// the system, and can be obtained from a live Pass by calling its
@@ -41,7 +39,7 @@ public:
 private:
   const char      *const PassName;     // Nice name for Pass
   const char      *const PassArgument; // Command Line argument to run this pass
-  const intptr_t  PassID;      
+  const void *PassID;      
   const bool IsCFGOnlyPass;            // Pass only looks at the CFG.
   const bool IsAnalysis;               // True if an analysis pass.
   const bool IsAnalysisGroup;          // True if an analysis group.
@@ -52,9 +50,8 @@ private:
 public:
   /// PassInfo ctor - Do not call this directly, this should only be invoked
   /// through RegisterPass.
-  PassInfo(const char *name, const char *arg, intptr_t pi,
-           NormalCtor_t normal = 0,
-           bool isCFGOnly = false, bool is_analysis = false)
+  PassInfo(const char *name, const char *arg, const void *pi,
+           NormalCtor_t normal, bool isCFGOnly, bool is_analysis)
     : PassName(name), PassArgument(arg), PassID(pi), 
       IsCFGOnlyPass(isCFGOnly), 
       IsAnalysis(is_analysis), IsAnalysisGroup(false), NormalCtor(normal) {
@@ -63,7 +60,7 @@ public:
   /// PassInfo ctor - Do not call this directly, this should only be invoked
   /// through RegisterPass. This version is for use by analysis groups; it
   /// does not auto-register the pass.
-  PassInfo(const char *name, intptr_t pi)
+  PassInfo(const char *name, const void *pi)
     : PassName(name), PassArgument(""), PassID(pi), 
       IsCFGOnlyPass(false), 
       IsAnalysis(false), IsAnalysisGroup(true), NormalCtor(0) {
@@ -81,11 +78,11 @@ public:
 
   /// getTypeInfo - Return the id object for the pass...
   /// TODO : Rename
-  intptr_t getTypeInfo() const { return PassID; }
+  const void *getTypeInfo() const { return PassID; }
 
   /// Return true if this PassID implements the specified ID pointer.
-  bool isPassID(void *IDPtr) const {
-    return PassID == (intptr_t)IDPtr;
+  bool isPassID(const void *IDPtr) const {
+    return PassID == IDPtr;
   }
   
   /// isAnalysisGroup - Return true if this is an analysis group, not a normal
@@ -161,7 +158,7 @@ struct RegisterPass : public PassInfo {
   // Register Pass using default constructor...
   RegisterPass(const char *PassArg, const char *Name, bool CFGOnly = false,
                bool is_analysis = false)
-    : PassInfo(Name, PassArg, intptr_t(&passName::ID),
+    : PassInfo(Name, PassArg, &passName::ID,
                PassInfo::NormalCtor_t(callDefaultCtor<passName>),
                CFGOnly, is_analysis) {
     
@@ -191,8 +188,8 @@ struct RegisterPass : public PassInfo {
 class RegisterAGBase : public PassInfo {
 protected:
   RegisterAGBase(const char *Name,
-                 intptr_t InterfaceID,
-                 intptr_t PassID = 0,
+                 const void *InterfaceID,
+                 const void *PassID = 0,
                  bool isDefault = false);
 };
 
@@ -200,12 +197,12 @@ template<typename Interface, bool Default = false>
 struct RegisterAnalysisGroup : public RegisterAGBase {
   explicit RegisterAnalysisGroup(PassInfo &RPB)
     : RegisterAGBase(RPB.getPassName(),
-                     intptr_t(&Interface::ID), RPB.getTypeInfo(),
+                     &Interface::ID, RPB.getTypeInfo(),
                      Default) {
   }
 
   explicit RegisterAnalysisGroup(const char *Name)
-    : RegisterAGBase(Name, intptr_t(&Interface::ID)) {
+    : RegisterAGBase(Name, &Interface::ID) {
   }
 };
 

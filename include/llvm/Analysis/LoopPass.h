@@ -19,6 +19,7 @@
 #include "llvm/Pass.h"
 #include "llvm/PassManagers.h"
 #include "llvm/Function.h"
+#include <deque>
 
 namespace llvm {
 
@@ -28,8 +29,7 @@ class PMStack;
 
 class LoopPass : public Pass {
 public:
-  explicit LoopPass(intptr_t pid) : Pass(PT_Loop, pid) {}
-  explicit LoopPass(void *pid) : Pass(PT_Loop, pid) {}
+  explicit LoopPass(char &pid) : Pass(PT_Loop, pid) {}
 
   /// getPrinterPass - Get a pass to print the function corresponding
   /// to a Loop.
@@ -58,7 +58,7 @@ public:
 
   /// Assign pass manager to manage this pass
   virtual void assignPassManager(PMStack &PMS,
-                                 PassManagerType PMT = PMT_LoopPassManager);
+                                 PassManagerType PMT);
 
   ///  Return what kind of Pass Manager can manage this pass.
   virtual PassManagerType getPotentialPassManagerType() const {

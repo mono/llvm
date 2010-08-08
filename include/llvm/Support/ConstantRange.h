@@ -139,12 +139,6 @@ public:
   ///
   APInt getSignedMin() const;
 
-  /// operator= - Copy one ConstantRange over another.
-  void operator=(const ConstantRange &CR) {
-    Lower = CR.Lower;
-    Upper = CR.Upper;
-  }
-
   /// operator== - Return true if this range is equal to another range.
   ///
   bool operator==(const ConstantRange &CR) const {
@@ -235,6 +229,9 @@ public:
   /// from a logical right shift of a value in this range by the Amount value.
   ConstantRange lshr(const ConstantRange &Amount) const;
 
+  /// inverse - Return a new range that is the logical not of the current set.
+  ConstantRange inverse() const;
+  
   /// print - Print out the bounds to a stream...
   ///
   void print(raw_ostream &OS) const;
