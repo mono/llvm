@@ -31,7 +31,6 @@ static MCAsmInfo *createMCAsmInfo(const Target &T, StringRef TT) {
   }
 }
 
-
 extern "C" void LLVMInitializeARMTarget() {
   // Register the target.
   RegisterTargetMachine<ARMTargetMachine> X(TheARMTarget);
@@ -66,6 +65,9 @@ ARMTargetMachine::ARMTargetMachine(const Target &T, const std::string &TT,
                            "v128:64:128-v64:64:64-n32")),
     TLInfo(*this),
     TSInfo(*this) {
+  if (!Subtarget.hasARMOps())
+    report_fatal_error("CPU: '" + Subtarget.getCPUString() + "' does not "
+                       "support ARM mode execution!");
 }
 
 ThumbTargetMachine::ThumbTargetMachine(const Target &T, const std::string &TT,
@@ -138,7 +140,7 @@ bool ARMBaseTargetMachine::addPreSched2(PassManagerBase &PM,
 
 bool ARMBaseTargetMachine::addPreEmitPass(PassManagerBase &PM,
                                           CodeGenOpt::Level OptLevel) {
-  if (Subtarget.isThumb2())
+  if (Subtarget.isThumb2() && !Subtarget.prefers32BitThumb())
     PM.add(createThumb2SizeReductionPass());
 
   PM.add(createARMConstantIslandPass());

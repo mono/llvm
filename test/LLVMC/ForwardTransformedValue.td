@@ -2,13 +2,13 @@
 // The dummy tool and graph are required to silence warnings.
 // RUN: tblgen -I %p/../../include --gen-llvmc %s -o %t
 // RUN: FileCheck -input-file %t %s
-// RUN: %compile_cxx -fexceptions -x c++ %t
+// RUN: %compile_cxx -x c++ %t
 // XFAIL: vg_leak
 
 include "llvm/CompilerDriver/Common.td"
 
-def OptList : OptionList<[(parameter_option "a", (extern)),
-                          (prefix_list_option "b", (extern))]>;
+def OptList : OptionList<[(parameter_option "a", (help "dummy")),
+                          (prefix_list_option "b", (help "dummy"))]>;
 
 // CHECK: std::string HookA
 // CHECK: std::string HookB

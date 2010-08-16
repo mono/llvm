@@ -98,44 +98,45 @@ namespace ARMII {
 
     // Miscellaneous arithmetic instructions
     ArithMiscFrm  = 12 << FormShift,
+    SatFrm        = 13 << FormShift,
 
     // Extend instructions
-    ExtFrm        = 13 << FormShift,
+    ExtFrm        = 14 << FormShift,
 
     // VFP formats
-    VFPUnaryFrm   = 14 << FormShift,
-    VFPBinaryFrm  = 15 << FormShift,
-    VFPConv1Frm   = 16 << FormShift,
-    VFPConv2Frm   = 17 << FormShift,
-    VFPConv3Frm   = 18 << FormShift,
-    VFPConv4Frm   = 19 << FormShift,
-    VFPConv5Frm   = 20 << FormShift,
-    VFPLdStFrm    = 21 << FormShift,
-    VFPLdStMulFrm = 22 << FormShift,
-    VFPMiscFrm    = 23 << FormShift,
+    VFPUnaryFrm   = 15 << FormShift,
+    VFPBinaryFrm  = 16 << FormShift,
+    VFPConv1Frm   = 17 << FormShift,
+    VFPConv2Frm   = 18 << FormShift,
+    VFPConv3Frm   = 19 << FormShift,
+    VFPConv4Frm   = 20 << FormShift,
+    VFPConv5Frm   = 21 << FormShift,
+    VFPLdStFrm    = 22 << FormShift,
+    VFPLdStMulFrm = 23 << FormShift,
+    VFPMiscFrm    = 24 << FormShift,
 
     // Thumb format
-    ThumbFrm      = 24 << FormShift,
+    ThumbFrm      = 25 << FormShift,
 
     // Miscelleaneous format
-    MiscFrm       = 25 << FormShift,
+    MiscFrm       = 26 << FormShift,
 
     // NEON formats
-    NGetLnFrm     = 26 << FormShift,
-    NSetLnFrm     = 27 << FormShift,
-    NDupFrm       = 28 << FormShift,
-    NLdStFrm      = 29 << FormShift,
-    N1RegModImmFrm= 30 << FormShift,
-    N2RegFrm      = 31 << FormShift,
-    NVCVTFrm      = 32 << FormShift,
-    NVDupLnFrm    = 33 << FormShift,
-    N2RegVShLFrm  = 34 << FormShift,
-    N2RegVShRFrm  = 35 << FormShift,
-    N3RegFrm      = 36 << FormShift,
-    N3RegVShFrm   = 37 << FormShift,
-    NVExtFrm      = 38 << FormShift,
-    NVMulSLFrm    = 39 << FormShift,
-    NVTBLFrm      = 40 << FormShift,
+    NGetLnFrm     = 27 << FormShift,
+    NSetLnFrm     = 28 << FormShift,
+    NDupFrm       = 29 << FormShift,
+    NLdStFrm      = 30 << FormShift,
+    N1RegModImmFrm= 31 << FormShift,
+    N2RegFrm      = 32 << FormShift,
+    NVCVTFrm      = 33 << FormShift,
+    NVDupLnFrm    = 34 << FormShift,
+    N2RegVShLFrm  = 35 << FormShift,
+    N2RegVShRFrm  = 36 << FormShift,
+    N3RegFrm      = 37 << FormShift,
+    N3RegVShFrm   = 38 << FormShift,
+    NVExtFrm      = 39 << FormShift,
+    NVMulSLFrm    = 40 << FormShift,
+    NVTBLFrm      = 41 << FormShift,
 
     //===------------------------------------------------------------------===//
     // Misc flags.
@@ -337,15 +338,15 @@ public:
     return NumInstrs && NumInstrs == 1;
   }
 
-  /// isCompareInstr - If the machine instruction is a comparison instruction,
-  /// then return true. Also return the source register in SrcReg and the value
-  /// it compares against in CmpValue.
-  virtual bool isCompareInstr(const MachineInstr *MI, unsigned &SrcReg,
+  /// AnalyzeCompare - For a comparison instruction, return the source register
+  /// in SrcReg and the value it compares against in CmpValue. Return true if
+  /// the comparison instruction can be analyzed.
+  virtual bool AnalyzeCompare(const MachineInstr *MI, unsigned &SrcReg,
                               int &CmpValue) const;
 
-  /// convertToSetZeroFlag - Convert the instruction to set the zero flag so
+  /// ConvertToSetZeroFlag - Convert the instruction to set the zero flag so
   /// that we can remove a "comparison with zero".
-  virtual bool convertToSetZeroFlag(MachineInstr *Instr,
+  virtual bool ConvertToSetZeroFlag(MachineInstr *Instr,
                                     MachineInstr *CmpInstr) const;
 };
 

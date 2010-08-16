@@ -295,17 +295,6 @@ public:
   ///
   virtual bool doFinalization(Module &);
 
-  /// runOnModule - On a module, we run this pass by initializing,
-  /// ronOnFunction'ing once for every function in the module, then by
-  /// finalizing.
-  ///
-  virtual bool runOnModule(Module &M);
-
-  /// run - On a function, we simply initialize, run the function, then
-  /// finalize.
-  ///
-  bool run(Function &F);
-
   virtual void assignPassManager(PMStack &PMS, 
                                  PassManagerType T);
 
@@ -356,12 +345,6 @@ public:
   /// processing needed after all passes have run.
   ///
   virtual bool doFinalization(Module &);
-
-
-  // To run this pass on a function, we simply call runOnBasicBlock once for
-  // each function.
-  //
-  bool runOnFunction(Function &F);
 
   virtual void assignPassManager(PMStack &PMS, 
                                  PassManagerType T);

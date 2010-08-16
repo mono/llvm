@@ -11,6 +11,11 @@
    they can be in exported headers and won't override package specific
    directives.  This is a C file so we can include it in the llvm-c headers.  */
 
+/* To avoid multiple inclusions of these variables when we include the exported
+   headers and config.h, conditionally include these.  */
+/* TODO: This is a bit of a hack.  */
+#ifndef CONFIG_H
+
 /* Installation directory for binary executables */
 #cmakedefine LLVM_BINDIR "${LLVM_BINDIR}"
 
@@ -81,4 +86,6 @@
 #cmakedefine LLVM_PATH_TWOPI "${LLVM_PATH_TWOPI}"
 
 /* Installation prefix directory */
-#cmakedefine LLVM_PREFIX
+#cmakedefine LLVM_PREFIX "${LLVM_PREFIX}"
+
+#endif

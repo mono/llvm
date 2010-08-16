@@ -199,6 +199,14 @@ static void TokenizeAsmString(StringRef AsmString,
       break;
     }
 
+    case '.':
+      if (InTok) {
+        Tokens.push_back(AsmString.slice(Prev, i));
+      }
+      Prev = i;
+      InTok = true;
+      break;
+
     default:
       InTok = true;
     }
@@ -260,9 +268,12 @@ static bool IsAssemblerInstruction(StringRef Name,
     }
 
     if (Tokens[i][0] == '$' && !OperandNames.insert(Tokens[i]).second) {
-      std::string Err = "'" + Name.str() + "': " +
-        "invalid assembler instruction; tied operand '" + Tokens[i].str() + "'";
-      throw TGError(CGI.TheDef->getLoc(), Err);
+      DEBUG({
+          errs() << "warning: '" << Name << "': "
+                 << "ignoring instruction with tied operand '"
+                 << Tokens[i].str() << "'\n";
+        });
+      return false;
     }
   }
 
@@ -1688,13 +1699,10 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
        it != ie; ++it)
     MaxNumOperands = std::max(MaxNumOperands, (*it)->Operands.size());
 
-  const std::string &MatchName =
-    AsmParser->getValueAsString("MatchInstructionName");
   OS << "bool " << Target.getName() << ClassName << "::\n"
-     << MatchName
-     << "(const SmallVectorImpl<MCParsedAsmOperand*> &Operands,\n";
-  OS.indent(MatchName.size() + 1);
-  OS << "MCInst &Inst) {\n";
+     << "MatchInstructionImpl(const SmallVectorImpl<MCParsedAsmOperand*>"
+     << " &Operands,\n";
+  OS << "                     MCInst &Inst) {\n";
 
   // Emit the static match table; unused classes get initalized to 0 which is
   // guaranteed to be InvalidMatchClass.

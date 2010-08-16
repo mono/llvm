@@ -45,7 +45,7 @@ class InlineSpiller : public Spiller {
 
   // Variables that are valid during spill(), but used by multiple methods.
   LiveInterval *li_;
-  std::vector<LiveInterval*> *newIntervals_;
+  SmallVectorImpl<LiveInterval*> *newIntervals_;
   const TargetRegisterClass *rc_;
   int stackSlot_;
   const SmallVectorImpl<LiveInterval*> *spillIs_;
@@ -75,9 +75,8 @@ public:
       splitAnalysis_(mf, lis_, loops_) {}
 
   void spill(LiveInterval *li,
-             std::vector<LiveInterval*> &newIntervals,
-             SmallVectorImpl<LiveInterval*> &spillIs,
-             SlotIndex *earliestIndex);
+             SmallVectorImpl<LiveInterval*> &newIntervals,
+             SmallVectorImpl<LiveInterval*> &spillIs);
 
 private:
   bool split();
@@ -106,10 +105,6 @@ Spiller *createInlineSpiller(MachineFunctionPass &pass,
 /// split - try splitting the current interval into pieces that may allocate
 /// separately. Return true if successful.
 bool InlineSpiller::split() {
-  // FIXME: Add intra-MBB splitting.
-  if (lis_.intervalIsInOneMBB(*li_))
-    return false;
-
   splitAnalysis_.analyze(li_);
 
   if (const MachineLoop *loop = splitAnalysis_.getBestSplitLoop()) {
@@ -118,6 +113,24 @@ bool InlineSpiller::split() {
           .splitAroundLoop(loop))
       return true;
   }
+
+  // Try splitting into single block intervals.
+  SplitAnalysis::BlockPtrSet blocks;
+  if (splitAnalysis_.getMultiUseBlocks(blocks)) {
+    if (SplitEditor(splitAnalysis_, lis_, vrm_, *newIntervals_)
+          .splitSingleBlocks(blocks))
+      return true;
+  }
+
+  // Try splitting inside a basic block.
+  if (const MachineBasicBlock *MBB = splitAnalysis_.getBlockForInsideSplit()) {
+    if (SplitEditor(splitAnalysis_, lis_, vrm_, *newIntervals_)
+          .splitInsideBlock(MBB))
+      return true;
+  }
+
+  // We may have been able to split out some uses, but the original interval is
+  // intact, and it should still be spilled.
   return false;
 }
 
@@ -270,7 +283,7 @@ void InlineSpiller::reMaterializeAll() {
     lis_.RemoveMachineInstrFromMaps(DefMI);
     vrm_.RemoveMachineInstrFromMaps(DefMI);
     DefMI->eraseFromParent();
-    li_->removeValNo(VNI);
+    VNI->setIsDefAccurate(false);
     anyRemoved = true;
   }
 
@@ -286,8 +299,8 @@ void InlineSpiller::reMaterializeAll() {
     MachineBasicBlock::iterator NextMI = MI;
     ++NextMI;
     if (NextMI != MI->getParent()->end() && !lis_.isNotInMIMap(NextMI)) {
-      SlotIndex NearIdx = lis_.getInstructionIndex(NextMI);
-      if (li_->liveAt(NearIdx))
+      VNInfo *VNI = li_->getVNInfoAt(lis_.getInstructionIndex(NextMI));
+      if (VNI && (VNI->hasPHIKill() || usedValues_.count(VNI)))
         continue;
     }
     DEBUG(dbgs() << "Removing debug info due to remat:" << "\t" << *MI);
@@ -374,9 +387,8 @@ void InlineSpiller::insertSpill(LiveInterval &NewLI,
 }
 
 void InlineSpiller::spill(LiveInterval *li,
-                          std::vector<LiveInterval*> &newIntervals,
-                          SmallVectorImpl<LiveInterval*> &spillIs,
-                          SlotIndex *earliestIndex) {
+                          SmallVectorImpl<LiveInterval*> &newIntervals,
+                          SmallVectorImpl<LiveInterval*> &spillIs) {
   DEBUG(dbgs() << "Inline spilling " << *li << "\n");
   assert(li->isSpillable() && "Attempting to spill already spilled value.");
   assert(!li->isStackSlot() && "Trying to spill a stack slot.");

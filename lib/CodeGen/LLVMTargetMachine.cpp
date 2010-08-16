@@ -74,6 +74,16 @@ static cl::opt<bool> EnableMCLogging("enable-mc-api-logging", cl::Hidden,
 static cl::opt<bool> VerifyMachineCode("verify-machineinstrs", cl::Hidden,
     cl::desc("Verify generated machine code"),
     cl::init(getenv("LLVM_VERIFY_MACHINEINSTRS")!=NULL));
+// Enabled or disable local stack object block allocation. This is an
+// experimental pass that allocates locals relative to one another before
+// register allocation and then assigns them to actual stack slots as a block
+// later in PEI. This will eventually allow targets with limited index offset
+// range to allocate additional base registers (not just FP and SP) to
+// more efficiently reference locals, as well as handle situations where
+// locals cannot be referenced via SP or FP at all (dynamic stack realignment
+// together with variable sized objects, for example).
+cl::opt<bool> EnableLocalStackAlloc("enable-local-stack-alloc", cl::init(false),
+    cl::Hidden, cl::desc("Enable pre-regalloc stack frame index allocation"));
 
 static cl::opt<cl::boolOrDefault>
 AsmVerbose("asm-verbose", cl::desc("Add comments to directives."),
@@ -85,7 +95,7 @@ static bool getVerboseAsm() {
   case cl::BOU_UNSET: return TargetMachine::getAsmVerbosityDefault();
   case cl::BOU_TRUE:  return true;
   case cl::BOU_FALSE: return false;
-  }      
+  }
 }
 
 // Enable or disable FastISel. Both options are needed, because
@@ -176,12 +186,12 @@ bool LLVMTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
   FunctionPass *Printer = getTarget().createAsmPrinter(*this, *AsmStreamer);
   if (Printer == 0)
     return true;
-  
+
   // If successful, createAsmPrinter took ownership of AsmStreamer.
   AsmStreamer.take();
-  
+
   PM.add(Printer);
-  
+
   // Make sure the code model is set.
   setCodeModelForStatic();
   PM.add(createGCInfoDeleter());
@@ -200,7 +210,7 @@ bool LLVMTargetMachine::addPassesToEmitMachineCode(PassManagerBase &PM,
                                                    bool DisableVerify) {
   // Make sure the code model is set.
   setCodeModelForJIT();
-  
+
   // Add common CodeGen passes.
   MCContext *Ctx = 0;
   if (addCommonCodeGenPasses(PM, OptLevel, DisableVerify, Ctx))
@@ -317,13 +327,12 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
     PM.add(createVerifierPass());
 
   // Standard Lower-Level Passes.
-  
+
   // Install a MachineModuleInfo class, which is an immutable pass that holds
   // all the per-module stuff we're generating, including MCContext.
   MachineModuleInfo *MMI = new MachineModuleInfo(*getMCAsmInfo());
   PM.add(MMI);
   OutContext = &MMI->getContext(); // Return the MCContext specifically by-ref.
-  
 
   // Set up a MachineFunction for the rest of CodeGen to work on.
   PM.add(new MachineFunctionAnalysis(*this, OptLevel));
@@ -345,6 +354,12 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
   if (OptLevel != CodeGenOpt::None)
     PM.add(createOptimizePHIsPass());
 
+  // Assign local variables to stack slots relative to one another and simplify
+  // frame index references where possible. Final stack slot locations will be
+  // assigned in PEI.
+  if (EnableLocalStackAlloc)
+    PM.add(createLocalStackSlotAllocationPass());
+
   if (OptLevel != CodeGenOpt::None) {
     // With optimization, dead code should already be eliminated. However
     // there is one known exception: lowered code for arguments that are only
@@ -353,8 +368,7 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
     PM.add(createDeadMachineInstructionElimPass());
     printAndVerify(PM, "After codegen DCE pass");
 
-    PM.add(createOptimizeExtsPass());
-    PM.add(createOptimizeCmpsPass());
+    PM.add(createPeepholeOptimizerPass());
     if (!DisableMachineLICM)
       PM.add(createMachineLICMPass());
     PM.add(createMachineCSEPass());

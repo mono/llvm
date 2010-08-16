@@ -54,10 +54,10 @@ def SDT_ARMEH_SJLJ_Setjmp : SDTypeProfile<1, 2, [SDTCisInt<0>, SDTCisPtrTy<1>,
                                                  SDTCisInt<2>]>;
 def SDT_ARMEH_SJLJ_Longjmp: SDTypeProfile<0, 2, [SDTCisPtrTy<0>, SDTCisInt<1>]>;
 
-def SDT_ARMMEMBARRIERV7  : SDTypeProfile<0, 0, []>;
-def SDT_ARMSYNCBARRIERV7 : SDTypeProfile<0, 0, []>;
-def SDT_ARMMEMBARRIERV6  : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
-def SDT_ARMSYNCBARRIERV6 : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
+def SDT_ARMMEMBARRIER     : SDTypeProfile<0, 0, []>;
+def SDT_ARMSYNCBARRIER    : SDTypeProfile<0, 0, []>;
+def SDT_ARMMEMBARRIERMCR  : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
+def SDT_ARMSYNCBARRIERMCR : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
 
 def SDT_ARMTCRET : SDTypeProfile<0, 1, [SDTCisPtrTy<0>]>;
 
@@ -120,14 +120,14 @@ def ARMeh_sjlj_setjmp: SDNode<"ARMISD::EH_SJLJ_SETJMP",
 def ARMeh_sjlj_longjmp: SDNode<"ARMISD::EH_SJLJ_LONGJMP",
                                 SDT_ARMEH_SJLJ_Longjmp, [SDNPHasChain]>;
 
-def ARMMemBarrierV7  : SDNode<"ARMISD::MEMBARRIER", SDT_ARMMEMBARRIERV7,
-                              [SDNPHasChain]>;
-def ARMSyncBarrierV7 : SDNode<"ARMISD::SYNCBARRIER", SDT_ARMMEMBARRIERV7,
-                              [SDNPHasChain]>;
-def ARMMemBarrierV6  : SDNode<"ARMISD::MEMBARRIER", SDT_ARMMEMBARRIERV6,
-                              [SDNPHasChain]>;
-def ARMSyncBarrierV6 : SDNode<"ARMISD::SYNCBARRIER", SDT_ARMMEMBARRIERV6,
-                              [SDNPHasChain]>;
+def ARMMemBarrier     : SDNode<"ARMISD::MEMBARRIER", SDT_ARMMEMBARRIER,
+                               [SDNPHasChain]>;
+def ARMSyncBarrier    : SDNode<"ARMISD::SYNCBARRIER", SDT_ARMMEMBARRIER,
+                               [SDNPHasChain]>;
+def ARMMemBarrierMCR  : SDNode<"ARMISD::MEMBARRIER", SDT_ARMMEMBARRIERMCR,
+                               [SDNPHasChain]>;
+def ARMSyncBarrierMCR : SDNode<"ARMISD::SYNCBARRIER", SDT_ARMMEMBARRIERMCR,
+                               [SDNPHasChain]>;
 
 def ARMrbit          : SDNode<"ARMISD::RBIT", SDTIntUnaryOp>;
 
@@ -154,6 +154,7 @@ def HasVFP3   : Predicate<"Subtarget->hasVFP3()">;
 def HasNEON   : Predicate<"Subtarget->hasNEON()">;
 def HasDivide : Predicate<"Subtarget->hasDivide()">;
 def HasT2ExtractPack : Predicate<"Subtarget->hasT2ExtractPack()">;
+def HasDB     : Predicate<"Subtarget->hasDataBarrier()">;
 def UseNEONForFP : Predicate<"Subtarget->useNEONForSinglePrecisionFP()">;
 def DontUseNEONForFP : Predicate<"!Subtarget->useNEONForSinglePrecisionFP()">;
 def IsThumb   : Predicate<"Subtarget->isThumb()">;
@@ -496,7 +497,7 @@ multiclass AI1_bin_s_irs<bits<4> opcod, string opc, PatFrag opnode,
 /// AI1_cmp_irs - Defines a set of (op r, {so_imm|r|so_reg}) cmp / test
 /// patterns. Similar to AsI1_bin_irs except the instruction does not produce
 /// a explicit result, only implicitly set CPSR.
-let Defs = [CPSR] in {
+let isCompare = 1, Defs = [CPSR] in {
 multiclass AI1_cmp_irs<bits<4> opcod, string opc, PatFrag opnode,
                        bit Commutable = 0> {
   def ri : AI1<opcod, (outs), (ins GPR:$a, so_imm:$b), DPFrm, IIC_iCMPi,
@@ -1809,50 +1810,40 @@ def USADA8 : AI<(outs GPR:$dst), (ins GPR:$a, GPR:$b, GPR:$acc),
 
 // Signed/Unsigned saturate -- for disassembly only
 
-def SSATlsl : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, i32imm:$shamt),
-                 DPFrm, NoItinerary, "ssat", "\t$dst, $bit_pos, $a, lsl $shamt",
-                 [/* For disassembly only; pattern left blank */]> {
-  let Inst{27-21} = 0b0110101;
-  let Inst{6-4} = 0b001;
+def sat_shift : Operand<i32> {
+  let PrintMethod = "printSatShiftOperand";
 }
 
-def SSATasr : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, i32imm:$shamt),
-                 DPFrm, NoItinerary, "ssat", "\t$dst, $bit_pos, $a, asr $shamt",
-                 [/* For disassembly only; pattern left blank */]> {
+def SSAT : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, sat_shift:$sh),
+              SatFrm, NoItinerary, "ssat", "\t$dst, $bit_pos, $a$sh",
+              [/* For disassembly only; pattern left blank */]> {
   let Inst{27-21} = 0b0110101;
-  let Inst{6-4} = 0b101;
+  let Inst{5-4} = 0b01;
 }
 
-def SSAT16 : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a), DPFrm,
+def SSAT16 : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a), SatFrm,
                 NoItinerary, "ssat16", "\t$dst, $bit_pos, $a",
                 [/* For disassembly only; pattern left blank */]> {
   let Inst{27-20} = 0b01101010;
   let Inst{7-4} = 0b0011;
 }
 
-def USATlsl : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, i32imm:$shamt),
-                 DPFrm, NoItinerary, "usat", "\t$dst, $bit_pos, $a, lsl $shamt",
-                 [/* For disassembly only; pattern left blank */]> {
+def USAT : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, sat_shift:$sh),
+              SatFrm, NoItinerary, "usat", "\t$dst, $bit_pos, $a$sh",
+              [/* For disassembly only; pattern left blank */]> {
   let Inst{27-21} = 0b0110111;
-  let Inst{6-4} = 0b001;
+  let Inst{5-4} = 0b01;
 }
 
-def USATasr : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, i32imm:$shamt),
-                 DPFrm, NoItinerary, "usat", "\t$dst, $bit_pos, $a, asr $shamt",
-                 [/* For disassembly only; pattern left blank */]> {
-  let Inst{27-21} = 0b0110111;
-  let Inst{6-4} = 0b101;
-}
-
-def USAT16 : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a), DPFrm,
+def USAT16 : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a), SatFrm,
                 NoItinerary, "usat16", "\t$dst, $bit_pos, $a",
                 [/* For disassembly only; pattern left blank */]> {
   let Inst{27-20} = 0b01101110;
   let Inst{7-4} = 0b0011;
 }
 
-def : ARMV6Pat<(int_arm_ssat GPR:$a, imm:$pos), (SSATlsl imm:$pos, GPR:$a, 0)>;
-def : ARMV6Pat<(int_arm_usat GPR:$a, imm:$pos), (USATlsl imm:$pos, GPR:$a, 0)>;
+def : ARMV6Pat<(int_arm_ssat GPR:$a, imm:$pos), (SSAT imm:$pos, GPR:$a, 0)>;
+def : ARMV6Pat<(int_arm_usat GPR:$a, imm:$pos), (USAT imm:$pos, GPR:$a, 0)>;
 
 //===----------------------------------------------------------------------===//
 //  Bitwise Instructions.
@@ -2365,102 +2356,63 @@ def MOVCCi : AI1<0b1101, (outs GPR:$dst),
 
 // memory barriers protect the atomic sequences
 let hasSideEffects = 1 in {
-def Int_MemBarrierV7 : AInoP<(outs), (ins),
-                        Pseudo, NoItinerary,
-                        "dmb", "",
-                        [(ARMMemBarrierV7)]>,
-                        Requires<[IsARM, HasV7]> {
+def DMBsy : AInoP<(outs), (ins), MiscFrm, NoItinerary, "dmb", "",
+                  [(ARMMemBarrier)]>, Requires<[IsARM, HasDB]> {
   let Inst{31-4} = 0xf57ff05;
   // FIXME: add support for options other than a full system DMB
   // See DMB disassembly-only variants below.
   let Inst{3-0} = 0b1111;
 }
 
-def Int_SyncBarrierV7 : AInoP<(outs), (ins),
-                        Pseudo, NoItinerary,
-                        "dsb", "",
-                        [(ARMSyncBarrierV7)]>,
-                        Requires<[IsARM, HasV7]> {
+def DSBsy : AInoP<(outs), (ins), MiscFrm, NoItinerary, "dsb", "",
+                  [(ARMSyncBarrier)]>, Requires<[IsARM, HasDB]> {
   let Inst{31-4} = 0xf57ff04;
   // FIXME: add support for options other than a full system DSB
   // See DSB disassembly-only variants below.
   let Inst{3-0} = 0b1111;
 }
 
-def Int_MemBarrierV6 : AInoP<(outs), (ins GPR:$zero),
-                       Pseudo, NoItinerary,
+def DMB_MCR : AInoP<(outs), (ins GPR:$zero), MiscFrm, NoItinerary,
                        "mcr", "\tp15, 0, $zero, c7, c10, 5",
-                       [(ARMMemBarrierV6 GPR:$zero)]>,
+                       [(ARMMemBarrierMCR GPR:$zero)]>,
                        Requires<[IsARM, HasV6]> {
   // FIXME: add support for options other than a full system DMB
   // FIXME: add encoding
 }
 
-def Int_SyncBarrierV6 : AInoP<(outs), (ins GPR:$zero),
-                        Pseudo, NoItinerary,
+def DSB_MCR : AInoP<(outs), (ins GPR:$zero), MiscFrm, NoItinerary,
                         "mcr", "\tp15, 0, $zero, c7, c10, 4",
-                        [(ARMSyncBarrierV6 GPR:$zero)]>,
+                        [(ARMSyncBarrierMCR GPR:$zero)]>,
                         Requires<[IsARM, HasV6]> {
   // FIXME: add support for options other than a full system DSB
   // FIXME: add encoding
 }
 }
 
-// Helper class for multiclass MemB -- for disassembly only
-class AMBI<string opc, string asm>
-  : AInoP<(outs), (ins), MiscFrm, NoItinerary, opc, asm,
-          [/* For disassembly only; pattern left blank */]>,
-    Requires<[IsARM, HasV7]> {
-  let Inst{31-20} = 0xf57;
+// Memory Barrier Operations Variants -- for disassembly only
+
+def memb_opt : Operand<i32> {
+  let PrintMethod = "printMemBOption";
 }
 
-multiclass MemB<bits<4> op7_4, string opc> {
-
-  def st : AMBI<opc, "\tst"> {
-    let Inst{7-4} = op7_4;
-    let Inst{3-0} = 0b1110;
-  }
-
-  def ish : AMBI<opc, "\tish"> {
-    let Inst{7-4} = op7_4;
-    let Inst{3-0} = 0b1011;
-  }
-
-  def ishst : AMBI<opc, "\tishst"> {
-    let Inst{7-4} = op7_4;
-    let Inst{3-0} = 0b1010;
-  }
-
-  def nsh : AMBI<opc, "\tnsh"> {
-    let Inst{7-4} = op7_4;
-    let Inst{3-0} = 0b0111;
-  }
-
-  def nshst : AMBI<opc, "\tnshst"> {
-    let Inst{7-4} = op7_4;
-    let Inst{3-0} = 0b0110;
-  }
-
-  def osh : AMBI<opc, "\tosh"> {
-    let Inst{7-4} = op7_4;
-    let Inst{3-0} = 0b0011;
-  }
-
-  def oshst : AMBI<opc, "\toshst"> {
-    let Inst{7-4} = op7_4;
-    let Inst{3-0} = 0b0010;
-  }
+class AMBI<bits<4> op7_4, string opc>
+  : AInoP<(outs), (ins memb_opt:$opt), MiscFrm, NoItinerary, opc, "\t$opt",
+          [/* For disassembly only; pattern left blank */]>,
+    Requires<[IsARM, HasDB]> {
+  let Inst{31-8} = 0xf57ff0;
+  let Inst{7-4} = op7_4;
 }
 
 // These DMB variants are for disassembly only.
-defm DMB : MemB<0b0101, "dmb">;
+def DMBvar : AMBI<0b0101, "dmb">;
 
 // These DSB variants are for disassembly only.
-defm DSB : MemB<0b0100, "dsb">;
+def DSBvar : AMBI<0b0100, "dsb">;
 
 // ISB has only full system option -- for disassembly only
-def ISBsy : AMBI<"isb", ""> {
-  let Inst{7-4} = 0b0110;
+def ISBsy : AInoP<(outs), (ins), MiscFrm, NoItinerary, "isb", "", []>,
+            Requires<[IsARM, HasDB]> {
+  let Inst{31-4} = 0xf57ff06;
   let Inst{3-0} = 0b1111;
 }
 

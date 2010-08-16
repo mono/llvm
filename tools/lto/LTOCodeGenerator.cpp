@@ -119,11 +119,24 @@ bool LTOCodeGenerator::setCodePICModel(lto_codegen_model model,
     return true;
 }
 
+void LTOCodeGenerator::setCpu(const char* mCpu)
+{
+  _mCpu = mCpu;
+}
+
 void LTOCodeGenerator::setAssemblerPath(const char* path)
 {
     if ( _assemblerPath )
         delete _assemblerPath;
     _assemblerPath = new sys::Path(path);
+}
+
+void LTOCodeGenerator::setAssemblerArgs(const char** args, int nargs)
+{
+  for (int i = 0; i < nargs; ++i) {
+    const char *arg = args[i];
+    _assemblerArgs.push_back(arg);
+  }
 }
 
 void LTOCodeGenerator::addMustPreserveSymbol(const char* sym)
@@ -257,6 +270,11 @@ bool LTOCodeGenerator::assemble(const std::string& asmPath,
         args.push_back("-c");
         args.push_back("-x");
         args.push_back("assembler");
+    } else {
+        for (std::vector<std::string>::iterator I = _assemblerArgs.begin(),
+               E = _assemblerArgs.end(); I != E; ++I) {
+            args.push_back(I->c_str());
+        }
     }
     args.push_back("-o");
     args.push_back(objPath.c_str());
@@ -301,7 +319,7 @@ bool LTOCodeGenerator::determineTarget(std::string& errMsg)
 
         // construct LTModule, hand over ownership of module and target
         SubtargetFeatures Features;
-        Features.getDefaultSubtargetFeatures("" /* cpu */, llvm::Triple(Triple));
+        Features.getDefaultSubtargetFeatures(_mCpu, llvm::Triple(Triple));
         std::string FeatureStr = Features.getString();
         _target = march->createTargetMachine(Triple, FeatureStr);
     }

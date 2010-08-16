@@ -1462,30 +1462,48 @@ static bool DisassembleThumb2DPModImm(MCInst &MI, unsigned Opcode,
 
 static inline bool Thumb2SaturateOpcode(unsigned Opcode) {
   switch (Opcode) {
-  case ARM::t2SSATlsl: case ARM::t2SSATasr: case ARM::t2SSAT16:
-  case ARM::t2USATlsl: case ARM::t2USATasr: case ARM::t2USAT16:
+  case ARM::t2SSAT: case ARM::t2SSAT16:
+  case ARM::t2USAT: case ARM::t2USAT16:
     return true;
   default:
     return false;
   }
 }
 
-static inline unsigned decodeThumb2SaturatePos(unsigned Opcode, uint32_t insn) {
-  switch (Opcode) {
-  case ARM::t2SSATlsl:
-  case ARM::t2SSATasr:
-    return slice(insn, 4, 0) + 1;
-  case ARM::t2SSAT16:
-    return slice(insn, 3, 0) + 1;
-  case ARM::t2USATlsl:
-  case ARM::t2USATasr:
-    return slice(insn, 4, 0);
-  case ARM::t2USAT16:
-    return slice(insn, 3, 0);
-  default:
-    assert(0 && "Unexpected opcode");
-    return 0;
+/// DisassembleThumb2Sat - Disassemble Thumb2 saturate instructions:
+/// o t2SSAT, t2USAT: Rs sat_pos Rn shamt
+/// o t2SSAT16, t2USAT16: Rs sat_pos Rn
+static bool DisassembleThumb2Sat(MCInst &MI, unsigned Opcode, uint32_t insn,
+                                 unsigned &NumOpsAdded, BO B) {
+  const TargetInstrDesc &TID = ARMInsts[Opcode];
+  NumOpsAdded = TID.getNumOperands() - 2; // ignore predicate operands
+
+  // Disassemble the register def.
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::rGPRRegClassID,
+                                                     decodeRs(insn))));
+
+  unsigned Pos = slice(insn, 4, 0);
+  if (Opcode == ARM::t2SSAT || Opcode == ARM::t2SSAT16)
+    Pos += 1;
+  MI.addOperand(MCOperand::CreateImm(Pos));
+
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::rGPRRegClassID,
+                                                     decodeRn(insn))));
+
+  if (NumOpsAdded == 4) {
+    ARM_AM::ShiftOpc Opc = (slice(insn, 21, 21) != 0 ?
+                            ARM_AM::asr : ARM_AM::lsl);
+    // Inst{14-12:7-6} encodes the imm5 shift amount.
+    unsigned ShAmt = slice(insn, 14, 12) << 2 | slice(insn, 7, 6);
+    if (ShAmt == 0) {
+      if (Opc == ARM_AM::asr)
+        ShAmt = 32;
+      else
+        Opc = ARM_AM::no_shift;
+    }
+    MI.addOperand(MCOperand::CreateImm(ARM_AM::getSORegOpc(Opc, ShAmt)));
   }
+  return true;
 }
 
 // A6.3.3 Data-processing (plain binary immediate)
@@ -1499,11 +1517,6 @@ static inline unsigned decodeThumb2SaturatePos(unsigned Opcode, uint32_t insn) {
 // o t2SBFX (SBFX): Rs Rn lsb width
 // o t2UBFX (UBFX): Rs Rn lsb width
 // o t2BFI (BFI): Rs Rn lsb width
-//
-// [Signed|Unsigned] Saturate [16]
-//
-// o t2SSAT[lsl|asr], t2USAT[lsl|asr]: Rs sat_pos Rn shamt
-// o t2SSAT16, t2USAT16: Rs sat_pos Rn
 static bool DisassembleThumb2DPBinImm(MCInst &MI, unsigned Opcode,
     uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
@@ -1527,30 +1540,6 @@ static bool DisassembleThumb2DPBinImm(MCInst &MI, unsigned Opcode,
   MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RdRegClassID,
                                                      decodeRs(insn))));
   ++OpIdx;
-
-  // t2SSAT/t2SSAT16/t2USAT/t2USAT16 has imm operand after Rd.
-  if (Thumb2SaturateOpcode(Opcode)) {
-    MI.addOperand(MCOperand::CreateImm(decodeThumb2SaturatePos(Opcode, insn)));
-
-    MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RnRegClassID,
-                                                       decodeRn(insn))));
-
-    if (Opcode == ARM::t2SSAT16 || Opcode == ARM::t2USAT16) {
-      OpIdx += 2;
-      return true;
-    }
-
-    // For SSAT operand reg (Rn) has been disassembled above.
-    // Now disassemble the shift amount.
-
-    // Inst{14-12:7-6} encodes the imm5 shift amount.
-    unsigned ShAmt = slice(insn, 14, 12) << 2 | slice(insn, 7, 6);
-
-    MI.addOperand(MCOperand::CreateImm(ShAmt));
-
-    OpIdx += 3;
-    return true;
-  }
 
   if (TwoReg) {
     assert(NumOps >= 3 && "Expect >= 3 operands");
@@ -1629,8 +1618,8 @@ static inline bool t2MiscCtrlInstr(uint32_t insn) {
 // A8.6.26
 // t2BXJ -> Rn
 //
-// Miscellaneous control: t2Int_MemBarrierV7 (and its t2DMB variants),
-// t2Int_SyncBarrierV7 (and its t2DSB varianst), t2ISBsy, t2CLREX
+// Miscellaneous control: t2DMBsy (and its t2DMB variants),
+// t2DSBsy (and its t2DSB varianst), t2ISBsy, t2CLREX
 //   -> no operand (except pred-imm pred-ccr for CLREX, memory barrier variants)
 //
 // Hint: t2NOP, t2YIELD, t2WFE, t2WFI, t2SEV
@@ -2163,22 +2152,20 @@ static bool DisassembleThumb2(uint16_t op1, uint16_t op2, uint16_t op,
     break;
   case 2:
     if (op == 0) {
-      if (slice(op2, 5, 5) == 0) {
+      if (slice(op2, 5, 5) == 0)
         // Data-processing (modified immediate)
         return DisassembleThumb2DPModImm(MI, Opcode, insn, NumOps, NumOpsAdded,
                                          B);
-      } else {
-        // Data-processing (plain binary immediate)
-        return DisassembleThumb2DPBinImm(MI, Opcode, insn, NumOps, NumOpsAdded,
-                                         B);
-      }
-    } else {
-      // Branches and miscellaneous control on page A6-20.
-      return DisassembleThumb2BrMiscCtrl(MI, Opcode, insn, NumOps, NumOpsAdded,
-                                         B);
-    }
+      if (Thumb2SaturateOpcode(Opcode))
+        return DisassembleThumb2Sat(MI, Opcode, insn, NumOpsAdded, B);
 
-    break;
+      // Data-processing (plain binary immediate)
+      return DisassembleThumb2DPBinImm(MI, Opcode, insn, NumOps, NumOpsAdded,
+                                       B);
+    }
+    // Branches and miscellaneous control on page A6-20.
+    return DisassembleThumb2BrMiscCtrl(MI, Opcode, insn, NumOps, NumOpsAdded,
+                                       B);
   case 3:
     switch (slice(op2, 6, 5)) {
     case 0:

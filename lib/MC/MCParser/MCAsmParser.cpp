@@ -15,7 +15,7 @@
 #include "llvm/Target/TargetAsmParser.h"
 using namespace llvm;
 
-MCAsmParser::MCAsmParser() : TargetParser(0) {
+MCAsmParser::MCAsmParser() : TargetParser(0), ShowParsedOperands(0) {
 }
 
 MCAsmParser::~MCAsmParser() {
@@ -40,9 +40,5 @@ bool MCAsmParser::ParseExpression(const MCExpr *&Res) {
   SMLoc L;
   return ParseExpression(Res, L);
 }
-
-/// getStartLoc - Get the location of the first token of this operand.
-SMLoc MCParsedAsmOperand::getStartLoc() const { return SMLoc(); }
-SMLoc MCParsedAsmOperand::getEndLoc() const { return SMLoc(); }
 
 

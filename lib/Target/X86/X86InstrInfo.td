@@ -1191,7 +1191,7 @@ def MOV32cr : I<0x22, MRMSrcReg, (outs CONTROL_REG:$dst), (ins GR32:$src),
 
 // Extra precision multiplication
 
-// AL is really implied by AX, by the registers in Defs must match the
+// AL is really implied by AX, but the registers in Defs must match the
 // SDNode results (i8, i32).
 let Defs = [AL,EFLAGS,AX], Uses = [AL] in
 def MUL8r  : I<0xF6, MRM4r, (outs),  (ins GR8:$src), "mul{b}\t$src",
@@ -3960,18 +3960,17 @@ def EH_RETURN   : I<0xC3, RawFrm, (outs), (ins GR32:$addr),
 //
 
 // Memory barriers
+
+// TODO: Get this to fold the constant into the instruction.           
+def OR32mrLocked  : I<0x09, MRMDestMem, (outs), (ins i32mem:$dst, GR32:$zero),
+                      "lock\n\t"
+                      "or{l}\t{$zero, $dst|$dst, $zero}",
+                      []>, Requires<[In32BitMode]>, LOCK;
+
 let hasSideEffects = 1 in {
 def Int_MemBarrier : I<0, Pseudo, (outs), (ins),
                      "#MEMBARRIER",
                      [(X86MemBarrier)]>, Requires<[HasSSE2]>;
-
-// TODO: Get this to fold the constant into the instruction.           
-let Defs = [ESP] in
-def Int_MemBarrierNoSSE  : I<0x09, MRM1r, (outs), (ins GR32:$zero),
-                           "lock\n\t"
-                           "or{l}\t{$zero, (%esp)|(%esp), $zero}",
-                           [(X86MemBarrierNoSSE GR32:$zero)]>,
- 													 Requires<[In32BitMode]>, LOCK;
 }
 
 // Atomic swap. These are just normal xchg instructions. But since a memory

@@ -303,6 +303,10 @@ bool SCEVAddRecExpr::isLoopInvariant(const Loop *QueryLoop) const {
   if (QueryLoop->contains(L))
     return false;
 
+  // This recurrence is invariant w.r.t. QueryLoop if L contains QueryLoop.
+  if (L->contains(QueryLoop))
+    return true;
+
   // This recurrence is variant w.r.t. QueryLoop if any of its operands
   // are variant.
   for (unsigned i = 0, e = getNumOperands(); i != e; ++i)
@@ -519,7 +523,7 @@ namespace {
   /// than the complexity of the RHS.  This comparator is used to canonicalize
   /// expressions.
   class SCEVComplexityCompare {
-    const LoopInfo *LI;
+    const LoopInfo *const LI;
   public:
     explicit SCEVComplexityCompare(const LoopInfo *li) : LI(li) {}
 
@@ -541,40 +545,45 @@ namespace {
       // not as complete as it could be.
       if (const SCEVUnknown *LU = dyn_cast<SCEVUnknown>(LHS)) {
         const SCEVUnknown *RU = cast<SCEVUnknown>(RHS);
+        const Value *LV = LU->getValue(), *RV = RU->getValue();
 
         // Order pointer values after integer values. This helps SCEVExpander
         // form GEPs.
-        bool LIsPointer = LU->getType()->isPointerTy(),
-             RIsPointer = RU->getType()->isPointerTy();
+        bool LIsPointer = LV->getType()->isPointerTy(),
+             RIsPointer = RV->getType()->isPointerTy();
         if (LIsPointer != RIsPointer)
           return RIsPointer;
 
         // Compare getValueID values.
-        unsigned LID = LU->getValue()->getValueID(),
-                 RID = RU->getValue()->getValueID();
+        unsigned LID = LV->getValueID(),
+                 RID = RV->getValueID();
         if (LID != RID)
           return LID < RID;
 
         // Sort arguments by their position.
-        if (const Argument *LA = dyn_cast<Argument>(LU->getValue())) {
-          const Argument *RA = cast<Argument>(RU->getValue());
+        if (const Argument *LA = dyn_cast<Argument>(LV)) {
+          const Argument *RA = cast<Argument>(RV);
           return LA->getArgNo() < RA->getArgNo();
         }
 
         // For instructions, compare their loop depth, and their opcode.
         // This is pretty loose.
-        if (const Instruction *LV = dyn_cast<Instruction>(LU->getValue())) {
-          const Instruction *RV = cast<Instruction>(RU->getValue());
+        if (const Instruction *LInst = dyn_cast<Instruction>(LV)) {
+          const Instruction *RInst = cast<Instruction>(RV);
 
           // Compare loop depths.
-          unsigned LDepth = LI->getLoopDepth(LV->getParent()),
-                   RDepth = LI->getLoopDepth(RV->getParent());
-          if (LDepth != RDepth)
-            return LDepth < RDepth;
+          const BasicBlock *LParent = LInst->getParent(),
+                           *RParent = RInst->getParent();
+          if (LParent != RParent) {
+            unsigned LDepth = LI->getLoopDepth(LParent),
+                     RDepth = LI->getLoopDepth(RParent);
+            if (LDepth != RDepth)
+              return LDepth < RDepth;
+          }
 
           // Compare the number of operands.
-          unsigned LNumOps = LV->getNumOperands(),
-                   RNumOps = RV->getNumOperands();
+          unsigned LNumOps = LInst->getNumOperands(),
+                   RNumOps = RInst->getNumOperands();
           if (LNumOps != RNumOps)
             return LNumOps < RNumOps;
         }
@@ -596,10 +605,13 @@ namespace {
       // Compare addrec loop depths.
       if (const SCEVAddRecExpr *LA = dyn_cast<SCEVAddRecExpr>(LHS)) {
         const SCEVAddRecExpr *RA = cast<SCEVAddRecExpr>(RHS);
-        unsigned LDepth = LA->getLoop()->getLoopDepth(),
-                 RDepth = RA->getLoop()->getLoopDepth();
-        if (LDepth != RDepth)
-          return LDepth < RDepth;
+        const Loop *LLoop = LA->getLoop(), *RLoop = RA->getLoop();
+        if (LLoop != RLoop) {
+          unsigned LDepth = LLoop->getLoopDepth(),
+                   RDepth = RLoop->getLoopDepth();
+          if (LDepth != RDepth)
+            return LDepth < RDepth;
+        }
       }
 
       // Lexicographically compare n-ary expressions.
@@ -1373,18 +1385,22 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
   // so, merge them together into an multiply expression.  Since we sorted the
   // list, these values are required to be adjacent.
   const Type *Ty = Ops[0]->getType();
+  bool FoundMatch = false;
   for (unsigned i = 0, e = Ops.size()-1; i != e; ++i)
     if (Ops[i] == Ops[i+1]) {      //  X + Y + Y  -->  X + Y*2
       // Found a match, merge the two values into a multiply, and add any
       // remaining values to the result.
       const SCEV *Two = getConstant(Ty, 2);
-      const SCEV *Mul = getMulExpr(Ops[i], Two);
+      const SCEV *Mul = getMulExpr(Two, Ops[i]);
       if (Ops.size() == 2)
         return Mul;
-      Ops.erase(Ops.begin()+i, Ops.begin()+i+2);
-      Ops.push_back(Mul);
-      return getAddExpr(Ops, HasNUW, HasNSW);
+      Ops[i] = Mul;
+      Ops.erase(Ops.begin()+i+1);
+      --i; --e;
+      FoundMatch = true;
     }
+  if (FoundMatch)
+    return getAddExpr(Ops, HasNUW, HasNSW);
 
   // Check for truncates. If all the operands are truncated from the same
   // type, see if factoring out the truncate would permit the result to be
@@ -1508,8 +1524,10 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
     const SCEVMulExpr *Mul = cast<SCEVMulExpr>(Ops[Idx]);
     for (unsigned MulOp = 0, e = Mul->getNumOperands(); MulOp != e; ++MulOp) {
       const SCEV *MulOpSCEV = Mul->getOperand(MulOp);
+      if (isa<SCEVConstant>(MulOpSCEV))
+        continue;
       for (unsigned AddOp = 0, e = Ops.size(); AddOp != e; ++AddOp)
-        if (MulOpSCEV == Ops[AddOp] && !isa<SCEVConstant>(Ops[AddOp])) {
+        if (MulOpSCEV == Ops[AddOp]) {
           // Fold W + X + (X * Y * Z)  -->  W + (X * ((Y*Z)+1))
           const SCEV *InnerMul = Mul->getOperand(MulOp == 0);
           if (Mul->getNumOperands() != 2) {
@@ -1520,8 +1538,8 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
             InnerMul = getMulExpr(MulOps);
           }
           const SCEV *One = getConstant(Ty, 1);
-          const SCEV *AddOne = getAddExpr(InnerMul, One);
-          const SCEV *OuterMul = getMulExpr(AddOne, Ops[AddOp]);
+          const SCEV *AddOne = getAddExpr(One, InnerMul);
+          const SCEV *OuterMul = getMulExpr(AddOne, MulOpSCEV);
           if (Ops.size() == 2) return OuterMul;
           if (AddOp < Idx) {
             Ops.erase(Ops.begin()+AddOp);
@@ -1535,6 +1553,7 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
         }
 
       // Check this multiply against other multiplies being added together.
+      bool AnyFold = false;
       for (unsigned OtherMulIdx = Idx+1;
            OtherMulIdx < Ops.size() && isa<SCEVMulExpr>(Ops[OtherMulIdx]);
            ++OtherMulIdx) {
@@ -1562,12 +1581,14 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
             const SCEV *InnerMulSum = getAddExpr(InnerMul1,InnerMul2);
             const SCEV *OuterMul = getMulExpr(MulOpSCEV, InnerMulSum);
             if (Ops.size() == 2) return OuterMul;
-            Ops.erase(Ops.begin()+Idx);
-            Ops.erase(Ops.begin()+OtherMulIdx-1);
-            Ops.push_back(OuterMul);
-            return getAddExpr(Ops);
+            Ops[Idx] = OuterMul;
+            Ops.erase(Ops.begin()+OtherMulIdx);
+            OtherMulIdx = Idx;
+            AnyFold = true;
           }
       }
+      if (AnyFold)
+        return getAddExpr(Ops);
     }
   }
 
@@ -2034,9 +2055,9 @@ ScalarEvolution::getAddRecExpr(SmallVectorImpl<const SCEV *> &Operands,
   // Canonicalize nested AddRecs in by nesting them in order of loop depth.
   if (const SCEVAddRecExpr *NestedAR = dyn_cast<SCEVAddRecExpr>(Operands[0])) {
     const Loop *NestedLoop = NestedAR->getLoop();
-    if (L->contains(NestedLoop->getHeader()) ?
+    if (L->contains(NestedLoop) ?
         (L->getLoopDepth() < NestedLoop->getLoopDepth()) :
-        (!NestedLoop->contains(L->getHeader()) &&
+        (!NestedLoop->contains(L) &&
          DT->dominates(L->getHeader(), NestedLoop->getHeader()))) {
       SmallVector<const SCEV *, 4> NestedOperands(NestedAR->op_begin(),
                                                   NestedAR->op_end());
@@ -3525,7 +3546,7 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
           const SCEV *LDiff = getMinusSCEV(LA, LS);
           const SCEV *RDiff = getMinusSCEV(RA, One);
           if (LDiff == RDiff)
-            return getAddExpr(getUMaxExpr(LS, One), LDiff);
+            return getAddExpr(getUMaxExpr(One, LS), LDiff);
         }
         break;
       case ICmpInst::ICMP_EQ:
@@ -3540,7 +3561,7 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
           const SCEV *LDiff = getMinusSCEV(LA, One);
           const SCEV *RDiff = getMinusSCEV(RA, LS);
           if (LDiff == RDiff)
-            return getAddExpr(getUMaxExpr(LS, One), LDiff);
+            return getAddExpr(getUMaxExpr(One, LS), LDiff);
         }
         break;
       default:
@@ -3854,14 +3875,13 @@ ScalarEvolution::ComputeBackedgeTakenCountFromExitCond(const Loop *L,
         else
           MaxBECount = getUMinFromMismatchedTypes(BTI0.Max, BTI1.Max);
       } else {
-        // Both conditions must be true for the loop to exit.
+        // Both conditions must be true at the same time for the loop to exit.
+        // For now, be conservative.
         assert(L->contains(FBB) && "Loop block has no successor in loop!");
-        if (BTI0.Exact != getCouldNotCompute() &&
-            BTI1.Exact != getCouldNotCompute())
-          BECount = getUMaxFromMismatchedTypes(BTI0.Exact, BTI1.Exact);
-        if (BTI0.Max != getCouldNotCompute() &&
-            BTI1.Max != getCouldNotCompute())
-          MaxBECount = getUMaxFromMismatchedTypes(BTI0.Max, BTI1.Max);
+        if (BTI0.Max == BTI1.Max)
+          MaxBECount = BTI0.Max;
+        if (BTI0.Exact == BTI1.Exact)
+          BECount = BTI0.Exact;
       }
 
       return BackedgeTakenInfo(BECount, MaxBECount);
@@ -3889,14 +3909,13 @@ ScalarEvolution::ComputeBackedgeTakenCountFromExitCond(const Loop *L,
         else
           MaxBECount = getUMinFromMismatchedTypes(BTI0.Max, BTI1.Max);
       } else {
-        // Both conditions must be false for the loop to exit.
+        // Both conditions must be false at the same time for the loop to exit.
+        // For now, be conservative.
         assert(L->contains(TBB) && "Loop block has no successor in loop!");
-        if (BTI0.Exact != getCouldNotCompute() &&
-            BTI1.Exact != getCouldNotCompute())
-          BECount = getUMaxFromMismatchedTypes(BTI0.Exact, BTI1.Exact);
-        if (BTI0.Max != getCouldNotCompute() &&
-            BTI1.Max != getCouldNotCompute())
-          MaxBECount = getUMaxFromMismatchedTypes(BTI0.Max, BTI1.Max);
+        if (BTI0.Max == BTI1.Max)
+          MaxBECount = BTI0.Max;
+        if (BTI0.Exact == BTI1.Exact)
+          BECount = BTI0.Exact;
       }
 
       return BackedgeTakenInfo(BECount, MaxBECount);
@@ -5223,7 +5242,8 @@ ScalarEvolution::isLoopBackedgeGuardedByCond(const Loop *L,
       LoopContinuePredicate->isUnconditional())
     return false;
 
-  return isImpliedCond(LoopContinuePredicate->getCondition(), Pred, LHS, RHS,
+  return isImpliedCond(Pred, LHS, RHS,
+                       LoopContinuePredicate->getCondition(),
                        LoopContinuePredicate->getSuccessor(0) != L->getHeader());
 }
 
@@ -5252,7 +5272,8 @@ ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
         LoopEntryPredicate->isUnconditional())
       continue;
 
-    if (isImpliedCond(LoopEntryPredicate->getCondition(), Pred, LHS, RHS,
+    if (isImpliedCond(Pred, LHS, RHS,
+                      LoopEntryPredicate->getCondition(),
                       LoopEntryPredicate->getSuccessor(0) != Pair.second))
       return true;
   }
@@ -5262,24 +5283,24 @@ ScalarEvolution::isLoopEntryGuardedByCond(const Loop *L,
 
 /// isImpliedCond - Test whether the condition described by Pred, LHS,
 /// and RHS is true whenever the given Cond value evaluates to true.
-bool ScalarEvolution::isImpliedCond(Value *CondValue,
-                                    ICmpInst::Predicate Pred,
+bool ScalarEvolution::isImpliedCond(ICmpInst::Predicate Pred,
                                     const SCEV *LHS, const SCEV *RHS,
+                                    Value *FoundCondValue,
                                     bool Inverse) {
   // Recursively handle And and Or conditions.
-  if (BinaryOperator *BO = dyn_cast<BinaryOperator>(CondValue)) {
+  if (BinaryOperator *BO = dyn_cast<BinaryOperator>(FoundCondValue)) {
     if (BO->getOpcode() == Instruction::And) {
       if (!Inverse)
-        return isImpliedCond(BO->getOperand(0), Pred, LHS, RHS, Inverse) ||
-               isImpliedCond(BO->getOperand(1), Pred, LHS, RHS, Inverse);
+        return isImpliedCond(Pred, LHS, RHS, BO->getOperand(0), Inverse) ||
+               isImpliedCond(Pred, LHS, RHS, BO->getOperand(1), Inverse);
     } else if (BO->getOpcode() == Instruction::Or) {
       if (Inverse)
-        return isImpliedCond(BO->getOperand(0), Pred, LHS, RHS, Inverse) ||
-               isImpliedCond(BO->getOperand(1), Pred, LHS, RHS, Inverse);
+        return isImpliedCond(Pred, LHS, RHS, BO->getOperand(0), Inverse) ||
+               isImpliedCond(Pred, LHS, RHS, BO->getOperand(1), Inverse);
     }
   }
 
-  ICmpInst *ICI = dyn_cast<ICmpInst>(CondValue);
+  ICmpInst *ICI = dyn_cast<ICmpInst>(FoundCondValue);
   if (!ICI) return false;
 
   // Bail if the ICmp's operands' types are wider than the needed type

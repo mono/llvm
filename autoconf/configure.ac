@@ -858,35 +858,6 @@ AC_ARG_ENABLE(libffi,AS_HELP_STRING(
   esac],
   llvm_cv_enable_libffi=no)
 
-dnl Only Windows needs dynamic libCompilerDriver to support plugins.
-if test "$llvm_cv_os_type" = "Win32" ; then
-   llvmc_dynamic="yes"
-else
-   llvmc_dynamic="no"
-fi
-
-dnl --enable-llvmc-dynamic : should LLVMC link libCompilerDriver dynamically?
-AC_ARG_ENABLE(llvmc-dynamic,AS_HELP_STRING(
---enable-llvmc-dynamic,
-[Link LLVMC dynamically (default is NO, unless on Win32)]),,
-enableval=$llvmc_dynamic)
-if test ${enableval} = "yes" && test "$ENABLE_PIC" -eq 1 ; then
-   AC_SUBST(ENABLE_LLVMC_DYNAMIC,[[ENABLE_LLVMC_DYNAMIC=1]])
-else
-   AC_SUBST(ENABLE_LLVMC_DYNAMIC,[[]])
-fi
-
-dnl --enable-llvmc-dynamic-plugins : should LLVMC support dynamic plugins?
-AC_ARG_ENABLE(llvmc-dynamic-plugins,AS_HELP_STRING(
---enable-llvmc-dynamic-plugins,
-[Enable dynamic LLVMC plugins (default is YES)]),,
-enableval=yes)
-if test ${enableval} = "yes" ; then
-   AC_SUBST(ENABLE_LLVMC_DYNAMIC_PLUGINS,[[ENABLE_LLVMC_DYNAMIC_PLUGINS=1]])
-else
-   AC_SUBST(ENABLE_LLVMC_DYNAMIC_PLUGINS,[[]])
-fi
-
 dnl===-----------------------------------------------------------------------===
 dnl===
 dnl=== SECTION 4: Check for programs we need and that they are the right version
@@ -1040,6 +1011,9 @@ AC_PATH_PROGS(OCAMLOPT, [ocamlopt])
 AC_PATH_PROGS(OCAMLDEP, [ocamldep])
 AC_PATH_PROGS(OCAMLDOC, [ocamldoc])
 AC_PATH_PROGS(GAS, [gas as])
+
+dnl Get the version of the linker in use.
+AC_LINK_GET_VERSION
 
 dnl Determine whether the linker supports the -R option.
 AC_LINK_USE_R
@@ -1581,6 +1555,10 @@ dnl you MUST also update Makefile.rules so that the variable FilesToConfig
 dnl contains the same list of files as AC_CONFIG_HEADERS below. This ensures the
 dnl files can be updated automatically when their *.in sources change.
 AC_CONFIG_HEADERS([include/llvm/Config/config.h include/llvm/Config/llvm-config.h])
+AH_TOP([#ifndef CONFIG_H
+#define CONFIG_H])
+AH_BOTTOM([#endif])
+
 AC_CONFIG_FILES([include/llvm/Config/Targets.def])
 AC_CONFIG_FILES([include/llvm/Config/AsmPrinters.def])
 AC_CONFIG_FILES([include/llvm/Config/AsmParsers.def])
@@ -1594,7 +1572,7 @@ dnl Configure the RPM spec file for LLVM
 AC_CONFIG_FILES([llvm.spec])
 
 dnl Configure llvmc's Base plugin
-AC_CONFIG_FILES([tools/llvmc/plugins/Base/Base.td])
+AC_CONFIG_FILES([tools/llvmc/src/Base.td])
 
 dnl Do the first stage of configuration for llvm-config.in.
 AC_CONFIG_FILES([tools/llvm-config/llvm-config.in])

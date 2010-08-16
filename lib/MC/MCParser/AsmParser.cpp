@@ -916,20 +916,29 @@ bool AsmParser::ParseStatement() {
   if (!HadError && Lexer.isNot(AsmToken::EndOfStatement))
     HadError = TokError("unexpected token in argument list");
 
+  // Dump the parsed representation, if requested.
+  if (getShowParsedOperands()) {
+    SmallString<256> Str;
+    raw_svector_ostream OS(Str);
+    OS << "parsed instruction: [";
+    for (unsigned i = 0; i != ParsedOperands.size(); ++i) {
+      if (i != 0)
+        OS << ", ";
+      ParsedOperands[i]->dump(OS);
+    }
+    OS << "]";
+
+    PrintMessage(IDLoc, OS.str(), "note");
+  }
+
   // If parsing succeeded, match the instruction.
   if (!HadError) {
     MCInst Inst;
-    if (!getTargetParser().MatchInstruction(ParsedOperands, Inst)) {
+    if (!getTargetParser().MatchInstruction(IDLoc, ParsedOperands, Inst)) {
       // Emit the instruction on success.
       Out.EmitInstruction(Inst);
-    } else {
-      // Otherwise emit a diagnostic about the match failure and set the error
-      // flag.
-      //
-      // FIXME: We should give nicer diagnostics about the exact failure.
-      Error(IDLoc, "unrecognized instruction");
+    } else
       HadError = true;
-    }
   }
 
   // If there was no error, consume the end-of-statement token. Otherwise this
@@ -1032,12 +1041,14 @@ bool AsmParser::HandleMacroEntry(StringRef Name, SMLoc NameLoc,
     // list.
     if (ParenLevel == 0 && Lexer.is(AsmToken::Comma)) {
       MacroArguments.push_back(std::vector<AsmToken>());
-    } else if (Lexer.is(AsmToken::LParen)) {
-      ++ParenLevel;
-    } else if (Lexer.is(AsmToken::RParen)) {
-      if (ParenLevel)
-        --ParenLevel;
     } else {
+      // Adjust the current parentheses level.
+      if (Lexer.is(AsmToken::LParen))
+        ++ParenLevel;
+      else if (Lexer.is(AsmToken::RParen) && ParenLevel)
+        --ParenLevel;
+
+      // Append the token to the current argument list.
       MacroArguments.back().push_back(getTok());
     }
     Lex();

@@ -77,12 +77,23 @@ public:
 
   static LVILatticeVal get(Constant *C) {
     LVILatticeVal Res;
-    Res.markConstant(C);
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(C))
+      Res.markConstantRange(ConstantRange(CI->getValue(), CI->getValue()+1));
+    else if (!isa<UndefValue>(C))
+      Res.markConstant(C);
     return Res;
   }
   static LVILatticeVal getNot(Constant *C) {
     LVILatticeVal Res;
-    Res.markNotConstant(C);
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(C))
+      Res.markConstantRange(ConstantRange(CI->getValue()+1, CI->getValue()));
+    else
+      Res.markNotConstant(C);
+    return Res;
+  }
+  static LVILatticeVal getRange(ConstantRange CR) {
+    LVILatticeVal Res;
+    Res.markConstantRange(CR);
     return Res;
   }
   
@@ -154,8 +165,6 @@ public:
       if (NewR.isEmptySet())
         return markOverdefined();
       
-      assert(Range.contains(NewR) &&
-             "Marking constant range with non-subset range!");
       bool changed = Range == NewR;
       Range = NewR;
       return changed;
@@ -202,8 +211,8 @@ public:
     
     if (RHS.isConstantRange()) {
       if (isConstantRange()) {
-        ConstantRange NewR = Range.intersectWith(RHS.getConstantRange());
-        if (NewR.isEmptySet())
+        ConstantRange NewR = Range.unionWith(RHS.getConstantRange());
+        if (NewR.isFullSet())
           return markOverdefined();
         else
           return markConstantRange(NewR);
@@ -247,6 +256,9 @@ raw_ostream &operator<<(raw_ostream &OS, const LVILatticeVal &Val) {
 
   if (Val.isNotConstant())
     return OS << "notconstant<" << *Val.getNotConstant() << '>';
+  else if (Val.isConstantRange())
+    return OS << "constantrange<" << Val.getConstantRange().getLower() << ", "
+              << Val.getConstantRange().getUpper() << '>';
   return OS << "constant<" << *Val.getConstant() << '>';
 }
 }
@@ -372,7 +384,6 @@ namespace {
 } // end anonymous namespace
 
 void LazyValueInfoCache::LVIValueHandle::deleted() {
-  Parent->ValueCache.erase(*this);
   for (std::set<std::pair<BasicBlock*, Value*> >::iterator
        I = Parent->OverDefinedCache.begin(),
        E = Parent->OverDefinedCache.end();
@@ -382,6 +393,10 @@ void LazyValueInfoCache::LVIValueHandle::deleted() {
     if (tmp->second == getValPtr())
       Parent->OverDefinedCache.erase(tmp);
   }
+  
+  // This erasure deallocates *this, so it MUST happen after we're done
+  // using any and all members of *this.
+  Parent->ValueCache.erase(*this);
 }
 
 
@@ -495,19 +510,42 @@ LVILatticeVal LVIQuery::getEdgeValue(BasicBlock *BBFrom, BasicBlock *BBTo) {
       // it is.
       if (BI->getCondition() == Val)
         return LVILatticeVal::get(ConstantInt::get(
-                               Type::getInt1Ty(Val->getContext()), isTrueDest));
+                              Type::getInt1Ty(Val->getContext()), isTrueDest));
       
       // If the condition of the branch is an equality comparison, we may be
       // able to infer the value.
-      if (ICmpInst *ICI = dyn_cast<ICmpInst>(BI->getCondition()))
-        if (ICI->isEquality() && ICI->getOperand(0) == Val &&
-            isa<Constant>(ICI->getOperand(1))) {
+      ICmpInst *ICI = dyn_cast<ICmpInst>(BI->getCondition());
+      if (ICI && ICI->getOperand(0) == Val &&
+          isa<Constant>(ICI->getOperand(1))) {
+        if (ICI->isEquality()) {
           // We know that V has the RHS constant if this is a true SETEQ or
           // false SETNE. 
           if (isTrueDest == (ICI->getPredicate() == ICmpInst::ICMP_EQ))
             return LVILatticeVal::get(cast<Constant>(ICI->getOperand(1)));
           return LVILatticeVal::getNot(cast<Constant>(ICI->getOperand(1)));
         }
+          
+        if (ConstantInt *CI = dyn_cast<ConstantInt>(ICI->getOperand(1))) {
+          // Calculate the range of values that would satisfy the comparison.
+          ConstantRange CmpRange(CI->getValue(), CI->getValue()+1);
+          ConstantRange TrueValues =
+            ConstantRange::makeICmpRegion(ICI->getPredicate(), CmpRange);
+            
+          // If we're interested in the false dest, invert the condition.
+          if (!isTrueDest) TrueValues = TrueValues.inverse();
+          
+          // Figure out the possible values of the query BEFORE this branch.  
+          LVILatticeVal InBlock = getBlockValue(BBFrom);
+          if (!InBlock.isConstantRange()) return InBlock;
+            
+          // Find all potential values that satisfy both the input and output
+          // conditions.
+          ConstantRange PossibleValues =
+            TrueValues.intersectWith(InBlock.getConstantRange());
+            
+          return LVILatticeVal::getRange(PossibleValues);
+        }
+      }
     }
   }
 
@@ -676,6 +714,11 @@ Constant *LazyValueInfo::getConstantOnEdge(Value *V, BasicBlock *FromBB,
   
   if (Result.isConstant())
     return Result.getConstant();
+  else if (Result.isConstantRange()) {
+    ConstantRange CR = Result.getConstantRange();
+    if (const APInt *SingleVal = CR.getSingleElement())
+      return ConstantInt::get(V->getContext(), *SingleVal);
+  }
   return 0;
 }
 
@@ -693,6 +736,34 @@ LazyValueInfo::getPredicateOnEdge(unsigned Pred, Value *V, Constant *C,
     Res = ConstantFoldCompareInstOperands(Pred, Result.getConstant(), C, TD);
     if (ConstantInt *ResCI = dyn_cast_or_null<ConstantInt>(Res))
       return ResCI->isZero() ? False : True;
+    return Unknown;
+  }
+  
+  if (Result.isConstantRange()) {
+    ConstantInt *CI = cast<ConstantInt>(C);
+    ConstantRange CR = Result.getConstantRange();
+    if (Pred == ICmpInst::ICMP_EQ) {
+      if (!CR.contains(CI->getValue()))
+        return False;
+      
+      if (CR.isSingleElement() && CR.contains(CI->getValue()))
+        return True;
+    } else if (Pred == ICmpInst::ICMP_NE) {
+      if (!CR.contains(CI->getValue()))
+        return True;
+      
+      if (CR.isSingleElement() && CR.contains(CI->getValue()))
+        return False;
+    }
+    
+    // Handle more complex predicates.
+    ConstantRange RHS(CI->getValue(), CI->getValue()+1);
+    ConstantRange TrueValues = ConstantRange::makeICmpRegion(Pred, RHS);
+    if (CR.intersectWith(TrueValues).isEmptySet())
+      return False;
+    else if (TrueValues.contains(CR))
+      return True;
+    
     return Unknown;
   }
   

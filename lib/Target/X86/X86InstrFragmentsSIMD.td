@@ -117,9 +117,10 @@ def X86pcmpgtd : SDNode<"X86ISD::PCMPGTD", SDTIntBinOp>;
 def X86pcmpgtq : SDNode<"X86ISD::PCMPGTQ", SDTIntBinOp>;
 
 def SDTX86CmpPTest : SDTypeProfile<1, 2, [SDTCisVT<0, i32>,
-                                          SDTCisVT<1, v4f32>,
-                                          SDTCisVT<2, v4f32>]>;
+                                          SDTCisVec<1>,
+                                          SDTCisSameAs<2, 1>]>;
 def X86ptest   : SDNode<"X86ISD::PTEST", SDTX86CmpPTest>;
+def X86testp   : SDNode<"X86ISD::TESTP", SDTX86CmpPTest>;
 
 //===----------------------------------------------------------------------===//
 // SSE Complex Patterns
@@ -148,12 +149,13 @@ def sdmem : Operand<v2f64> {
 // SSE pattern fragments
 //===----------------------------------------------------------------------===//
 
+// 128-bit load pattern fragments
 def loadv4f32    : PatFrag<(ops node:$ptr), (v4f32 (load node:$ptr))>;
 def loadv2f64    : PatFrag<(ops node:$ptr), (v2f64 (load node:$ptr))>;
 def loadv4i32    : PatFrag<(ops node:$ptr), (v4i32 (load node:$ptr))>;
 def loadv2i64    : PatFrag<(ops node:$ptr), (v2i64 (load node:$ptr))>;
 
-// FIXME: move this to a more appropriate place after all AVX is done.
+// 256-bit load pattern fragments
 def loadv8f32    : PatFrag<(ops node:$ptr), (v8f32 (load node:$ptr))>;
 def loadv4f64    : PatFrag<(ops node:$ptr), (v4f64 (load node:$ptr))>;
 def loadv8i32    : PatFrag<(ops node:$ptr), (v8i32 (load node:$ptr))>;
@@ -174,6 +176,8 @@ def alignedloadfsf32 : PatFrag<(ops node:$ptr),
                                (f32 (alignedload node:$ptr))>;
 def alignedloadfsf64 : PatFrag<(ops node:$ptr),
                                (f64 (alignedload node:$ptr))>;
+
+// 128-bit aligned load pattern fragments
 def alignedloadv4f32 : PatFrag<(ops node:$ptr),
                                (v4f32 (alignedload node:$ptr))>;
 def alignedloadv2f64 : PatFrag<(ops node:$ptr),
@@ -183,7 +187,7 @@ def alignedloadv4i32 : PatFrag<(ops node:$ptr),
 def alignedloadv2i64 : PatFrag<(ops node:$ptr),
                                (v2i64 (alignedload node:$ptr))>;
 
-// FIXME: move this to a more appropriate place after all AVX is done.
+// 256-bit aligned load pattern fragments
 def alignedloadv8f32 : PatFrag<(ops node:$ptr),
                                (v8f32 (alignedload node:$ptr))>;
 def alignedloadv4f64 : PatFrag<(ops node:$ptr),
@@ -206,13 +210,15 @@ def memop : PatFrag<(ops node:$ptr), (load node:$ptr), [{
 
 def memopfsf32 : PatFrag<(ops node:$ptr), (f32   (memop node:$ptr))>;
 def memopfsf64 : PatFrag<(ops node:$ptr), (f64   (memop node:$ptr))>;
+
+// 128-bit memop pattern fragments
 def memopv4f32 : PatFrag<(ops node:$ptr), (v4f32 (memop node:$ptr))>;
 def memopv2f64 : PatFrag<(ops node:$ptr), (v2f64 (memop node:$ptr))>;
 def memopv4i32 : PatFrag<(ops node:$ptr), (v4i32 (memop node:$ptr))>;
 def memopv2i64 : PatFrag<(ops node:$ptr), (v2i64 (memop node:$ptr))>;
 def memopv16i8 : PatFrag<(ops node:$ptr), (v16i8 (memop node:$ptr))>;
 
-// FIXME: move this to a more appropriate place after all AVX is done.
+// 256-bit memop pattern fragments
 def memopv32i8 : PatFrag<(ops node:$ptr), (v32i8 (memop node:$ptr))>;
 def memopv8f32 : PatFrag<(ops node:$ptr), (v8f32 (memop node:$ptr))>;
 def memopv4f64 : PatFrag<(ops node:$ptr), (v4f64 (memop node:$ptr))>;
@@ -257,6 +263,7 @@ def unalignednontemporalstore : PatFrag<(ops node:$val, node:$ptr),
   return false;
 }]>;
 
+// 128-bit bitconvert pattern fragments
 def bc_v4f32 : PatFrag<(ops node:$in), (v4f32 (bitconvert node:$in))>;
 def bc_v2f64 : PatFrag<(ops node:$in), (v2f64 (bitconvert node:$in))>;
 def bc_v16i8 : PatFrag<(ops node:$in), (v16i8 (bitconvert node:$in))>;
@@ -264,7 +271,7 @@ def bc_v8i16 : PatFrag<(ops node:$in), (v8i16 (bitconvert node:$in))>;
 def bc_v4i32 : PatFrag<(ops node:$in), (v4i32 (bitconvert node:$in))>;
 def bc_v2i64 : PatFrag<(ops node:$in), (v2i64 (bitconvert node:$in))>;
 
-// FIXME: move this to a more appropriate place after all AVX is done.
+// 256-bit bitconvert pattern fragments
 def bc_v8i32 : PatFrag<(ops node:$in), (v8i32 (bitconvert node:$in))>;
 
 def vzmovl_v2i64 : PatFrag<(ops node:$src),

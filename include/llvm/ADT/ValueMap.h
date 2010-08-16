@@ -82,17 +82,12 @@ class ValueMap {
   typedef typename Config::ExtraData ExtraData;
   MapT Map;
   ExtraData Data;
+  ValueMap(const ValueMap&); // DO NOT IMPLEMENT
+  ValueMap& operator=(const ValueMap&); // DO NOT IMPLEMENT
 public:
   typedef KeyT key_type;
   typedef ValueT mapped_type;
   typedef std::pair<KeyT, ValueT> value_type;
-
-  ValueMap(const ValueMap& Other) : Map(Other.Map), Data(Other.Data) {
-    // Each ValueMapCVH key contains a pointer to the containing ValueMap.
-    // The keys in the new map need to point to the new map, not Other.
-    for (typename MapT::iterator I = Map.begin(), E = Map.end(); I != E; ++I)
-      I->first.Map = this;
-  }
 
   explicit ValueMap(unsigned NumInitBuckets = 64)
     : Map(NumInitBuckets), Data() {}
@@ -164,12 +159,6 @@ public:
 
   ValueT &operator[](const KeyT &Key) {
     return Map[Wrap(Key)];
-  }
-
-  ValueMap& operator=(const ValueMap& Other) {
-    Map = Other.Map;
-    Data = Other.Data;
-    return *this;
   }
 
   /// isPointerIntoBucketsArray - Return true if the specified pointer points

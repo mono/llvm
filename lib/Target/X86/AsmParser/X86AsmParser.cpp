@@ -10,6 +10,7 @@
 #include "llvm/Target/TargetAsmParser.h"
 #include "X86.h"
 #include "X86Subtarget.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
@@ -20,6 +21,7 @@
 #include "llvm/MC/MCParser/MCAsmParser.h"
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegistry.h"
 #include "llvm/Target/TargetAsmParser.h"
 using namespace llvm;
@@ -50,7 +52,8 @@ private:
 
   bool ParseDirectiveWord(unsigned Size, SMLoc L);
 
-  bool MatchInstruction(const SmallVectorImpl<MCParsedAsmOperand*> &Operands,
+  bool MatchInstruction(SMLoc IDLoc,
+                        const SmallVectorImpl<MCParsedAsmOperand*> &Operands,
                         MCInst &Inst);
 
   /// @name Auto-generated Matcher Functions
@@ -147,6 +150,8 @@ struct X86Operand : public MCParsedAsmOperand {
   SMLoc getStartLoc() const { return StartLoc; }
   /// getEndLoc - Get the location of the last token of this operand.
   SMLoc getEndLoc() const { return EndLoc; }
+
+  virtual void dump(raw_ostream &OS) const {}
 
   StringRef getToken() const {
     assert(Kind == Token && "Invalid access!");
@@ -869,20 +874,20 @@ bool X86ATTAsmParser::ParseDirectiveWord(unsigned Size, SMLoc L) {
   return false;
 }
 
+
 bool
-X86ATTAsmParser::MatchInstruction(const SmallVectorImpl<MCParsedAsmOperand*>
+X86ATTAsmParser::MatchInstruction(SMLoc IDLoc,
+                                  const SmallVectorImpl<MCParsedAsmOperand*>
                                     &Operands,
                                   MCInst &Inst) {
+  assert(!Operands.empty() && "Unexpect empty operand list!");
+
+  X86Operand *Op = static_cast<X86Operand*>(Operands[0]);
+  assert(Op->isToken() && "Leading operand should always be a mnemonic!");
+
   // First, try a direct match.
   if (!MatchInstructionImpl(Operands, Inst))
     return false;
-
-  // Ignore anything which is obviously not a suffix match.
-  if (Operands.size() == 0)
-    return true;
-  X86Operand *Op = static_cast<X86Operand*>(Operands[0]);
-  if (!Op->isToken() || Op->getToken().size() > 15)
-    return true;
 
   // FIXME: Ideally, we would only attempt suffix matches for things which are
   // valid prefixes, and we could just infer the right unambiguous
@@ -890,10 +895,11 @@ X86ATTAsmParser::MatchInstruction(const SmallVectorImpl<MCParsedAsmOperand*>
   // following hack.
 
   // Change the operand to point to a temporary token.
-  char Tmp[16];
   StringRef Base = Op->getToken();
-  memcpy(Tmp, Base.data(), Base.size());
-  Op->setTokenValue(StringRef(Tmp, Base.size() + 1));
+  SmallString<16> Tmp;
+  Tmp += Base;
+  Tmp += ' ';
+  Op->setTokenValue(Tmp.str());
 
   // Check for the various suffix matches.
   Tmp[Base.size()] = 'b';
@@ -915,6 +921,38 @@ X86ATTAsmParser::MatchInstruction(const SmallVectorImpl<MCParsedAsmOperand*>
     return false;
 
   // Otherwise, the match failed.
+
+  // If we had multiple suffix matches, then identify this as an ambiguous
+  // match.
+  if (MatchB + MatchW + MatchL + MatchQ != 4) {
+    char MatchChars[4];
+    unsigned NumMatches = 0;
+    if (!MatchB)
+      MatchChars[NumMatches++] = 'b';
+    if (!MatchW)
+      MatchChars[NumMatches++] = 'w';
+    if (!MatchL)
+      MatchChars[NumMatches++] = 'l';
+    if (!MatchQ)
+      MatchChars[NumMatches++] = 'q';
+
+    SmallString<126> Msg;
+    raw_svector_ostream OS(Msg);
+    OS << "ambiguous instructions require an explicit suffix (could be ";
+    for (unsigned i = 0; i != NumMatches; ++i) {
+      if (i != 0)
+        OS << ", ";
+      if (i + 1 == NumMatches)
+        OS << "or ";
+      OS << "'" << Base << MatchChars[i] << "'";
+    }
+    OS << ")";
+    Error(IDLoc, OS.str());
+  } else {
+    // FIXME: We should give nicer diagnostics about the exact failure.
+    Error(IDLoc, "unrecognized instruction");
+  }
+
   return true;
 }
 

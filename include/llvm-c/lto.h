@@ -135,6 +135,12 @@ lto_module_dispose(lto_module_t mod);
 extern const char*
 lto_module_get_target_triple(lto_module_t mod);
 
+/**
+ * Sets triple string with which the object will be codegened.
+ */
+extern void
+lto_module_set_target_triple(lto_module_t mod, const char *triple);
+
 
 /**
  * Returns the number of symbols in the object module.
@@ -200,6 +206,13 @@ lto_codegen_set_pic_model(lto_code_gen_t cg, lto_codegen_model);
 
 
 /**
+ * Sets the cpu to generate code for.
+ */
+extern void
+lto_codegen_set_cpu(lto_code_gen_t cg, const char *cpu);
+
+
+/**
  * Sets the location of the "gcc" to run. If not set, libLTO will search for
  * "gcc" on the path.
  */
@@ -214,6 +227,12 @@ lto_codegen_set_gcc_path(lto_code_gen_t cg, const char* path);
 extern void
 lto_codegen_set_assembler_path(lto_code_gen_t cg, const char* path);
 
+/**
+ * Sets extra arguments that libLTO should pass to the assembler.
+ */
+extern void
+lto_codegen_set_assembler_args(lto_code_gen_t cg, const char **args,
+                               int nargs);
 
 /**
  * Adds to a list of all global symbols that must exist in the final

@@ -182,8 +182,9 @@ void LiveInterval::markValNoForDeletion(VNInfo *ValNo) {
 
 /// RenumberValues - Renumber all values in order of appearance and delete the
 /// remaining unused values.
-void LiveInterval::RenumberValues() {
+void LiveInterval::RenumberValues(LiveIntervals &lis) {
   SmallPtrSet<VNInfo*, 8> Seen;
+  bool seenPHIDef = false;
   valnos.clear();
   for (const_iterator I = begin(), E = end(); I != E; ++I) {
     VNInfo *VNI = I->valno;
@@ -192,6 +193,26 @@ void LiveInterval::RenumberValues() {
     assert(!VNI->isUnused() && "Unused valno used by live range");
     VNI->id = (unsigned)valnos.size();
     valnos.push_back(VNI);
+    VNI->setHasPHIKill(false);
+    if (VNI->isPHIDef())
+      seenPHIDef = true;
+  }
+
+  // Recompute phi kill flags.
+  if (!seenPHIDef)
+    return;
+  for (const_vni_iterator I = vni_begin(), E = vni_end(); I != E; ++I) {
+    VNInfo *VNI = *I;
+    if (!VNI->isPHIDef())
+      continue;
+    const MachineBasicBlock *PHIBB = lis.getMBBFromIndex(VNI->def);
+    assert(PHIBB && "No basic block for phi-def");
+    for (MachineBasicBlock::const_pred_iterator PI = PHIBB->pred_begin(),
+         PE = PHIBB->pred_end(); PI != PE; ++PI) {
+      VNInfo *KVNI = getVNInfoAt(lis.getMBBEndIdx(*PI).getPrevSlot());
+      if (KVNI)
+        KVNI->setHasPHIKill(true);
+    }
   }
 }
 
@@ -309,7 +330,7 @@ LiveInterval::addRangeFrom(LiveRange LR, iterator From) {
   return ranges.insert(it, LR);
 }
 
-/// isInOneLiveRange - Return true if the range specified is entirely in 
+/// isInOneLiveRange - Return true if the range specified is entirely in
 /// a single LiveRange of the live interval.
 bool LiveInterval::isInOneLiveRange(SlotIndex Start, SlotIndex End) {
   Ranges::iterator I = std::upper_bound(ranges.begin(), ranges.end(), Start);
@@ -386,7 +407,7 @@ void LiveInterval::removeValNo(VNInfo *ValNo) {
 
 /// getLiveRangeContaining - Return the live range that contains the
 /// specified index, or null if there is none.
-LiveInterval::const_iterator 
+LiveInterval::const_iterator
 LiveInterval::FindLiveRangeContaining(SlotIndex Idx) const {
   const_iterator It = std::upper_bound(begin(), end(), Idx);
   if (It != ranges.begin()) {
@@ -398,7 +419,7 @@ LiveInterval::FindLiveRangeContaining(SlotIndex Idx) const {
   return end();
 }
 
-LiveInterval::iterator 
+LiveInterval::iterator
 LiveInterval::FindLiveRangeContaining(SlotIndex Idx) {
   iterator It = std::upper_bound(begin(), end(), Idx);
   if (It != begin()) {
@@ -406,7 +427,7 @@ LiveInterval::FindLiveRangeContaining(SlotIndex Idx) {
     if (It->contains(Idx))
       return It;
   }
-  
+
   return end();
 }
 
@@ -438,11 +459,11 @@ VNInfo *LiveInterval::findDefinedVNInfoForStackInt(unsigned reg) const {
 /// the intervals are not joinable, this aborts.
 void LiveInterval::join(LiveInterval &Other,
                         const int *LHSValNoAssignments,
-                        const int *RHSValNoAssignments, 
+                        const int *RHSValNoAssignments,
                         SmallVector<VNInfo*, 16> &NewVNInfo,
                         MachineRegisterInfo *MRI) {
   // Determine if any of our live range values are mapped.  This is uncommon, so
-  // we want to avoid the interval scan if not. 
+  // we want to avoid the interval scan if not.
   bool MustMapCurValNos = false;
   unsigned NumVals = getNumValNums();
   unsigned NumNewVals = NewVNInfo.size();
@@ -462,7 +483,7 @@ void LiveInterval::join(LiveInterval &Other,
     ++OutIt;
     for (iterator I = OutIt, E = end(); I != E; ++I) {
       OutIt->valno = NewVNInfo[LHSValNoAssignments[I->valno->id]];
-      
+
       // If this live range has the same value # as its immediate predecessor,
       // and if they are neighbors, remove one LiveRange.  This happens when we
       // have [0,3:0)[4,7:1) and map 0/1 onto the same value #.
@@ -473,12 +494,12 @@ void LiveInterval::join(LiveInterval &Other,
           OutIt->start = I->start;
           OutIt->end = I->end;
         }
-        
+
         // Didn't merge, on to the next one.
         ++OutIt;
       }
     }
-    
+
     // If we merge some live ranges, chop off the end.
     ranges.erase(OutIt, end());
   }
@@ -496,7 +517,7 @@ void LiveInterval::join(LiveInterval &Other,
     if (VNI) {
       if (NumValNos >= NumVals)
         valnos.push_back(VNI);
-      else 
+      else
         valnos[NumValNos] = VNI;
       VNI->id = NumValNos++;  // Renumber val#.
     }
@@ -515,25 +536,13 @@ void LiveInterval::join(LiveInterval &Other,
   }
 
   ComputeJoinedWeight(Other);
-
-  // Update regalloc hint if currently there isn't one.
-  if (TargetRegisterInfo::isVirtualRegister(reg) &&
-      TargetRegisterInfo::isVirtualRegister(Other.reg)) {
-    std::pair<unsigned, unsigned> Hint = MRI->getRegAllocationHint(reg);
-    if (Hint.first == 0 && Hint.second == 0) {
-      std::pair<unsigned, unsigned> OtherHint =
-        MRI->getRegAllocationHint(Other.reg);
-      if (OtherHint.first || OtherHint.second)
-        MRI->setRegAllocationHint(reg, OtherHint.first, OtherHint.second);
-    }
-  }
 }
 
 /// MergeRangesInAsValue - Merge all of the intervals in RHS into this live
 /// interval as the specified value number.  The LiveRanges in RHS are
 /// allowed to overlap with LiveRanges in the current interval, but only if
 /// the overlapping LiveRanges have the specified value number.
-void LiveInterval::MergeRangesInAsValue(const LiveInterval &RHS, 
+void LiveInterval::MergeRangesInAsValue(const LiveInterval &RHS,
                                         VNInfo *LHSValNo) {
   // TODO: Make this more efficient.
   iterator InsertPos = begin();
@@ -582,7 +591,7 @@ void LiveInterval::MergeValueInAsValue(
       // If this trimmed away the whole range, ignore it.
       if (Start == End) continue;
     }
-    
+
     // Map the valno in the other live range to the current live range.
     IP = addRangeFrom(LiveRange(Start, End, LHSValNo), IP);
   }
@@ -597,7 +606,7 @@ void LiveInterval::MergeValueInAsValue(
         if (I->valno == V1) {
           isDead = false;
           break;
-        }          
+        }
       if (isDead) {
         // Now that V1 is dead, remove it.
         markValNoForDeletion(V1);
@@ -614,7 +623,7 @@ void LiveInterval::MergeInClobberRanges(LiveIntervals &li_,
                                         const LiveInterval &Clobbers,
                                         VNInfo::Allocator &VNInfoAllocator) {
   if (Clobbers.empty()) return;
-  
+
   DenseMap<VNInfo*, VNInfo*> ValNoMaps;
   VNInfo *UnusedValNo = 0;
   iterator IP = begin();
@@ -684,10 +693,10 @@ void LiveInterval::MergeInClobberRange(LiveIntervals &li_,
   // for unknown values, use it.
   VNInfo *ClobberValNo =
     getNextValue(li_.getInvalidIndex(), 0, false, VNInfoAllocator);
-  
+
   iterator IP = begin();
   IP = std::upper_bound(IP, end(), Start);
-    
+
   // If the start of this range overlaps with an existing liverange, trim it.
   if (IP != begin() && IP[-1].end > Start) {
     Start = IP[-1].end;
@@ -700,7 +709,7 @@ void LiveInterval::MergeInClobberRange(LiveIntervals &li_,
     // If this trimmed away the whole range, ignore it.
     if (Start == End) return;
   }
-    
+
   // Insert the clobber interval.
   addRangeFrom(LiveRange(Start, End, ClobberValNo), IP);
 }
@@ -727,7 +736,7 @@ VNInfo* LiveInterval::MergeValueNumberInto(VNInfo *V1, VNInfo *V2) {
   for (iterator I = begin(); I != end(); ) {
     iterator LR = I++;
     if (LR->valno != V1) continue;  // Not a V1 LiveRange.
-    
+
     // Okay, we found a V1 live range.  If it had a previous, touching, V2 live
     // range, extend it.
     if (LR != begin()) {
@@ -741,11 +750,11 @@ VNInfo* LiveInterval::MergeValueNumberInto(VNInfo *V1, VNInfo *V2) {
         LR = Prev;
       }
     }
-    
+
     // Okay, now we have a V1 or V2 live range that is maximally merged forward.
     // Ensure that it is a V2 live-range.
     LR->valno = V2;
-    
+
     // If we can merge it into later V2 live ranges, do so now.  We ignore any
     // following V1 live ranges, as they will be merged in subsequent iterations
     // of the loop.
@@ -757,10 +766,10 @@ VNInfo* LiveInterval::MergeValueNumberInto(VNInfo *V1, VNInfo *V2) {
       }
     }
   }
-  
+
   // Now that V1 is dead, remove it.
   markValNoForDeletion(V1);
-  
+
   return V2;
 }
 

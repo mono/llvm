@@ -51,6 +51,12 @@ using namespace llvm;
 
 STATISTIC(NumTailCalls, "Number of tail calls");
 
+// This option should go away when tail calls fully work.
+static cl::opt<bool>
+EnableARMTailCalls("arm-tail-calls", cl::Hidden,
+  cl::desc("Generate tail calls (TEMPORARY OPTION)."),
+  cl::init(false));
+
 // This option should go away when Machine LICM is smart enough to hoist a 
 // reg-to-reg VDUP.
 static cl::opt<bool>
@@ -266,7 +272,8 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
     addRegisterClass(MVT::i32, ARM::GPRRegisterClass);
   if (!UseSoftFloat && Subtarget->hasVFP2() && !Subtarget->isThumb1Only()) {
     addRegisterClass(MVT::f32, ARM::SPRRegisterClass);
-    addRegisterClass(MVT::f64, ARM::DPRRegisterClass);
+    if (!Subtarget->isFPOnlySP())
+      addRegisterClass(MVT::f64, ARM::DPRRegisterClass);
 
     setTruncStoreAction(MVT::f64, MVT::f32, Expand);
   }
@@ -417,12 +424,10 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setExceptionPointerRegister(ARM::R0);
   setExceptionSelectorRegister(ARM::R1);
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
-  // Handle atomics directly for ARMv[67] (except for Thumb1), otherwise
-  // use the default expansion.
-  bool canHandleAtomics =
-    (Subtarget->hasV7Ops() ||
-      (Subtarget->hasV6Ops() && !Subtarget->isThumb1Only()));
-  if (canHandleAtomics) {
+  // ARMv6 Thumb1 (except for CPUs that support dmb / dsb) and earlier use
+  // the default expansion.
+  if (Subtarget->hasDataBarrier() ||
+      (Subtarget->hasV6Ops() && !Subtarget->isThumb1Only())) {
     // membarrier needs custom lowering; the rest are legal and handled
     // normally.
     setOperationAction(ISD::MEMBARRIER, MVT::Other, Custom);
@@ -490,9 +495,9 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::SETCC,     MVT::i32, Expand);
   setOperationAction(ISD::SETCC,     MVT::f32, Expand);
   setOperationAction(ISD::SETCC,     MVT::f64, Expand);
-  setOperationAction(ISD::SELECT,    MVT::i32, Expand);
-  setOperationAction(ISD::SELECT,    MVT::f32, Expand);
-  setOperationAction(ISD::SELECT,    MVT::f64, Expand);
+  setOperationAction(ISD::SELECT,    MVT::i32, Custom);
+  setOperationAction(ISD::SELECT,    MVT::f32, Custom);
+  setOperationAction(ISD::SELECT,    MVT::f64, Custom);
   setOperationAction(ISD::SELECT_CC, MVT::i32, Custom);
   setOperationAction(ISD::SELECT_CC, MVT::f32, Custom);
   setOperationAction(ISD::SELECT_CC, MVT::f64, Custom);
@@ -747,14 +752,15 @@ Sched::Preference ARMTargetLowering::getSchedulingPreference(SDNode *N) const {
 unsigned
 ARMTargetLowering::getRegPressureLimit(const TargetRegisterClass *RC,
                                        MachineFunction &MF) const {
-  unsigned FPDiff = RegInfo->hasFP(MF) ? 1 : 0;
   switch (RC->getID()) {
   default:
     return 0;
   case ARM::tGPRRegClassID:
-    return 5 - FPDiff;
-  case ARM::GPRRegClassID:
-    return 10 - FPDiff - (Subtarget->isR9Reserved() ? 1 : 0);
+    return RegInfo->hasFP(MF) ? 4 : 5;
+  case ARM::GPRRegClassID: {
+    unsigned FP = RegInfo->hasFP(MF) ? 1 : 0;
+    return 10 - FP - (Subtarget->isR9Reserved() ? 1 : 0);
+  }
   case ARM::SPRRegClassID:  // Currently not used as 'rep' register class.
   case ARM::DPRRegClassID:
     return 32 - 10;
@@ -1127,6 +1133,9 @@ ARMTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   MachineFunction &MF = DAG.getMachineFunction();
   bool IsStructRet    = (Outs.empty()) ? false : Outs[0].Flags.isSRet();
   bool IsSibCall = false;
+  // Temporarily disable tail calls so things don't break.
+  if (!EnableARMTailCalls)
+    isTailCall = false;
   if (isTailCall) {
     // Check if it's really possible to do a tail call.
     isTailCall = IsEligibleForTailCallOptimization(Callee, CallConv,
@@ -2001,17 +2010,19 @@ static SDValue LowerMEMBARRIER(SDValue Op, SelectionDAG &DAG,
   DebugLoc dl = Op.getDebugLoc();
   SDValue Op5 = Op.getOperand(5);
   unsigned isDeviceBarrier = cast<ConstantSDNode>(Op5)->getZExtValue();
-  // v6 and v7 can both handle barriers directly, but need handled a bit
-  // differently. Thumb1 and pre-v6 ARM mode use a libcall instead and should
+  // Some subtargets which have dmb and dsb instructions can handle barriers
+  // directly. Some ARMv6 cpus can support them with the help of mcr
+  // instruction. Thumb1 and pre-v6 ARM mode use a libcall instead and should
   // never get here.
   unsigned Opc = isDeviceBarrier ? ARMISD::SYNCBARRIER : ARMISD::MEMBARRIER;
-  if (Subtarget->hasV7Ops())
+  if (Subtarget->hasDataBarrier())
     return DAG.getNode(Opc, dl, MVT::Other, Op.getOperand(0));
-  else if (Subtarget->hasV6Ops() && !Subtarget->isThumb1Only())
+  else {
+    assert(Subtarget->hasV6Ops() && !Subtarget->isThumb1Only() &&
+           "Unexpected ISD::MEMBARRIER encountered. Should be libcall!");
     return DAG.getNode(Opc, dl, MVT::Other, Op.getOperand(0),
                        DAG.getConstant(0, MVT::i32));
-  assert(0 && "Unexpected ISD::MEMBARRIER encountered. Should be libcall!");
-  return SDValue();
+  }
 }
 
 static SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) {
@@ -2321,6 +2332,52 @@ ARMTargetLowering::getVFPCmp(SDValue LHS, SDValue RHS, SelectionDAG &DAG,
   else
     Cmp = DAG.getNode(ARMISD::CMPFPw0, dl, MVT::Flag, LHS);
   return DAG.getNode(ARMISD::FMSTAT, dl, MVT::Flag, Cmp);
+}
+
+SDValue ARMTargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
+  SDValue Cond = Op.getOperand(0);
+  SDValue SelectTrue = Op.getOperand(1);
+  SDValue SelectFalse = Op.getOperand(2);
+  DebugLoc dl = Op.getDebugLoc();
+
+  // Convert:
+  //
+  //   (select (cmov 1, 0, cond), t, f) -> (cmov t, f, cond)
+  //   (select (cmov 0, 1, cond), t, f) -> (cmov f, t, cond)
+  //
+  if (Cond.getOpcode() == ARMISD::CMOV && Cond.hasOneUse()) {
+    const ConstantSDNode *CMOVTrue =
+      dyn_cast<ConstantSDNode>(Cond.getOperand(0));
+    const ConstantSDNode *CMOVFalse =
+      dyn_cast<ConstantSDNode>(Cond.getOperand(1));
+
+    if (CMOVTrue && CMOVFalse) {
+      unsigned CMOVTrueVal = CMOVTrue->getZExtValue();
+      unsigned CMOVFalseVal = CMOVFalse->getZExtValue();
+
+      SDValue True;
+      SDValue False;
+      if (CMOVTrueVal == 1 && CMOVFalseVal == 0) {
+        True = SelectTrue;
+        False = SelectFalse;
+      } else if (CMOVTrueVal == 0 && CMOVFalseVal == 1) {
+        True = SelectFalse;
+        False = SelectTrue;
+      }
+
+      if (True.getNode() && False.getNode()) {
+        EVT VT = Cond.getValueType();
+        SDValue ARMcc = Cond.getOperand(2);
+        SDValue CCR = Cond.getOperand(3);
+        SDValue Cmp = Cond.getOperand(4);
+        return DAG.getNode(ARMISD::CMOV, dl, VT, True, False, ARMcc, CCR, Cmp);
+      }
+    }
+  }
+
+  return DAG.getSelectCC(dl, Cond,
+                         DAG.getConstant(0, Cond.getValueType()),
+                         SelectTrue, SelectFalse, ISD::SETNE);
 }
 
 SDValue ARMTargetLowering::LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const {
@@ -3696,6 +3753,7 @@ SDValue ARMTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
     return Subtarget->isTargetDarwin() ? LowerGlobalAddressDarwin(Op, DAG) :
       LowerGlobalAddressELF(Op, DAG);
   case ISD::GlobalTLSAddress:   return LowerGlobalTLSAddress(Op, DAG);
+  case ISD::SELECT:        return LowerSELECT(Op, DAG);
   case ISD::SELECT_CC:     return LowerSELECT_CC(Op, DAG);
   case ISD::BR_CC:         return LowerBR_CC(Op, DAG);
   case ISD::BR_JT:         return LowerBR_JT(Op, DAG);
@@ -4101,78 +4159,6 @@ ARMTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     BuildMI(BB, dl, TII->get(isThumb2 ? ARM::t2B : ARM::B))
       .addMBB(exitMBB);
 
-    MI->eraseFromParent();   // The pseudo instruction is gone now.
-    return BB;
-  }
-
-  case ARM::tANDsp:
-  case ARM::tADDspr_:
-  case ARM::tSUBspi_:
-  case ARM::t2SUBrSPi_:
-  case ARM::t2SUBrSPi12_:
-  case ARM::t2SUBrSPs_: {
-    MachineFunction *MF = BB->getParent();
-    unsigned DstReg = MI->getOperand(0).getReg();
-    unsigned SrcReg = MI->getOperand(1).getReg();
-    bool DstIsDead = MI->getOperand(0).isDead();
-    bool SrcIsKill = MI->getOperand(1).isKill();
-
-    if (SrcReg != ARM::SP) {
-      // Copy the source to SP from virtual register.
-      const TargetRegisterClass *RC = MF->getRegInfo().getRegClass(SrcReg);
-      unsigned CopyOpc = (RC == ARM::tGPRRegisterClass)
-        ? ARM::tMOVtgpr2gpr : ARM::tMOVgpr2gpr;
-      BuildMI(*BB, MI, dl, TII->get(CopyOpc), ARM::SP)
-        .addReg(SrcReg, getKillRegState(SrcIsKill));
-    }
-
-    unsigned OpOpc = 0;
-    bool NeedPred = false, NeedCC = false, NeedOp3 = false;
-    switch (MI->getOpcode()) {
-    default:
-      llvm_unreachable("Unexpected pseudo instruction!");
-    case ARM::tANDsp:
-      OpOpc = ARM::tAND;
-      NeedPred = true;
-      break;
-    case ARM::tADDspr_:
-      OpOpc = ARM::tADDspr;
-      break;
-    case ARM::tSUBspi_:
-      OpOpc = ARM::tSUBspi;
-      break;
-    case ARM::t2SUBrSPi_:
-      OpOpc = ARM::t2SUBrSPi;
-      NeedPred = true; NeedCC = true;
-      break;
-    case ARM::t2SUBrSPi12_:
-      OpOpc = ARM::t2SUBrSPi12;
-      NeedPred = true;
-      break;
-    case ARM::t2SUBrSPs_:
-      OpOpc = ARM::t2SUBrSPs;
-      NeedPred = true; NeedCC = true; NeedOp3 = true;
-      break;
-    }
-    MachineInstrBuilder MIB = BuildMI(*BB, MI, dl, TII->get(OpOpc), ARM::SP);
-    if (OpOpc == ARM::tAND)
-      AddDefaultT1CC(MIB);
-    MIB.addReg(ARM::SP);
-    MIB.addOperand(MI->getOperand(2));
-    if (NeedOp3)
-      MIB.addOperand(MI->getOperand(3));
-    if (NeedPred)
-      AddDefaultPred(MIB);
-    if (NeedCC)
-      AddDefaultCC(MIB);
-
-    // Copy the result from SP to virtual register.
-    const TargetRegisterClass *RC = MF->getRegInfo().getRegClass(DstReg);
-    unsigned CopyOpc = (RC == ARM::tGPRRegisterClass)
-      ? ARM::tMOVgpr2tgpr : ARM::tMOVgpr2gpr;
-    BuildMI(*BB, MI, dl, TII->get(CopyOpc))
-      .addReg(DstReg, getDefRegState(true) | getDeadRegState(DstIsDead))
-      .addReg(ARM::SP);
     MI->eraseFromParent();   // The pseudo instruction is gone now.
     return BB;
   }

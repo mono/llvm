@@ -120,6 +120,14 @@ const char* lto_module_get_target_triple(lto_module_t mod)
     return mod->getTargetTriple();
 }
 
+//
+// sets triple string with which the object will be codegened.
+//
+void lto_module_set_target_triple(lto_module_t mod, const char *triple)
+{
+    return mod->setTargetTriple(triple);
+}
+
 
 //
 // returns the number of symbols in the object module
@@ -203,11 +211,29 @@ bool lto_codegen_set_pic_model(lto_code_gen_t cg, lto_codegen_model model)
 }
 
 //
+// sets the cpu to generate code for
+//
+void lto_codegen_set_cpu(lto_code_gen_t cg, const char* cpu)
+{
+  return cg->setCpu(cpu);
+}
+
+//
 // sets the path to the assembler tool
 //
 void lto_codegen_set_assembler_path(lto_code_gen_t cg, const char* path)
 {
     cg->setAssemblerPath(path);
+}
+
+
+//
+// sets extra arguments that libLTO should pass to the assembler
+//
+void lto_codegen_set_assembler_args(lto_code_gen_t cg, const char** args,
+                                    int nargs)
+{
+  cg->setAssemblerArgs(args, nargs);
 }
 
 //

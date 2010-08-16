@@ -20,6 +20,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+//#define DEBUG(X) do { X; } while (0)
+
 /// ARMGenInstrInfo.inc - ARMGenInstrInfo.inc contains the static const
 /// TargetInstrDesc ARMInsts[] definition and the TargetOperandInfo[]'s
 /// describing the operand info for each ARMInsts[i].
@@ -493,9 +495,6 @@ static inline ARM_AM::AMSubMode getAMSubModeForBits(unsigned bits) {
 static bool DisassemblePseudo(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO) {
 
-  if (Opcode == ARM::Int_MemBarrierV7 || Opcode == ARM::Int_SyncBarrierV7)
-    return true;
-
   assert(0 && "Unexpected pseudo instruction!");
   return false;
 }
@@ -908,34 +907,6 @@ static inline bool getBFCInvMask(uint32_t insn, uint32_t &mask) {
   return true;
 }
 
-static inline bool SaturateOpcode(unsigned Opcode) {
-  switch (Opcode) {
-  case ARM::SSATlsl: case ARM::SSATasr: case ARM::SSAT16:
-  case ARM::USATlsl: case ARM::USATasr: case ARM::USAT16:
-    return true;
-  default:
-    return false;
-  }
-}
-
-static inline unsigned decodeSaturatePos(unsigned Opcode, uint32_t insn) {
-  switch (Opcode) {
-  case ARM::SSATlsl:
-  case ARM::SSATasr:
-    return slice(insn, 20, 16) + 1;
-  case ARM::SSAT16:
-    return slice(insn, 19, 16) + 1;
-  case ARM::USATlsl:
-  case ARM::USATasr:
-    return slice(insn, 20, 16);
-  case ARM::USAT16:
-    return slice(insn, 19, 16);
-  default:
-    assert(0 && "Invalid opcode passed in");
-    return 0;
-  }
-}
-
 // A major complication is the fact that some of the saturating add/subtract
 // operations have Rd Rm Rn, instead of the "normal" Rd Rn Rm.
 // They are QADD, QDADD, QDSUB, and QSUB.
@@ -960,34 +931,6 @@ static bool DisassembleDPFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
   // Now disassemble the src operands.
   if (OpIdx >= NumOps)
     return false;
-
-  // SSAT/SSAT16/USAT/USAT16 has imm operand after Rd.
-  if (SaturateOpcode(Opcode)) {
-    MI.addOperand(MCOperand::CreateImm(decodeSaturatePos(Opcode, insn)));
-
-    MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
-                                                       decodeRm(insn))));
-
-    if (Opcode == ARM::SSAT16 || Opcode == ARM::USAT16) {
-      OpIdx += 2;
-      return true;
-    }
-
-    // For SSAT operand reg (Rm) has been disassembled above.
-    // Now disassemble the shift amount.
-
-    // Inst{11-7} encodes the imm5 shift amount.
-    unsigned ShAmt = slice(insn, 11, 7);
-
-    // A8.6.183.  Possible ASR shift amount of 32...
-    if (Opcode == ARM::SSATasr && ShAmt == 0)
-      ShAmt = 32;
-
-    MI.addOperand(MCOperand::CreateImm(ShAmt));
-
-    OpIdx += 3;
-    return true;
-  }
 
   // Special-case handling of BFC/BFI/SBFX/UBFX.
   if (Opcode == ARM::BFC || Opcode == ARM::BFI) {
@@ -1506,6 +1449,42 @@ static bool DisassembleArithMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     ++OpIdx;
   }
 
+  return true;
+}
+
+/// DisassembleSatFrm - Disassemble saturate instructions:
+/// SSAT, SSAT16, USAT, and USAT16.
+static bool DisassembleSatFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
+    unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
+
+  const TargetInstrDesc &TID = ARMInsts[Opcode];
+  NumOpsAdded = TID.getNumOperands() - 2; // ignore predicate operands
+
+  // Disassemble register def.
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+                                                     decodeRd(insn))));
+
+  unsigned Pos = slice(insn, 20, 16);
+  if (Opcode == ARM::SSAT || Opcode == ARM::SSAT16)
+    Pos += 1;
+  MI.addOperand(MCOperand::CreateImm(Pos));
+
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+                                                     decodeRm(insn))));
+
+  if (NumOpsAdded == 4) {
+    ARM_AM::ShiftOpc Opc = (slice(insn, 6, 6) != 0 ? ARM_AM::asr : ARM_AM::lsl);
+    // Inst{11-7} encodes the imm5 shift amount.
+    unsigned ShAmt = slice(insn, 11, 7);
+    if (ShAmt == 0) {
+      // A8.6.183.  Possible ASR shift amount of 32...
+      if (Opc == ARM_AM::asr)
+        ShAmt = 32;
+      else
+        Opc = ARM_AM::no_shift;
+    }
+    MI.addOperand(MCOperand::CreateImm(ARM_AM::getSORegOpc(Opc, ShAmt)));
+  }
   return true;
 }
 
@@ -2956,7 +2935,7 @@ static bool DisassembleNDupFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
 // A8.6.49 ISB
 static inline bool MemBarrierInstr(uint32_t insn) {
   unsigned op7_4 = slice(insn, 7, 4);
-  if (slice(insn, 31, 20) == 0xf57 && (op7_4 >= 4 && op7_4 <= 6))
+  if (slice(insn, 31, 8) == 0xf57ff0 && (op7_4 >= 4 && op7_4 <= 6))
     return true;
 
   return false;
@@ -3013,8 +2992,15 @@ static bool DisassemblePreLoadFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  if (MemBarrierInstr(insn))
+  if (MemBarrierInstr(insn)) {
+    // DMBsy, DSBsy, and ISBsy instructions have zero operand and are taken care
+    // of within the generic ARMBasicMCBuilder::BuildIt() method.
+    //
+    // Inst{3-0} encodes the memory barrier option for the variants.
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 3, 0)));
+    NumOpsAdded = 1;
     return true;
+  }
 
   switch (Opcode) {
   case ARM::CLREX:
@@ -3085,6 +3071,7 @@ static const DisassembleFP FuncPtrs[] = {
   &DisassembleLdStMulFrm,
   &DisassembleLdStExFrm,
   &DisassembleArithMiscFrm,
+  &DisassembleSatFrm,
   &DisassembleExtFrm,
   &DisassembleVFPUnaryFrm,
   &DisassembleVFPBinaryFrm,

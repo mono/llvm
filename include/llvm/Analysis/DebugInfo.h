@@ -62,6 +62,7 @@ namespace llvm {
     }
 
     GlobalVariable *getGlobalVariableField(unsigned Elt) const;
+    Constant *getConstantField(unsigned Elt) const;
     Function *getFunctionField(unsigned Elt) const;
 
   public:
@@ -447,6 +448,7 @@ namespace llvm {
     unsigned isDefinition() const       { return getUnsignedField(10); }
 
     GlobalVariable *getGlobal() const { return getGlobalVariableField(11); }
+    Constant *getConstant() const   { return getConstantField(11); }
 
     /// Verify - Verify that a global variable descriptor is well formed.
     bool Verify() const;
@@ -666,7 +668,8 @@ namespace llvm {
                                           unsigned Flags,
                                           DIType DerivedFrom,
                                           DIArray Elements,
-                                          unsigned RunTimeLang = 0);
+                                          unsigned RunTimeLang = 0,
+                                          MDNode *ContainingType = 0);
 
     /// CreateSubprogram - Create a new descriptor for the specified subprogram.
     /// See comments in DISubprogram for descriptions of these fields.
@@ -695,6 +698,15 @@ namespace llvm {
                          DIFile F,
                          unsigned LineNo, DIType Ty, bool isLocalToUnit,
                          bool isDefinition, llvm::GlobalVariable *GV);
+
+    /// CreateGlobalVariable - Create a new descriptor for the specified constant.
+    DIGlobalVariable
+    CreateGlobalVariable(DIDescriptor Context, StringRef Name,
+                         StringRef DisplayName,
+                         StringRef LinkageName,
+                         DIFile F,
+                         unsigned LineNo, DIType Ty, bool isLocalToUnit,
+                         bool isDefinition, llvm::Constant *C);
 
     /// CreateVariable - Create a new descriptor for the specified variable.
     DIVariable CreateVariable(unsigned Tag, DIDescriptor Context,

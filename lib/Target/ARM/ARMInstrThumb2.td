@@ -259,9 +259,9 @@ multiclass T2I_bin_w_irs<bits<4> opcod, string opc, PatFrag opnode,
     T2I_bin_irs<opcod, opc, opnode, Commutable, ".w">;
 
 /// T2I_rbin_is - Same as T2I_bin_irs except the order of operands are
-/// reversed. It doesn't define the 'rr' form since it's handled by its
-/// T2I_bin_irs counterpart.
-multiclass T2I_rbin_is<bits<4> opcod, string opc, PatFrag opnode> {
+/// reversed.  The 'rr' form is only defined for the disassembler; for codegen
+/// it is equivalent to the T2I_bin_irs counterpart.
+multiclass T2I_rbin_irs<bits<4> opcod, string opc, PatFrag opnode> {
    // shifted imm
    def ri : T2sI<(outs rGPR:$dst), (ins rGPR:$rhs, t2_so_imm:$lhs), IIC_iALUi,
                  opc, ".w\t$dst, $rhs, $lhs",
@@ -271,6 +271,18 @@ multiclass T2I_rbin_is<bits<4> opcod, string opc, PatFrag opnode> {
      let Inst{24-21} = opcod;
      let Inst{20} = ?; // The S bit.
      let Inst{15} = 0;
+   }
+   // register
+   def rr : T2sI<(outs rGPR:$dst), (ins rGPR:$rhs, rGPR:$lhs), IIC_iALUr,
+                 opc, "\t$dst, $rhs, $lhs",
+                 [/* For disassembly only; pattern left blank */]> {
+     let Inst{31-27} = 0b11101;
+     let Inst{26-25} = 0b01;
+     let Inst{24-21} = opcod;
+     let Inst{20} = ?; // The S bit.
+     let Inst{14-12} = 0b000; // imm3
+     let Inst{7-6} = 0b00; // imm2
+     let Inst{5-4} = 0b00; // type
    }
    // shifted register
    def rs : T2sI<(outs rGPR:$dst), (ins rGPR:$rhs, t2_so_reg:$lhs), IIC_iALUsi,
@@ -461,7 +473,8 @@ multiclass T2I_adde_sube_s_irs<bits<4> opcod, string opc, PatFrag opnode,
 }
 }
 
-/// T2I_rbin_s_is - Same as T2I_rbin_is except sets 's' bit.
+/// T2I_rbin_s_is - Same as T2I_rbin_irs except sets 's' bit and the register
+/// version is not needed since this is only for codegen.
 let Defs = [CPSR] in {
 multiclass T2I_rbin_s_is<bits<4> opcod, string opc, PatFrag opnode> {
    // shifted imm
@@ -780,7 +793,7 @@ multiclass T2I_bin_rrot_DO<bits<3> opcod, string opc> {
 let neverHasSideEffects = 1 in {
 let isReMaterializable = 1 in
 def t2LEApcrel : T2XI<(outs rGPR:$dst), (ins i32imm:$label, pred:$p), IIC_iALUi,
-                      "adr$p.w\t$dst, #$label", []> {
+                      "adr${p}.w\t$dst, #$label", []> {
   let Inst{31-27} = 0b11110;
   let Inst{25-24} = 0b10;
   // Inst{23:21} = '11' (add = FALSE) or '00' (add = TRUE)
@@ -792,7 +805,7 @@ def t2LEApcrel : T2XI<(outs rGPR:$dst), (ins i32imm:$label, pred:$p), IIC_iALUi,
 } // neverHasSideEffects
 def t2LEApcrelJT : T2XI<(outs rGPR:$dst),
                         (ins i32imm:$label, nohash_imm:$id, pred:$p), IIC_iALUi,
-                        "adr$p.w\t$dst, #${label}_${id}", []> {
+                        "adr${p}.w\t$dst, #${label}_${id}", []> {
   let Inst{31-27} = 0b11110;
   let Inst{25-24} = 0b10;
   // Inst{23:21} = '11' (add = FALSE) or '00' (add = TRUE)
@@ -887,20 +900,6 @@ def t2UDIV : T2I<(outs rGPR:$dst), (ins rGPR:$a, rGPR:$b), IIC_iALUi,
   let Inst{15-12} = 0b1111;
   let Inst{7-4} = 0b1111;
 }
-
-// Pseudo instruction that will expand into a t2SUBrSPi + a copy.
-// FIXME: Now that we have rGPR, do we need these pseudos? It seems
-//        that the coalescer will now properly know how to do the right
-//        thing without them.
-let usesCustomInserter = 1 in { // Expanded after instruction selection.
-def t2SUBrSPi_   : PseudoInst<(outs GPR:$dst), (ins GPR:$sp, t2_so_imm:$imm),
-                   NoItinerary, "${:comment} sub.w\t$dst, $sp, $imm", []>;
-def t2SUBrSPi12_ : PseudoInst<(outs GPR:$dst), (ins GPR:$sp, imm0_4095:$imm),
-                   NoItinerary, "${:comment} subw\t$dst, $sp, $imm", []>;
-def t2SUBrSPs_   : PseudoInst<(outs GPR:$dst), (ins GPR:$sp, t2_so_reg:$rhs),
-                   NoItinerary, "${:comment} sub\t$dst, $sp, $rhs", []>;
-} // usesCustomInserter
-
 
 //===----------------------------------------------------------------------===//
 //  Load / store Instructions.
@@ -1401,7 +1400,7 @@ defm t2SBCS : T2I_adde_sube_s_irs<0b1011, "sbc",
                           BinOpFrag<(sube_live_carry node:$LHS, node:$RHS)>>;
 
 // RSB
-defm t2RSB  : T2I_rbin_is   <0b1110, "rsb",
+defm t2RSB  : T2I_rbin_irs  <0b1110, "rsb",
                              BinOpFrag<(sub  node:$LHS, node:$RHS)>>;
 defm t2RSBS : T2I_rbin_s_is <0b1110, "rsb",
                              BinOpFrag<(subc node:$LHS, node:$RHS)>>;
@@ -1524,24 +1523,13 @@ def t2USADA8  : T2I_mac<0, 0b111, 0b0000, (outs rGPR:$dst),
 
 // Signed/Unsigned saturate -- for disassembly only
 
-def t2SSATlsl:T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos,rGPR:$a,i32imm:$shamt),
-                    NoItinerary, "ssat", "\t$dst, $bit_pos, $a, lsl $shamt",
-                    [/* For disassembly only; pattern left blank */]> {
+def t2SSAT: T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos, rGPR:$a, sat_shift:$sh),
+                NoItinerary, "ssat", "\t$dst, $bit_pos, $a$sh",
+                [/* For disassembly only; pattern left blank */]> {
   let Inst{31-27} = 0b11110;
   let Inst{25-22} = 0b1100;
   let Inst{20} = 0;
   let Inst{15} = 0;
-  let Inst{21} = 0;        // sh = '0'
-}
-
-def t2SSATasr:T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos,rGPR:$a,i32imm:$shamt),
-                    NoItinerary, "ssat", "\t$dst, $bit_pos, $a, asr $shamt",
-                    [/* For disassembly only; pattern left blank */]> {
-  let Inst{31-27} = 0b11110;
-  let Inst{25-22} = 0b1100;
-  let Inst{20} = 0;
-  let Inst{15} = 0;
-  let Inst{21} = 1;        // sh = '1'
 }
 
 def t2SSAT16: T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos, rGPR:$a), NoItinerary,
@@ -1556,24 +1544,13 @@ def t2SSAT16: T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos, rGPR:$a), NoItinerary,
   let Inst{7-6} = 0b00;    // imm2 = '00'
 }
 
-def t2USATlsl:T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos,rGPR:$a,i32imm:$shamt),
-                     NoItinerary, "usat", "\t$dst, $bit_pos, $a, lsl $shamt",
-                     [/* For disassembly only; pattern left blank */]> {
+def t2USAT: T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos, rGPR:$a, sat_shift:$sh),
+                NoItinerary, "usat", "\t$dst, $bit_pos, $a$sh",
+                [/* For disassembly only; pattern left blank */]> {
   let Inst{31-27} = 0b11110;
   let Inst{25-22} = 0b1110;
   let Inst{20} = 0;
   let Inst{15} = 0;
-  let Inst{21} = 0;        // sh = '0'
-}
-
-def t2USATasr:T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos,rGPR:$a,i32imm:$shamt),
-                     NoItinerary, "usat", "\t$dst, $bit_pos, $a, asr $shamt",
-                     [/* For disassembly only; pattern left blank */]> {
-  let Inst{31-27} = 0b11110;
-  let Inst{25-22} = 0b1110;
-  let Inst{20} = 0;
-  let Inst{15} = 0;
-  let Inst{21} = 1;        // sh = '1'
 }
 
 def t2USAT16: T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos, rGPR:$a), NoItinerary,
@@ -1588,8 +1565,8 @@ def t2USAT16: T2I<(outs rGPR:$dst), (ins i32imm:$bit_pos, rGPR:$a), NoItinerary,
   let Inst{7-6} = 0b00;    // imm2 = '00'
 }
 
-def : T2Pat<(int_arm_ssat GPR:$a, imm:$pos), (t2SSATlsl imm:$pos, GPR:$a, 0)>;
-def : T2Pat<(int_arm_usat GPR:$a, imm:$pos), (t2USATlsl imm:$pos, GPR:$a, 0)>;
+def : T2Pat<(int_arm_ssat GPR:$a, imm:$pos), (t2SSAT imm:$pos, GPR:$a, 0)>;
+def : T2Pat<(int_arm_usat GPR:$a, imm:$pos), (t2USAT imm:$pos, GPR:$a, 0)>;
 
 //===----------------------------------------------------------------------===//
 //  Shift and rotate Instructions.
@@ -2155,11 +2132,12 @@ def : T2Pat<(or (and rGPR:$src1, 0xFFFF0000),
 //===----------------------------------------------------------------------===//
 //  Comparison Instructions...
 //
-
+let isCompare = 1 in {
 defm t2CMP  : T2I_cmp_irs<0b1101, "cmp",
                           BinOpFrag<(ARMcmp node:$LHS, node:$RHS)>>;
 defm t2CMPz : T2I_cmp_irs<0b1101, "cmp",
                           BinOpFrag<(ARMcmpZ node:$LHS, node:$RHS)>>;
+}
 
 //FIXME: Disable CMN, as CCodes are backwards from compare expectations
 //       Compare-to-zero still works out, just not the relationals
@@ -2178,11 +2156,6 @@ defm t2TST  : T2I_cmp_irs<0b0000, "tst",
                           BinOpFrag<(ARMcmpZ (and node:$LHS, node:$RHS), 0)>>;
 defm t2TEQ  : T2I_cmp_irs<0b0100, "teq",
                           BinOpFrag<(ARMcmpZ (xor node:$LHS, node:$RHS), 0)>>;
-
-// A8.6.27  CBNZ, CBZ - Compare and branch on (non)zero.
-// Short range conditional branch. Looks awesome for loops. Need to figure
-// out how to use this one.
-
 
 // Conditional moves
 // FIXME: should be able to write a pattern for ARMcmov, but can't use
@@ -2247,21 +2220,15 @@ def t2MOVCCror : T2I_movcc_sh<0b11, (outs rGPR:$dst),
 
 // memory barriers protect the atomic sequences
 let hasSideEffects = 1 in {
-def t2Int_MemBarrierV7 : AInoP<(outs), (ins),
-                        ThumbFrm, NoItinerary,
-                        "dmb", "",
-                        [(ARMMemBarrierV7)]>,
-                        Requires<[IsThumb2]> {
+def t2DMBsy : AInoP<(outs), (ins), ThumbFrm, NoItinerary, "dmb", "",
+                    [(ARMMemBarrier)]>, Requires<[IsThumb, HasDB]> {
   let Inst{31-4} = 0xF3BF8F5;
   // FIXME: add support for options other than a full system DMB
   let Inst{3-0} = 0b1111;
 }
 
-def t2Int_SyncBarrierV7 : AInoP<(outs), (ins),
-                        ThumbFrm, NoItinerary,
-                        "dsb", "",
-                        [(ARMSyncBarrierV7)]>,
-                        Requires<[IsThumb2]> {
+def t2DSBsy : AInoP<(outs), (ins), ThumbFrm, NoItinerary, "dsb", "",
+                    [(ARMSyncBarrier)]>, Requires<[IsThumb, HasDB]> {
   let Inst{31-4} = 0xF3BF8F4;
   // FIXME: add support for options other than a full system DSB
   let Inst{3-0} = 0b1111;
