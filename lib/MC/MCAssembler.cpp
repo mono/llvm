@@ -211,7 +211,8 @@ MCSymbolData::MCSymbolData(const MCSymbol &_Symbol, MCFragment *_Fragment,
                            uint64_t _Offset, MCAssembler *A)
   : Symbol(&_Symbol), Fragment(_Fragment), Offset(_Offset),
     IsExternal(false), IsPrivateExtern(false),
-    CommonSize(0), CommonAlign(0), Flags(0), Index(0)
+    CommonSize(0), SymbolSize(0), CommonAlign(0),
+    Flags(0), Index(0)
 {
   if (A)
     A->getSymbolList().push_back(this);
@@ -649,6 +650,40 @@ void MCAssembler::WriteSectionData(const MCSectionData *SD,
     WriteFragmentData(*this, Layout, *it, OW);
 
   assert(OW->getStream().tell() - Start == Layout.getSectionFileSize(SD));
+}
+
+void MCAssembler::AddSectionToTheEnd(MCSectionData &SD, MCAsmLayout &Layout) {
+  // Create dummy fragments and assign section ordinals.
+  unsigned SectionIndex = 0;
+  for (MCAssembler::iterator it = begin(), ie = end(); it != ie; ++it)
+    SectionIndex++;
+
+  SD.setOrdinal(SectionIndex);
+
+  // Assign layout order indices to sections and fragments.
+  unsigned FragmentIndex = 0;
+  unsigned i = 0;
+  for (unsigned e = Layout.getSectionOrder().size(); i != e; ++i) {
+    MCSectionData *SD = Layout.getSectionOrder()[i];
+
+    for (MCSectionData::iterator it2 = SD->begin(),
+           ie2 = SD->end(); it2 != ie2; ++it2)
+      FragmentIndex++;
+  }
+
+  SD.setLayoutOrder(i);
+  for (MCSectionData::iterator it2 = SD.begin(),
+         ie2 = SD.end(); it2 != ie2; ++it2) {
+    it2->setLayoutOrder(FragmentIndex++);
+  }
+  Layout.getSectionOrder().push_back(&SD);
+
+  Layout.LayoutSection(&SD);
+
+  // Layout until everything fits.
+  while (LayoutOnce(Layout))
+    continue;
+
 }
 
 void MCAssembler::Finish(MCObjectWriter *Writer) {

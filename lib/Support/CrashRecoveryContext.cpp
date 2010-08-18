@@ -10,6 +10,7 @@
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Config/config.h"
+#include "llvm/System/Mutex.h"
 #include "llvm/System/ThreadLocal.h"
 #include <setjmp.h>
 #include <cstdio>
@@ -22,12 +23,14 @@ struct CrashRecoveryContextImpl;
 static sys::ThreadLocal<const CrashRecoveryContextImpl> CurrentContext;
 
 struct CrashRecoveryContextImpl {
+  CrashRecoveryContext *CRC;
   std::string Backtrace;
   ::jmp_buf JumpBuffer;
   volatile unsigned Failed : 1;
 
 public:
-  CrashRecoveryContextImpl() : Failed(false) {
+  CrashRecoveryContextImpl(CrashRecoveryContext *CRC) : CRC(CRC),
+                                                        Failed(false) {
     CurrentContext.set(this);
   }
   ~CrashRecoveryContextImpl() {
@@ -35,6 +38,10 @@ public:
   }
 
   void HandleCrash() {
+    // Eliminate the current context entry, to avoid re-entering in case the
+    // cleanup code crashes.
+    CurrentContext.erase();
+
     assert(!Failed && "Crash recovery context already failed!");
     Failed = true;
 
@@ -47,6 +54,7 @@ public:
 
 }
 
+static sys::Mutex gCrashRecoveryContexMutex;
 static bool gCrashRecoveryEnabled = false;
 
 CrashRecoveryContext::~CrashRecoveryContext() {
@@ -54,11 +62,21 @@ CrashRecoveryContext::~CrashRecoveryContext() {
   delete CRCI;
 }
 
+CrashRecoveryContext *CrashRecoveryContext::GetCurrent() {
+  const CrashRecoveryContextImpl *CRCI = CurrentContext.get();
+  if (!CRCI)
+    return 0;
+
+  return CRCI->CRC;
+}
+
 #ifdef LLVM_ON_WIN32
 
 // FIXME: No real Win32 implementation currently.
 
 void CrashRecoveryContext::Enable() {
+  sys::ScopedLock L(gCrashRecoveryContexMutex);
+
   if (gCrashRecoveryEnabled)
     return;
 
@@ -66,6 +84,8 @@ void CrashRecoveryContext::Enable() {
 }
 
 void CrashRecoveryContext::Disable() {
+  sys::ScopedLock L(gCrashRecoveryContexMutex);
+
   if (!gCrashRecoveryEnabled)
     return;
 
@@ -121,6 +141,8 @@ static void CrashRecoverySignalHandler(int Signal) {
 }
 
 void CrashRecoveryContext::Enable() {
+  sys::ScopedLock L(gCrashRecoveryContexMutex);
+
   if (gCrashRecoveryEnabled)
     return;
 
@@ -138,6 +160,8 @@ void CrashRecoveryContext::Enable() {
 }
 
 void CrashRecoveryContext::Disable() {
+  sys::ScopedLock L(gCrashRecoveryContexMutex);
+
   if (!gCrashRecoveryEnabled)
     return;
 
@@ -154,7 +178,7 @@ bool CrashRecoveryContext::RunSafely(void (*Fn)(void*), void *UserData) {
   // If crash recovery is disabled, do nothing.
   if (gCrashRecoveryEnabled) {
     assert(!Impl && "Crash recovery context already initialized!");
-    CrashRecoveryContextImpl *CRCI = new CrashRecoveryContextImpl;
+    CrashRecoveryContextImpl *CRCI = new CrashRecoveryContextImpl(this);
     Impl = CRCI;
 
     if (setjmp(CRCI->JumpBuffer) != 0) {

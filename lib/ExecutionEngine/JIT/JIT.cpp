@@ -219,9 +219,8 @@ ExecutionEngine *JIT::createJIT(Module *M,
                                 StringRef MArch,
                                 StringRef MCPU,
                                 const SmallVectorImpl<std::string>& MAttrs) {
-  // This is a revert of r110564, which breaks the JIT since it can't
-  // resolve things like calls to memset in generated code
-  sys::DynamicLibrary::LoadLibraryPermanently(0, ErrorStr);
+  // Try to register the program as a source of symbols to resolve against.
+  sys::DynamicLibrary::LoadLibraryPermanently(0, NULL);
 
   // Pick a target either via -march or by guessing the native arch.
   TargetMachine *TM = JIT::selectTarget(M, MArch, MCPU, MAttrs, ErrorStr);

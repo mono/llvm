@@ -636,6 +636,30 @@ public:
     return false;
   }
 
+  /// needsFrameBaseReg - Returns true if the instruction's frame index
+  /// reference would be better served by a base register other than FP
+  /// or SP. Used by LocalStackFrameAllocation to determine which frame index
+  /// references it should create new base registers for.
+  virtual bool needsFrameBaseReg(MachineInstr *MI, unsigned operand) const {
+    return false;
+  }
+
+  /// materializeFrameBaseRegister - Insert defining instruction(s) for
+  /// BaseReg to be a pointer to FrameIdx before insertion point I.
+  virtual void materializeFrameBaseRegister(MachineBasicBlock::iterator I,
+                                            unsigned BaseReg,
+                                            int FrameIdx) const {
+    assert(0 && "materializeFrameBaseRegister does not exist on this target");
+  }
+
+  /// resolveFrameIndex - Resolve a frame index operand of an instruction
+  /// to reference the indicated base register plus offset instead.
+  virtual void resolveFrameIndex(MachineBasicBlock::iterator I,
+                                 unsigned BaseReg, int64_t Offset) const {
+    assert(0 && "resolveFrameIndex does not exist on this target");
+  }
+
+
   /// getCallFrameSetup/DestroyOpcode - These methods return the opcode of the
   /// frame setup/destroy instructions if they exist (-1 otherwise).  Some
   /// targets use pseudo instructions in order to abstract away the difference

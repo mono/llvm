@@ -1417,6 +1417,90 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
   MBB.erase(I);
 }
 
+/// needsFrameBaseReg - Returns true if the instruction's frame index
+/// reference would be better served by a base register other than FP
+/// or SP. Used by LocalStackFrameAllocation to determine which frame index
+/// references it should create new base registers for.
+bool ARMBaseRegisterInfo::
+needsFrameBaseReg(MachineInstr *MI, unsigned operand) const {
+  assert (MI->getOperand(operand).isFI() &&
+          "needsFrameBaseReg() called on non Frame Index operand!");
+
+  // It's the load/store FI references that cause issues, as it can be difficult
+  // to materialize the offset if it won't fit in the literal field. Estimate
+  // based on the size of the local frame and some conservative assumptions
+  // about the rest of the stack frame (note, this is pre-regalloc, so
+  // we don't know everything for certain yet) whether this offset is likely
+  // to be out of range of the immediate. Return true if so.
+
+  // FIXME: For testing, return true for all loads/stores and false for
+  // everything else. We want to create lots of base regs to shake out bugs.
+  //
+  // FIXME: This is Thumb2/ARM only for now to keep it simpler.
+  ARMFunctionInfo *AFI =
+    MI->getParent()->getParent()->getInfo<ARMFunctionInfo>();
+  if (AFI->isThumb1OnlyFunction())
+    return false;
+
+  unsigned Opc = MI->getOpcode();
+
+  switch (Opc) {
+  case ARM::LDR: case ARM::LDRH: case ARM::LDRB:
+  case ARM::STR: case ARM::STRH: case ARM::STRB:
+  case ARM::t2LDRi12: case ARM::t2LDRi8:
+  case ARM::t2STRi12: case ARM::t2STRi8:
+  case ARM::VLDRS: case ARM::VLDRD:
+  case ARM::VSTRS: case ARM::VSTRD:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// materializeFrameBaseRegister - Insert defining instruction(s) for
+/// BaseReg to be a pointer to FrameIdx before insertion point I.
+void ARMBaseRegisterInfo::
+materializeFrameBaseRegister(MachineBasicBlock::iterator I,
+                             unsigned BaseReg, int FrameIdx) const {
+  ARMFunctionInfo *AFI =
+    I->getParent()->getParent()->getInfo<ARMFunctionInfo>();
+  unsigned ADDriOpc = !AFI->isThumbFunction() ? ARM::ADDri : ARM::t2ADDri;
+  assert(!AFI->isThumb1OnlyFunction() &&
+         "This materializeFrameBaseRegister does not support Thumb1!");
+
+  MachineInstrBuilder MIB =
+    BuildMI(*I->getParent(), I, I->getDebugLoc(), TII.get(ADDriOpc), BaseReg)
+    .addFrameIndex(FrameIdx).addImm(0);
+  AddDefaultCC(AddDefaultPred(MIB));
+}
+
+void
+ARMBaseRegisterInfo::resolveFrameIndex(MachineBasicBlock::iterator I,
+                                       unsigned BaseReg, int64_t Offset) const {
+  MachineInstr &MI = *I;
+  MachineBasicBlock &MBB = *MI.getParent();
+  MachineFunction &MF = *MBB.getParent();
+  ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
+  int Off = Offset; // ARM doesn't need the general 64-bit offsets
+  unsigned i = 0;
+
+  assert(!AFI->isThumb1OnlyFunction() &&
+         "This resolveFrameIndex does not support Thumb1!");
+
+  while (!MI.getOperand(i).isFI()) {
+    ++i;
+    assert(i < MI.getNumOperands() && "Instr doesn't have FrameIndex operand!");
+  }
+  bool Done = false;
+  if (!AFI->isThumbFunction())
+    Done = rewriteARMFrameIndex(MI, i, BaseReg, Off, TII);
+  else {
+    assert(AFI->isThumb2Function());
+    Done = rewriteT2FrameIndex(MI, i, BaseReg, Off, TII);
+  }
+  assert (Done && "Unable to resolve frame index!");
+}
+
 unsigned
 ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                          int SPAdj, FrameIndexValue *Value,

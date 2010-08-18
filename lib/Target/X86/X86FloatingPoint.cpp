@@ -144,11 +144,6 @@ namespace {
       dbgs() << "\n";
     }
 
-    /// isStackEmpty - Return true if the FP stack is empty.
-    bool isStackEmpty() const {
-      return StackTop == 0;
-    }
-
     /// getSlot - Return the stack slot number a particular register number is
     /// in.
     unsigned getSlot(unsigned RegNo) const {

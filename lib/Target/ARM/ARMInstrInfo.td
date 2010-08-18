@@ -234,11 +234,6 @@ def bf_inv_mask_imm : Operand<i32>,
 }
 
 /// Split a 32-bit immediate into two 16 bit parts.
-def lo16 : SDNodeXForm<imm, [{
-  return CurDAG->getTargetConstant((uint32_t)N->getZExtValue() & 0xffff,
-                                   MVT::i32);
-}]>;
-
 def hi16 : SDNodeXForm<imm, [{
   return CurDAG->getTargetConstant((uint32_t)N->getZExtValue() >> 16, MVT::i32);
 }]>;
@@ -301,6 +296,13 @@ def pclabel : Operand<i32> {
   let PrintMethod = "printPCLabel";
 }
 
+// shift_imm: An integer that encodes a shift amount and the type of shift
+// (currently either asr or lsl) using the same encoding used for the
+// immediates in so_reg operands.
+def shift_imm : Operand<i32> {
+  let PrintMethod = "printShiftImmOperand";
+}
+
 // shifter_operand operands: so_reg and so_imm.
 def so_reg : Operand<i32>,    // reg reg imm
              ComplexPattern<i32, 3, "SelectShifterOperandReg",
@@ -314,10 +316,7 @@ def so_reg : Operand<i32>,    // reg reg imm
 // represented in the imm field in the same 12-bit form that they are encoded
 // into so_imm instructions: the 8-bit immediate is the least significant bits
 // [bits 0-7], the 4-bit shift amount is the next 4 bits [bits 8-11].
-def so_imm : Operand<i32>,
-             PatLeaf<(imm), [{
-      return ARM_AM::getSOImmVal(N->getZExtValue()) != -1;
-    }]> {
+def so_imm : Operand<i32>, PatLeaf<(imm), [{ return Pred_so_imm(N); }]> {
   let PrintMethod = "printSOImmOperand";
 }
 
@@ -1810,11 +1809,7 @@ def USADA8 : AI<(outs GPR:$dst), (ins GPR:$a, GPR:$b, GPR:$acc),
 
 // Signed/Unsigned saturate -- for disassembly only
 
-def sat_shift : Operand<i32> {
-  let PrintMethod = "printSatShiftOperand";
-}
-
-def SSAT : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, sat_shift:$sh),
+def SSAT : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, shift_imm:$sh),
               SatFrm, NoItinerary, "ssat", "\t$dst, $bit_pos, $a$sh",
               [/* For disassembly only; pattern left blank */]> {
   let Inst{27-21} = 0b0110101;
@@ -1828,7 +1823,7 @@ def SSAT16 : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a), SatFrm,
   let Inst{7-4} = 0b0011;
 }
 
-def USAT : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, sat_shift:$sh),
+def USAT : AI<(outs GPR:$dst), (ins i32imm:$bit_pos, GPR:$a, shift_imm:$sh),
               SatFrm, NoItinerary, "usat", "\t$dst, $bit_pos, $a$sh",
               [/* For disassembly only; pattern left blank */]> {
   let Inst{27-21} = 0b0110111;
@@ -2242,11 +2237,20 @@ def REVSH : AMiscA1I<0b01101111, (outs GPR:$dst), (ins GPR:$src), IIC_iUNAr,
   let Inst{19-16} = 0b1111;
 }
 
+def lsl_shift_imm : SDNodeXForm<imm, [{
+  unsigned Sh = ARM_AM::getSORegOpc(ARM_AM::lsl, N->getZExtValue());
+  return CurDAG->getTargetConstant(Sh, MVT::i32);
+}]>;
+
+def lsl_amt : PatLeaf<(i32 imm), [{
+  return (N->getZExtValue() < 32);
+}], lsl_shift_imm>;
+
 def PKHBT : AMiscA1I<0b01101000, (outs GPR:$dst),
-                                 (ins GPR:$src1, GPR:$src2, i32imm:$shamt),
-               IIC_iALUsi, "pkhbt", "\t$dst, $src1, $src2, lsl $shamt",
+                                 (ins GPR:$src1, GPR:$src2, shift_imm:$sh),
+               IIC_iALUsi, "pkhbt", "\t$dst, $src1, $src2$sh",
                [(set GPR:$dst, (or (and GPR:$src1, 0xFFFF),
-                                   (and (shl GPR:$src2, (i32 imm:$shamt)),
+                                   (and (shl GPR:$src2, lsl_amt:$sh),
                                         0xFFFF0000)))]>,
                Requires<[IsARM, HasV6]> {
   let Inst{6-4} = 0b001;
@@ -2255,26 +2259,37 @@ def PKHBT : AMiscA1I<0b01101000, (outs GPR:$dst),
 // Alternate cases for PKHBT where identities eliminate some nodes.
 def : ARMV6Pat<(or (and GPR:$src1, 0xFFFF), (and GPR:$src2, 0xFFFF0000)),
                (PKHBT GPR:$src1, GPR:$src2, 0)>;
-def : ARMV6Pat<(or (and GPR:$src1, 0xFFFF), (shl GPR:$src2, imm16_31:$shamt)),
-               (PKHBT GPR:$src1, GPR:$src2, imm16_31:$shamt)>;
+def : ARMV6Pat<(or (and GPR:$src1, 0xFFFF), (shl GPR:$src2, imm16_31:$sh)),
+               (PKHBT GPR:$src1, GPR:$src2, (lsl_shift_imm imm16_31:$sh))>;
 
+def asr_shift_imm : SDNodeXForm<imm, [{
+  unsigned Sh = ARM_AM::getSORegOpc(ARM_AM::asr, N->getZExtValue());
+  return CurDAG->getTargetConstant(Sh, MVT::i32);
+}]>;
 
+def asr_amt : PatLeaf<(i32 imm), [{
+  return (N->getZExtValue() <= 32);
+}], asr_shift_imm>;
+
+// Note: Shifts of 1-15 bits will be transformed to srl instead of sra and
+// will match the pattern below.
 def PKHTB : AMiscA1I<0b01101000, (outs GPR:$dst),
-                                 (ins GPR:$src1, GPR:$src2, i32imm:$shamt),
-               IIC_iALUsi, "pkhtb", "\t$dst, $src1, $src2, asr $shamt",
+                                 (ins GPR:$src1, GPR:$src2, shift_imm:$sh),
+               IIC_iALUsi, "pkhtb", "\t$dst, $src1, $src2$sh",
                [(set GPR:$dst, (or (and GPR:$src1, 0xFFFF0000),
-                                   (and (sra GPR:$src2, imm16_31:$shamt),
-                                        0xFFFF)))]>, Requires<[IsARM, HasV6]> {
+                                   (and (sra GPR:$src2, asr_amt:$sh),
+                                        0xFFFF)))]>,
+               Requires<[IsARM, HasV6]> {
   let Inst{6-4} = 0b101;
 }
 
 // Alternate cases for PKHTB where identities eliminate some nodes.  Note that
 // a shift amount of 0 is *not legal* here, it is PKHBT instead.
-def : ARMV6Pat<(or (and GPR:$src1, 0xFFFF0000), (srl GPR:$src2, (i32 16))),
-               (PKHTB GPR:$src1, GPR:$src2, 16)>;
+def : ARMV6Pat<(or (and GPR:$src1, 0xFFFF0000), (srl GPR:$src2, imm16_31:$sh)),
+               (PKHTB GPR:$src1, GPR:$src2, (asr_shift_imm imm16_31:$sh))>;
 def : ARMV6Pat<(or (and GPR:$src1, 0xFFFF0000),
-                   (and (srl GPR:$src2, imm1_15:$shamt), 0xFFFF)),
-               (PKHTB GPR:$src1, GPR:$src2, imm1_15:$shamt)>;
+                   (and (srl GPR:$src2, imm1_15:$sh), 0xFFFF)),
+               (PKHTB GPR:$src1, GPR:$src2, (asr_shift_imm imm1_15:$sh))>;
 
 //===----------------------------------------------------------------------===//
 //  Comparison Instructions...
@@ -2308,8 +2323,8 @@ def : ARMPat<(ARMcmpZ GPR:$src, so_imm_neg:$imm),
 let usesCustomInserter = 1, isBranch = 1, isTerminator = 1,
     Defs = [CPSR] in {
 def BCCi64 : PseudoInst<(outs),
-     (ins i32imm:$cc, GPR:$lhs1, GPR:$lhs2, GPR:$rhs1, GPR:$rhs2, brtarget:$dst),
-      IIC_Br,
+    (ins i32imm:$cc, GPR:$lhs1, GPR:$lhs2, GPR:$rhs1, GPR:$rhs2, brtarget:$dst),
+     IIC_Br,
      "${:comment} B\t$dst GPR:$lhs1, GPR:$lhs2, GPR:$rhs1, GPR:$rhs2, imm:$cc",
     [(ARMBcci64 imm:$cc, GPR:$lhs1, GPR:$lhs2, GPR:$rhs1, GPR:$rhs2, bb:$dst)]>;
 

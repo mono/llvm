@@ -235,6 +235,7 @@ X86InstrInfo::X86InstrInfo(X86TargetMachine &tm)
     { X86::BT64ri8,     X86::BT64mi8, 1, 0 },
     { X86::CALL32r,     X86::CALL32m, 1, 0 },
     { X86::CALL64r,     X86::CALL64m, 1, 0 },
+    { X86::WINCALL64r,  X86::WINCALL64m, 1, 0 },
     { X86::CMP16ri,     X86::CMP16mi, 1, 0 },
     { X86::CMP16ri8,    X86::CMP16mi8, 1, 0 },
     { X86::CMP16rr,     X86::CMP16mr, 1, 0 },

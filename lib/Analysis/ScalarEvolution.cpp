@@ -258,19 +258,50 @@ void SCEVCommutativeExpr::print(raw_ostream &OS) const {
 }
 
 bool SCEVNAryExpr::dominates(BasicBlock *BB, DominatorTree *DT) const {
-  for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
-    if (!getOperand(i)->dominates(BB, DT))
+  for (op_iterator I = op_begin(), E = op_end(); I != E; ++I)
+    if (!(*I)->dominates(BB, DT))
       return false;
-  }
   return true;
 }
 
 bool SCEVNAryExpr::properlyDominates(BasicBlock *BB, DominatorTree *DT) const {
-  for (unsigned i = 0, e = getNumOperands(); i != e; ++i) {
-    if (!getOperand(i)->properlyDominates(BB, DT))
+  for (op_iterator I = op_begin(), E = op_end(); I != E; ++I)
+    if (!(*I)->properlyDominates(BB, DT))
       return false;
-  }
   return true;
+}
+
+bool SCEVNAryExpr::isLoopInvariant(const Loop *L) const {
+  for (op_iterator I = op_begin(), E = op_end(); I != E; ++I)
+    if (!(*I)->isLoopInvariant(L))
+      return false;
+  return true;
+}
+
+// hasComputableLoopEvolution - N-ary expressions have computable loop
+// evolutions iff they have at least one operand that varies with the loop,
+// but that all varying operands are computable.
+bool SCEVNAryExpr::hasComputableLoopEvolution(const Loop *L) const {
+  bool HasVarying = false;
+  for (op_iterator I = op_begin(), E = op_end(); I != E; ++I) {
+    const SCEV *S = *I;
+    if (!S->isLoopInvariant(L)) {
+      if (S->hasComputableLoopEvolution(L))
+        HasVarying = true;
+      else
+        return false;
+    }
+  }
+  return HasVarying;
+}
+
+bool SCEVNAryExpr::hasOperand(const SCEV *O) const {
+  for (op_iterator I = op_begin(), E = op_end(); I != E; ++I) {
+    const SCEV *S = *I;
+    if (O == S || S->hasOperand(O))
+      return true;
+  }
+  return false;
 }
 
 bool SCEVUDivExpr::dominates(BasicBlock *BB, DominatorTree *DT) const {
@@ -483,41 +514,6 @@ void SCEVUnknown::print(raw_ostream &OS) const {
 //                               SCEV Utilities
 //===----------------------------------------------------------------------===//
 
-static bool CompareTypes(const Type *A, const Type *B) {
-  if (A->getTypeID() != B->getTypeID())
-    return A->getTypeID() < B->getTypeID();
-  if (const IntegerType *AI = dyn_cast<IntegerType>(A)) {
-    const IntegerType *BI = cast<IntegerType>(B);
-    return AI->getBitWidth() < BI->getBitWidth();
-  }
-  if (const PointerType *AI = dyn_cast<PointerType>(A)) {
-    const PointerType *BI = cast<PointerType>(B);
-    return CompareTypes(AI->getElementType(), BI->getElementType());
-  }
-  if (const ArrayType *AI = dyn_cast<ArrayType>(A)) {
-    const ArrayType *BI = cast<ArrayType>(B);
-    if (AI->getNumElements() != BI->getNumElements())
-      return AI->getNumElements() < BI->getNumElements();
-    return CompareTypes(AI->getElementType(), BI->getElementType());
-  }
-  if (const VectorType *AI = dyn_cast<VectorType>(A)) {
-    const VectorType *BI = cast<VectorType>(B);
-    if (AI->getNumElements() != BI->getNumElements())
-      return AI->getNumElements() < BI->getNumElements();
-    return CompareTypes(AI->getElementType(), BI->getElementType());
-  }
-  if (const StructType *AI = dyn_cast<StructType>(A)) {
-    const StructType *BI = cast<StructType>(B);
-    if (AI->getNumElements() != BI->getNumElements())
-      return AI->getNumElements() < BI->getNumElements();
-    for (unsigned i = 0, e = AI->getNumElements(); i != e; ++i)
-      if (CompareTypes(AI->getElementType(i), BI->getElementType(i)) ||
-          CompareTypes(BI->getElementType(i), AI->getElementType(i)))
-        return CompareTypes(AI->getElementType(i), BI->getElementType(i));
-  }
-  return false;
-}
-
 namespace {
   /// SCEVComplexityCompare - Return true if the complexity of the LHS is less
   /// than the complexity of the RHS.  This comparator is used to canonicalize
@@ -594,12 +590,12 @@ namespace {
       // Compare constant values.
       if (const SCEVConstant *LC = dyn_cast<SCEVConstant>(LHS)) {
         const SCEVConstant *RC = cast<SCEVConstant>(RHS);
-        const ConstantInt *LCC = LC->getValue();
-        const ConstantInt *RCC = RC->getValue();
-        unsigned LBitWidth = LCC->getBitWidth(), RBitWidth = RCC->getBitWidth();
+        const APInt &LA = LC->getValue()->getValue();
+        const APInt &RA = RC->getValue()->getValue();
+        unsigned LBitWidth = LA.getBitWidth(), RBitWidth = RA.getBitWidth();
         if (LBitWidth != RBitWidth)
           return LBitWidth < RBitWidth;
-        return LCC->getValue().ult(RCC->getValue());
+        return LA.ult(RA);
       }
 
       // Compare addrec loop depths.
@@ -1347,8 +1343,9 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
   // If HasNSW is true and all the operands are non-negative, infer HasNUW.
   if (!HasNUW && HasNSW) {
     bool All = true;
-    for (unsigned i = 0, e = Ops.size(); i != e; ++i)
-      if (!isKnownNonNegative(Ops[i])) {
+    for (SmallVectorImpl<const SCEV *>::const_iterator I = Ops.begin(),
+         E = Ops.end(); I != E; ++I)
+      if (!isKnownNonNegative(*I)) {
         All = false;
         break;
       }
@@ -1497,7 +1494,7 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
       // re-generate the operands list. Group the operands by constant scale,
       // to avoid multiplying by the same constant scale multiple times.
       std::map<APInt, SmallVector<const SCEV *, 4>, APIntCompare> MulOpLists;
-      for (SmallVector<const SCEV *, 8>::iterator I = NewOps.begin(),
+      for (SmallVector<const SCEV *, 8>::const_iterator I = NewOps.begin(),
            E = NewOps.end(); I != E; ++I)
         MulOpLists[M.find(*I)->second].push_back(*I);
       // Re-generate the operands list.
@@ -1533,8 +1530,9 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
           if (Mul->getNumOperands() != 2) {
             // If the multiply has more than two operands, we must get the
             // Y*Z term.
-            SmallVector<const SCEV *, 4> MulOps(Mul->op_begin(), Mul->op_end());
-            MulOps.erase(MulOps.begin()+MulOp);
+            SmallVector<const SCEV *, 4> MulOps(Mul->op_begin(),
+                                                Mul->op_begin()+MulOp);
+            MulOps.append(Mul->op_begin()+MulOp+1, Mul->op_end());
             InnerMul = getMulExpr(MulOps);
           }
           const SCEV *One = getConstant(Ty, 1);
@@ -1567,15 +1565,15 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
             const SCEV *InnerMul1 = Mul->getOperand(MulOp == 0);
             if (Mul->getNumOperands() != 2) {
               SmallVector<const SCEV *, 4> MulOps(Mul->op_begin(),
-                                                  Mul->op_end());
-              MulOps.erase(MulOps.begin()+MulOp);
+                                                  Mul->op_begin()+MulOp);
+              MulOps.append(Mul->op_begin()+MulOp+1, Mul->op_end());
               InnerMul1 = getMulExpr(MulOps);
             }
             const SCEV *InnerMul2 = OtherMul->getOperand(OMulOp == 0);
             if (OtherMul->getNumOperands() != 2) {
               SmallVector<const SCEV *, 4> MulOps(OtherMul->op_begin(),
-                                                  OtherMul->op_end());
-              MulOps.erase(MulOps.begin()+OMulOp);
+                                                  OtherMul->op_begin()+OMulOp);
+              MulOps.append(OtherMul->op_begin()+OMulOp+1, OtherMul->op_end());
               InnerMul2 = getMulExpr(MulOps);
             }
             const SCEV *InnerMulSum = getAddExpr(InnerMul1,InnerMul2);
@@ -1702,17 +1700,18 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
   assert(!Ops.empty() && "Cannot get empty mul!");
   if (Ops.size() == 1) return Ops[0];
 #ifndef NDEBUG
+  const Type *ETy = getEffectiveSCEVType(Ops[0]->getType());
   for (unsigned i = 1, e = Ops.size(); i != e; ++i)
-    assert(getEffectiveSCEVType(Ops[i]->getType()) ==
-           getEffectiveSCEVType(Ops[0]->getType()) &&
+    assert(getEffectiveSCEVType(Ops[i]->getType()) == ETy &&
            "SCEVMulExpr operand types don't match!");
 #endif
 
   // If HasNSW is true and all the operands are non-negative, infer HasNUW.
   if (!HasNUW && HasNSW) {
     bool All = true;
-    for (unsigned i = 0, e = Ops.size(); i != e; ++i)
-      if (!isKnownNonNegative(Ops[i])) {
+    for (SmallVectorImpl<const SCEV *>::const_iterator I = Ops.begin(),
+         E = Ops.end(); I != E; ++I)
+      if (!isKnownNonNegative(*I)) {
         All = false;
         break;
       }
@@ -1853,15 +1852,14 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
         if (AddRec->getLoop() == OtherAddRec->getLoop()) {
           // F * G  -->  {A,+,B} * {C,+,D}  -->  {A*C,+,F*D + G*B + B*D}
           const SCEVAddRecExpr *F = AddRec, *G = OtherAddRec;
-          const SCEV *NewStart = getMulExpr(F->getStart(),
-                                                 G->getStart());
+          const SCEV *NewStart = getMulExpr(F->getStart(), G->getStart());
           const SCEV *B = F->getStepRecurrence(*this);
           const SCEV *D = G->getStepRecurrence(*this);
           const SCEV *NewStep = getAddExpr(getMulExpr(F, D),
-                                          getMulExpr(G, B),
-                                          getMulExpr(B, D));
+                                           getMulExpr(G, B),
+                                           getMulExpr(B, D));
           const SCEV *NewAddRec = getAddRecExpr(NewStart, NewStep,
-                                               F->getLoop());
+                                                F->getLoop());
           if (Ops.size() == 2) return NewAddRec;
 
           Ops.erase(Ops.begin()+Idx);
@@ -2024,9 +2022,9 @@ ScalarEvolution::getAddRecExpr(SmallVectorImpl<const SCEV *> &Operands,
                                bool HasNUW, bool HasNSW) {
   if (Operands.size() == 1) return Operands[0];
 #ifndef NDEBUG
+  const Type *ETy = getEffectiveSCEVType(Operands[0]->getType());
   for (unsigned i = 1, e = Operands.size(); i != e; ++i)
-    assert(getEffectiveSCEVType(Operands[i]->getType()) ==
-           getEffectiveSCEVType(Operands[0]->getType()) &&
+    assert(getEffectiveSCEVType(Operands[i]->getType()) == ETy &&
            "SCEVAddRecExpr operand types don't match!");
 #endif
 
@@ -2044,8 +2042,9 @@ ScalarEvolution::getAddRecExpr(SmallVectorImpl<const SCEV *> &Operands,
   // If HasNSW is true and all the operands are non-negative, infer HasNUW.
   if (!HasNUW && HasNSW) {
     bool All = true;
-    for (unsigned i = 0, e = Operands.size(); i != e; ++i)
-      if (!isKnownNonNegative(Operands[i])) {
+    for (SmallVectorImpl<const SCEV *>::const_iterator I = Operands.begin(),
+         E = Operands.end(); I != E; ++I)
+      if (!isKnownNonNegative(*I)) {
         All = false;
         break;
       }
@@ -2124,9 +2123,9 @@ ScalarEvolution::getSMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   assert(!Ops.empty() && "Cannot get empty smax!");
   if (Ops.size() == 1) return Ops[0];
 #ifndef NDEBUG
+  const Type *ETy = getEffectiveSCEVType(Ops[0]->getType());
   for (unsigned i = 1, e = Ops.size(); i != e; ++i)
-    assert(getEffectiveSCEVType(Ops[i]->getType()) ==
-           getEffectiveSCEVType(Ops[0]->getType()) &&
+    assert(getEffectiveSCEVType(Ops[i]->getType()) == ETy &&
            "SCEVSMaxExpr operand types don't match!");
 #endif
 
@@ -2229,9 +2228,9 @@ ScalarEvolution::getUMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   assert(!Ops.empty() && "Cannot get empty umax!");
   if (Ops.size() == 1) return Ops[0];
 #ifndef NDEBUG
+  const Type *ETy = getEffectiveSCEVType(Ops[0]->getType());
   for (unsigned i = 1, e = Ops.size(); i != e; ++i)
-    assert(getEffectiveSCEVType(Ops[i]->getType()) ==
-           getEffectiveSCEVType(Ops[0]->getType()) &&
+    assert(getEffectiveSCEVType(Ops[i]->getType()) == ETy &&
            "SCEVUMaxExpr operand types don't match!");
 #endif
 
@@ -2466,9 +2465,14 @@ const SCEV *ScalarEvolution::getCouldNotCompute() {
 const SCEV *ScalarEvolution::getSCEV(Value *V) {
   assert(isSCEVable(V->getType()) && "Value is not SCEVable!");
 
-  std::map<SCEVCallbackVH, const SCEV *>::iterator I = Scalars.find(V);
+  std::map<SCEVCallbackVH, const SCEV *>::const_iterator I = Scalars.find(V);
   if (I != Scalars.end()) return I->second;
   const SCEV *S = createSCEV(V);
+
+  // The process of creating a SCEV for V may have caused other SCEVs
+  // to have been created, so it's necessary to insert the new entry
+  // from scratch, rather than trying to remember the insert position
+  // above.
   Scalars.insert(std::make_pair(SCEVCallbackVH(V, this), S));
   return S;
 }
@@ -3279,12 +3283,37 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
 
   Operator *U = cast<Operator>(V);
   switch (Opcode) {
-  case Instruction::Add:
-    return getAddExpr(getSCEV(U->getOperand(0)),
-                      getSCEV(U->getOperand(1)));
-  case Instruction::Mul:
-    return getMulExpr(getSCEV(U->getOperand(0)),
-                      getSCEV(U->getOperand(1)));
+  case Instruction::Add: {
+    // The simple thing to do would be to just call getSCEV on both operands
+    // and call getAddExpr with the result. However if we're looking at a
+    // bunch of things all added together, this can be quite inefficient,
+    // because it leads to N-1 getAddExpr calls for N ultimate operands.
+    // Instead, gather up all the operands and make a single getAddExpr call.
+    // LLVM IR canonical form means we need only traverse the left operands.
+    SmallVector<const SCEV *, 4> AddOps;
+    AddOps.push_back(getSCEV(U->getOperand(1)));
+    for (Value *Op = U->getOperand(0);
+         Op->getValueID() == Instruction::Add + Value::InstructionVal;
+         Op = U->getOperand(0)) {
+      U = cast<Operator>(Op);
+      AddOps.push_back(getSCEV(U->getOperand(1)));
+    }
+    AddOps.push_back(getSCEV(U->getOperand(0)));
+    return getAddExpr(AddOps);
+  }
+  case Instruction::Mul: {
+    // See the Add code above.
+    SmallVector<const SCEV *, 4> MulOps;
+    MulOps.push_back(getSCEV(U->getOperand(1)));
+    for (Value *Op = U->getOperand(0);
+         Op->getValueID() == Instruction::Mul + Value::InstructionVal; 
+         Op = U->getOperand(0)) {
+      U = cast<Operator>(Op);
+      MulOps.push_back(getSCEV(U->getOperand(1)));
+    }
+    MulOps.push_back(getSCEV(U->getOperand(0)));
+    return getMulExpr(MulOps);
+  }
   case Instruction::UDiv:
     return getUDivExpr(getSCEV(U->getOperand(0)),
                        getSCEV(U->getOperand(1)));
@@ -4260,7 +4289,7 @@ Constant *
 ScalarEvolution::getConstantEvolutionLoopExitValue(PHINode *PN,
                                                    const APInt &BEs,
                                                    const Loop *L) {
-  std::map<PHINode*, Constant*>::iterator I =
+  std::map<PHINode*, Constant*>::const_iterator I =
     ConstantEvolutionLoopExitValue.find(PN);
   if (I != ConstantEvolutionLoopExitValue.end())
     return I->second;

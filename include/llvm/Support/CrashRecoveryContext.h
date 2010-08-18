@@ -47,13 +47,15 @@ public:
   CrashRecoveryContext() : Impl(0) {}
   ~CrashRecoveryContext();
 
-  /// \brief Enable crash recovery. This function is not thread safe, clients
-  /// should call it during startup or with a lock held.
+  /// \brief Enable crash recovery.
   static void Enable();
 
-  /// \brief Disable crash recovery. This function is not thread safe, clients
-  /// should call it during startup or with a lock held.
+  /// \brief Disable crash recovery.
   static void Disable();
+
+  /// \brief Return the active context, if the code is currently executing in a
+  /// thread which is in a protected context.
+  static CrashRecoveryContext *GetCurrent();
 
   /// \brief Execute the provide callback function (with the given arguments) in
   /// a protected context.

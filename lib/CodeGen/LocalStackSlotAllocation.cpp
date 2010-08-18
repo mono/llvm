@@ -19,14 +19,15 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/Instructions.h"
 #include "llvm/Intrinsics.h"
-#include "llvm/ADT/Statistic.h"
 #include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -36,13 +37,15 @@
 
 using namespace llvm;
 
-STATISTIC(NumAllocations, "Number of frame indices processed");
+STATISTIC(NumAllocations, "Number of frame indices allocated into local block");
+STATISTIC(NumBaseRegisters, "Number of virtual frame base registers allocated");
+STATISTIC(NumReplacements, "Number of frame indices references replaced");
 
 namespace {
   class LocalStackSlotPass: public MachineFunctionPass {
-    int64_t LocalStackSize;
-
     void calculateFrameObjectOffsets(MachineFunction &Fn);
+
+    void insertFrameReferenceRegisters(MachineFunction &Fn);
   public:
     static char ID; // Pass identification, replacement for typeid
     explicit LocalStackSlotPass() : MachineFunctionPass(ID) { }
@@ -67,8 +70,11 @@ FunctionPass *llvm::createLocalStackSlotAllocationPass() {
 }
 
 bool LocalStackSlotPass::runOnMachineFunction(MachineFunction &MF) {
+  // Lay out the local blob.
   calculateFrameObjectOffsets(MF);
-  DEBUG(dbgs() << LocalStackSize << " bytes of local storage pre-allocated\n");
+
+  // Insert virtual base registers to resolve frame index references.
+  insertFrameReferenceRegisters(MF);
   return true;
 }
 
@@ -97,12 +103,10 @@ AdjustStackOffset(MachineFrameInfo *MFI, int FrameIdx, int64_t &Offset,
 /// abstract stack objects.
 ///
 void LocalStackSlotPass::calculateFrameObjectOffsets(MachineFunction &Fn) {
-  const TargetFrameInfo &TFI = *Fn.getTarget().getFrameInfo();
-
   // Loop over all of the stack objects, assigning sequential addresses...
   MachineFrameInfo *MFI = Fn.getFrameInfo();
   int64_t Offset = 0;
-  unsigned MaxAlign = MFI->getMaxAlignment();
+  unsigned MaxAlign = 0;
 
   // Make sure that the stack protector comes before the local variables on the
   // stack.
@@ -137,33 +141,77 @@ void LocalStackSlotPass::calculateFrameObjectOffsets(MachineFunction &Fn) {
     AdjustStackOffset(MFI, i, Offset, MaxAlign);
   }
 
-  const TargetRegisterInfo *RegInfo = Fn.getTarget().getRegisterInfo();
-  if (!RegInfo->targetHandlesStackFrameRounding()) {
-    // If we have reserved argument space for call sites in the function
-    // immediately on entry to the current function, count it as part of the
-    // overall stack size.
-    if (MFI->adjustsStack() && RegInfo->hasReservedCallFrame(Fn))
-      Offset += MFI->getMaxCallFrameSize();
-
-    // Round up the size to a multiple of the alignment.  If the function has
-    // any calls or alloca's, align to the target's StackAlignment value to
-    // ensure that the callee's frame or the alloca data is suitably aligned;
-    // otherwise, for leaf functions, align to the TransientStackAlignment
-    // value.
-    unsigned StackAlign;
-    if (MFI->adjustsStack() || MFI->hasVarSizedObjects() ||
-        (RegInfo->needsStackRealignment(Fn) && MFI->getObjectIndexEnd() != 0))
-      StackAlign = TFI.getStackAlignment();
-    else
-      StackAlign = TFI.getTransientStackAlignment();
-
-    // If the frame pointer is eliminated, all frame offsets will be relative to
-    // SP not FP. Align to MaxAlign so this works.
-    StackAlign = std::max(StackAlign, MaxAlign);
-    unsigned AlignMask = StackAlign - 1;
-    Offset = (Offset + AlignMask) & ~uint64_t(AlignMask);
-  }
-
   // Remember how big this blob of stack space is
-  LocalStackSize = Offset;
+  MFI->setLocalFrameSize(Offset);
+  MFI->setLocalFrameMaxAlign(MaxAlign);
+}
+
+void LocalStackSlotPass::insertFrameReferenceRegisters(MachineFunction &Fn) {
+  // Scan the function's instructions looking for frame index references.
+  // For each, ask the target if it wants a virtual base register for it
+  // based on what we can tell it about where the local will end up in the
+  // stack frame. If it wants one, re-use a suitable one we've previously
+  // allocated, or if there isn't one that fits the bill, allocate a new one
+  // and ask the target to create a defining instruction for it.
+
+  MachineFrameInfo *MFI = Fn.getFrameInfo();
+  const TargetRegisterInfo *TRI = Fn.getTarget().getRegisterInfo();
+
+  for (MachineFunction::iterator BB = Fn.begin(),
+         E = Fn.end(); BB != E; ++BB) {
+    for (MachineBasicBlock::iterator I = BB->begin(); I != BB->end(); ++I) {
+      MachineInstr *MI = I;
+      // Debug value instructions can't be out of range, so they don't need
+      // any updates.
+      // FIXME: When we extend this stuff to handle functions with both
+      // VLAs and dynamic realignment, we should update the debug values
+      // to reference the new base pointer when possible.
+      if (MI->isDebugValue())
+        continue;
+
+      // For now, allocate the base register(s) within the basic block
+      // where they're used, and don't try to keep them around outside
+      // of that. It may be beneficial to try sharing them more broadly
+      // than that, but the increased register pressure makes that a
+      // tricky thing to balance. Investigate if re-materializing these
+      // becomes an issue.
+      for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
+        // Consider replacing all frame index operands that reference
+        // an object allocated in the local block.
+        if (MI->getOperand(i).isFI()) {
+          int FrameIdx = MI->getOperand(i).getIndex();
+          // Don't try this with values not in the local block.
+          if (!MFI->isObjectPreAllocated(FrameIdx))
+            continue;
+
+          DEBUG(dbgs() << "Considering: " << *MI);
+          if (TRI->needsFrameBaseReg(MI, i)) {
+            DEBUG(dbgs() << "  Replacing FI in: " << *MI);
+            // FIXME: Make sure any new base reg is aligned reasonably. TBD
+            // what "reasonably" really means. Conservatively, can just
+            // use the alignment of the local block.
+
+            // If we have a suitable base register available, use it; otherwise
+            // create a new one.
+            // FIXME: For the moment, just always create a new one.
+
+            const TargetRegisterClass *RC = TRI->getPointerRegClass();
+            unsigned BaseReg = Fn.getRegInfo().createVirtualRegister(RC);
+
+            // Tell the target to insert the instruction to initialize
+            // the base register.
+            TRI->materializeFrameBaseRegister(I, BaseReg, FrameIdx);
+
+            // Modify the instruction to use the new base register rather
+            // than the frame index operand.
+            TRI->resolveFrameIndex(I, BaseReg, 0);
+
+            ++NumBaseRegisters;
+            ++NumReplacements;
+          }
+
+        }
+      }
+    }
+  }
 }
