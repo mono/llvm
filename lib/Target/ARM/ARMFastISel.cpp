@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ARM.h"
+#include "ARMBaseInstrInfo.h"
 #include "ARMRegisterInfo.h"
 #include "ARMTargetMachine.h"
 #include "ARMSubtarget.h"
@@ -66,6 +67,7 @@ class ARMFastISel : public FastISel {
       Subtarget = &TM.getSubtarget<ARMSubtarget>();
     }
 
+    // Code from FastISel.cpp.
     virtual unsigned FastEmitInst_(unsigned MachineInstOpcode,
                                    const TargetRegisterClass *RC);
     virtual unsigned FastEmitInst_r(unsigned MachineInstOpcode,
@@ -94,22 +96,67 @@ class ARMFastISel : public FastISel {
     virtual unsigned FastEmitInst_extractsubreg(MVT RetVT,
                                                 unsigned Op0, bool Op0IsKill,
                                                 uint32_t Idx);
+                                                
+    // Backend specific FastISel code.
     virtual bool TargetSelectInstruction(const Instruction *I);
 
   #include "ARMGenFastISel.inc"
 
-  };
+  private:
+    bool DefinesOptionalPredicate(MachineInstr *MI, bool *CPSR);
+    const MachineInstrBuilder &AddOptionalDefs(const MachineInstrBuilder &MIB);
+};
 
 } // end anonymous namespace
 
 // #include "ARMGenCallingConv.inc"
+
+// DefinesOptionalPredicate - This is different from DefinesPredicate in that
+// we don't care about implicit defs here, just places we'll need to add a
+// default CCReg argument. Sets CPSR if we're setting CPSR instead of CCR.
+bool ARMFastISel::DefinesOptionalPredicate(MachineInstr *MI, bool *CPSR) {
+  const TargetInstrDesc &TID = MI->getDesc();
+  if (!TID.hasOptionalDef())
+    return false;
+
+  // Look to see if our OptionalDef is defining CPSR or CCR.
+  for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
+    const MachineOperand &MO = MI->getOperand(i);
+    if (!MO.isReg() || !MO.isDef()) continue;
+    if (MO.getReg() == ARM::CPSR)
+      *CPSR = true;
+  }
+  return true;
+}
+
+// If the machine is predicable go ahead and add the predicate operands, if
+// it needs default CC operands add those.
+const MachineInstrBuilder &
+ARMFastISel::AddOptionalDefs(const MachineInstrBuilder &MIB) {
+  MachineInstr *MI = &*MIB;
+
+  // Do we use a predicate?
+  if (TII.isPredicable(MI))
+    AddDefaultPred(MIB);
+  
+  // Do we optionally set a predicate?  Preds is size > 0 iff the predicate
+  // defines CPSR. All other OptionalDefines in ARM are the CCR register.
+  bool CPSR = false;
+  if (DefinesOptionalPredicate(MI, &CPSR)) {
+    if (CPSR)
+      AddDefaultT1CC(MIB);
+    else
+      AddDefaultCC(MIB);
+  }
+  return MIB;
+}
 
 unsigned ARMFastISel::FastEmitInst_(unsigned MachineInstOpcode,
                                     const TargetRegisterClass* RC) {
   unsigned ResultReg = createResultReg(RC);
   const TargetInstrDesc &II = TII.get(MachineInstOpcode);
 
-  AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg));
+  AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg));
   return ResultReg;
 }
 
@@ -120,12 +167,12 @@ unsigned ARMFastISel::FastEmitInst_r(unsigned MachineInstOpcode,
   const TargetInstrDesc &II = TII.get(MachineInstOpcode);
 
   if (II.getNumDefs() >= 1)
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
                    .addReg(Op0, Op0IsKill * RegState::Kill));
   else {
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
                    .addReg(Op0, Op0IsKill * RegState::Kill));
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                    TII.get(TargetOpcode::COPY), ResultReg)
                    .addReg(II.ImplicitDefs[0]));
   }
@@ -140,14 +187,14 @@ unsigned ARMFastISel::FastEmitInst_rr(unsigned MachineInstOpcode,
   const TargetInstrDesc &II = TII.get(MachineInstOpcode);
 
   if (II.getNumDefs() >= 1)
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
                    .addReg(Op0, Op0IsKill * RegState::Kill)
                    .addReg(Op1, Op1IsKill * RegState::Kill));
   else {
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
                    .addReg(Op0, Op0IsKill * RegState::Kill)
                    .addReg(Op1, Op1IsKill * RegState::Kill));
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                            TII.get(TargetOpcode::COPY), ResultReg)
                    .addReg(II.ImplicitDefs[0]));
   }
@@ -162,14 +209,14 @@ unsigned ARMFastISel::FastEmitInst_ri(unsigned MachineInstOpcode,
   const TargetInstrDesc &II = TII.get(MachineInstOpcode);
 
   if (II.getNumDefs() >= 1)
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
                    .addReg(Op0, Op0IsKill * RegState::Kill)
                    .addImm(Imm));
   else {
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
                    .addReg(Op0, Op0IsKill * RegState::Kill)
                    .addImm(Imm));
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                            TII.get(TargetOpcode::COPY), ResultReg)
                    .addReg(II.ImplicitDefs[0]));
   }
@@ -184,14 +231,14 @@ unsigned ARMFastISel::FastEmitInst_rf(unsigned MachineInstOpcode,
   const TargetInstrDesc &II = TII.get(MachineInstOpcode);
 
   if (II.getNumDefs() >= 1)
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
                    .addReg(Op0, Op0IsKill * RegState::Kill)
                    .addFPImm(FPImm));
   else {
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
                    .addReg(Op0, Op0IsKill * RegState::Kill)
                    .addFPImm(FPImm));
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                            TII.get(TargetOpcode::COPY), ResultReg)
                    .addReg(II.ImplicitDefs[0]));
   }
@@ -207,16 +254,16 @@ unsigned ARMFastISel::FastEmitInst_rri(unsigned MachineInstOpcode,
   const TargetInstrDesc &II = TII.get(MachineInstOpcode);
 
   if (II.getNumDefs() >= 1)
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
                    .addReg(Op0, Op0IsKill * RegState::Kill)
                    .addReg(Op1, Op1IsKill * RegState::Kill)
                    .addImm(Imm));
   else {
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
                    .addReg(Op0, Op0IsKill * RegState::Kill)
                    .addReg(Op1, Op1IsKill * RegState::Kill)
                    .addImm(Imm));
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                            TII.get(TargetOpcode::COPY), ResultReg)
                    .addReg(II.ImplicitDefs[0]));
   }
@@ -230,12 +277,12 @@ unsigned ARMFastISel::FastEmitInst_i(unsigned MachineInstOpcode,
   const TargetInstrDesc &II = TII.get(MachineInstOpcode);
   
   if (II.getNumDefs() >= 1)
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
                    .addImm(Imm));
   else {
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
                    .addImm(Imm));
-    AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                            TII.get(TargetOpcode::COPY), ResultReg)
                    .addReg(II.ImplicitDefs[0]));
   }
@@ -248,7 +295,7 @@ unsigned ARMFastISel::FastEmitInst_extractsubreg(MVT RetVT,
   unsigned ResultReg = createResultReg(TLI.getRegClassFor(RetVT));
   assert(TargetRegisterInfo::isVirtualRegister(Op0) &&
          "Cannot yet extract from physregs");
-  AddDefaultPred(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt,
+  AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt,
                          DL, TII.get(TargetOpcode::COPY), ResultReg)
                  .addReg(Op0, getKillRegState(Op0IsKill), Idx));
   return ResultReg;

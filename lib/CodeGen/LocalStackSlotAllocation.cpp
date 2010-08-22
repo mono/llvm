@@ -43,9 +43,12 @@ STATISTIC(NumReplacements, "Number of frame indices references replaced");
 
 namespace {
   class LocalStackSlotPass: public MachineFunctionPass {
-    void calculateFrameObjectOffsets(MachineFunction &Fn);
+    SmallVector<int64_t,16> LocalOffsets;
 
-    void insertFrameReferenceRegisters(MachineFunction &Fn);
+    void AdjustStackOffset(MachineFrameInfo *MFI, int FrameIdx, int64_t &Offset,
+                           unsigned &MaxAlign);
+    void calculateFrameObjectOffsets(MachineFunction &Fn);
+    bool insertFrameReferenceRegisters(MachineFunction &Fn);
   public:
     static char ID; // Pass identification, replacement for typeid
     explicit LocalStackSlotPass() : MachineFunctionPass(ID) { }
@@ -70,18 +73,36 @@ FunctionPass *llvm::createLocalStackSlotAllocationPass() {
 }
 
 bool LocalStackSlotPass::runOnMachineFunction(MachineFunction &MF) {
+  MachineFrameInfo *MFI = MF.getFrameInfo();
+  unsigned LocalObjectCount = MFI->getObjectIndexEnd();
+
+  // Early exit if there are no locals to consider
+  if (!LocalObjectCount)
+    return true;
+
+  // Make sure we have enough space to store the local offsets.
+  LocalOffsets.resize(MFI->getObjectIndexEnd());
+
   // Lay out the local blob.
   calculateFrameObjectOffsets(MF);
 
   // Insert virtual base registers to resolve frame index references.
-  insertFrameReferenceRegisters(MF);
+  bool UsedBaseRegs = insertFrameReferenceRegisters(MF);
+
+  // Tell MFI whether any base registers were allocated. PEI will only
+  // want to use the local block allocations from this pass if there were any.
+  // Otherwise, PEI can do a bit better job of getting the alignment right
+  // without a hole at the start since it knows the alignment of the stack
+  // at the start of local allocation, and this pass doesn't.
+  MFI->setUseLocalStackAllocationBlock(UsedBaseRegs);
+
   return true;
 }
 
 /// AdjustStackOffset - Helper function used to adjust the stack frame offset.
-static inline void
-AdjustStackOffset(MachineFrameInfo *MFI, int FrameIdx, int64_t &Offset,
-                  unsigned &MaxAlign) {
+void LocalStackSlotPass::AdjustStackOffset(MachineFrameInfo *MFI,
+                                           int FrameIdx, int64_t &Offset,
+                                           unsigned &MaxAlign) {
   unsigned Align = MFI->getObjectAlignment(FrameIdx);
 
   // If the alignment of this object is greater than that of the stack, then
@@ -93,6 +114,9 @@ AdjustStackOffset(MachineFrameInfo *MFI, int FrameIdx, int64_t &Offset,
 
   DEBUG(dbgs() << "Allocate FI(" << FrameIdx << ") to local offset "
         << Offset << "\n");
+  // Keep the offset available for base register allocation
+  LocalOffsets[FrameIdx] = Offset;
+  // And tell MFI about it for PEI to use later
   MFI->mapLocalFrameObject(FrameIdx, Offset);
   Offset += MFI->getObjectSize(FrameIdx);
 
@@ -146,19 +170,47 @@ void LocalStackSlotPass::calculateFrameObjectOffsets(MachineFunction &Fn) {
   MFI->setLocalFrameMaxAlign(MaxAlign);
 }
 
-void LocalStackSlotPass::insertFrameReferenceRegisters(MachineFunction &Fn) {
+static inline bool
+lookupCandidateBaseReg(const SmallVector<std::pair<unsigned, int64_t>, 8> &Regs,
+                       std::pair<unsigned, int64_t> &RegOffset,
+                       int64_t LocalFrameOffset,
+                       bool StackGrowsDown,
+                       const MachineInstr *MI,
+                       const TargetRegisterInfo *TRI) {
+  unsigned e = Regs.size();
+  for (unsigned i = 0; i < e; ++i) {
+    RegOffset = Regs[i];
+    // Check if the relative offset from the where the base register references
+    // to the target address is in range for the instruction.
+    int64_t Offset = LocalFrameOffset - RegOffset.second;
+    if (StackGrowsDown)
+      Offset = -Offset;
+    if (TRI->isFrameOffsetLegal(MI, Offset))
+      return true;
+  }
+  return false;
+}
+
+bool LocalStackSlotPass::insertFrameReferenceRegisters(MachineFunction &Fn) {
   // Scan the function's instructions looking for frame index references.
   // For each, ask the target if it wants a virtual base register for it
   // based on what we can tell it about where the local will end up in the
   // stack frame. If it wants one, re-use a suitable one we've previously
   // allocated, or if there isn't one that fits the bill, allocate a new one
   // and ask the target to create a defining instruction for it.
+  bool UsedBaseReg = false;
 
   MachineFrameInfo *MFI = Fn.getFrameInfo();
   const TargetRegisterInfo *TRI = Fn.getTarget().getRegisterInfo();
+  const TargetFrameInfo &TFI = *Fn.getTarget().getFrameInfo();
+  bool StackGrowsDown =
+    TFI.getStackGrowthDirection() == TargetFrameInfo::StackGrowsDown;
 
   for (MachineFunction::iterator BB = Fn.begin(),
          E = Fn.end(); BB != E; ++BB) {
+    // A base register definition is a register+offset pair.
+    SmallVector<std::pair<unsigned, int64_t>, 8> BaseRegisters;
+
     for (MachineBasicBlock::iterator I = BB->begin(); I != BB->end(); ++I) {
       MachineInstr *MI = I;
       // Debug value instructions can't be out of range, so they don't need
@@ -180,33 +232,67 @@ void LocalStackSlotPass::insertFrameReferenceRegisters(MachineFunction &Fn) {
         // an object allocated in the local block.
         if (MI->getOperand(i).isFI()) {
           int FrameIdx = MI->getOperand(i).getIndex();
+
           // Don't try this with values not in the local block.
           if (!MFI->isObjectPreAllocated(FrameIdx))
             continue;
 
           DEBUG(dbgs() << "Considering: " << *MI);
           if (TRI->needsFrameBaseReg(MI, i)) {
+            unsigned BaseReg = 0;
+            int64_t Offset = 0;
+
             DEBUG(dbgs() << "  Replacing FI in: " << *MI);
-            // FIXME: Make sure any new base reg is aligned reasonably. TBD
-            // what "reasonably" really means. Conservatively, can just
-            // use the alignment of the local block.
 
             // If we have a suitable base register available, use it; otherwise
-            // create a new one.
-            // FIXME: For the moment, just always create a new one.
+            // create a new one. Note that any offset encoded in the
+            // instruction itself will be taken into account by the target,
+            // so we don't have to adjust for it here when reusing a base
+            // register.
+            std::pair<unsigned, int64_t> RegOffset;
+            if (lookupCandidateBaseReg(BaseRegisters, RegOffset,
+                                       LocalOffsets[FrameIdx],
+                                       StackGrowsDown, MI, TRI)) {
+              DEBUG(dbgs() << "  Reusing base register " <<
+                    RegOffset.first << "\n");
+              // We found a register to reuse.
+              BaseReg = RegOffset.first;
+              Offset = LocalOffsets[FrameIdx] - RegOffset.second;
+              if (StackGrowsDown)
+                Offset = -Offset;
+            } else {
+              // No previously defined register was in range, so create a
+              // new one.
+              int64_t InstrOffset = TRI->getFrameIndexInstrOffset(MI, i);
+              const TargetRegisterClass *RC = TRI->getPointerRegClass();
+              BaseReg = Fn.getRegInfo().createVirtualRegister(RC);
 
-            const TargetRegisterClass *RC = TRI->getPointerRegClass();
-            unsigned BaseReg = Fn.getRegInfo().createVirtualRegister(RC);
+              DEBUG(dbgs() << "  Materializing base register " << BaseReg <<
+                    " at frame local offset " <<
+                    LocalOffsets[FrameIdx] + InstrOffset << "\n");
+              // Tell the target to insert the instruction to initialize
+              // the base register.
+              TRI->materializeFrameBaseRegister(I, BaseReg, FrameIdx,
+                                                InstrOffset);
 
-            // Tell the target to insert the instruction to initialize
-            // the base register.
-            TRI->materializeFrameBaseRegister(I, BaseReg, FrameIdx);
+              // The base register already includes any offset specified
+              // by the instruction, so account for that so it doesn't get
+              // applied twice.
+              Offset = -InstrOffset;
+
+              BaseRegisters.push_back(
+                std::pair<unsigned, int64_t>(BaseReg,
+                                      LocalOffsets[FrameIdx] + InstrOffset));
+              ++NumBaseRegisters;
+              UsedBaseReg = true;
+            }
+            assert(BaseReg != 0 && "Unable to allocate virtual base register!");
 
             // Modify the instruction to use the new base register rather
             // than the frame index operand.
-            TRI->resolveFrameIndex(I, BaseReg, 0);
+            TRI->resolveFrameIndex(I, BaseReg, Offset);
+            DEBUG(dbgs() << "Resolved: " << *MI);
 
-            ++NumBaseRegisters;
             ++NumReplacements;
           }
 
@@ -214,4 +300,5 @@ void LocalStackSlotPass::insertFrameReferenceRegisters(MachineFunction &Fn) {
       }
     }
   }
+  return UsedBaseReg;
 }

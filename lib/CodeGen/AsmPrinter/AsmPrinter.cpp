@@ -200,11 +200,17 @@ void AsmPrinter::EmitLinkage(unsigned Linkage, MCSymbol *GVSym) const {
   case GlobalValue::WeakAnyLinkage:
   case GlobalValue::WeakODRLinkage:
   case GlobalValue::LinkerPrivateWeakLinkage:
+  case GlobalValue::LinkerPrivateWeakDefAutoLinkage:
     if (MAI->getWeakDefDirective() != 0) {
       // .globl _foo
       OutStreamer.EmitSymbolAttribute(GVSym, MCSA_Global);
-      // .weak_definition _foo
-      OutStreamer.EmitSymbolAttribute(GVSym, MCSA_WeakDefinition);
+
+      if ((GlobalValue::LinkageTypes)Linkage !=
+          GlobalValue::LinkerPrivateWeakDefAutoLinkage)
+        // .weak_definition _foo
+        OutStreamer.EmitSymbolAttribute(GVSym, MCSA_WeakDefinition);
+      else
+        OutStreamer.EmitSymbolAttribute(GVSym, MCSA_WeakDefAutoPrivate);
     } else if (MAI->getLinkOnceDirective() != 0) {
       // .globl _foo
       OutStreamer.EmitSymbolAttribute(GVSym, MCSA_Global);
@@ -1250,6 +1256,7 @@ static const MCExpr *LowerConstant(const Constant *CV, AsmPrinter &AP) {
   
   if (const GlobalValue *GV = dyn_cast<GlobalValue>(CV))
     return MCSymbolRefExpr::Create(AP.Mang->getSymbol(GV), Ctx);
+
   if (const BlockAddress *BA = dyn_cast<BlockAddress>(CV))
     return MCSymbolRefExpr::Create(AP.GetBlockAddressSymbol(BA), Ctx);
   
@@ -1543,7 +1550,7 @@ static void EmitGlobalConstantImpl(const Constant *CV, unsigned AddrSpace,
     case 8:
       if (AP.isVerbose())
         AP.OutStreamer.GetCommentOS() << format("0x%llx\n", CI->getZExtValue());
-        AP.OutStreamer.EmitIntValue(CI->getZExtValue(), Size, AddrSpace);
+      AP.OutStreamer.EmitIntValue(CI->getZExtValue(), Size, AddrSpace);
       return;
     default:
       EmitGlobalConstantLargeInt(CI, AddrSpace, AP);

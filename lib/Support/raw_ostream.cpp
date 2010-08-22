@@ -19,6 +19,7 @@
 #include "llvm/Config/config.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/System/Signals.h"
 #include "llvm/ADT/STLExtras.h"
 #include <cctype>
 #include <cerrno>
@@ -56,13 +57,6 @@ raw_ostream::~raw_ostream() {
 
   if (BufferMode == InternalBuffer)
     delete [] OutBufStart;
-
-  // If there are any pending errors, report them now. Clients wishing
-  // to avoid report_fatal_error calls should check for errors with
-  // has_error() and clear the error flag with clear_error() before
-  // destructing raw_ostream objects which may have errors.
-  if (Error)
-    report_fatal_error("IO failure on output stream.");
 }
 
 // An out of line virtual method to provide a home for the class vtable.
@@ -369,7 +363,7 @@ void format_object_base::home() {
 /// stream should be immediately destroyed; the string will be empty
 /// if no error occurred.
 raw_fd_ostream::raw_fd_ostream(const char *Filename, std::string &ErrorInfo,
-                               unsigned Flags) : pos(0) {
+                               unsigned Flags) : Error(false), pos(0) {
   assert(Filename != 0 && "Filename is null");
   // Verify that we don't have both "append" and "excl".
   assert((!(Flags & F_Excl) || !(Flags & F_Append)) &&
@@ -377,14 +371,17 @@ raw_fd_ostream::raw_fd_ostream(const char *Filename, std::string &ErrorInfo,
 
   ErrorInfo.clear();
 
-  // Handle "-" as stdout.
+  // Handle "-" as stdout. Note that when we do this, we consider ourself
+  // the owner of stdout. This means that we can do things like close the
+  // file descriptor when we're done and set the "binary" flag globally.
   if (Filename[0] == '-' && Filename[1] == 0) {
     FD = STDOUT_FILENO;
     // If user requested binary then put stdout into binary mode if
     // possible.
     if (Flags & F_Binary)
       sys::Program::ChangeStdoutToBinary();
-    ShouldClose = false;
+    // Close stdout when we're done, to detect any output errors.
+    ShouldClose = true;
     return;
   }
 
@@ -414,14 +411,22 @@ raw_fd_ostream::raw_fd_ostream(const char *Filename, std::string &ErrorInfo,
 }
 
 raw_fd_ostream::~raw_fd_ostream() {
-  if (FD < 0) return;
-  flush();
-  if (ShouldClose)
-    while (::close(FD) != 0)
-      if (errno != EINTR) {
-        error_detected();
-        break;
-      }
+  if (FD >= 0) {
+    flush();
+    if (ShouldClose)
+      while (::close(FD) != 0)
+        if (errno != EINTR) {
+          error_detected();
+          break;
+        }
+  }
+
+  // If there are any pending errors, report them now. Clients wishing
+  // to avoid report_fatal_error calls should check for errors with
+  // has_error() and clear the error flag with clear_error() before
+  // destructing raw_ostream objects which may have errors.
+  if (has_error())
+    report_fatal_error("IO failure on output stream.");
 }
 
 
@@ -535,30 +540,24 @@ bool raw_fd_ostream::is_displayed() const {
 }
 
 //===----------------------------------------------------------------------===//
-//  raw_stdout/err_ostream
+//  outs(), errs(), nulls()
 //===----------------------------------------------------------------------===//
-
-// Set buffer settings to model stdout and stderr behavior.
-// Set standard error to be unbuffered by default.
-raw_stdout_ostream::raw_stdout_ostream():raw_fd_ostream(STDOUT_FILENO, false) {}
-raw_stderr_ostream::raw_stderr_ostream():raw_fd_ostream(STDERR_FILENO, false,
-                                                        true) {}
-
-// An out of line virtual method to provide a home for the class vtable.
-void raw_stdout_ostream::handle() {}
-void raw_stderr_ostream::handle() {}
 
 /// outs() - This returns a reference to a raw_ostream for standard output.
 /// Use it like: outs() << "foo" << "bar";
 raw_ostream &llvm::outs() {
-  static raw_stdout_ostream S;
+  // Set buffer settings to model stdout behavior.
+  // Delete the file descriptor when the program exists, forcing error
+  // detection. If you don't want this behavior, don't use outs().
+  static raw_fd_ostream S(STDOUT_FILENO, true);
   return S;
 }
 
 /// errs() - This returns a reference to a raw_ostream for standard error.
 /// Use it like: errs() << "foo" << "bar";
 raw_ostream &llvm::errs() {
-  static raw_stderr_ostream S;
+  // Set standard error to be unbuffered by default.
+  static raw_fd_ostream S(STDERR_FILENO, false, true);
   return S;
 }
 
@@ -665,4 +664,31 @@ void raw_null_ostream::write_impl(const char *Ptr, size_t Size) {
 
 uint64_t raw_null_ostream::current_pos() const {
   return 0;
+}
+
+//===----------------------------------------------------------------------===//
+//  tool_output_file
+//===----------------------------------------------------------------------===//
+
+/// SetupRemoveOnSignal - This is a helper for tool_output_file's constructor
+/// to allow the signal handlers to be installed before constructing the
+/// base class raw_fd_ostream.
+static const char *SetupRemoveOnSignal(const char *Filename) {
+  // Arrange for the file to be deleted if the process is killed.
+  if (strcmp(Filename, "-") != 0)
+    sys::RemoveFileOnSignal(sys::Path(Filename));
+  return Filename;
+}
+
+tool_output_file::tool_output_file(const char *filename, std::string &ErrorInfo, 
+                                   unsigned Flags)
+  : raw_fd_ostream(SetupRemoveOnSignal(filename), ErrorInfo, Flags),
+    Filename(filename),
+    Keep(!ErrorInfo.empty() /* If open fails, no cleanup is needed. */) {
+}
+
+tool_output_file::~tool_output_file() {
+  // Delete the file if the client hasn't told us not to.
+  if (!Keep && Filename != "-")
+    sys::Path(Filename).eraseFromDisk();
 }

@@ -77,6 +77,7 @@ static GlobalValue::LinkageTypes GetDecodedLinkage(unsigned Val) {
   case 12: return GlobalValue::AvailableExternallyLinkage;
   case 13: return GlobalValue::LinkerPrivateLinkage;
   case 14: return GlobalValue::LinkerPrivateWeakLinkage;
+  case 15: return GlobalValue::LinkerPrivateWeakDefAutoLinkage;
   }
 }
 
@@ -333,9 +334,9 @@ void BitcodeReaderMDValueList::AssignValue(Value *V, unsigned Idx) {
   }
 
   // If there was a forward reference to this value, replace it.
-  Value *PrevVal = OldV;
+  MDNode *PrevVal = cast<MDNode>(OldV);
   OldV->replaceAllUsesWith(V);
-  delete PrevVal;
+  MDNode::deleteTemporary(PrevVal);
   // Deleting PrevVal sets Idx value in MDValuePtrs to null. Set new
   // value for Idx.
   MDValuePtrs[Idx] = V;
@@ -351,7 +352,7 @@ Value *BitcodeReaderMDValueList::getValueFwdRef(unsigned Idx) {
   }
 
   // Create and return a placeholder, which will later be RAUW'd.
-  Value *V = new Argument(Type::getMetadataTy(Context));
+  Value *V = MDNode::getTemporary(Context, 0, 0);
   MDValuePtrs[Idx] = V;
   return V;
 }

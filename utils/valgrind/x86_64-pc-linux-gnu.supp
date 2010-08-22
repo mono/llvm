@@ -2,8 +2,7 @@
    False leak under RegisterPass
    Memcheck:Leak
    ...
-   fun:_ZN83_GLOBAL_*PassRegistrar12RegisterPassERKN4llvm8PassInfoE
-   fun:_ZN4llvm8PassInfo12registerPassEv
+   fun:_ZN4llvm12PassRegistry12registerPassERKNS_8PassInfoE
 }
 
 # Python false positives according to
@@ -25,6 +24,12 @@
    ADDRESS_IN_RANGE/Conditional jump or move depends on uninitialised value
    Memcheck:Cond
    obj:/usr/bin/python2.5
+}
+
+{
+   We don't care if grep leaks
+   Memcheck:Leak
+   obj:/bin/grep
 }
 
 {

@@ -39,6 +39,7 @@ def MRM_E8 : Format<39>;
 def MRM_F0 : Format<40>;
 def MRM_F8 : Format<41>;
 def MRM_F9 : Format<42>;
+def RawFrmImm16 : Format<43>;
 
 // ImmType - This specifies the immediate type used by an instruction. This is
 // part of the ad-hoc solution used to emit machine instruction encodings by our
@@ -224,13 +225,13 @@ class FpI_<dag outs, dag ins, FPFormat fp, list<dag> pattern>
 //   Iseg32 - 16-bit segment selector, 32-bit offset
 
 class Iseg16 <bits<8> o, Format f, dag outs, dag ins, string asm, 
-              list<dag> pattern> : X86Inst<o, f, NoImm, outs, ins, asm> {
+              list<dag> pattern> : X86Inst<o, f, Imm16, outs, ins, asm> {
   let Pattern = pattern;
   let CodeSize = 3;
 }
 
 class Iseg32 <bits<8> o, Format f, dag outs, dag ins, string asm, 
-              list<dag> pattern> : X86Inst<o, f, NoImm, outs, ins, asm> {
+              list<dag> pattern> : X86Inst<o, f, Imm32, outs, ins, asm> {
   let Pattern = pattern;
   let CodeSize = 3;
 }

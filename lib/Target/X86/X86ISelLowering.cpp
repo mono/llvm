@@ -4166,10 +4166,10 @@ X86TargetLowering::LowerCONCAT_VECTORS(SDValue Op, SelectionDAG &DAG) const {
 // 2. [ssse3] 1 x pshufb
 // 3. [ssse3] 2 x pshufb + 1 x por
 // 4. [all]   mov + pshuflw + pshufhw + N x (pextrw + pinsrw)
-static
-SDValue LowerVECTOR_SHUFFLEv8i16(ShuffleVectorSDNode *SVOp,
-                                 SelectionDAG &DAG,
-                                 const X86TargetLowering &TLI) {
+SDValue
+X86TargetLowering::LowerVECTOR_SHUFFLEv8i16(SDValue Op,
+                                            SelectionDAG &DAG) const {
+  ShuffleVectorSDNode *SVOp = cast<ShuffleVectorSDNode>(Op);
   SDValue V1 = SVOp->getOperand(0);
   SDValue V2 = SVOp->getOperand(1);
   DebugLoc dl = SVOp->getDebugLoc();
@@ -4220,7 +4220,7 @@ SDValue LowerVECTOR_SHUFFLEv8i16(ShuffleVectorSDNode *SVOp,
   // quads, disable the next transformation since it does not help SSSE3.
   bool V1Used = InputQuads[0] || InputQuads[1];
   bool V2Used = InputQuads[2] || InputQuads[3];
-  if (TLI.getSubtarget()->hasSSSE3()) {
+  if (Subtarget->hasSSSE3()) {
     if (InputQuads.count() == 2 && V1Used && V2Used) {
       BestLoQuad = InputQuads.find_first();
       BestHiQuad = InputQuads.find_next(BestLoQuad);
@@ -4242,6 +4242,8 @@ SDValue LowerVECTOR_SHUFFLEv8i16(ShuffleVectorSDNode *SVOp,
     NewV = DAG.getVectorShuffle(MVT::v2i64, dl,
                   DAG.getNode(ISD::BIT_CONVERT, dl, MVT::v2i64, V1),
                   DAG.getNode(ISD::BIT_CONVERT, dl, MVT::v2i64, V2), &MaskV[0]);
+    if (NewV.getOpcode() == ISD::VECTOR_SHUFFLE)
+      NewV = LowerVECTOR_SHUFFLE(NewV, DAG);
     NewV = DAG.getNode(ISD::BIT_CONVERT, dl, MVT::v8i16, NewV);
 
     // Rewrite the MaskVals and assign NewV to V1 if NewV now contains all the
@@ -4287,7 +4289,7 @@ SDValue LowerVECTOR_SHUFFLEv8i16(ShuffleVectorSDNode *SVOp,
   // If we have SSSE3, and all words of the result are from 1 input vector,
   // case 2 is generated, otherwise case 3 is generated.  If no SSSE3
   // is present, fall back to case 4.
-  if (TLI.getSubtarget()->hasSSSE3()) {
+  if (Subtarget->hasSSSE3()) {
     SmallVector<SDValue,16> pshufbMask;
 
     // If we have elements from both input vectors, set the high bit of the
@@ -4957,7 +4959,7 @@ X86TargetLowering::LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const {
 
   // Handle v8i16 specifically since SSE can do byte extraction and insertion.
   if (VT == MVT::v8i16) {
-    SDValue NewOp = LowerVECTOR_SHUFFLEv8i16(SVOp, DAG, *this);
+    SDValue NewOp = LowerVECTOR_SHUFFLEv8i16(Op, DAG);
     if (NewOp.getNode())
       return NewOp;
   }
@@ -8108,6 +8110,41 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::MUL_IMM:            return "X86ISD::MUL_IMM";
   case X86ISD::PTEST:              return "X86ISD::PTEST";
   case X86ISD::TESTP:              return "X86ISD::TESTP";
+  case X86ISD::PALIGN:             return "X86ISD::PALIGN";
+  case X86ISD::PSHUFD:             return "X86ISD::PSHUFD";
+  case X86ISD::PSHUFHW:            return "X86ISD::PSHUFHW";
+  case X86ISD::PSHUFHW_LD:         return "X86ISD::PSHUFHW_LD";
+  case X86ISD::PSHUFLW:            return "X86ISD::PSHUFLW";
+  case X86ISD::PSHUFLW_LD:         return "X86ISD::PSHUFLW_LD";
+  case X86ISD::SHUFPS:             return "X86ISD::SHUFPS";
+  case X86ISD::SHUFPD:             return "X86ISD::SHUFPD";
+  case X86ISD::MOVLHPS:            return "X86ISD::MOVLHPS";
+  case X86ISD::MOVHLPS:            return "X86ISD::MOVHLPS";
+  case X86ISD::MOVLHPD:            return "X86ISD::MOVLHPD";
+  case X86ISD::MOVHLPD:            return "X86ISD::MOVHLPD";
+  case X86ISD::MOVHPS:             return "X86ISD::MOVHPS";
+  case X86ISD::MOVLPS:             return "X86ISD::MOVLPS";
+  case X86ISD::MOVHPD:             return "X86ISD::MOVHPD";
+  case X86ISD::MOVLPD:             return "X86ISD::MOVLPD";
+  case X86ISD::MOVDDUP:            return "X86ISD::MOVDDUP";
+  case X86ISD::MOVSHDUP:           return "X86ISD::MOVSHDUP";
+  case X86ISD::MOVSLDUP:           return "X86ISD::MOVSLDUP";
+  case X86ISD::MOVSHDUP_LD:        return "X86ISD::MOVSHDUP_LD";
+  case X86ISD::MOVSLDUP_LD:        return "X86ISD::MOVSLDUP_LD";
+  case X86ISD::MOVSD:              return "X86ISD::MOVSD";
+  case X86ISD::MOVSS:              return "X86ISD::MOVSS";
+  case X86ISD::UNPCKLPS:           return "X86ISD::UNPCKLPS";
+  case X86ISD::UNPCKLPD:           return "X86ISD::UNPCKLPD";
+  case X86ISD::UNPCKHPS:           return "X86ISD::UNPCKHPS";
+  case X86ISD::UNPCKHPD:           return "X86ISD::UNPCKHPD";
+  case X86ISD::PUNPCKLBW:          return "X86ISD::PUNPCKLBW";
+  case X86ISD::PUNPCKLWD:          return "X86ISD::PUNPCKLWD";
+  case X86ISD::PUNPCKLDQ:          return "X86ISD::PUNPCKLDQ";
+  case X86ISD::PUNPCKLQDQ:         return "X86ISD::PUNPCKLQDQ";
+  case X86ISD::PUNPCKHBW:          return "X86ISD::PUNPCKHBW";
+  case X86ISD::PUNPCKHWD:          return "X86ISD::PUNPCKHWD";
+  case X86ISD::PUNPCKHDQ:          return "X86ISD::PUNPCKHDQ";
+  case X86ISD::PUNPCKHQDQ:         return "X86ISD::PUNPCKHQDQ";
   case X86ISD::VASTART_SAVE_XMM_REGS: return "X86ISD::VASTART_SAVE_XMM_REGS";
   case X86ISD::MINGW_ALLOCA:       return "X86ISD::MINGW_ALLOCA";
   }

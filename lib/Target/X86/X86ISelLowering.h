@@ -251,6 +251,43 @@ namespace llvm {
       // TESTP - Vector packed fp sign bitwise comparisons
       TESTP,
 
+      // Several flavors of instructions with vector shuffle behaviors.
+      PALIGN,
+      PSHUFD,
+      PSHUFHW,
+      PSHUFLW,
+      PSHUFHW_LD,
+      PSHUFLW_LD,
+      SHUFPD,
+      SHUFPS,
+      MOVDDUP,
+      MOVSHDUP,
+      MOVSLDUP,
+      MOVSHDUP_LD,
+      MOVSLDUP_LD,
+      MOVLHPS,
+      MOVHLPS,
+      MOVLHPD,
+      MOVHLPD,
+      MOVHPS,
+      MOVHPD,
+      MOVLPS,
+      MOVLPD,
+      MOVSD,
+      MOVSS,
+      UNPCKLPS,
+      UNPCKLPD,
+      UNPCKHPS,
+      UNPCKHPD,
+      PUNPCKLBW,
+      PUNPCKLWD,
+      PUNPCKLDQ,
+      PUNPCKLQDQ,
+      PUNPCKHBW,
+      PUNPCKHWD,
+      PUNPCKHDQ,
+      PUNPCKHQDQ,
+
       // VASTART_SAVE_XMM_REGS - Save xmm argument registers to the stack,
       // according to %al. An operator is needed so that this can be expanded
       // with control flow.
@@ -733,6 +770,9 @@ namespace llvm {
     SDValue LowerLOAD_SUB(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerREADCYCLECOUNTER(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerMEMBARRIER(SDValue Op, SelectionDAG &DAG) const;
+
+    // Utility functions to help LowerVECTOR_SHUFFLE
+    SDValue LowerVECTOR_SHUFFLEv8i16(SDValue Op, SelectionDAG &DAG) const;
 
     virtual SDValue
       LowerFormalArguments(SDValue Chain,

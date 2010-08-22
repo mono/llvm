@@ -227,7 +227,9 @@ typedef enum {
   LLVMGhostLinkage,       /**< Obsolete */
   LLVMCommonLinkage,      /**< Tentative definitions */
   LLVMLinkerPrivateLinkage, /**< Like Private, but linker removes. */
-  LLVMLinkerPrivateWeakLinkage /**< Like LinkerPrivate, but is weak. */
+  LLVMLinkerPrivateWeakLinkage, /**< Like LinkerPrivate, but is weak. */
+  LLVMLinkerPrivateWeakDefAutoLinkage /**< Like LinkerPrivateWeak, but possibly
+                                           hidden. */
 } LLVMLinkage;
 
 typedef enum {
@@ -524,6 +526,8 @@ LLVMValueRef LLVMGetUsedValue(LLVMUseRef U);
 
 /* Operations on Users */
 LLVMValueRef LLVMGetOperand(LLVMValueRef Val, unsigned Index);
+void LLVMSetOperand(LLVMValueRef User, unsigned Index, LLVMValueRef Val);
+int LLVMGetNumOperands(LLVMValueRef Val);
 
 /* Operations on constants of any type */
 LLVMValueRef LLVMConstNull(LLVMTypeRef Ty); /* all zeroes */
