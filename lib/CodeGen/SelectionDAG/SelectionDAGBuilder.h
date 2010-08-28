@@ -18,9 +18,6 @@
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
-#ifndef NDEBUG
-#include "llvm/ADT/SmallSet.h"
-#endif
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/Support/CallSite.h"
@@ -532,12 +529,10 @@ private:
 
   void HandlePHINodesInSuccessorBlocks(const BasicBlock *LLVMBB);
 
-  /// EmitFuncArgumentDbgValue - If the DbgValueInst is a dbg_value of a
-  /// function argument, create the corresponding DBG_VALUE machine instruction
-  /// for it now. At the end of instruction selection, they will be inserted to
-  /// the entry BB.
-  bool EmitFuncArgumentDbgValue(const DbgValueInst &DI,
-                                const Value *V, MDNode *Variable,
+  /// EmitFuncArgumentDbgValue - If V is an function argument then create
+  /// corresponding DBG_VALUE machine instruction for it now. At the end of 
+  /// instruction selection, they will be inserted to the entry BB.
+  bool EmitFuncArgumentDbgValue(const Value *V, MDNode *Variable,
                                 uint64_t Offset, const SDValue &N);
 };
 

@@ -593,6 +593,13 @@ public:
     return false;
   }
 
+  /// requiresVirtualBaseRegisters - Returns true if the target wants the
+  /// LocalStackAllocation pass to be run and virtual base registers
+  /// used for more efficient stack access.
+  virtual bool requiresVirtualBaseRegisters(const MachineFunction &MF) const {
+    return false;
+  }
+
   /// hasFP - Return true if the specified function should have a dedicated
   /// frame pointer register. For most targets this is true only if the function
   /// has variable sized allocas or if frame pointer elimination is disabled.
@@ -638,7 +645,8 @@ public:
 
   /// getFrameIndexInstrOffset - Get the offset from the referenced frame
   /// index in the instruction, if the is one.
-  virtual int64_t getFrameIndexInstrOffset(MachineInstr *MI, int Idx) const {
+  virtual int64_t getFrameIndexInstrOffset(const MachineInstr *MI,
+                                           int Idx) const {
     return 0;
   }
 
@@ -646,7 +654,7 @@ public:
   /// reference would be better served by a base register other than FP
   /// or SP. Used by LocalStackFrameAllocation to determine which frame index
   /// references it should create new base registers for.
-  virtual bool needsFrameBaseReg(MachineInstr *MI, unsigned operand) const {
+  virtual bool needsFrameBaseReg(MachineInstr *MI, int64_t Offset) const {
     return false;
   }
 
@@ -735,14 +743,8 @@ public:
   /// specified instruction, as long as it keeps the iterator pointing at the
   /// finished product. SPAdj is the SP adjustment due to call frame setup
   /// instruction.
-  ///
-  /// When -enable-frame-index-scavenging is enabled, the virtual register
-  /// allocated for this frame index is returned and its value is stored in
-  /// *Value.
-  typedef std::pair<unsigned, int> FrameIndexValue;
-  virtual unsigned eliminateFrameIndex(MachineBasicBlock::iterator MI,
-                                       int SPAdj, FrameIndexValue *Value = NULL,
-                                       RegScavenger *RS=NULL) const = 0;
+  virtual void eliminateFrameIndex(MachineBasicBlock::iterator MI,
+                                   int SPAdj, RegScavenger *RS=NULL) const = 0;
 
   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
   /// the function.

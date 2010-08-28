@@ -71,6 +71,7 @@ namespace {
         upperName[0] = std::toupper(upperName[0]);
       }
     }
+    virtual ~Argument() {}
 
     StringRef getLowerName() const { return lowerName; }
     StringRef getUpperName() const { return upperName; }
@@ -96,8 +97,6 @@ namespace {
     SimpleArgument(Record &Arg, StringRef Attr, std::string T)
       : Argument(Arg, Attr), type(T)
     {}
-
-    std::string getType() const { return type; }
 
     void writeAccessors(raw_ostream &OS) const {
       OS << "  " << type << " get" << getUpperName() << "() const {\n";

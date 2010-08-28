@@ -1320,9 +1320,8 @@ X86TargetLowering::LowerReturn(SDValue Chain,
     // llvm-gcc has never done it right and no one has noticed, so this
     // should be OK for now.
     if (ValVT == MVT::f64 &&
-        (Subtarget->is64Bit() && !Subtarget->hasSSE2())) {
+        (Subtarget->is64Bit() && !Subtarget->hasSSE2()))
       report_fatal_error("SSE2 register return with SSE2 disabled");
-    }
 
     // Returns in ST0/ST1 are handled specially: these are pushed as operands to
     // the RET instruction and handled by the FP Stackifier.
@@ -1342,12 +1341,18 @@ X86TargetLowering::LowerReturn(SDValue Chain,
     if (Subtarget->is64Bit()) {
       if (ValVT.isVector() && ValVT.getSizeInBits() == 64) {
         ValToCopy = DAG.getNode(ISD::BIT_CONVERT, dl, MVT::i64, ValToCopy);
-        if (VA.getLocReg() == X86::XMM0 || VA.getLocReg() == X86::XMM1)
+        if (VA.getLocReg() == X86::XMM0 || VA.getLocReg() == X86::XMM1) {
           ValToCopy = DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, MVT::v2i64,
                                   ValToCopy);
+          
+          // If we don't have SSE2 available, convert to v4f32 so the generated
+          // register is legal.
+          if (!Subtarget->hasSSE2())
+            ValToCopy = DAG.getNode(ISD::BIT_CONVERT, dl, MVT::v4f32,ValToCopy);
+        }
       }
     }
-
+    
     Chain = DAG.getCopyToReg(Chain, dl, VA.getLocReg(), ValToCopy, Flag);
     Flag = Chain.getValue(1);
   }
@@ -2007,6 +2012,19 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 
     if (VA.isRegLoc()) {
       RegsToPass.push_back(std::make_pair(VA.getLocReg(), Arg));
+      if (isVarArg && Subtarget->isTargetWin64()) {
+        // Win64 ABI requires argument XMM reg to be copied to the corresponding
+        // shadow reg if callee is a varargs function.
+        unsigned ShadowReg = 0;
+        switch (VA.getLocReg()) {
+        case X86::XMM0: ShadowReg = X86::RCX; break;
+        case X86::XMM1: ShadowReg = X86::RDX; break;
+        case X86::XMM2: ShadowReg = X86::R8; break;
+        case X86::XMM3: ShadowReg = X86::R9; break;
+        }
+        if (ShadowReg)
+          RegsToPass.push_back(std::make_pair(ShadowReg, Arg));
+      }
     } else if (!IsSibcall && (!isTailCall || isByVal)) {
       assert(VA.isMemLoc());
       if (StackPtr.getNode() == 0)
@@ -2573,6 +2591,60 @@ X86TargetLowering::createFastISel(FunctionLoweringInfo &funcInfo) const {
 //                           Other Lowering Hooks
 //===----------------------------------------------------------------------===//
 
+static bool isTargetShuffle(unsigned Opcode) {
+  switch(Opcode) {
+  default: return false;
+  case X86ISD::PSHUFD:
+  case X86ISD::PSHUFHW:
+  case X86ISD::PSHUFLW:
+  case X86ISD::SHUFPD:
+  case X86ISD::SHUFPS:
+  case X86ISD::MOVLHPS:
+  case X86ISD::MOVSS:
+  case X86ISD::MOVSD:
+  case X86ISD::PUNPCKLDQ:
+    return true;
+  }
+  return false;
+}
+
+static SDValue getTargetShuffleNode(unsigned Opc, DebugLoc dl, EVT VT,
+                          SDValue V1, unsigned TargetMask, SelectionDAG &DAG) {
+  switch(Opc) {
+  default: llvm_unreachable("Unknown x86 shuffle node");
+  case X86ISD::PSHUFD:
+  case X86ISD::PSHUFHW:
+  case X86ISD::PSHUFLW:
+    return DAG.getNode(Opc, dl, VT, V1, DAG.getConstant(TargetMask, MVT::i8));
+  }
+
+  return SDValue();
+}
+
+static SDValue getTargetShuffleNode(unsigned Opc, DebugLoc dl, EVT VT,
+               SDValue V1, SDValue V2, unsigned TargetMask, SelectionDAG &DAG) {
+  switch(Opc) {
+  default: llvm_unreachable("Unknown x86 shuffle node");
+  case X86ISD::SHUFPD:
+  case X86ISD::SHUFPS:
+    return DAG.getNode(Opc, dl, VT, V1, V2,
+                       DAG.getConstant(TargetMask, MVT::i8));
+  }
+  return SDValue();
+}
+
+static SDValue getTargetShuffleNode(unsigned Opc, DebugLoc dl, EVT VT,
+                                    SDValue V1, SDValue V2, SelectionDAG &DAG) {
+  switch(Opc) {
+  default: llvm_unreachable("Unknown x86 shuffle node");
+  case X86ISD::MOVLHPS:
+  case X86ISD::MOVSS:
+  case X86ISD::MOVSD:
+  case X86ISD::PUNPCKLDQ:
+    return DAG.getNode(Opc, dl, VT, V1, V2);
+  }
+  return SDValue();
+}
 
 SDValue X86TargetLowering::getReturnAddressFrameIndex(SelectionDAG &DAG) const {
   MachineFunction &MF = DAG.getMachineFunction();
@@ -3576,68 +3648,184 @@ static SDValue getShuffleVectorZeroOrUndef(SDValue V2, unsigned Idx,
   return DAG.getVectorShuffle(VT, V2.getDebugLoc(), V1, V2, &MaskVec[0]);
 }
 
-/// getNumOfConsecutiveZeros - Return the number of elements in a result of
-/// a shuffle that is zero.
-static
-unsigned getNumOfConsecutiveZeros(ShuffleVectorSDNode *SVOp, int NumElems,
-                                  bool Low, SelectionDAG &DAG) {
-  unsigned NumZeros = 0;
-  for (int i = 0; i < NumElems; ++i) {
-    unsigned Index = Low ? i : NumElems-i-1;
-    int Idx = SVOp->getMaskElt(Index);
-    if (Idx < 0) {
-      ++NumZeros;
-      continue;
-    }
-    SDValue Elt = DAG.getShuffleScalarElt(SVOp, Index);
-    if (Elt.getNode() && X86::isZeroNode(Elt))
-      ++NumZeros;
-    else
-      break;
+/// getShuffleScalarElt - Returns the scalar element that will make up the ith
+/// element of the result of the vector shuffle.
+SDValue getShuffleScalarElt(SDNode *N, int Index, SelectionDAG &DAG) {
+  SDValue V = SDValue(N, 0);
+  EVT VT = V.getValueType();
+  unsigned Opcode = V.getOpcode();
+  int NumElems = VT.getVectorNumElements();
+
+  // Recurse into ISD::VECTOR_SHUFFLE node to find scalars.
+  if (const ShuffleVectorSDNode *SV = dyn_cast<ShuffleVectorSDNode>(N)) {
+    Index = SV->getMaskElt(Index);
+
+    if (Index < 0)
+      return DAG.getUNDEF(VT.getVectorElementType());
+
+    SDValue NewV = (Index < NumElems) ? SV->getOperand(0) : SV->getOperand(1);
+    return getShuffleScalarElt(NewV.getNode(), Index % NumElems, DAG);
   }
-  return NumZeros;
+
+  // Recurse into target specific vector shuffles to find scalars.
+  if (isTargetShuffle(Opcode)) {
+    switch(Opcode) {
+    case X86ISD::MOVSS:
+    case X86ISD::MOVSD:
+      // Only care about the second operand, which can contain
+      // a scalar_to_vector which we are looking for.
+      return getShuffleScalarElt(V.getOperand(1).getNode(),
+                                 0 /* Index */, DAG);
+    default:
+      assert("not implemented for target shuffle node");
+      return SDValue();
+    }
+  }
+
+  // Actual nodes that may contain scalar elements
+  if (Opcode == ISD::BIT_CONVERT) {
+    V = V.getOperand(0);
+    EVT SrcVT = V.getValueType();
+
+    if (!SrcVT.isVector() || SrcVT.getVectorNumElements() != (unsigned)NumElems)
+      return SDValue();
+  }
+
+  if (V.getOpcode() == ISD::SCALAR_TO_VECTOR)
+    return (Index == 0) ? V.getOperand(0)
+                          : DAG.getUNDEF(VT.getVectorElementType());
+
+  if (V.getOpcode() == ISD::BUILD_VECTOR)
+    return V.getOperand(Index);
+
+  return SDValue();
+}
+
+/// getNumOfConsecutiveZeros - Return the number of elements of a vector
+/// shuffle operation which come from a consecutively from a zero. The
+/// search can start in two diferent directions, from left or right.
+static
+unsigned getNumOfConsecutiveZeros(SDNode *N, int NumElems,
+                                  bool ZerosFromLeft, SelectionDAG &DAG) {
+  int i = 0;
+
+  while (i < NumElems) {
+    unsigned Index = ZerosFromLeft ? i : NumElems-i-1;
+    SDValue Elt = getShuffleScalarElt(N, Index, DAG);
+    if (!(Elt.getNode() &&
+         (Elt.getOpcode() == ISD::UNDEF || X86::isZeroNode(Elt))))
+      break;
+    ++i;
+  }
+
+  return i;
+}
+
+/// isShuffleMaskConsecutive - Check if the shuffle mask indicies from MaskI to
+/// MaskE correspond consecutively to elements from one of the vector operands,
+/// starting from its index OpIdx. Also tell OpNum which source vector operand.
+static
+bool isShuffleMaskConsecutive(ShuffleVectorSDNode *SVOp, int MaskI, int MaskE,
+                              int OpIdx, int NumElems, unsigned &OpNum) {
+  bool SeenV1 = false;
+  bool SeenV2 = false;
+
+  for (int i = MaskI; i <= MaskE; ++i, ++OpIdx) {
+    int Idx = SVOp->getMaskElt(i);
+    // Ignore undef indicies
+    if (Idx < 0)
+      continue;
+
+    if (Idx < NumElems)
+      SeenV1 = true;
+    else
+      SeenV2 = true;
+
+    // Only accept consecutive elements from the same vector
+    if ((Idx % NumElems != OpIdx) || (SeenV1 && SeenV2))
+      return false;
+  }
+
+  OpNum = SeenV1 ? 0 : 1;
+  return true;
+}
+
+/// isVectorShiftRight - Returns true if the shuffle can be implemented as a
+/// logical left shift of a vector.
+static bool isVectorShiftRight(ShuffleVectorSDNode *SVOp, SelectionDAG &DAG,
+                               bool &isLeft, SDValue &ShVal, unsigned &ShAmt) {
+  unsigned NumElems = SVOp->getValueType(0).getVectorNumElements();
+  unsigned NumZeros = getNumOfConsecutiveZeros(SVOp, NumElems,
+              false /* check zeros from right */, DAG);
+  unsigned OpSrc;
+
+  if (!NumZeros)
+    return false;
+
+  // Considering the elements in the mask that are not consecutive zeros,
+  // check if they consecutively come from only one of the source vectors.
+  //
+  //               V1 = {X, A, B, C}     0
+  //                         \  \  \    /
+  //   vector_shuffle V1, V2 <1, 2, 3, X>
+  //
+  if (!isShuffleMaskConsecutive(SVOp,
+            0,                   // Mask Start Index
+            NumElems-NumZeros-1, // Mask End Index
+            NumZeros,            // Where to start looking in the src vector
+            NumElems,            // Number of elements in vector
+            OpSrc))              // Which source operand ?
+    return false;
+
+  isLeft = false;
+  ShAmt = NumZeros;
+  ShVal = SVOp->getOperand(OpSrc);
+  return true;
+}
+
+/// isVectorShiftLeft - Returns true if the shuffle can be implemented as a
+/// logical left shift of a vector.
+static bool isVectorShiftLeft(ShuffleVectorSDNode *SVOp, SelectionDAG &DAG,
+                              bool &isLeft, SDValue &ShVal, unsigned &ShAmt) {
+  unsigned NumElems = SVOp->getValueType(0).getVectorNumElements();
+  unsigned NumZeros = getNumOfConsecutiveZeros(SVOp, NumElems,
+              true /* check zeros from left */, DAG);
+  unsigned OpSrc;
+
+  if (!NumZeros)
+    return false;
+
+  // Considering the elements in the mask that are not consecutive zeros,
+  // check if they consecutively come from only one of the source vectors.
+  //
+  //                           0    { A, B, X, X } = V2
+  //                          / \    /  /
+  //   vector_shuffle V1, V2 <X, X, 4, 5>
+  //
+  if (!isShuffleMaskConsecutive(SVOp,
+            NumZeros,     // Mask Start Index
+            NumElems-1,   // Mask End Index
+            0,            // Where to start looking in the src vector
+            NumElems,     // Number of elements in vector
+            OpSrc))       // Which source operand ?
+    return false;
+
+  isLeft = true;
+  ShAmt = NumZeros;
+  ShVal = SVOp->getOperand(OpSrc);
+  return true;
 }
 
 /// isVectorShift - Returns true if the shuffle can be implemented as a
 /// logical left or right shift of a vector.
-/// FIXME: split into pslldqi, psrldqi, palignr variants.
 static bool isVectorShift(ShuffleVectorSDNode *SVOp, SelectionDAG &DAG,
                           bool &isLeft, SDValue &ShVal, unsigned &ShAmt) {
-  unsigned NumElems = SVOp->getValueType(0).getVectorNumElements();
+  if (isVectorShiftLeft(SVOp, DAG, isLeft, ShVal, ShAmt) ||
+      isVectorShiftRight(SVOp, DAG, isLeft, ShVal, ShAmt))
+    return true;
 
-  isLeft = true;
-  unsigned NumZeros = getNumOfConsecutiveZeros(SVOp, NumElems, true, DAG);
-  if (!NumZeros) {
-    isLeft = false;
-    NumZeros = getNumOfConsecutiveZeros(SVOp, NumElems, false, DAG);
-    if (!NumZeros)
-      return false;
-  }
-  bool SeenV1 = false;
-  bool SeenV2 = false;
-  for (unsigned i = NumZeros; i < NumElems; ++i) {
-    unsigned Val = isLeft ? (i - NumZeros) : i;
-    int Idx_ = SVOp->getMaskElt(isLeft ? i : (i - NumZeros));
-    if (Idx_ < 0)
-      continue;
-    unsigned Idx = (unsigned) Idx_;
-    if (Idx < NumElems)
-      SeenV1 = true;
-    else {
-      Idx -= NumElems;
-      SeenV2 = true;
-    }
-    if (Idx != Val)
-      return false;
-  }
-  if (SeenV1 && SeenV2)
-    return false;
-
-  ShVal = SeenV1 ? SVOp->getOperand(0) : SVOp->getOperand(1);
-  ShAmt = NumZeros;
-  return true;
+  return false;
 }
-
 
 /// LowerBuildVectorv16i8 - Custom lower build_vector of v16i8.
 ///
@@ -3867,8 +4055,8 @@ static SDValue EltsFromConsecutiveLoads(EVT VT, SmallVectorImpl<SDValue> &Elts,
 SDValue
 X86TargetLowering::LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const {
   DebugLoc dl = Op.getDebugLoc();
-  // All zero's are handled with pxor in SSE2 and above, xorps in SSE1 and
-  // all one's are handled with pcmpeqd. In AVX, zero's are handled with
+  // All zero's are handled with pxor in SSE2 and above, xorps in SSE1.
+  // All one's are handled with pcmpeqd. In AVX, zero's are handled with
   // vpxor in 128-bit and xor{pd,ps} in 256-bit, but no 256 version of pcmpeqd
   // is present, so AllOnes is ignored.
   if (ISD::isBuildVectorAllZeros(Op.getNode()) ||
@@ -3911,10 +4099,9 @@ X86TargetLowering::LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const {
     }
   }
 
-  if (NumNonZero == 0) {
-    // All undef vector. Return an UNDEF.  All zero vectors were handled above.
+  // All undef vector. Return an UNDEF.  All zero vectors were handled above.
+  if (NumNonZero == 0)
     return DAG.getUNDEF(VT);
-  }
 
   // Special case for single non-zero, non-undef, element.
   if (NumNonZero == 1) {
@@ -4052,7 +4239,7 @@ X86TargetLowering::LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const {
 
   if (EVTBits == 16 && NumElems == 8) {
     SDValue V = LowerBuildVectorv8i16(Op, NonZeros,NumNonZero,NumZero, DAG,
-                                        *this);
+                                      *this);
     if (V.getNode()) return V;
   }
 
@@ -4106,28 +4293,51 @@ X86TargetLowering::LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const {
     if (LD.getNode())
       return LD;
     
-    // For SSE 4.1, use inserts into undef.  
+    // For SSE 4.1, use insertps to put the high elements into the low element. 
     if (getSubtarget()->hasSSE41()) {
-      V[0] = DAG.getUNDEF(VT);
-      for (unsigned i = 0; i < NumElems; ++i)
-        if (Op.getOperand(i).getOpcode() != ISD::UNDEF)
-          V[0] = DAG.getNode(ISD::INSERT_VECTOR_ELT, dl, VT, V[0],
+      SDValue Result;
+      if (Op.getOperand(0).getOpcode() != ISD::UNDEF)
+        Result = DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, VT, Op.getOperand(0));
+      else
+        Result = DAG.getUNDEF(VT);
+      
+      for (unsigned i = 1; i < NumElems; ++i) {
+        if (Op.getOperand(i).getOpcode() == ISD::UNDEF) continue;
+        Result = DAG.getNode(ISD::INSERT_VECTOR_ELT, dl, VT, Result,
                              Op.getOperand(i), DAG.getIntPtrConstant(i));
-      return V[0];
+      }
+      return Result;
     }
     
-    // Otherwise, expand into a number of unpckl*
-    // e.g. for v4f32
+    // Otherwise, expand into a number of unpckl*, start by extending each of
+    // our (non-undef) elements to the full vector width with the element in the
+    // bottom slot of the vector (which generates no code for SSE).
+    for (unsigned i = 0; i < NumElems; ++i) {
+      if (Op.getOperand(i).getOpcode() != ISD::UNDEF)
+        V[i] = DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, VT, Op.getOperand(i));
+      else
+        V[i] = DAG.getUNDEF(VT);
+    }
+
+    // Next, we iteratively mix elements, e.g. for v4f32:
     //   Step 1: unpcklps 0, 2 ==> X: <?, ?, 2, 0>
     //         : unpcklps 1, 3 ==> Y: <?, ?, 3, 1>
     //   Step 2: unpcklps X, Y ==>    <3, 2, 1, 0>
-    for (unsigned i = 0; i < NumElems; ++i)
-      V[i] = DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, VT, Op.getOperand(i));
-    NumElems >>= 1;
-    while (NumElems != 0) {
-      for (unsigned i = 0; i < NumElems; ++i)
-        V[i] = getUnpackl(DAG, dl, VT, V[i], V[i + NumElems]);
-      NumElems >>= 1;
+    unsigned EltStride = NumElems >> 1;
+    while (EltStride != 0) {
+      for (unsigned i = 0; i < EltStride; ++i) {
+        // If V[i+EltStride] is undef and this is the first round of mixing,
+        // then it is safe to just drop this shuffle: V[i] is already in the
+        // right place, the one element (since it's the first round) being
+        // inserted as undef can be dropped.  This isn't safe for successive
+        // rounds because they will permute elements within both vectors.
+        if (V[i+EltStride].getOpcode() == ISD::UNDEF &&
+            EltStride == NumElems/2)
+          continue;
+        
+        V[i] = getUnpackl(DAG, dl, VT, V[i], V[i + EltStride]);
+      }
+      EltStride >>= 1;
     }
     return V[0];
   }
@@ -4242,8 +4452,6 @@ X86TargetLowering::LowerVECTOR_SHUFFLEv8i16(SDValue Op,
     NewV = DAG.getVectorShuffle(MVT::v2i64, dl,
                   DAG.getNode(ISD::BIT_CONVERT, dl, MVT::v2i64, V1),
                   DAG.getNode(ISD::BIT_CONVERT, dl, MVT::v2i64, V2), &MaskV[0]);
-    if (NewV.getOpcode() == ISD::VECTOR_SHUFFLE)
-      NewV = LowerVECTOR_SHUFFLE(NewV, DAG);
     NewV = DAG.getNode(ISD::BIT_CONVERT, dl, MVT::v8i16, NewV);
 
     // Rewrite the MaskVals and assign NewV to V1 if NewV now contains all the
@@ -4281,8 +4489,14 @@ X86TargetLowering::LowerVECTOR_SHUFFLEv8i16(SDValue Op,
     // If we've eliminated the use of V2, and the new mask is a pshuflw or
     // pshufhw, that's as cheap as it gets.  Return the new shuffle.
     if ((pshufhw && InOrder[0]) || (pshuflw && InOrder[1])) {
-      return DAG.getVectorShuffle(MVT::v8i16, dl, NewV,
+      unsigned Opc = pshufhw ? X86ISD::PSHUFHW : X86ISD::PSHUFLW;
+      unsigned TargetMask = 0;
+      NewV = DAG.getVectorShuffle(MVT::v8i16, dl, NewV,
                                   DAG.getUNDEF(MVT::v8i16), &MaskVals[0]);
+      TargetMask = pshufhw ? X86::getShufflePSHUFHWImmediate(NewV.getNode()):
+                             X86::getShufflePSHUFLWImmediate(NewV.getNode());
+      V1 = NewV.getOperand(0);
+      return getTargetShuffleNode(Opc, dl, MVT::v8i16, V1, TargetMask, DAG);
     }
   }
 
@@ -4356,6 +4570,12 @@ X86TargetLowering::LowerVECTOR_SHUFFLEv8i16(SDValue Op,
       MaskV.push_back(i);
     NewV = DAG.getVectorShuffle(MVT::v8i16, dl, NewV, DAG.getUNDEF(MVT::v8i16),
                                 &MaskV[0]);
+
+    if (NewV.getOpcode() == ISD::VECTOR_SHUFFLE && Subtarget->hasSSSE3())
+      NewV = getTargetShuffleNode(X86ISD::PSHUFLW, dl, MVT::v8i16,
+                               NewV.getOperand(0),
+                               X86::getShufflePSHUFLWImmediate(NewV.getNode()),
+                               DAG);
   }
 
   // If BestHi >= 0, generate a pshufhw to put the high elements in order,
@@ -4378,6 +4598,12 @@ X86TargetLowering::LowerVECTOR_SHUFFLEv8i16(SDValue Op,
     }
     NewV = DAG.getVectorShuffle(MVT::v8i16, dl, NewV, DAG.getUNDEF(MVT::v8i16),
                                 &MaskV[0]);
+
+    if (NewV.getOpcode() == ISD::VECTOR_SHUFFLE && Subtarget->hasSSSE3())
+      NewV = getTargetShuffleNode(X86ISD::PSHUFHW, dl, MVT::v8i16,
+                              NewV.getOperand(0),
+                              X86::getShufflePSHUFHWImmediate(NewV.getNode()),
+                              DAG);
   }
 
   // In case BestHi & BestLo were both -1, which means each quadword has a word
@@ -4567,7 +4793,7 @@ SDValue RewriteAsNarrowerShuffle(ShuffleVectorSDNode *SVOp,
   SDValue V2 = SVOp->getOperand(1);
   unsigned NumElems = VT.getVectorNumElements();
   unsigned NewWidth = (NumElems == 4) ? 2 : 4;
-  EVT MaskVT = MVT::getIntVectorWithNumElements(NewWidth);
+  EVT MaskVT = (NewWidth == 4) ? MVT::v4i16 : MVT::v2i32;
   EVT NewVT = MaskVT;
   switch (VT.getSimpleVT().SimpleTy) {
   default: assert(false && "Unexpected!");
@@ -4804,6 +5030,9 @@ X86TargetLowering::LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const {
   bool V2IsUndef = V2.getOpcode() == ISD::UNDEF;
   bool V1IsSplat = false;
   bool V2IsSplat = false;
+  bool HasSSE2 = Subtarget->hasSSE2() || Subtarget->hasAVX();
+  MachineFunction &MF = DAG.getMachineFunction();
+  bool OptForSize = MF.getFunction()->hasFnAttr(Attribute::OptimizeForSize);
 
   if (isZeroShuffle(SVOp))
     return getZeroVector(VT, Subtarget->hasSSE2(), DAG, dl);
@@ -4840,8 +5069,30 @@ X86TargetLowering::LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const {
     }
   }
 
-  if (X86::isPSHUFDMask(SVOp))
-    return Op;
+  if (X86::isPSHUFDMask(SVOp)) {
+    // The actual implementation will match the mask in the if above and then
+    // during isel it can match several different instructions, not only pshufd
+    // as its name says, sad but true, emulate the behavior for now...
+    if (X86::isMOVDDUPMask(SVOp) && ((VT == MVT::v4f32 || VT == MVT::v2i64)))
+        return getTargetShuffleNode(X86ISD::MOVLHPS, dl, VT, V1, V1, DAG);
+
+    if (OptForSize && HasSSE2 && X86::isUNPCKL_v_undef_Mask(SVOp) &&
+        VT == MVT::v4i32)
+      return getTargetShuffleNode(X86ISD::PUNPCKLDQ, dl, VT, V1, V1, DAG);
+
+    unsigned TargetMask = X86::getShuffleSHUFImmediate(SVOp);
+
+    if (HasSSE2 && (VT == MVT::v4f32 || VT == MVT::v4i32))
+      return getTargetShuffleNode(X86ISD::PSHUFD, dl, VT, V1, TargetMask, DAG);
+
+    if (HasSSE2 && (VT == MVT::v2i64 || VT == MVT::v2f64))
+      return getTargetShuffleNode(X86ISD::SHUFPD, dl, VT, V1, V1,
+                                  TargetMask, DAG);
+
+    if (VT == MVT::v4f32)
+      return getTargetShuffleNode(X86ISD::SHUFPS, dl, VT, V1, V1,
+                                  TargetMask, DAG);
+  }
 
   // Check if this can be converted into a logical shift.
   bool isLeft = false;
@@ -8156,6 +8407,7 @@ bool X86TargetLowering::isLegalAddressingMode(const AddrMode &AM,
                                               const Type *Ty) const {
   // X86 supports extremely general addressing modes.
   CodeModel::Model M = getTargetMachine().getCodeModel();
+  Reloc::Model R = getTargetMachine().getRelocationModel();
 
   // X86 allows a sign-extended 32-bit immediate field as a displacement.
   if (!X86::isOffsetSuitableForCodeModel(AM.BaseOffs, M, AM.BaseGV != NULL))
@@ -8175,7 +8427,8 @@ bool X86TargetLowering::isLegalAddressingMode(const AddrMode &AM,
       return false;
 
     // If lower 4G is not available, then we must use rip-relative addressing.
-    if (Subtarget->is64Bit() && (AM.BaseOffs || AM.Scale > 1))
+    if ((M != CodeModel::Small || R != Reloc::Static) &&
+        Subtarget->is64Bit() && (AM.BaseOffs || AM.Scale > 1))
       return false;
   }
 
@@ -8867,7 +9120,8 @@ X86TargetLowering::EmitLoweredMingwAlloca(MachineInstr *MI,
     .addReg(X86::EAX, RegState::Implicit)
     .addReg(X86::ESP, RegState::Implicit)
     .addReg(X86::EAX, RegState::Define | RegState::Implicit)
-    .addReg(X86::ESP, RegState::Define | RegState::Implicit);
+    .addReg(X86::ESP, RegState::Define | RegState::Implicit)
+    .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
 
   MI->eraseFromParent();   // The pseudo instruction is gone now.
   return BB;
@@ -9276,15 +9530,14 @@ static SDValue PerformShuffleCombine(SDNode *N, SelectionDAG &DAG,
                                      const TargetLowering &TLI) {
   DebugLoc dl = N->getDebugLoc();
   EVT VT = N->getValueType(0);
-  ShuffleVectorSDNode *SVN = cast<ShuffleVectorSDNode>(N);
 
   if (VT.getSizeInBits() != 128)
     return SDValue();
 
   SmallVector<SDValue, 16> Elts;
   for (unsigned i = 0, e = VT.getVectorNumElements(); i != e; ++i)
-    Elts.push_back(DAG.getShuffleScalarElt(SVN, i));
-  
+    Elts.push_back(getShuffleScalarElt(N, i, DAG));
+
   return EltsFromConsecutiveLoads(VT, Elts, dl, DAG);
 }
 

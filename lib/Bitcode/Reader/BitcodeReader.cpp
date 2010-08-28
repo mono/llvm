@@ -297,8 +297,6 @@ void BitcodeReaderValueList::ResolveConstantForwardRefs() {
       } else if (ConstantStruct *UserCS = dyn_cast<ConstantStruct>(UserC)) {
         NewC = ConstantStruct::get(Context, &NewOps[0], NewOps.size(),
                                          UserCS->getType()->isPacked());
-      } else if (ConstantUnion *UserCU = dyn_cast<ConstantUnion>(UserC)) {
-        NewC = ConstantUnion::get(UserCU->getType(), NewOps[0]);
       } else if (isa<ConstantVector>(UserC)) {
         NewC = ConstantVector::get(&NewOps[0], NewOps.size());
       } else {
@@ -589,13 +587,6 @@ bool BitcodeReader::ParseTypeTable() {
       for (unsigned i = 1, e = Record.size(); i != e; ++i)
         EltTys.push_back(getTypeByID(Record[i], true));
       ResultTy = StructType::get(Context, EltTys, Record[0]);
-      break;
-    }
-    case bitc::TYPE_CODE_UNION: {  // UNION: [eltty x N]
-      SmallVector<const Type*, 8> EltTys;
-      for (unsigned i = 0, e = Record.size(); i != e; ++i)
-        EltTys.push_back(getTypeByID(Record[i], true));
-      ResultTy = UnionType::get(&EltTys[0], EltTys.size());
       break;
     }
     case bitc::TYPE_CODE_ARRAY:     // ARRAY: [numelts, eltty]
@@ -1014,11 +1005,6 @@ bool BitcodeReader::ParseConstants() {
           Elts.push_back(ValueList.getConstantFwdRef(Record[i],
                                                      STy->getElementType(i)));
         V = ConstantStruct::get(STy, Elts);
-      } else if (const UnionType *UnTy = dyn_cast<UnionType>(CurTy)) {
-        uint64_t Index = Record[0];
-        Constant *Val = ValueList.getConstantFwdRef(Record[1],
-                                        UnTy->getElementType(Index));
-        V = ConstantUnion::get(UnTy, Val);
       } else if (const ArrayType *ATy = dyn_cast<ArrayType>(CurTy)) {
         const Type *EltTy = ATy->getElementType();
         for (unsigned i = 0; i != Size; ++i)
@@ -1636,6 +1622,7 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
 
   InstructionList.clear();
   unsigned ModuleValueListSize = ValueList.size();
+  unsigned ModuleMDValueListSize = MDValueList.size();
 
   // Add all the function arguments to the value table.
   for(Function::arg_iterator I = F->arg_begin(), E = F->arg_end(); I != E; ++I)
@@ -1986,6 +1973,7 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
         } while(OpNum != Record.size());
 
         const Type *ReturnType = F->getReturnType();
+        // Handle multiple return values. FIXME: Remove in LLVM 3.0.
         if (Vs.size() > 1 ||
             (ReturnType->isStructTy() &&
              (Vs.empty() || Vs[0]->getType() != ReturnType))) {
@@ -2322,7 +2310,7 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
     if (A->getParent() == 0) {
       // We found at least one unresolved value.  Nuke them all to avoid leaks.
       for (unsigned i = ModuleValueListSize, e = ValueList.size(); i != e; ++i){
-        if ((A = dyn_cast<Argument>(ValueList.back())) && A->getParent() == 0) {
+        if ((A = dyn_cast<Argument>(ValueList[i])) && A->getParent() == 0) {
           A->replaceAllUsesWith(UndefValue::get(A->getType()));
           delete A;
         }
@@ -2330,6 +2318,9 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
       return Error("Never resolved value found in function!");
     }
   }
+
+  // FIXME: Check for unresolved forward-declared metadata references
+  // and clean up leaks.
 
   // See if anything took the address of blocks in this function.  If so,
   // resolve them now.
@@ -2352,6 +2343,7 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
   
   // Trim the value list down to the size it was before we parsed this function.
   ValueList.shrinkTo(ModuleValueListSize);
+  MDValueList.shrinkTo(ModuleMDValueListSize);
   std::vector<BasicBlock*>().swap(FunctionBBs);
 
   return false;

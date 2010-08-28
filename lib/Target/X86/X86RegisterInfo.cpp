@@ -626,10 +626,9 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
   MBB.erase(I);
 }
 
-unsigned
+void
 X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
-                                     int SPAdj, FrameIndexValue *Value,
-                                     RegScavenger *RS) const{
+                                     int SPAdj, RegScavenger *RS) const{
   assert(SPAdj == 0 && "Unexpected");
 
   unsigned i = 0;
@@ -676,7 +675,6 @@ X86RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     uint64_t Offset = FIOffset + (uint64_t)MI.getOperand(i+3).getOffset();
     MI.getOperand(i+3).setOffset(Offset);
   }
-  return 0;
 }
 
 void
@@ -1109,7 +1107,8 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
         .addImm(NumBytes);
       BuildMI(MBB, MBBI, DL, TII.get(X86::CALLpcrel32))
         .addExternalSymbol("_alloca")
-        .addReg(StackPtr, RegState::Define | RegState::Implicit);
+        .addReg(StackPtr,    RegState::Define | RegState::Implicit)
+        .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
     } else {
       // Save EAX
       BuildMI(MBB, MBBI, DL, TII.get(X86::PUSH32r))
@@ -1121,7 +1120,8 @@ void X86RegisterInfo::emitPrologue(MachineFunction &MF) const {
         .addImm(NumBytes - 4);
       BuildMI(MBB, MBBI, DL, TII.get(X86::CALLpcrel32))
         .addExternalSymbol("_alloca")
-        .addReg(StackPtr, RegState::Define | RegState::Implicit);
+        .addReg(StackPtr,    RegState::Define | RegState::Implicit)
+        .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
 
       // Restore EAX
       MachineInstr *MI = addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm),

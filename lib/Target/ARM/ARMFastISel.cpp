@@ -57,6 +57,7 @@ class ARMFastISel : public FastISel {
   const TargetMachine &TM;
   const TargetInstrInfo &TII;
   const TargetLowering &TLI;
+  const ARMFunctionInfo *AFI;
 
   public:
     explicit ARMFastISel(FunctionLoweringInfo &funcInfo) 
@@ -65,6 +66,7 @@ class ARMFastISel : public FastISel {
       TII(*TM.getInstrInfo()),
       TLI(*TM.getTargetLowering()) {
       Subtarget = &TM.getSubtarget<ARMSubtarget>();
+      AFI = funcInfo.MF->getInfo<ARMFunctionInfo>();
     }
 
     // Code from FastISel.cpp.
@@ -101,8 +103,17 @@ class ARMFastISel : public FastISel {
     virtual bool TargetSelectInstruction(const Instruction *I);
 
   #include "ARMGenFastISel.inc"
+  
+    // Instruction selection routines.
+    virtual bool ARMSelectLoad(const Instruction *I);
 
+    // Utility routines.
   private:
+    bool isTypeLegal(const Type *Ty, EVT &VT);
+    bool ARMEmitLoad(EVT VT, unsigned &ResultReg, unsigned Reg, int Offset);
+    bool ARMLoadAlloca(const Instruction *I);
+    bool ARMComputeRegOffset(const Value *Obj, unsigned &Reg, int &Offset);
+    
     bool DefinesOptionalPredicate(MachineInstr *MI, bool *CPSR);
     const MachineInstrBuilder &AddOptionalDefs(const MachineInstrBuilder &MIB);
 };
@@ -301,8 +312,160 @@ unsigned ARMFastISel::FastEmitInst_extractsubreg(MVT RetVT,
   return ResultReg;
 }
 
+bool ARMFastISel::isTypeLegal(const Type *Ty, EVT &VT) {
+  VT = TLI.getValueType(Ty, true);
+  
+  // Only handle simple types.
+  if (VT == MVT::Other || !VT.isSimple()) return false;
+  
+  // For now, only handle 32-bit types.
+  return VT == MVT::i32;
+}
+
+// Computes the Reg+Offset to get to an object.
+bool ARMFastISel::ARMComputeRegOffset(const Value *Obj, unsigned &Reg,
+                                      int &Offset) {
+  // Some boilerplate from the X86 FastISel.
+  const User *U = NULL;
+  unsigned Opcode = Instruction::UserOp1;
+  if (const Instruction *I = dyn_cast<Instruction>(Obj)) {
+    // Don't walk into other basic blocks; it's possible we haven't
+    // visited them yet, so the instructions may not yet be assigned
+    // virtual registers.
+    if (FuncInfo.MBBMap[I->getParent()] != FuncInfo.MBB)
+      return false;
+
+    Opcode = I->getOpcode();
+    U = I;
+  } else if (const ConstantExpr *C = dyn_cast<ConstantExpr>(Obj)) {
+    Opcode = C->getOpcode();
+    U = C;
+  }
+
+  if (const PointerType *Ty = dyn_cast<PointerType>(Obj->getType()))
+    if (Ty->getAddressSpace() > 255)
+      // Fast instruction selection doesn't support the special
+      // address spaces.
+      return false;
+  
+  switch (Opcode) {
+    default: 
+    //errs() << "Failing Opcode is: " << *Op1 << "\n";
+    break;
+    case Instruction::Alloca: {
+      assert(false && "Alloca should have been handled earlier!");
+      return false;
+    }
+  }
+  
+  if (const GlobalValue *GV = dyn_cast<GlobalValue>(Obj)) {
+    //errs() << "Failing GV is: " << GV << "\n";
+    (void)GV;
+    return false;
+  }
+  
+  // Try to get this in a register if nothing else has worked.
+  Reg = getRegForValue(Obj);
+  return Reg != 0;  
+}
+
+bool ARMFastISel::ARMLoadAlloca(const Instruction *I) {
+  Value *Op0 = I->getOperand(0);
+
+  // Verify it's an alloca.
+  if (const AllocaInst *AI = dyn_cast<AllocaInst>(Op0)) {
+    DenseMap<const AllocaInst*, int>::iterator SI =
+      FuncInfo.StaticAllocaMap.find(AI);
+
+    if (SI != FuncInfo.StaticAllocaMap.end()) {
+      TargetRegisterClass* RC = TLI.getRegClassFor(TLI.getPointerTy());
+      unsigned ResultReg = createResultReg(RC);
+      TII.loadRegFromStackSlot(*FuncInfo.MBB, *FuncInfo.InsertPt,
+                               ResultReg, SI->second, RC,
+                               TM.getRegisterInfo());
+      UpdateValueMap(I, ResultReg);
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+bool ARMFastISel::ARMEmitLoad(EVT VT, unsigned &ResultReg,
+                              unsigned Reg, int Offset) {
+  
+  assert(VT.isSimple() && "Non-simple types are invalid here!");
+  switch (VT.getSimpleVT().SimpleTy) {
+    default: return false;
+    case MVT::i32: {
+      ResultReg = createResultReg(ARM::GPRRegisterClass);
+      // TODO: Fix the Addressing modes so that these can share some code.
+      // Since this is a Thumb1 load this will work in Thumb1 or 2 mode.
+      if (AFI->isThumbFunction())
+        AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+                                TII.get(ARM::tLDR), ResultReg)
+                        .addReg(Reg).addImm(Offset).addReg(0));
+      else
+        AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+                                TII.get(ARM::LDR), ResultReg)
+                        .addReg(Reg).addReg(0).addImm(Offset));
+      return true;
+    }
+  }
+}
+
+bool ARMFastISel::ARMSelectLoad(const Instruction *I) {
+  // If we're an alloca we know we have a frame index and can emit the load
+  // directly in short order.
+  if (ARMLoadAlloca(I))
+    return true;
+    
+  // Verify we have a legal type before going any further.
+  EVT VT;
+  if (!isTypeLegal(I->getType(), VT))
+    return false;
+  
+  // Our register and offset with innocuous defaults.
+  unsigned Reg = 0;
+  int Offset = 0;
+  
+  // See if we can handle this as Reg + Offset
+  if (!ARMComputeRegOffset(I->getOperand(0), Reg, Offset))
+    return false;
+    
+  // Since the offset may be too large for the load instruction
+  // get the reg+offset into a register.
+  // TODO: Optimize this somewhat.
+  ARMCC::CondCodes Pred = ARMCC::AL;
+  unsigned PredReg = 0;
+  
+  if (!AFI->isThumbFunction())
+    emitARMRegPlusImmediate(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+                            Reg, Reg, Offset, Pred, PredReg,
+                            static_cast<const ARMBaseInstrInfo&>(TII));
+  else {
+    assert(AFI->isThumb2Function());
+    emitT2RegPlusImmediate(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
+                           Reg, Reg, Offset, Pred, PredReg,
+                           static_cast<const ARMBaseInstrInfo&>(TII));
+  } 
+  
+  unsigned ResultReg;
+  // TODO: Verify the additions above work, otherwise we'll need to add the
+  // offset instead of 0 and do all sorts of operand munging.
+  if (!ARMEmitLoad(VT, ResultReg, Reg, 0)) return false;
+  
+  UpdateValueMap(I, ResultReg);
+  return true;
+}
+
 bool ARMFastISel::TargetSelectInstruction(const Instruction *I) {
+  // No Thumb-1 for now.
+  if (AFI->isThumbFunction() && !AFI->isThumb2Function()) return false;
+  
   switch (I->getOpcode()) {
+    case Instruction::Load:
+      return ARMSelectLoad(I);
     default: break;
   }
   return false;

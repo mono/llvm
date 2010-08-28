@@ -102,8 +102,8 @@ namespace {  // Anonymous namespace for class
 }
 
 char PreVerifier::ID = 0;
-static RegisterPass<PreVerifier>
-PreVer("preverify", "Preliminary module verification");
+INITIALIZE_PASS(PreVerifier, "preverify", "Preliminary module verification", 
+                false, false);
 char &PreVerifyID = PreVerifier::ID;
 
 namespace {
@@ -189,16 +189,6 @@ namespace {
       : FunctionPass(ID), 
       Broken(false), RealPass(true), action(ctn), Mod(0), Context(0), DT(0),
       MessagesStr(Messages) {}
-    explicit Verifier(bool AB)
-      : FunctionPass(ID), 
-      Broken(false), RealPass(true),
-      action( AB ? AbortProcessAction : PrintMessageAction), Mod(0),
-      Context(0), DT(0), MessagesStr(Messages) {}
-    explicit Verifier(DominatorTree &dt)
-      : FunctionPass(ID), 
-      Broken(false), RealPass(false), action(PrintMessageAction), Mod(0),
-      Context(0), DT(&dt), MessagesStr(Messages) {}
-
 
     bool doInitialization(Module &M) {
       Mod = &M;
@@ -403,7 +393,7 @@ namespace {
 } // End anonymous namespace
 
 char Verifier::ID = 0;
-static RegisterPass<Verifier> X("verify", "Module Verifier");
+INITIALIZE_PASS(Verifier, "verify", "Module Verifier", false, false);
 
 // Assert - We know that cond should be true, if not print an error message.
 #define Assert(C, M) \
@@ -1282,28 +1272,37 @@ void Verifier::visitBinaryOperator(BinaryOperator &B) {
   visitInstruction(B);
 }
 
-void Verifier::visitICmpInst(ICmpInst& IC) {
+void Verifier::visitICmpInst(ICmpInst &IC) {
   // Check that the operands are the same type
-  const Type* Op0Ty = IC.getOperand(0)->getType();
-  const Type* Op1Ty = IC.getOperand(1)->getType();
+  const Type *Op0Ty = IC.getOperand(0)->getType();
+  const Type *Op1Ty = IC.getOperand(1)->getType();
   Assert1(Op0Ty == Op1Ty,
           "Both operands to ICmp instruction are not of the same type!", &IC);
   // Check that the operands are the right type
   Assert1(Op0Ty->isIntOrIntVectorTy() || Op0Ty->isPointerTy(),
           "Invalid operand types for ICmp instruction", &IC);
+  // Check that the predicate is valid.
+  Assert1(IC.getPredicate() >= CmpInst::FIRST_ICMP_PREDICATE &&
+          IC.getPredicate() <= CmpInst::LAST_ICMP_PREDICATE,
+          "Invalid predicate in ICmp instruction!", &IC);
 
   visitInstruction(IC);
 }
 
-void Verifier::visitFCmpInst(FCmpInst& FC) {
+void Verifier::visitFCmpInst(FCmpInst &FC) {
   // Check that the operands are the same type
-  const Type* Op0Ty = FC.getOperand(0)->getType();
-  const Type* Op1Ty = FC.getOperand(1)->getType();
+  const Type *Op0Ty = FC.getOperand(0)->getType();
+  const Type *Op1Ty = FC.getOperand(1)->getType();
   Assert1(Op0Ty == Op1Ty,
           "Both operands to FCmp instruction are not of the same type!", &FC);
   // Check that the operands are the right type
   Assert1(Op0Ty->isFPOrFPVectorTy(),
           "Invalid operand types for FCmp instruction", &FC);
+  // Check that the predicate is valid.
+  Assert1(FC.getPredicate() >= CmpInst::FIRST_FCMP_PREDICATE &&
+          FC.getPredicate() <= CmpInst::LAST_FCMP_PREDICATE,
+          "Invalid predicate in FCmp instruction!", &FC);
+
   visitInstruction(FC);
 }
 
@@ -1563,7 +1562,8 @@ void Verifier::VerifyType(const Type *Ty) {
               "Function type with invalid parameter type", ElTy, FTy);
       VerifyType(ElTy);
     }
-  } break;
+    break;
+  }
   case Type::StructTyID: {
     const StructType *STy = cast<StructType>(Ty);
     for (unsigned i = 0, e = STy->getNumElements(); i != e; ++i) {
@@ -1572,34 +1572,29 @@ void Verifier::VerifyType(const Type *Ty) {
               "Structure type with invalid element type", ElTy, STy);
       VerifyType(ElTy);
     }
-  } break;
-  case Type::UnionTyID: {
-    const UnionType *UTy = cast<UnionType>(Ty);
-    for (unsigned i = 0, e = UTy->getNumElements(); i != e; ++i) {
-      const Type *ElTy = UTy->getElementType(i);
-      Assert2(UnionType::isValidElementType(ElTy),
-              "Union type with invalid element type", ElTy, UTy);
-      VerifyType(ElTy);
-    }
-  } break;
+    break;
+  }
   case Type::ArrayTyID: {
     const ArrayType *ATy = cast<ArrayType>(Ty);
     Assert1(ArrayType::isValidElementType(ATy->getElementType()),
             "Array type with invalid element type", ATy);
     VerifyType(ATy->getElementType());
-  } break;
+    break;
+  }
   case Type::PointerTyID: {
     const PointerType *PTy = cast<PointerType>(Ty);
     Assert1(PointerType::isValidElementType(PTy->getElementType()),
             "Pointer type with invalid element type", PTy);
     VerifyType(PTy->getElementType());
-  } break;
+    break;
+  }
   case Type::VectorTyID: {
     const VectorType *VTy = cast<VectorType>(Ty);
     Assert1(VectorType::isValidElementType(VTy->getElementType()),
             "Vector type with invalid element type", VTy);
     VerifyType(VTy->getElementType());
-  } break;
+    break;
+  }
   default:
     break;
   }

@@ -1,5 +1,4 @@
 add_llvm_library(LLVMScalarOpts
-  ABCD.cpp
   ADCE.cpp
   BasicBlockPlacement.cpp
   CodeGenPrepare.cpp
@@ -30,6 +29,7 @@ add_llvm_library(LLVMScalarOpts
   Sink.cpp
   TailDuplication.cpp
   TailRecursionElimination.cpp
+  ValuePropagation.cpp
   )
 
 target_link_libraries (LLVMScalarOpts LLVMTransformUtils)

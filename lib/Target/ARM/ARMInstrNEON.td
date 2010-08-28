@@ -124,15 +124,16 @@ def nModImm : Operand<i32> {
 // NEON load / store instructions
 //===----------------------------------------------------------------------===//
 
-let mayLoad = 1, neverHasSideEffects = 1 in {
 // Use vldmia to load a Q register as a D register pair.
 // This is equivalent to VLDMD except that it has a Q register operand
 // instead of a pair of D registers.
 def VLDMQ
-  : AXDI5<(outs QPR:$dst), (ins addrmode5:$addr, pred:$p),
+  : AXDI5<(outs QPR:$dst), (ins addrmode4:$addr, pred:$p),
           IndexModeNone, IIC_fpLoadm,
-          "vldm${addr:submode}${p}\t${addr:base}, ${dst:dregpair}", "", []>;
+          "vldm${addr:submode}${p}\t$addr, ${dst:dregpair}", "",
+          [(set QPR:$dst, (v2f64 (load addrmode4:$addr)))]>;
 
+let mayLoad = 1, neverHasSideEffects = 1 in {
 // Use vld1 to load a Q register as a D register pair.
 // This alternative to VLDMQ allows an alignment to be specified.
 // This is equivalent to VLD1q64 except that it has a Q register operand.
@@ -141,15 +142,16 @@ def VLD1q
           IIC_VLD1, "vld1", "64", "${dst:dregpair}, $addr", "", []>;
 } // mayLoad = 1, neverHasSideEffects = 1
 
-let mayStore = 1, neverHasSideEffects = 1 in {
 // Use vstmia to store a Q register as a D register pair.
 // This is equivalent to VSTMD except that it has a Q register operand
 // instead of a pair of D registers.
 def VSTMQ
-  : AXDI5<(outs), (ins QPR:$src, addrmode5:$addr, pred:$p),
+  : AXDI5<(outs), (ins QPR:$src, addrmode4:$addr, pred:$p),
           IndexModeNone, IIC_fpStorem,
-          "vstm${addr:submode}${p}\t${addr:base}, ${src:dregpair}", "", []>;
+          "vstm${addr:submode}${p}\t$addr, ${src:dregpair}", "",
+          [(store (v2f64 QPR:$src), addrmode4:$addr)]>;
 
+let mayStore = 1, neverHasSideEffects = 1 in {
 // Use vst1 to store a Q register as a D register pair.
 // This alternative to VSTMQ allows an alignment to be specified.
 // This is equivalent to VST1q64 except that it has a Q register operand.
@@ -486,6 +488,25 @@ def VLD4LNq32_UPD : VLD4LNWB<0b1011, {?,1,?,?}, "32">;
 
 let mayStore = 1, neverHasSideEffects = 1, hasExtraSrcRegAllocReq = 1 in {
 
+// Classes for VST* pseudo-instructions with multi-register operands.
+// These are expanded to real instructions after register allocation.
+class VSTQPseudo
+  : PseudoNLdSt<(outs), (ins addrmode6:$addr, QPR:$src), IIC_VST, "">;
+class VSTQWBPseudo
+  : PseudoNLdSt<(outs GPR:$wb),
+                (ins addrmode6:$addr, am6offset:$offset, QPR:$src), IIC_VST,
+                "$addr.addr = $wb">;
+class VSTQQPseudo
+  : PseudoNLdSt<(outs), (ins addrmode6:$addr, QQPR:$src), IIC_VST, "">;
+class VSTQQWBPseudo
+  : PseudoNLdSt<(outs GPR:$wb),
+                (ins addrmode6:$addr, am6offset:$offset, QQPR:$src), IIC_VST,
+                "$addr.addr = $wb">;
+class VSTQQQQWBPseudo
+  : PseudoNLdSt<(outs GPR:$wb),
+                (ins addrmode6:$addr, am6offset:$offset, QQQQPR:$src), IIC_VST,
+                "$addr.addr = $wb">;
+
 //   VST1     : Vector Store (multiple single elements)
 class VST1D<bits<4> op7_4, string Dt>
   : NLdSt<0,0b00,0b0111,op7_4, (outs), (ins addrmode6:$addr, DPR:$src), IIC_VST,
@@ -504,6 +525,11 @@ def  VST1q8   : VST1Q<0b0000, "8">;
 def  VST1q16  : VST1Q<0b0100, "16">;
 def  VST1q32  : VST1Q<0b1000, "32">;
 def  VST1q64  : VST1Q<0b1100, "64">;
+
+def VST1q8Pseudo  : VSTQPseudo;
+def VST1q16Pseudo : VSTQPseudo;
+def VST1q32Pseudo : VSTQPseudo;
+def VST1q64Pseudo : VSTQPseudo;
 
 // ...with address register writeback:
 class VST1DWB<bits<4> op7_4, string Dt>
@@ -524,6 +550,11 @@ def VST1q8_UPD  : VST1QWB<0b0000, "8">;
 def VST1q16_UPD : VST1QWB<0b0100, "16">;
 def VST1q32_UPD : VST1QWB<0b1000, "32">;
 def VST1q64_UPD : VST1QWB<0b1100, "64">;
+
+def VST1q8Pseudo_UPD  : VSTQWBPseudo;
+def VST1q16Pseudo_UPD : VSTQWBPseudo;
+def VST1q32Pseudo_UPD : VSTQWBPseudo;
+def VST1q64Pseudo_UPD : VSTQWBPseudo;
 
 // ...with 3 registers (some of these are only for the disassembler):
 class VST1D3<bits<4> op7_4, string Dt>
@@ -546,6 +577,9 @@ def VST1d8T_UPD  : VST1D3WB<0b0000, "8">;
 def VST1d16T_UPD : VST1D3WB<0b0100, "16">;
 def VST1d32T_UPD : VST1D3WB<0b1000, "32">;
 def VST1d64T_UPD : VST1D3WB<0b1100, "64">;
+
+def VST1d64TPseudo     : VSTQQPseudo;
+def VST1d64TPseudo_UPD : VSTQQWBPseudo;
 
 // ...with 4 registers (some of these are only for the disassembler):
 class VST1D4<bits<4> op7_4, string Dt>
@@ -570,6 +604,9 @@ def VST1d16Q_UPD : VST1D4WB<0b0100, "16">;
 def VST1d32Q_UPD : VST1D4WB<0b1000, "32">;
 def VST1d64Q_UPD : VST1D4WB<0b1100, "64">;
 
+def VST1d64QPseudo     : VSTQQPseudo;
+def VST1d64QPseudo_UPD : VSTQQWBPseudo;
+
 //   VST2     : Vector Store (multiple 2-element structures)
 class VST2D<bits<4> op11_8, bits<4> op7_4, string Dt>
   : NLdSt<0, 0b00, op11_8, op7_4, (outs),
@@ -588,6 +625,14 @@ def  VST2d32  : VST2D<0b1000, 0b1000, "32">;
 def  VST2q8   : VST2Q<0b0000, "8">;
 def  VST2q16  : VST2Q<0b0100, "16">;
 def  VST2q32  : VST2Q<0b1000, "32">;
+
+def  VST2d8Pseudo  : VSTQPseudo;
+def  VST2d16Pseudo : VSTQPseudo;
+def  VST2d32Pseudo : VSTQPseudo;
+
+def  VST2q8Pseudo  : VSTQQPseudo;
+def  VST2q16Pseudo : VSTQQPseudo;
+def  VST2q32Pseudo : VSTQQPseudo;
 
 // ...with address register writeback:
 class VST2DWB<bits<4> op11_8, bits<4> op7_4, string Dt>
@@ -610,6 +655,14 @@ def VST2q8_UPD  : VST2QWB<0b0000, "8">;
 def VST2q16_UPD : VST2QWB<0b0100, "16">;
 def VST2q32_UPD : VST2QWB<0b1000, "32">;
 
+def VST2d8Pseudo_UPD  : VSTQWBPseudo;
+def VST2d16Pseudo_UPD : VSTQWBPseudo;
+def VST2d32Pseudo_UPD : VSTQWBPseudo;
+
+def VST2q8Pseudo_UPD  : VSTQQWBPseudo;
+def VST2q16Pseudo_UPD : VSTQQWBPseudo;
+def VST2q32Pseudo_UPD : VSTQQWBPseudo;
+
 // ...with double-spaced registers (for disassembly only):
 def VST2b8      : VST2D<0b1001, 0b0000, "8">;
 def VST2b16     : VST2D<0b1001, 0b0100, "16">;
@@ -628,6 +681,10 @@ def  VST3d8   : VST3D<0b0100, 0b0000, "8">;
 def  VST3d16  : VST3D<0b0100, 0b0100, "16">;
 def  VST3d32  : VST3D<0b0100, 0b1000, "32">;
 
+def  VST3d8Pseudo  : VSTQQPseudo;
+def  VST3d16Pseudo : VSTQQPseudo;
+def  VST3d32Pseudo : VSTQQPseudo;
+
 // ...with address register writeback:
 class VST3DWB<bits<4> op11_8, bits<4> op7_4, string Dt>
   : NLdSt<0, 0b00, op11_8, op7_4, (outs GPR:$wb),
@@ -640,6 +697,10 @@ def VST3d8_UPD  : VST3DWB<0b0100, 0b0000, "8">;
 def VST3d16_UPD : VST3DWB<0b0100, 0b0100, "16">;
 def VST3d32_UPD : VST3DWB<0b0100, 0b1000, "32">;
 
+def VST3d8Pseudo_UPD  : VSTQQWBPseudo;
+def VST3d16Pseudo_UPD : VSTQQWBPseudo;
+def VST3d32Pseudo_UPD : VSTQQWBPseudo;
+
 // ...with double-spaced registers (non-updating versions for disassembly only):
 def VST3q8      : VST3D<0b0101, 0b0000, "8">;
 def VST3q16     : VST3D<0b0101, 0b0100, "16">;
@@ -648,10 +709,14 @@ def VST3q8_UPD  : VST3DWB<0b0101, 0b0000, "8">;
 def VST3q16_UPD : VST3DWB<0b0101, 0b0100, "16">;
 def VST3q32_UPD : VST3DWB<0b0101, 0b1000, "32">;
 
+def VST3q8Pseudo_UPD  : VSTQQQQWBPseudo;
+def VST3q16Pseudo_UPD : VSTQQQQWBPseudo;
+def VST3q32Pseudo_UPD : VSTQQQQWBPseudo;
+
 // ...alternate versions to be allocated odd register numbers:
-def VST3q8odd_UPD  : VST3DWB<0b0101, 0b0000, "8">;
-def VST3q16odd_UPD : VST3DWB<0b0101, 0b0100, "16">;
-def VST3q32odd_UPD : VST3DWB<0b0101, 0b1000, "32">;
+def VST3q8oddPseudo_UPD  : VSTQQQQWBPseudo;
+def VST3q16oddPseudo_UPD : VSTQQQQWBPseudo;
+def VST3q32oddPseudo_UPD : VSTQQQQWBPseudo;
 
 //   VST4     : Vector Store (multiple 4-element structures)
 class VST4D<bits<4> op11_8, bits<4> op7_4, string Dt>
@@ -663,6 +728,10 @@ class VST4D<bits<4> op11_8, bits<4> op7_4, string Dt>
 def  VST4d8   : VST4D<0b0000, 0b0000, "8">;
 def  VST4d16  : VST4D<0b0000, 0b0100, "16">;
 def  VST4d32  : VST4D<0b0000, 0b1000, "32">;
+
+def  VST4d8Pseudo  : VSTQQPseudo;
+def  VST4d16Pseudo : VSTQQPseudo;
+def  VST4d32Pseudo : VSTQQPseudo;
 
 // ...with address register writeback:
 class VST4DWB<bits<4> op11_8, bits<4> op7_4, string Dt>
@@ -676,6 +745,10 @@ def VST4d8_UPD  : VST4DWB<0b0000, 0b0000, "8">;
 def VST4d16_UPD : VST4DWB<0b0000, 0b0100, "16">;
 def VST4d32_UPD : VST4DWB<0b0000, 0b1000, "32">;
 
+def VST4d8Pseudo_UPD  : VSTQQWBPseudo;
+def VST4d16Pseudo_UPD : VSTQQWBPseudo;
+def VST4d32Pseudo_UPD : VSTQQWBPseudo;
+
 // ...with double-spaced registers (non-updating versions for disassembly only):
 def VST4q8      : VST4D<0b0001, 0b0000, "8">;
 def VST4q16     : VST4D<0b0001, 0b0100, "16">;
@@ -684,10 +757,14 @@ def VST4q8_UPD  : VST4DWB<0b0001, 0b0000, "8">;
 def VST4q16_UPD : VST4DWB<0b0001, 0b0100, "16">;
 def VST4q32_UPD : VST4DWB<0b0001, 0b1000, "32">;
 
+def VST4q8Pseudo_UPD  : VSTQQQQWBPseudo;
+def VST4q16Pseudo_UPD : VSTQQQQWBPseudo;
+def VST4q32Pseudo_UPD : VSTQQQQWBPseudo;
+
 // ...alternate versions to be allocated odd register numbers:
-def VST4q8odd_UPD  : VST4DWB<0b0001, 0b0000, "8">;
-def VST4q16odd_UPD : VST4DWB<0b0001, 0b0100, "16">;
-def VST4q32odd_UPD : VST4DWB<0b0001, 0b1000, "32">;
+def VST4q8oddPseudo_UPD  : VSTQQQQWBPseudo;
+def VST4q16oddPseudo_UPD : VSTQQQQWBPseudo;
+def VST4q32oddPseudo_UPD : VSTQQQQWBPseudo;
 
 //   VST1LN   : Vector Store (single element from one lane)
 //   FIXME: Not yet implemented.

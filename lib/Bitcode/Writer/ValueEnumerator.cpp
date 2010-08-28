@@ -137,7 +137,7 @@ ValueEnumerator::ValueEnumerator(const Module *M) {
 unsigned ValueEnumerator::getInstructionID(const Instruction *Inst) const {
   InstructionMapType::const_iterator I = InstructionMap.find(Inst);
   assert (I != InstructionMap.end() && "Instruction is not mapped!");
-    return I->second;
+  return I->second;
 }
 
 void ValueEnumerator::setInstructionID(const Instruction *I) {
@@ -217,12 +217,38 @@ void ValueEnumerator::EnumerateNamedMetadata(const Module *M) {
 
 void ValueEnumerator::EnumerateNamedMDNode(const NamedMDNode *MD) {
   for (unsigned i = 0, e = MD->getNumOperands(); i != e; ++i)
-    if (MDNode *E = MD->getOperand(i))
-      EnumerateValue(E);
+    EnumerateMetadata(MD->getOperand(i));
+}
+
+/// EnumerateMDNodeOperands - Enumerate all non-function-local values
+/// and types referenced by the given MDNode.
+void ValueEnumerator::EnumerateMDNodeOperands(const MDNode *N) {
+  for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i) {
+    if (Value *V = N->getOperand(i)) {
+      if (isa<MDNode>(V) || isa<MDString>(V))
+        EnumerateMetadata(V);
+      else if (!isa<Instruction>(V) && !isa<Argument>(V))
+        EnumerateValue(V);
+    } else
+      EnumerateType(Type::getVoidTy(N->getContext()));
+  }
 }
 
 void ValueEnumerator::EnumerateMetadata(const Value *MD) {
   assert((isa<MDNode>(MD) || isa<MDString>(MD)) && "Invalid metadata kind");
+
+  // Enumerate the type of this value.
+  EnumerateType(MD->getType());
+
+  const MDNode *N = dyn_cast<MDNode>(MD);
+
+  // In the module-level pass, skip function-local nodes themselves, but
+  // do walk their operands.
+  if (N && N->isFunctionLocal() && N->getFunction()) {
+    EnumerateMDNodeOperands(N);
+    return;
+  }
+
   // Check to see if it's already in!
   unsigned &MDValueID = MDValueMap[MD];
   if (MDValueID) {
@@ -230,35 +256,52 @@ void ValueEnumerator::EnumerateMetadata(const Value *MD) {
     MDValues[MDValueID-1].second++;
     return;
   }
-
-  // Enumerate the type of this value.
-  EnumerateType(MD->getType());
-
-  if (const MDNode *N = dyn_cast<MDNode>(MD)) {
-    MDValues.push_back(std::make_pair(MD, 1U));
-    MDValueMap[MD] = MDValues.size();
-    MDValueID = MDValues.size();
-    for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i) {
-      if (Value *V = N->getOperand(i))
-        EnumerateValue(V);
-      else
-        EnumerateType(Type::getVoidTy(MD->getContext()));
-    }
-    if (N->isFunctionLocal() && N->getFunction())
-      FunctionLocalMDs.push_back(N);
-    return;
-  }
-  
-  // Add the value.
-  assert(isa<MDString>(MD) && "Unknown metadata kind");
   MDValues.push_back(std::make_pair(MD, 1U));
   MDValueID = MDValues.size();
+
+  // Enumerate all non-function-local operands.
+  if (N)
+    EnumerateMDNodeOperands(N);
+}
+
+/// EnumerateFunctionLocalMetadataa - Incorporate function-local metadata
+/// information reachable from the given MDNode.
+void ValueEnumerator::EnumerateFunctionLocalMetadata(const MDNode *N) {
+  assert(N->isFunctionLocal() && N->getFunction() &&
+         "EnumerateFunctionLocalMetadata called on non-function-local mdnode!");
+
+  // Enumerate the type of this value.
+  EnumerateType(N->getType());
+
+  // Check to see if it's already in!
+  unsigned &MDValueID = MDValueMap[N];
+  if (MDValueID) {
+    // Increment use count.
+    MDValues[MDValueID-1].second++;
+    return;
+  }
+  MDValues.push_back(std::make_pair(N, 1U));
+  MDValueID = MDValues.size();
+
+  // To incoroporate function-local information visit all function-local
+  // MDNodes and all function-local values they reference.
+  for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i)
+    if (Value *V = N->getOperand(i)) {
+      if (MDNode *O = dyn_cast<MDNode>(V)) {
+        if (O->isFunctionLocal() && O->getFunction())
+          EnumerateFunctionLocalMetadata(O);
+      } else if (isa<Instruction>(V) || isa<Argument>(V))
+        EnumerateValue(V);
+    }
+
+  // Also, collect all function-local MDNodes for easy access.
+  FunctionLocalMDs.push_back(N);
 }
 
 void ValueEnumerator::EnumerateValue(const Value *V) {
   assert(!V->getType()->isVoidTy() && "Can't insert void values!");
-  if (isa<MDNode>(V) || isa<MDString>(V))
-    return EnumerateMetadata(V);
+  assert(!isa<MDNode>(V) && !isa<MDString>(V) &&
+         "EnumerateValue doesn't handle Metadata!");
 
   // Check to see if it's already in!
   unsigned &ValueID = ValueMap[V];
@@ -344,7 +387,7 @@ void ValueEnumerator::EnumerateOperandType(const Value *V) {
       // blockaddress.
       if (isa<BasicBlock>(Op)) continue;
       
-      EnumerateOperandType(cast<Constant>(Op));
+      EnumerateOperandType(Op);
     }
 
     if (const MDNode *N = dyn_cast<MDNode>(V)) {
@@ -353,7 +396,7 @@ void ValueEnumerator::EnumerateOperandType(const Value *V) {
           EnumerateOperandType(Elem);
     }
   } else if (isa<MDString>(V) || isa<MDNode>(V))
-    EnumerateValue(V);
+    EnumerateMetadata(V);
 }
 
 void ValueEnumerator::EnumerateAttributes(const AttrListPtr &PAL) {
@@ -371,6 +414,7 @@ void ValueEnumerator::EnumerateAttributes(const AttrListPtr &PAL) {
 void ValueEnumerator::incorporateFunction(const Function &F) {
   InstructionCount = 0;
   NumModuleValues = Values.size();
+  NumModuleMDValues = MDValues.size();
 
   // Adding function arguments to the value table.
   for (Function::const_arg_iterator I = F.arg_begin(), E = F.arg_end();
@@ -401,7 +445,6 @@ void ValueEnumerator::incorporateFunction(const Function &F) {
 
   FirstInstID = Values.size();
 
-  FunctionLocalMDs.clear();
   SmallVector<MDNode *, 8> FnLocalMDVector;
   // Add all of the instructions.
   for (Function::const_iterator BB = F.begin(), E = F.end(); BB != E; ++BB) {
@@ -413,6 +456,15 @@ void ValueEnumerator::incorporateFunction(const Function &F) {
             // Enumerate metadata after the instructions they might refer to.
             FnLocalMDVector.push_back(MD);
       }
+
+      SmallVector<std::pair<unsigned, MDNode*>, 8> MDs;
+      I->getAllMetadataOtherThanDebugLoc(MDs);
+      for (unsigned i = 0, e = MDs.size(); i != e; ++i) {
+        MDNode *N = MDs[i].second;
+        if (N->isFunctionLocal() && N->getFunction())
+          FnLocalMDVector.push_back(N);
+      }
+        
       if (!I->getType()->isVoidTy())
         EnumerateValue(I);
     }
@@ -420,18 +472,22 @@ void ValueEnumerator::incorporateFunction(const Function &F) {
 
   // Add all of the function-local metadata.
   for (unsigned i = 0, e = FnLocalMDVector.size(); i != e; ++i)
-    EnumerateOperandType(FnLocalMDVector[i]);
+    EnumerateFunctionLocalMetadata(FnLocalMDVector[i]);
 }
 
 void ValueEnumerator::purgeFunction() {
   /// Remove purged values from the ValueMap.
   for (unsigned i = NumModuleValues, e = Values.size(); i != e; ++i)
     ValueMap.erase(Values[i].first);
+  for (unsigned i = NumModuleMDValues, e = MDValues.size(); i != e; ++i)
+    MDValueMap.erase(MDValues[i].first);
   for (unsigned i = 0, e = BasicBlocks.size(); i != e; ++i)
     ValueMap.erase(BasicBlocks[i]);
 
   Values.resize(NumModuleValues);
+  MDValues.resize(NumModuleMDValues);
   BasicBlocks.clear();
+  FunctionLocalMDs.clear();
 }
 
 static void IncorporateFunctionInfoGlobalBBIDs(const Function *F,

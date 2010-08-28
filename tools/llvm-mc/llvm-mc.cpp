@@ -303,7 +303,8 @@ static int AssembleInput(const char *ProgName) {
     MCCodeEmitter *CE = 0;
     if (ShowEncoding)
       CE = TheTarget->createCodeEmitter(*TM, Ctx);
-    Str.reset(createAsmStreamer(Ctx, *Out,TM->getTargetData()->isLittleEndian(),
+    Str.reset(createAsmStreamer(Ctx, *Out,
+                                TM->getTargetData()->isLittleEndian(),
                                 /*asmverbose*/true, IP, CE, ShowInst));
   } else if (FileType == OFT_Null) {
     Str.reset(createNullStreamer(Ctx));
@@ -390,6 +391,7 @@ int main(int argc, char **argv) {
   llvm::InitializeAllDisassemblers();
   
   cl::ParseCommandLineOptions(argc, argv, "llvm machine code playground\n");
+  TripleName = Triple::normalize(TripleName);
 
   switch (Action) {
   default:

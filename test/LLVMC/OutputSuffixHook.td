@@ -21,4 +21,4 @@ def dummy_tool : Tool<[
          (switch_on "dummy1"), (output_suffix "$CALL(MyHook)")))
 ]>;
 
-def DummyGraph : CompilationGraph<[SimpleEdge<"root", "dummy_tool">]>;
+def DummyGraph : CompilationGraph<[(edge "root", "dummy_tool")]>;

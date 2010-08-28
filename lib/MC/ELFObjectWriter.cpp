@@ -49,10 +49,10 @@ namespace {
       }
     }
 
-    static bool isFixupKindX86RIPRel(unsigned Kind) {
+    /*static bool isFixupKindX86RIPRel(unsigned Kind) {
       return Kind == X86::reloc_riprel_4byte ||
         Kind == X86::reloc_riprel_4byte_movq_load;
-    }
+    }*/
 
 
     /// ELFSymbolData - Helper struct for containing some precomputed information
@@ -64,8 +64,8 @@ namespace {
 
       // Support lexicographic sorting.
       bool operator<(const ELFSymbolData &RHS) const {
-        const std::string &Name = SymbolData->getSymbol().getName();
-        return Name < RHS.SymbolData->getSymbol().getName();
+        return SymbolData->getSymbol().getName() <
+               RHS.SymbolData->getSymbol().getName();
       }
     };
 
@@ -127,18 +127,17 @@ namespace {
     void Write8(uint8_t Value) { Writer->Write8(Value); }
     void Write16(uint16_t Value) { Writer->Write16(Value); }
     void Write32(uint32_t Value) { Writer->Write32(Value); }
-    void Write64(uint64_t Value) { Writer->Write64(Value); }
+    //void Write64(uint64_t Value) { Writer->Write64(Value); }
     void WriteZeros(unsigned N) { Writer->WriteZeros(N); }
-    void WriteBytes(StringRef Str, unsigned ZeroFillSize = 0) {
-      Writer->WriteBytes(Str, ZeroFillSize);
-    }
+    //void WriteBytes(StringRef Str, unsigned ZeroFillSize = 0) {
+    //  Writer->WriteBytes(Str, ZeroFillSize);
+    //}
 
     void WriteWord(uint64_t W) {
-      if (Is64Bit) {
+      if (Is64Bit)
         Writer->Write64(W);
-      } else {
+      else
         Writer->Write32(W);
-      }
     }
 
     void String8(char *buf, uint8_t Value) {
@@ -151,21 +150,13 @@ namespace {
     }
 
     void StringLE32(char *buf, uint32_t Value) {
-      buf[0] = char(Value >> 0);
-      buf[1] = char(Value >> 8);
-      buf[2] = char(Value >> 16);
-      buf[3] = char(Value >> 24);
+      StringLE16(buf, uint16_t(Value >> 0));
+      StringLE16(buf + 2, uint16_t(Value >> 16));
     }
 
     void StringLE64(char *buf, uint64_t Value) {
-      buf[0] = char(Value >> 0);
-      buf[1] = char(Value >> 8);
-      buf[2] = char(Value >> 16);
-      buf[3] = char(Value >> 24);
-      buf[4] = char(Value >> 32);
-      buf[5] = char(Value >> 40);
-      buf[6] = char(Value >> 48);
-      buf[7] = char(Value >> 56);
+      StringLE32(buf, uint32_t(Value >> 0));
+      StringLE32(buf + 4, uint32_t(Value >> 32));
     }
 
     void StringBE16(char *buf ,uint16_t Value) {
@@ -174,21 +165,13 @@ namespace {
     }
 
     void StringBE32(char *buf, uint32_t Value) {
-      buf[0] = char(Value >> 24);
-      buf[1] = char(Value >> 16);
-      buf[2] = char(Value >> 8);
-      buf[3] = char(Value >> 0);
+      StringBE16(buf, uint16_t(Value >> 16));
+      StringBE16(buf + 2, uint16_t(Value >> 0));
     }
 
     void StringBE64(char *buf, uint64_t Value) {
-      buf[0] = char(Value >> 56);
-      buf[1] = char(Value >> 48);
-      buf[2] = char(Value >> 40);
-      buf[3] = char(Value >> 32);
-      buf[4] = char(Value >> 24);
-      buf[5] = char(Value >> 16);
-      buf[6] = char(Value >> 8);
-      buf[7] = char(Value >> 0);
+      StringBE32(buf, uint32_t(Value >> 32));
+      StringBE32(buf + 4, uint32_t(Value >> 0));
     }
 
     void String16(char *buf, uint16_t Value) {
@@ -228,29 +211,8 @@ namespace {
                           const MCFragment *Fragment, const MCFixup &Fixup,
                           MCValue Target, uint64_t &FixedValue);
 
-    // XXX-PERF: this should be cached
-    uint64_t getNumOfLocalSymbols(const MCAssembler &Asm) {
-      std::vector<const MCSymbol*> Local;
-
-      uint64_t Index = 0;
-      for (MCAssembler::const_symbol_iterator it = Asm.symbol_begin(),
-             ie = Asm.symbol_end(); it != ie; ++it) {
-        const MCSymbol &Symbol = it->getSymbol();
-
-        // Ignore non-linker visible symbols.
-        if (!Asm.isSymbolLinkerVisible(Symbol))
-          continue;
-
-        if (it->isExternal() || Symbol.isUndefined())
-          continue;
-
-        Index++;
-      }
-
-      return Index;
-    }
-
-    uint64_t getSymbolIndexInSymbolTable(MCAssembler &Asm, const MCSymbol *S);
+    uint64_t getSymbolIndexInSymbolTable(const MCAssembler &Asm,
+                                         const MCSymbol *S);
 
     /// ComputeSymbolTable - Compute the symbol table data
     ///
@@ -271,7 +233,10 @@ namespace {
 
     void CreateMetadataSections(MCAssembler &Asm, MCAsmLayout &Layout);
 
-    void ExecutePostLayoutBinding(MCAssembler &Asm) {}
+    void ExecutePostLayoutBinding(MCAssembler &Asm) {
+      // Compute symbol table information.
+      ComputeSymbolTable(Asm);
+    }
 
     void WriteSecHdrEntry(uint32_t Name, uint32_t Type, uint64_t Flags,
                           uint64_t Address, uint64_t Offset,
@@ -494,35 +459,33 @@ void ELFObjectWriterImpl::RecordRelocation(const MCAssembler &Asm,
                                            const MCFixup &Fixup,
                                            MCValue Target,
                                            uint64_t &FixedValue) {
-  unsigned IsPCRel = isFixupKindX86PCRel(Fixup.getKind());
-
-  uint64_t FixupOffset =
-    Layout.getFragmentOffset(Fragment) + Fixup.getOffset();
-  int64_t Value;
   int64_t Addend = 0;
   unsigned Index = 0;
-  unsigned Type;
-
-  Value = Target.getConstant();
+  int64_t Value = Target.getConstant();
 
   if (!Target.isAbsolute()) {
     const MCSymbol *Symbol = &Target.getSymA()->getSymbol();
     MCSymbolData &SD = Asm.getSymbolData(*Symbol);
     const MCSymbolData *Base = Asm.getAtom(Layout, &SD);
+    MCFragment *F = SD.getFragment();
 
     if (Base) {
-      Index = getSymbolIndexInSymbolTable(const_cast<MCAssembler &>(Asm), &Base->getSymbol());
+      if (F && (!Symbol->isInSection() || SD.isCommon())) {
+        Index = F->getParent()->getOrdinal() + LocalSymbolData.size() + 1;
+        Value += Layout.getSymbolAddress(&SD);
+      } else
+        Index = getSymbolIndexInSymbolTable(Asm, Symbol);
       if (Base != &SD)
         Value += Layout.getSymbolAddress(&SD) - Layout.getSymbolAddress(Base);
       Addend = Value;
-      Value = 0;
+      // Compensate for the addend on i386.
+      if (Is64Bit)
+        Value = 0;
     } else {
-      MCFragment *F = SD.getFragment();
       if (F) {
         // Index of the section in .symtab against this symbol
         // is being relocated + 2 (empty section + abs. symbols).
-        Index = SD.getFragment()->getParent()->getOrdinal() +
-          getNumOfLocalSymbols(Asm) + 1;
+        Index = F->getParent()->getOrdinal() + LocalSymbolData.size() + 1;
 
         MCSectionData *FSD = F->getParent();
         // Offset of the symbol in the section
@@ -534,7 +497,11 @@ void ELFObjectWriterImpl::RecordRelocation(const MCAssembler &Asm,
     }
   }
 
+  FixedValue = Value;
+
   // determine the type of the relocation
+  bool IsPCRel = isFixupKindX86PCRel(Fixup.getKind());
+  unsigned Type;
   if (Is64Bit) {
     if (IsPCRel) {
       Type = ELF::R_X86_64_PC32;
@@ -570,8 +537,6 @@ void ELFObjectWriterImpl::RecordRelocation(const MCAssembler &Asm,
     }
   }
 
-  FixedValue = Value;
-
   ELFRelocationEntry ERE;
 
   if (Is64Bit) {
@@ -584,7 +549,7 @@ void ELFObjectWriterImpl::RecordRelocation(const MCAssembler &Asm,
     ERE.r_info = ERE32.r_info;
   }
 
-  ERE.r_offset = FixupOffset;
+  ERE.r_offset = Layout.getFragmentOffset(Fragment) + Fixup.getOffset();
 
   if (HasRelocationAddend)
     ERE.r_addend = Addend;
@@ -594,64 +559,17 @@ void ELFObjectWriterImpl::RecordRelocation(const MCAssembler &Asm,
   Relocations[Fragment->getParent()].push_back(ERE);
 }
 
-// XXX-PERF: this should be cached
-uint64_t ELFObjectWriterImpl::getSymbolIndexInSymbolTable(MCAssembler &Asm,
-                                                          const MCSymbol *S) {
-  std::vector<ELFSymbolData> Local;
-  std::vector<ELFSymbolData> External;
-  std::vector<ELFSymbolData> Undefined;
+uint64_t
+ELFObjectWriterImpl::getSymbolIndexInSymbolTable(const MCAssembler &Asm,
+                                                 const MCSymbol *S) {
+  MCSymbolData &SD = Asm.getSymbolData(*S);
 
-  for (MCAssembler::symbol_iterator it = Asm.symbol_begin(),
-         ie = Asm.symbol_end(); it != ie; ++it) {
-    const MCSymbol &Symbol = it->getSymbol();
+  // Local symbol.
+  if (!SD.isExternal() && !S->isUndefined())
+    return SD.getIndex() + /* empty symbol */ 1;
 
-    // Ignore non-linker visible symbols.
-    if (!Asm.isSymbolLinkerVisible(Symbol))
-      continue;
-
-    if (it->isExternal() || Symbol.isUndefined())
-      continue;
-
-    ELFSymbolData MSD;
-    MSD.SymbolData = it;
-
-    Local.push_back(MSD);
-  }
-  for (MCAssembler::symbol_iterator it = Asm.symbol_begin(),
-         ie = Asm.symbol_end(); it != ie; ++it) {
-    const MCSymbol &Symbol = it->getSymbol();
-
-    // Ignore non-linker visible symbols.
-    if (!Asm.isSymbolLinkerVisible(Symbol))
-      continue;
-
-    if (!it->isExternal() && !Symbol.isUndefined())
-      continue;
-
-    ELFSymbolData MSD;
-    MSD.SymbolData = it;
-
-    if (Symbol.isUndefined())
-      Undefined.push_back(MSD);
-    else
-      External.push_back(MSD);
-  }
-
-  array_pod_sort(Local.begin(), Local.end());
-  array_pod_sort(External.begin(), External.end());
-  array_pod_sort(Undefined.begin(), Undefined.end());
-
-  for (unsigned i = 0, e = Local.size(); i != e; ++i)
-    if (&Local[i].SymbolData->getSymbol() == S)
-      return i + /* empty symbol */ 1;
-  for (unsigned i = 0, e = External.size(); i != e; ++i)
-    if (&External[i].SymbolData->getSymbol() == S)
-      return i + Local.size() + Asm.size() + /* empty symbol */ 1;
-  for (unsigned i = 0, e = Undefined.size(); i != e; ++i)
-    if (&Undefined[i].SymbolData->getSymbol() == S)
-      return i + Local.size() + External.size() + Asm.size() + /* empty symbol */ 1;
-
-  llvm_unreachable("Cannot find symbol which should exist!");
+  // External or undefined symbol.
+  return SD.getIndex() + Asm.size() + /* empty symbol */ 1;
 }
 
 void ELFObjectWriterImpl::ComputeSymbolTable(MCAssembler &Asm) {
@@ -905,9 +823,6 @@ void ELFObjectWriterImpl::CreateMetadataSections(MCAssembler &Asm,
 
 void ELFObjectWriterImpl::WriteObject(const MCAssembler &Asm,
                                       const MCAsmLayout &Layout) {
-  // Compute symbol table information.
-  ComputeSymbolTable(const_cast<MCAssembler&>(Asm));
-
   CreateMetadataSections(const_cast<MCAssembler&>(Asm),
                          const_cast<MCAsmLayout&>(Layout));
 

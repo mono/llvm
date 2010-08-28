@@ -707,6 +707,47 @@ public:
 
 };
 
+/// Specialize SmallVector at N=0.  This specialization guarantees
+/// that it can be instantiated at an incomplete T if none of its
+/// members are required.
+template <typename T>
+class SmallVector<T,0> : public SmallVectorImpl<T> {
+  // SmallVector doesn't like growing from zero capacity.  As a
+  // temporary workaround, avoid changing the growth algorithm by
+  // forcing capacity to be at least 1 in the constructors.
+
+public:
+  SmallVector() : SmallVectorImpl<T>(0) {
+    this->reserve(1); // workaround
+  }
+
+  explicit SmallVector(unsigned Size, const T &Value = T())
+    : SmallVectorImpl<T>(0) {
+    this->reserve(Size ? Size : 1); // workaround
+    while (Size--)
+      this->push_back(Value);
+  }
+
+  template<typename ItTy>
+  SmallVector(ItTy S, ItTy E) : SmallVectorImpl<T>(0) {
+    if (S == E) this->reserve(1); // workaround
+    this->append(S, E);
+  }
+
+  SmallVector(const SmallVector &RHS) : SmallVectorImpl<T>(0) {
+    if (!RHS.empty())
+      SmallVectorImpl<T>::operator=(RHS);
+    else
+      this->reserve(1); // workaround
+  }
+
+  const SmallVector &operator=(const SmallVector &RHS) {
+    SmallVectorImpl<T>::operator=(RHS);
+    return *this;
+  }
+
+};
+
 } // End llvm namespace
 
 namespace std {

@@ -178,25 +178,11 @@ static bool isNEONMultiRegOp(int Opcode, unsigned &FirstOpnd, unsigned &NumRegs,
     Stride = 2;
     return true;
 
-  case ARM::VST1q8:
-  case ARM::VST1q16:
-  case ARM::VST1q32:
-  case ARM::VST1q64:
-  case ARM::VST2d8:
-  case ARM::VST2d16:
-  case ARM::VST2d32:
   case ARM::VST2LNd8:
   case ARM::VST2LNd16:
   case ARM::VST2LNd32:
     FirstOpnd = 2;
     NumRegs = 2;
-    return true;
-
-  case ARM::VST2q8:
-  case ARM::VST2q16:
-  case ARM::VST2q32:
-    FirstOpnd = 2;
-    NumRegs = 4;
     return true;
 
   case ARM::VST2LNq16:
@@ -215,33 +201,11 @@ static bool isNEONMultiRegOp(int Opcode, unsigned &FirstOpnd, unsigned &NumRegs,
     Stride = 2;
     return true;
 
-  case ARM::VST3d8:
-  case ARM::VST3d16:
-  case ARM::VST3d32:
-  case ARM::VST1d64T:
   case ARM::VST3LNd8:
   case ARM::VST3LNd16:
   case ARM::VST3LNd32:
     FirstOpnd = 2;
     NumRegs = 3;
-    return true;
-
-  case ARM::VST3q8_UPD:
-  case ARM::VST3q16_UPD:
-  case ARM::VST3q32_UPD:
-    FirstOpnd = 4;
-    NumRegs = 3;
-    Offset = 0;
-    Stride = 2;
-    return true;
-
-  case ARM::VST3q8odd_UPD:
-  case ARM::VST3q16odd_UPD:
-  case ARM::VST3q32odd_UPD:
-    FirstOpnd = 4;
-    NumRegs = 3;
-    Offset = 1;
-    Stride = 2;
     return true;
 
   case ARM::VST3LNq16:
@@ -260,33 +224,11 @@ static bool isNEONMultiRegOp(int Opcode, unsigned &FirstOpnd, unsigned &NumRegs,
     Stride = 2;
     return true;
 
-  case ARM::VST4d8:
-  case ARM::VST4d16:
-  case ARM::VST4d32:
-  case ARM::VST1d64Q:
   case ARM::VST4LNd8:
   case ARM::VST4LNd16:
   case ARM::VST4LNd32:
     FirstOpnd = 2;
     NumRegs = 4;
-    return true;
-
-  case ARM::VST4q8_UPD:
-  case ARM::VST4q16_UPD:
-  case ARM::VST4q32_UPD:
-    FirstOpnd = 4;
-    NumRegs = 4;
-    Offset = 0;
-    Stride = 2;
-    return true;
-
-  case ARM::VST4q8odd_UPD:
-  case ARM::VST4q16odd_UPD:
-  case ARM::VST4q32odd_UPD:
-    FirstOpnd = 4;
-    NumRegs = 4;
-    Offset = 1;
-    Stride = 2;
     return true;
 
   case ARM::VST4LNq16:
@@ -468,7 +410,34 @@ bool NEONPreAllocPass::PreAllocNEONRegisters(MachineBasicBlock &MBB) {
       continue;
     if (FormsRegSequence(MI, FirstOpnd, NumRegs, Offset, Stride))
       continue;
-    llvm_unreachable("expected a REG_SEQUENCE");
+
+    MachineBasicBlock::iterator NextI = llvm::next(MBBI);
+    for (unsigned R = 0; R < NumRegs; ++R) {
+      MachineOperand &MO = MI->getOperand(FirstOpnd + R);
+      assert(MO.isReg() && MO.getSubReg() == 0 && "unexpected operand");
+      unsigned VirtReg = MO.getReg();
+      assert(TargetRegisterInfo::isVirtualRegister(VirtReg) &&
+             "expected a virtual register");
+
+      // For now, just assign a fixed set of adjacent registers.
+      // This leaves plenty of room for future improvements.
+      static const unsigned NEONDRegs[] = {
+        ARM::D0, ARM::D1, ARM::D2, ARM::D3,
+        ARM::D4, ARM::D5, ARM::D6, ARM::D7
+      };
+      MO.setReg(NEONDRegs[Offset + R * Stride]);
+
+      if (MO.isUse()) {
+        // Insert a copy from VirtReg.
+        BuildMI(MBB, MBBI, DebugLoc(), TII->get(TargetOpcode::COPY),MO.getReg())
+          .addReg(VirtReg, getKillRegState(MO.isKill()));
+        MO.setIsKill();
+      } else if (MO.isDef() && !MO.isDead()) {
+        // Add a copy to VirtReg.
+        BuildMI(MBB, NextI, DebugLoc(), TII->get(TargetOpcode::COPY), VirtReg)
+          .addReg(MO.getReg());
+      }
+    }
   }
 
   return Modified;

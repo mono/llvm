@@ -481,7 +481,7 @@ bool ARMDAGToDAGISel::SelectAddrMode3Offset(SDNode *Op, SDValue N,
 bool ARMDAGToDAGISel::SelectAddrMode4(SDNode *Op, SDValue N,
                                       SDValue &Addr, SDValue &Mode) {
   Addr = N;
-  Mode = CurDAG->getTargetConstant(0, MVT::i32);
+  Mode = CurDAG->getTargetConstant(ARM_AM::getAM4ModeImm(ARM_AM::ia), MVT::i32);
   return true;
 }
 
@@ -1256,12 +1256,14 @@ SDNode *ARMDAGToDAGISel::SelectVST(SDNode *N, unsigned NumVecs,
   SDValue Pred = getAL(CurDAG);
   SDValue Reg0 = CurDAG->getRegister(0, MVT::i32);
 
-  SmallVector<SDValue, 10> Ops;
+  SmallVector<SDValue, 7> Ops;
   Ops.push_back(MemAddr);
   Ops.push_back(Align);
 
   if (is64BitVector) {
-    if (NumVecs >= 2) {
+    if (NumVecs == 1) {
+      Ops.push_back(N->getOperand(3));
+    } else {
       SDValue RegSeq;
       SDValue V0 = N->getOperand(0+3);
       SDValue V1 = N->getOperand(1+3);
@@ -1278,111 +1280,61 @@ SDNode *ARMDAGToDAGISel::SelectVST(SDNode *N, unsigned NumVecs,
           : N->getOperand(3+3);
         RegSeq = SDValue(QuadDRegs(MVT::v4i64, V0, V1, V2, V3), 0);
       }
-
-      // Now extract the D registers back out.
-      Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_0, dl, VT,
-                                                   RegSeq));
-      Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_1, dl, VT,
-                                                   RegSeq));
-      if (NumVecs > 2)
-        Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_2, dl, VT,
-                                                     RegSeq));
-      if (NumVecs > 3)
-        Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_3, dl, VT,
-                                                     RegSeq));
-    } else {
-      for (unsigned Vec = 0; Vec < NumVecs; ++Vec)
-        Ops.push_back(N->getOperand(Vec+3));
+      Ops.push_back(RegSeq);
     }
     Ops.push_back(Pred);
     Ops.push_back(Reg0); // predicate register
     Ops.push_back(Chain);
     unsigned Opc = DOpcodes[OpcodeIndex];
-    return CurDAG->getMachineNode(Opc, dl, MVT::Other, Ops.data(), NumVecs+5);
+    return CurDAG->getMachineNode(Opc, dl, MVT::Other, Ops.data(), 6);
   }
 
-  EVT RegVT = GetNEONSubregVT(VT);
   if (NumVecs <= 2) {
-    // Quad registers are directly supported for VST1 and VST2,
-    // storing pairs of D regs.
+    // Quad registers are directly supported for VST1 and VST2.
     unsigned Opc = QOpcodes0[OpcodeIndex];
-    if (NumVecs == 2) {
-      // First extract the pair of Q registers.
+    if (NumVecs == 1) {
+      Ops.push_back(N->getOperand(3));
+    } else {
+      // Form a QQ register.
       SDValue Q0 = N->getOperand(3);
       SDValue Q1 = N->getOperand(4);
-
-      // Form a QQ register.
-      SDValue QQ = SDValue(PairQRegs(MVT::v4i64, Q0, Q1), 0);
-
-      // Now extract the D registers back out.
-      Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_0, dl, RegVT,
-                                                   QQ));
-      Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_1, dl, RegVT,
-                                                   QQ));
-      Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_2, dl, RegVT,
-                                                   QQ));
-      Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_3, dl, RegVT,
-                                                   QQ));
-      Ops.push_back(Pred);
-      Ops.push_back(Reg0); // predicate register
-      Ops.push_back(Chain);
-      return CurDAG->getMachineNode(Opc, dl, MVT::Other, Ops.data(), 5 + 4);
-    } else {
-      for (unsigned Vec = 0; Vec < NumVecs; ++Vec) {
-        Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_0, dl, RegVT,
-                                                     N->getOperand(Vec+3)));
-        Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_1, dl, RegVT,
-                                                     N->getOperand(Vec+3)));
-      }
-      Ops.push_back(Pred);
-      Ops.push_back(Reg0); // predicate register
-      Ops.push_back(Chain);
-      return CurDAG->getMachineNode(Opc, dl, MVT::Other, Ops.data(),
-                                    5 + 2 * NumVecs);
+      Ops.push_back(SDValue(PairQRegs(MVT::v4i64, Q0, Q1), 0));
     }
+    Ops.push_back(Pred);
+    Ops.push_back(Reg0); // predicate register
+    Ops.push_back(Chain);
+    return CurDAG->getMachineNode(Opc, dl, MVT::Other, Ops.data(), 6);
   }
 
   // Otherwise, quad registers are stored with two separate instructions,
   // where one stores the even registers and the other stores the odd registers.
 
   // Form the QQQQ REG_SEQUENCE.
-  SDValue V[8];
-  for (unsigned Vec = 0, i = 0; Vec < NumVecs; ++Vec, i+=2) {
-    V[i]   = CurDAG->getTargetExtractSubreg(ARM::dsub_0, dl, RegVT,
-                                            N->getOperand(Vec+3));
-    V[i+1] = CurDAG->getTargetExtractSubreg(ARM::dsub_1, dl, RegVT,
-                                            N->getOperand(Vec+3));
-  }
-  if (NumVecs == 3)
-    V[6] = V[7] = SDValue(CurDAG->getMachineNode(TargetOpcode::IMPLICIT_DEF,
-                                                 dl, RegVT), 0);
-
-  SDValue RegSeq = SDValue(OctoDRegs(MVT::v8i64, V[0], V[1], V[2], V[3],
-                                     V[4], V[5], V[6], V[7]), 0);
+  SDValue V0 = N->getOperand(0+3);
+  SDValue V1 = N->getOperand(1+3);
+  SDValue V2 = N->getOperand(2+3);
+  SDValue V3 = (NumVecs == 3)
+    ? SDValue(CurDAG->getMachineNode(TargetOpcode::IMPLICIT_DEF, dl, VT), 0)
+    : N->getOperand(3+3);
+  SDValue RegSeq = SDValue(QuadQRegs(MVT::v8i64, V0, V1, V2, V3), 0);
 
   // Store the even D registers.
-  assert(ARM::dsub_7 == ARM::dsub_0+7 && "Unexpected subreg numbering");
   Ops.push_back(Reg0); // post-access address offset
-  for (unsigned Vec = 0; Vec < NumVecs; ++Vec)
-    Ops.push_back(CurDAG->getTargetExtractSubreg(ARM::dsub_0+Vec*2, dl,
-                                                 RegVT, RegSeq));
+  Ops.push_back(RegSeq);
   Ops.push_back(Pred);
   Ops.push_back(Reg0); // predicate register
   Ops.push_back(Chain);
   unsigned Opc = QOpcodes0[OpcodeIndex];
   SDNode *VStA = CurDAG->getMachineNode(Opc, dl, MemAddr.getValueType(),
-                                        MVT::Other, Ops.data(), NumVecs+6);
+                                        MVT::Other, Ops.data(), 7);
   Chain = SDValue(VStA, 1);
 
   // Store the odd D registers.
   Ops[0] = SDValue(VStA, 0); // MemAddr
-  for (unsigned Vec = 0; Vec < NumVecs; ++Vec)
-    Ops[Vec+3] = CurDAG->getTargetExtractSubreg(ARM::dsub_1+Vec*2, dl,
-                                                RegVT, RegSeq);
-  Ops[NumVecs+5] = Chain;
+  Ops[6] = Chain;
   Opc = QOpcodes1[OpcodeIndex];
   SDNode *VStB = CurDAG->getMachineNode(Opc, dl, MemAddr.getValueType(),
-                                        MVT::Other, Ops.data(), NumVecs+6);
+                                        MVT::Other, Ops.data(), 7);
   Chain = SDValue(VStB, 1);
   ReplaceUses(SDValue(N, 0), Chain);
   return NULL;
@@ -2034,43 +1986,6 @@ SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
       ResNode = SelectARMIndexedLoad(N);
     if (ResNode)
       return ResNode;
-
-    // VLDMQ must be custom-selected for "v2f64 load" to set the AM5Opc value.
-    if (Subtarget->hasVFP2() &&
-        N->getValueType(0).getSimpleVT().SimpleTy == MVT::v2f64) {
-      SDValue Chain = N->getOperand(0);
-      SDValue AM5Opc =
-        CurDAG->getTargetConstant(ARM_AM::getAM5Opc(ARM_AM::ia, 4), MVT::i32);
-      SDValue Pred = getAL(CurDAG);
-      SDValue PredReg = CurDAG->getRegister(0, MVT::i32);
-      SDValue Ops[] = { N->getOperand(1), AM5Opc, Pred, PredReg, Chain };
-      MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
-      MemOp[0] = cast<MemSDNode>(N)->getMemOperand();
-      SDNode *Ret = CurDAG->getMachineNode(ARM::VLDMQ, dl,
-                                           MVT::v2f64, MVT::Other, Ops, 5);
-      cast<MachineSDNode>(Ret)->setMemRefs(MemOp, MemOp + 1);
-      return Ret;
-    }
-    // Other cases are autogenerated.
-    break;
-  }
-  case ISD::STORE: {
-    // VSTMQ must be custom-selected for "v2f64 store" to set the AM5Opc value.
-    if (Subtarget->hasVFP2() &&
-        N->getOperand(1).getValueType().getSimpleVT().SimpleTy == MVT::v2f64) {
-      SDValue Chain = N->getOperand(0);
-      SDValue AM5Opc =
-        CurDAG->getTargetConstant(ARM_AM::getAM5Opc(ARM_AM::ia, 4), MVT::i32);
-      SDValue Pred = getAL(CurDAG);
-      SDValue PredReg = CurDAG->getRegister(0, MVT::i32);
-      SDValue Ops[] = { N->getOperand(1), N->getOperand(2),
-                        AM5Opc, Pred, PredReg, Chain };
-      MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
-      MemOp[0] = cast<MemSDNode>(N)->getMemOperand();
-      SDNode *Ret = CurDAG->getMachineNode(ARM::VSTMQ, dl, MVT::Other, Ops, 6);
-      cast<MachineSDNode>(Ret)->setMemRefs(MemOp, MemOp + 1);
-      return Ret;
-    }
     // Other cases are autogenerated.
     break;
   }
@@ -2287,39 +2202,40 @@ SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
     case Intrinsic::arm_neon_vst1: {
       unsigned DOpcodes[] = { ARM::VST1d8, ARM::VST1d16,
                               ARM::VST1d32, ARM::VST1d64 };
-      unsigned QOpcodes[] = { ARM::VST1q8, ARM::VST1q16,
-                              ARM::VST1q32, ARM::VST1q64 };
+      unsigned QOpcodes[] = { ARM::VST1q8Pseudo, ARM::VST1q16Pseudo,
+                              ARM::VST1q32Pseudo, ARM::VST1q64Pseudo };
       return SelectVST(N, 1, DOpcodes, QOpcodes, 0);
     }
 
     case Intrinsic::arm_neon_vst2: {
-      unsigned DOpcodes[] = { ARM::VST2d8, ARM::VST2d16,
-                              ARM::VST2d32, ARM::VST1q64 };
-      unsigned QOpcodes[] = { ARM::VST2q8, ARM::VST2q16, ARM::VST2q32 };
+      unsigned DOpcodes[] = { ARM::VST2d8Pseudo, ARM::VST2d16Pseudo,
+                              ARM::VST2d32Pseudo, ARM::VST1q64Pseudo };
+      unsigned QOpcodes[] = { ARM::VST2q8Pseudo, ARM::VST2q16Pseudo,
+                              ARM::VST2q32Pseudo };
       return SelectVST(N, 2, DOpcodes, QOpcodes, 0);
     }
 
     case Intrinsic::arm_neon_vst3: {
-      unsigned DOpcodes[] = { ARM::VST3d8, ARM::VST3d16,
-                              ARM::VST3d32, ARM::VST1d64T };
-      unsigned QOpcodes0[] = { ARM::VST3q8_UPD,
-                               ARM::VST3q16_UPD,
-                               ARM::VST3q32_UPD };
-      unsigned QOpcodes1[] = { ARM::VST3q8odd_UPD,
-                               ARM::VST3q16odd_UPD,
-                               ARM::VST3q32odd_UPD };
+      unsigned DOpcodes[] = { ARM::VST3d8Pseudo, ARM::VST3d16Pseudo,
+                              ARM::VST3d32Pseudo, ARM::VST1d64TPseudo };
+      unsigned QOpcodes0[] = { ARM::VST3q8Pseudo_UPD,
+                               ARM::VST3q16Pseudo_UPD,
+                               ARM::VST3q32Pseudo_UPD };
+      unsigned QOpcodes1[] = { ARM::VST3q8oddPseudo_UPD,
+                               ARM::VST3q16oddPseudo_UPD,
+                               ARM::VST3q32oddPseudo_UPD };
       return SelectVST(N, 3, DOpcodes, QOpcodes0, QOpcodes1);
     }
 
     case Intrinsic::arm_neon_vst4: {
-      unsigned DOpcodes[] = { ARM::VST4d8, ARM::VST4d16,
-                              ARM::VST4d32, ARM::VST1d64Q };
-      unsigned QOpcodes0[] = { ARM::VST4q8_UPD,
-                               ARM::VST4q16_UPD,
-                               ARM::VST4q32_UPD };
-      unsigned QOpcodes1[] = { ARM::VST4q8odd_UPD,
-                               ARM::VST4q16odd_UPD,
-                               ARM::VST4q32odd_UPD };
+      unsigned DOpcodes[] = { ARM::VST4d8Pseudo, ARM::VST4d16Pseudo,
+                              ARM::VST4d32Pseudo, ARM::VST1d64QPseudo };
+      unsigned QOpcodes0[] = { ARM::VST4q8Pseudo_UPD,
+                               ARM::VST4q16Pseudo_UPD,
+                               ARM::VST4q32Pseudo_UPD };
+      unsigned QOpcodes1[] = { ARM::VST4q8oddPseudo_UPD,
+                               ARM::VST4q16oddPseudo_UPD,
+                               ARM::VST4q32oddPseudo_UPD };
       return SelectVST(N, 4, DOpcodes, QOpcodes0, QOpcodes1);
     }
 

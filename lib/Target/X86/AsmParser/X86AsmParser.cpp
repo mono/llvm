@@ -588,7 +588,7 @@ X86Operand *X86ATTAsmParser::ParseMemOperand(unsigned SegReg, SMLoc MemStart) {
         }
       }
     } else if (getLexer().isNot(AsmToken::RParen)) {
-      // Otherwise we have the unsupported form of a scale amount without an
+      // A scale amount without an index is ignored.
       // index.
       SMLoc Loc = Parser.getTok().getLoc();
 
@@ -596,8 +596,9 @@ X86Operand *X86ATTAsmParser::ParseMemOperand(unsigned SegReg, SMLoc MemStart) {
       if (getParser().ParseAbsoluteExpression(Value))
         return 0;
 
-      Error(Loc, "cannot have scale factor without index register");
-      return 0;
+      if (Value != 1)
+        Warning(Loc, "scale factor without index register is ignored");
+      Scale = 1;
     }
   }
 
@@ -823,6 +824,16 @@ ParseInstruction(StringRef Name, SMLoc NameLoc,
       static_cast<X86Operand*>(Operands[2])->getReg() == X86::ST0) {
     delete Operands[2];
     Operands.erase(Operands.begin() + 2);
+  }
+
+  // FIXME: Hack to handle "imul <imm>, B" which is an alias for "imul <imm>, B,
+  // B".
+  if (Name.startswith("imul") && Operands.size() == 3 &&
+      static_cast<X86Operand*>(Operands[1])->isImm() &&
+      static_cast<X86Operand*>(Operands.back())->isReg()) {
+    X86Operand *Op = static_cast<X86Operand*>(Operands.back());
+    Operands.push_back(X86Operand::CreateReg(Op->getReg(), Op->getStartLoc(),
+                                             Op->getEndLoc()));
   }
 
   return false;

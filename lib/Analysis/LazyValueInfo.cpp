@@ -216,6 +216,8 @@ public:
           return markOverdefined();
         else
           return markConstantRange(NewR);
+      } else if (!isUndefined()) {
+        return markOverdefined();
       }
       
       assert(isUndefined() && "Unexpected lattice");
@@ -365,6 +367,7 @@ namespace {
     ///  NewBlocks - This is a mapping of the new BasicBlocks which have been
     /// added to cache but that are not in sorted order.
     DenseSet<BasicBlock*> NewBlockInfo;
+    
   public:
     
     LVIQuery(Value *V, LazyValueInfoCache &P,
@@ -446,12 +449,25 @@ LVILatticeVal LVIQuery::getBlockValue(BasicBlock *BB) {
   BBLV.markOverdefined();
   Cache[BB] = BBLV;
   
-  // If V is live into BB, see if our predecessors know anything about it.
   Instruction *BBI = dyn_cast<Instruction>(Val);
   if (BBI == 0 || BBI->getParent() != BB) {
     LVILatticeVal Result;  // Start Undefined.
-    unsigned NumPreds = 0;
     
+    // If this is a pointer, and there's a load from that pointer in this BB,
+    // then we know that the pointer can't be NULL.
+    if (Val->getType()->isPointerTy()) {
+      const PointerType *PTy = cast<PointerType>(Val->getType());
+      for (BasicBlock::iterator BI = BB->begin(), BE = BB->end();BI != BE;++BI){
+        LoadInst *L = dyn_cast<LoadInst>(BI);
+        if (L && L->getPointerAddressSpace() == 0 &&
+            L->getPointerOperand()->getUnderlyingObject() ==
+              Val->getUnderlyingObject()) {
+          return LVILatticeVal::getNot(ConstantPointerNull::get(PTy));
+        }
+      }
+    }
+    
+    unsigned NumPreds = 0;    
     // Loop over all of our predecessors, merging what we know from them into
     // result.
     for (pred_iterator PI = pred_begin(BB), E = pred_end(BB); PI != E; ++PI) {
@@ -541,7 +557,12 @@ LVILatticeVal LVIQuery::getBlockValue(BasicBlock *BB) {
   ConstantRange RHSRange(1);
   const IntegerType *ResultTy = cast<IntegerType>(BBI->getType());
   if (isa<BinaryOperator>(BBI)) {
-    RHS = cast<ConstantInt>(BBI->getOperand(1));
+    RHS = dyn_cast<ConstantInt>(BBI->getOperand(1));
+    if (!RHS) {
+      Result.markOverdefined();
+      return Result;
+    }
+    
     RHSRange = ConstantRange(RHS->getValue(), RHS->getValue()+1);
   }
       
@@ -635,7 +656,8 @@ LVILatticeVal LVIQuery::getEdgeValue(BasicBlock *BBFrom, BasicBlock *BBTo) {
           
           // Figure out the possible values of the query BEFORE this branch.  
           LVILatticeVal InBlock = getBlockValue(BBFrom);
-          if (!InBlock.isConstantRange()) return InBlock;
+          if (!InBlock.isConstantRange())
+            return LVILatticeVal::getRange(TrueValues);
             
           // Find all potential values that satisfy both the input and output
           // conditions.
@@ -651,9 +673,28 @@ LVILatticeVal LVIQuery::getEdgeValue(BasicBlock *BBFrom, BasicBlock *BBTo) {
   // If the edge was formed by a switch on the value, then we may know exactly
   // what it is.
   if (SwitchInst *SI = dyn_cast<SwitchInst>(BBFrom->getTerminator())) {
-    // If BBTo is the default destination of the switch, we don't know anything.
-    // Given a more powerful range analysis we could know stuff.
-    if (SI->getCondition() == Val && SI->getDefaultDest() != BBTo) {
+    // If BBTo is the default destination of the switch, we know that it 
+    // doesn't have the same value as any of the cases.
+    if (SI->getCondition() == Val) {
+      if (SI->getDefaultDest() == BBTo) {
+        const IntegerType *IT = cast<IntegerType>(Val->getType());
+        ConstantRange CR(IT->getBitWidth());
+        
+        for (unsigned i = 1, e = SI->getNumSuccessors(); i != e; ++i) {
+          const APInt CaseVal = SI->getCaseValue(i)->getValue();
+          ConstantRange CaseRange(CaseVal, CaseVal+1);
+          CaseRange = CaseRange.inverse();
+          CR = CR.intersectWith(CaseRange);
+        }
+        
+        LVILatticeVal Result;
+        if (CR.isFullSet() || CR.isEmptySet())
+          Result.markOverdefined();
+        else
+          Result.markConstantRange(CR);
+        return Result;
+      }
+      
       // We only know something if there is exactly one value that goes from
       // BBFrom to BBTo.
       unsigned NumEdges = 0;
@@ -687,8 +728,8 @@ LVILatticeVal LazyValueInfoCache::getValueInBlock(Value *V, BasicBlock *BB) {
         << BB->getName() << "'\n");
   
   LVILatticeVal Result = LVIQuery(V, *this,
-                                  ValueCache[LVIValueHandle(V, this)], 
-                                  OverDefinedCache).getBlockValue(BB);
+                                ValueCache[LVIValueHandle(V, this)], 
+                                OverDefinedCache).getBlockValue(BB);
   
   DEBUG(dbgs() << "  Result = " << Result << "\n");
   return Result;
@@ -805,6 +846,11 @@ Constant *LazyValueInfo::getConstant(Value *V, BasicBlock *BB) {
   
   if (Result.isConstant())
     return Result.getConstant();
+  else if (Result.isConstantRange()) {
+    ConstantRange CR = Result.getConstantRange();
+    if (const APInt *SingleVal = CR.getSingleElement())
+      return ConstantInt::get(V->getContext(), *SingleVal);
+  }
   return 0;
 }
 
@@ -842,7 +888,9 @@ LazyValueInfo::getPredicateOnEdge(unsigned Pred, Value *V, Constant *C,
   }
   
   if (Result.isConstantRange()) {
-    ConstantInt *CI = cast<ConstantInt>(C);
+    ConstantInt *CI = dyn_cast<ConstantInt>(C);
+    if (!CI) return Unknown;
+    
     ConstantRange CR = Result.getConstantRange();
     if (Pred == ICmpInst::ICMP_EQ) {
       if (!CR.contains(CI->getValue()))

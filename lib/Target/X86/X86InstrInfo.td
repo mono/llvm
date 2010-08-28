@@ -602,9 +602,10 @@ def VASTART_SAVE_XMM_REGS : I<0, Pseudo,
 // The main point of having separate instruction are extra unmodelled effects
 // (compared to ordinary calls) like stack pointer change.
 
-def MINGW_ALLOCA : I<0, Pseudo, (outs), (ins),
-                     "# dynamic stack allocation",
-                     [(X86MingwAlloca)]>;
+let Defs = [EAX, ESP, EFLAGS], Uses = [ESP] in
+  def MINGW_ALLOCA : I<0, Pseudo, (outs), (ins),
+                       "# dynamic stack allocation",
+                       [(X86MingwAlloca)]>;
 }
 
 // Nop
@@ -617,10 +618,14 @@ let neverHasSideEffects = 1 in {
 }
 
 // Trap
-def INTO : I<0xce, RawFrm, (outs), (ins), "into", []>;
-def INT3 : I<0xcc, RawFrm, (outs), (ins), "int3", []>;
+let Uses = [EFLAGS] in {
+  def INTO : I<0xce, RawFrm, (outs), (ins), "into", []>;
+}
+def INT3 : I<0xcc, RawFrm, (outs), (ins), "int3",
+              [(int_x86_int (i8 3))]>;
 // FIXME: need to make sure that "int $3" matches int3
-def INT : Ii8<0xcd, RawFrm, (outs), (ins i8imm:$trap), "int\t$trap", []>;
+def INT : Ii8<0xcd, RawFrm, (outs), (ins i8imm:$trap), "int\t$trap",
+              [(int_x86_int imm:$trap)]>;
 def IRET16 : I<0xcf, RawFrm, (outs), (ins), "iret{w}", []>, OpSize;
 def IRET32 : I<0xcf, RawFrm, (outs), (ins), "iret{l}", []>;
 

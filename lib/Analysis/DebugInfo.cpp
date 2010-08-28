@@ -135,6 +135,7 @@ bool DIDescriptor::isDerivedType() const {
   case dwarf::DW_TAG_restrict_type:
   case dwarf::DW_TAG_member:
   case dwarf::DW_TAG_inheritance:
+  case dwarf::DW_TAG_friend:
     return true;
   default:
     // CompositeTypes are currently modelled as DerivedTypes.
@@ -301,6 +302,16 @@ bool DIType::Verify() const {
   if (!CU.Verify())
     return false;
   return true;
+}
+
+/// Verify - Verify that a basic type descriptor is well formed.
+bool DIBasicType::Verify() const {
+  return isBasicType();
+}
+
+/// Verify - Verify that a derived type descriptor is well formed.
+bool DIDerivedType::Verify() const {
+  return isDerivedType();
 }
 
 /// Verify - Verify that a composite type descriptor is well formed.

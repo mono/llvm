@@ -41,9 +41,12 @@
 #include "llvm/Support/CommandLine.h"
 
 namespace llvm {
-cl::opt<bool>
-ReuseFrameIndexVals("arm-reuse-frame-index-vals", cl::Hidden, cl::init(true),
-          cl::desc("Reuse repeated frame index values"));
+static cl::opt<bool>
+ForceAllBaseRegAlloc("arm-force-base-reg-alloc", cl::Hidden, cl::init(false),
+          cl::desc("Force use of virtual base registers for stack load/store"));
+static cl::opt<bool>
+EnableLocalStackAlloc("enable-local-stack-alloc", cl::init(true), cl::Hidden,
+          cl::desc("Enable pre-regalloc stack frame index allocation"));
 }
 
 using namespace llvm;
@@ -1283,6 +1286,11 @@ requiresFrameIndexScavenging(const MachineFunction &MF) const {
   return true;
 }
 
+bool ARMBaseRegisterInfo::
+requiresVirtualBaseRegisters(const MachineFunction &MF) const {
+  return EnableLocalStackAlloc;
+}
+
 // hasReservedCallFrame - Under normal circumstances, when a frame pointer is
 // not required, we reserve argument space for call sites in the function
 // immediately on entry to the current function. This eliminates the need for
@@ -1417,15 +1425,14 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
   MBB.erase(I);
 }
 
-
 int64_t ARMBaseRegisterInfo::
-getFrameIndexInstrOffset(MachineInstr *MI, int Idx) const {
+getFrameIndexInstrOffset(const MachineInstr *MI, int Idx) const {
   const TargetInstrDesc &Desc = MI->getDesc();
   unsigned AddrMode = (Desc.TSFlags & ARMII::AddrModeMask);
   int64_t InstrOffs = 0;;
   int Scale = 1;
   unsigned ImmIdx = 0;
-  switch(AddrMode) {
+  switch (AddrMode) {
   case ARMII::AddrModeT2_i8:
   case ARMII::AddrModeT2_i12:
     // i8 supports only negative, and i12 supports only positive, so
@@ -1436,7 +1443,7 @@ getFrameIndexInstrOffset(MachineInstr *MI, int Idx) const {
   case ARMII::AddrMode5: {
     // VFP address mode.
     const MachineOperand &OffOp = MI->getOperand(Idx+1);
-    int InstrOffs = ARM_AM::getAM5Offset(OffOp.getImm());
+    InstrOffs = ARM_AM::getAM5Offset(OffOp.getImm());
     if (ARM_AM::getAM5Op(OffOp.getImm()) == ARM_AM::sub)
       InstrOffs = -InstrOffs;
     Scale = 4;
@@ -1475,9 +1482,10 @@ getFrameIndexInstrOffset(MachineInstr *MI, int Idx) const {
 /// or SP. Used by LocalStackFrameAllocation to determine which frame index
 /// references it should create new base registers for.
 bool ARMBaseRegisterInfo::
-needsFrameBaseReg(MachineInstr *MI, unsigned operand) const {
-  assert (MI->getOperand(operand).isFI() &&
-          "needsFrameBaseReg() called on non Frame Index operand!");
+needsFrameBaseReg(MachineInstr *MI, int64_t Offset) const {
+  for (unsigned i = 0; !MI->getOperand(i).isFI(); ++i) {
+    assert(i < MI->getNumOperands() &&"Instr doesn't have FrameIndex operand!");
+  }
 
   // It's the load/store FI references that cause issues, as it can be difficult
   // to materialize the offset if it won't fit in the literal field. Estimate
@@ -1486,10 +1494,9 @@ needsFrameBaseReg(MachineInstr *MI, unsigned operand) const {
   // we don't know everything for certain yet) whether this offset is likely
   // to be out of range of the immediate. Return true if so.
 
-  // FIXME: For testing, return true for all loads/stores and false for
-  // everything else. We want to create lots of base regs to shake out bugs.
+  // We only generate virtual base registers for loads and stores, so
+  // return false for everything else.
   unsigned Opc = MI->getOpcode();
-
   switch (Opc) {
   case ARM::LDR: case ARM::LDRH: case ARM::LDRB:
   case ARM::STR: case ARM::STRH: case ARM::STRB:
@@ -1498,10 +1505,57 @@ needsFrameBaseReg(MachineInstr *MI, unsigned operand) const {
   case ARM::VLDRS: case ARM::VLDRD:
   case ARM::VSTRS: case ARM::VSTRD:
   case ARM::tSTRspi: case ARM::tLDRspi:
-    return true;
+    if (ForceAllBaseRegAlloc)
+      return true;
+    break;
   default:
     return false;
   }
+
+  // Without a virtual base register, if the function has variable sized
+  // objects, all fixed-size local references will be via the frame pointer,
+  // Approximate the offset and see if it's legal for the instruction.
+  // Note that the incoming offset is based on the SP value at function entry,
+  // so it'll be negative.
+  MachineFunction &MF = *MI->getParent()->getParent();
+  MachineFrameInfo *MFI = MF.getFrameInfo();
+  ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
+
+  // Estimate an offset from the frame pointer.
+  // Conservatively assume all callee-saved registers get pushed. R4-R6
+  // will be earlier than the FP, so we ignore those.
+  // R7, LR
+  int64_t FPOffset = Offset - 8;
+  // ARM and Thumb2 functions also need to consider R8-R11 and D8-D15
+  if (!AFI->isThumbFunction() || !AFI->isThumb1OnlyFunction())
+    FPOffset -= 80;
+  // Estimate an offset from the stack pointer.
+  Offset = -Offset;
+  // Assume that we'll have at least some spill slots allocated.
+  // FIXME: This is a total SWAG number. We should run some statistics
+  //        and pick a real one.
+  Offset += 128; // 128 bytes of spill slots
+
+  // If there is a frame pointer, try using it.
+  // The FP is only available if there is no dynamic realignment. We
+  // don't know for sure yet whether we'll need that, so we guess based
+  // on whether there are any local variables that would trigger it.
+  unsigned StackAlign = MF.getTarget().getFrameInfo()->getStackAlignment();
+  if (hasFP(MF) &&
+      !((MFI->getLocalFrameMaxAlign() > StackAlign) && canRealignStack(MF))) {
+    if (isFrameOffsetLegal(MI, FPOffset))
+      return false;
+  }
+  // If we can reference via the stack pointer, try that.
+  // FIXME: This (and the code that resolves the references) can be improved
+  //        to only disallow SP relative references in the live range of
+  //        the VLA(s). In practice, it's unclear how much difference that
+  //        would make, but it may be worth doing.
+  if (!MFI->hasVarSizedObjects() && isFrameOffsetLegal(MI, Offset))
+    return false;
+
+  // The offset likely isn't legal, we want to allocate a virtual base register.
+  return true;
 }
 
 /// materializeFrameBaseRegister - Insert defining instruction(s) for
@@ -1565,15 +1619,12 @@ bool ARMBaseRegisterInfo::isFrameOffsetLegal(const MachineInstr *MI,
 
   unsigned NumBits = 0;
   unsigned Scale = 1;
-  unsigned ImmIdx = 0;
-  int InstrOffs = 0;;
   bool isSigned = true;
-  switch(AddrMode) {
+  switch (AddrMode) {
   case ARMII::AddrModeT2_i8:
   case ARMII::AddrModeT2_i12:
     // i8 supports only negative, and i12 supports only positive, so
     // based on Offset sign, consider the appropriate instruction
-    InstrOffs = MI->getOperand(i+1).getImm();
     Scale = 1;
     if (Offset < 0) {
       NumBits = 8;
@@ -1582,49 +1633,32 @@ bool ARMBaseRegisterInfo::isFrameOffsetLegal(const MachineInstr *MI,
       NumBits = 12;
     }
     break;
-  case ARMII::AddrMode5: {
+  case ARMII::AddrMode5:
     // VFP address mode.
-    const MachineOperand &OffOp = MI->getOperand(i+1);
-    int InstrOffs = ARM_AM::getAM5Offset(OffOp.getImm());
-    if (ARM_AM::getAM5Op(OffOp.getImm()) == ARM_AM::sub)
-      InstrOffs = -InstrOffs;
     NumBits = 8;
     Scale = 4;
     break;
-  }
-  case ARMII::AddrMode2: {
-    ImmIdx = i+2;
-    InstrOffs = ARM_AM::getAM2Offset(MI->getOperand(ImmIdx).getImm());
-    if (ARM_AM::getAM2Op(MI->getOperand(ImmIdx).getImm()) == ARM_AM::sub)
-      InstrOffs = -InstrOffs;
+  case ARMII::AddrMode2:
     NumBits = 12;
     break;
-  }
-  case ARMII::AddrMode3: {
-    ImmIdx = i+2;
-    InstrOffs = ARM_AM::getAM3Offset(MI->getOperand(ImmIdx).getImm());
-    if (ARM_AM::getAM3Op(MI->getOperand(ImmIdx).getImm()) == ARM_AM::sub)
-      InstrOffs = -InstrOffs;
+  case ARMII::AddrMode3:
     NumBits = 8;
     break;
-  }
-  case ARMII::AddrModeT1_s: {
-    ImmIdx = i+1;
-    InstrOffs = MI->getOperand(ImmIdx).getImm();
+  case ARMII::AddrModeT1_s:
     NumBits = 5;
     Scale = 4;
     isSigned = false;
     break;
-  }
   default:
     llvm_unreachable("Unsupported addressing mode!");
     break;
   }
 
-  Offset += InstrOffs * Scale;
+  Offset += getFrameIndexInstrOffset(MI, i);
   assert((Offset & (Scale-1)) == 0 && "Can't encode this offset!");
   if (isSigned && Offset < 0)
     Offset = -Offset;
+
 
   unsigned Mask = (1 << NumBits) - 1;
   if ((unsigned)Offset <= Mask * Scale)
@@ -1633,10 +1667,9 @@ bool ARMBaseRegisterInfo::isFrameOffsetLegal(const MachineInstr *MI,
   return false;
 }
 
-unsigned
+void
 ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
-                                         int SPAdj, FrameIndexValue *Value,
-                                         RegScavenger *RS) const {
+                                         int SPAdj, RegScavenger *RS) const {
   unsigned i = 0;
   MachineInstr &MI = *II;
   MachineBasicBlock &MBB = *MI.getParent();
@@ -1659,7 +1692,7 @@ ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   if (MI.isDebugValue()) {
     MI.getOperand(i).  ChangeToRegister(FrameReg, false /*isDef*/);
     MI.getOperand(i+1).ChangeToImmediate(Offset);
-    return 0;
+    return;
   }
 
   // Modify MI as necessary to handle as much of 'Offset' as possible
@@ -1671,7 +1704,7 @@ ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     Done = rewriteT2FrameIndex(MI, i, FrameReg, Offset, TII);
   }
   if (Done)
-    return 0;
+    return;
 
   // If we get here, the immediate doesn't fit into the instruction.  We folded
   // as much as possible above, handle the rest, providing a register that is
@@ -1691,10 +1724,6 @@ ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     MI.getOperand(i).ChangeToRegister(FrameReg, false, false, false);
   else {
     ScratchReg = MF.getRegInfo().createVirtualRegister(ARM::GPRRegisterClass);
-    if (Value) {
-      Value->first = FrameReg; // use the frame register as a kind indicator
-      Value->second = Offset;
-    }
     if (!AFI->isThumbFunction())
       emitARMRegPlusImmediate(MBB, II, MI.getDebugLoc(), ScratchReg, FrameReg,
                               Offset, Pred, PredReg, TII);
@@ -1704,10 +1733,7 @@ ARMBaseRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                              Offset, Pred, PredReg, TII);
     }
     MI.getOperand(i).ChangeToRegister(ScratchReg, false, false, true);
-    if (!ReuseFrameIndexVals)
-      ScratchReg = 0;
   }
-  return ScratchReg;
 }
 
 /// Move iterator past the next bunch of callee save load / store ops for
