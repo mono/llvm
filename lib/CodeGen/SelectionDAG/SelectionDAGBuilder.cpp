@@ -1730,8 +1730,8 @@ void SelectionDAGBuilder::LowerIntrinsicTo(ImmutableCallSite CS, unsigned Intrin
                               PtrVT, Ptr,
                               DAG.getConstant(Offsets[i], PtrVT));
       SDValue L = DAG.getLoad(ValueVTs[i], getCurDebugLoc(), Root,
-                              A, SV, Offsets[i], isVolatile, 
-                              isNonTemporal, Alignment);
+                            A, MachinePointerInfo(SV, Offsets[i]), isVolatile, 
+                            isNonTemporal, Alignment);
 
       Values[i] = L;
       Chains[i] = L.getValue(1);
@@ -1779,8 +1779,8 @@ void SelectionDAGBuilder::LowerIntrinsicTo(ImmutableCallSite CS, unsigned Intrin
                                 DAG.getConstant(Offsets[i], PtrVT));
       Chains[i] = DAG.getStore(Root, getCurDebugLoc(),
                                SDValue(Src.getNode(), Src.getResNo() + i),
-                               Add, PtrV, Offsets[i], isVolatile, 
-                               isNonTemporal, Alignment);
+                               Add, MachinePointerInfo(PtrV, Offsets[i]),
+                               isVolatile, isNonTemporal, Alignment);
     }
 
     DAG.setRoot(DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
