@@ -464,29 +464,6 @@ def i64immZExt32  : PatLeaf<(i64 imm), [{
   return (uint64_t)N->getZExtValue() == (uint32_t)N->getZExtValue();
 }]>;
 
-// Store patterns
-def dsstore : PatFrag<(ops node:$val, node:$ptr), (store node:$val, node:$ptr), [{
-  if (const Value *Src = cast<StoreSDNode>(N)->getSrcValue())
-    if (const PointerType *PT = dyn_cast<PointerType>(Src->getType()))
-      if (PT->getAddressSpace() > 255)
-        return false;
-  return true;
-}]>;  
-
-def gsstore : PatFrag<(ops node:$val, node:$ptr), (store node:$val, node:$ptr), [{
-  if (const Value *Src = cast<StoreSDNode>(N)->getSrcValue())
-    if (const PointerType *PT = dyn_cast<PointerType>(Src->getType()))
-      return PT->getAddressSpace() == 256;
-  return false;
-}]>;  
-
-def fsstore : PatFrag<(ops node:$val, node:$ptr), (store node:$val, node:$ptr), [{
-  if (const Value *Src = cast<StoreSDNode>(N)->getSrcValue())
-    if (const PointerType *PT = dyn_cast<PointerType>(Src->getType()))
-      return PT->getAddressSpace() == 257;
-  return false;
-}]>;  
-
 // Helper fragments for loads.
 // It's always safe to treat a anyext i16 load as a i32 load if the i16 is
 // known to be 32-bit aligned or better. Ditto for i8 to i16.
@@ -815,13 +792,13 @@ def MOV64ri32 : RIi32<0xC7, MRM0r, (outs GR64:$dst), (ins i64i32imm:$src),
 
 def MOV8mi  : Ii8 <0xC6, MRM0m, (outs), (ins i8mem :$dst, i8imm :$src),
                    "mov{b}\t{$src, $dst|$dst, $src}",
-                   [(dsstore (i8 imm:$src), addr:$dst)]>;
+                   [(store (i8 imm:$src), addr:$dst)]>;
 def MOV16mi : Ii16<0xC7, MRM0m, (outs), (ins i16mem:$dst, i16imm:$src),
                    "mov{w}\t{$src, $dst|$dst, $src}",
-                   [(dsstore (i16 imm:$src), addr:$dst)]>, OpSize;
+                   [(store (i16 imm:$src), addr:$dst)]>, OpSize;
 def MOV32mi : Ii32<0xC7, MRM0m, (outs), (ins i32mem:$dst, i32imm:$src),
                    "mov{l}\t{$src, $dst|$dst, $src}",
-                   [(dsstore (i32 imm:$src), addr:$dst)]>;
+                   [(store (i32 imm:$src), addr:$dst)]>;
 def MOV64mi32 : RIi32<0xC7, MRM0m, (outs), (ins i64mem:$dst, i64i32imm:$src),
                       "mov{q}\t{$src, $dst|$dst, $src}",
                       [(store i64immSExt32:$src, addr:$dst)]>;
@@ -891,13 +868,13 @@ def MOV64rm : RI<0x8B, MRMSrcMem, (outs GR64:$dst), (ins i64mem:$src),
 
 def MOV8mr  : I<0x88, MRMDestMem, (outs), (ins i8mem :$dst, GR8 :$src),
                 "mov{b}\t{$src, $dst|$dst, $src}",
-                [(dsstore GR8:$src, addr:$dst)]>;
+                [(store GR8:$src, addr:$dst)]>;
 def MOV16mr : I<0x89, MRMDestMem, (outs), (ins i16mem:$dst, GR16:$src),
                 "mov{w}\t{$src, $dst|$dst, $src}",
-                [(dsstore GR16:$src, addr:$dst)]>, OpSize;
+                [(store GR16:$src, addr:$dst)]>, OpSize;
 def MOV32mr : I<0x89, MRMDestMem, (outs), (ins i32mem:$dst, GR32:$src),
                 "mov{l}\t{$src, $dst|$dst, $src}",
-                [(dsstore GR32:$src, addr:$dst)]>;
+                [(store GR32:$src, addr:$dst)]>;
 def MOV64mr : RI<0x89, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src),
                  "mov{q}\t{$src, $dst|$dst, $src}",
                  [(store GR64:$src, addr:$dst)]>;
@@ -949,11 +926,13 @@ def MOV8rm_NOREX : I<0x8A, MRMSrcMem,
                      "mov{b}\t{$src, $dst|$dst, $src}  # NOREX", []>;
 }
 
+
 // Condition code ops, incl. set if equal/not equal/...
 let Defs = [EFLAGS], Uses = [AH], neverHasSideEffects = 1 in
 def SAHF     : I<0x9E, RawFrm, (outs),  (ins), "sahf", []>;  // flags = AH
 let Defs = [AH], Uses = [EFLAGS], neverHasSideEffects = 1 in
 def LAHF     : I<0x9F, RawFrm, (outs),  (ins), "lahf", []>;  // AH = flags
+
 
 //===----------------------------------------------------------------------===//
 // Bit tests instructions: BT, BTS, BTR, BTC.
@@ -1096,6 +1075,7 @@ def BTS32mi8 : Ii8<0xBA, MRM5m, (outs), (ins i32mem:$src1, i32i8imm:$src2),
 def BTS64mi8 : RIi8<0xBA, MRM5m, (outs), (ins i64mem:$src1, i64i8imm:$src2),
                     "bts{q}\t{$src2, $src1|$src1, $src2}", []>, TB;
 } // Defs = [EFLAGS]
+
 
 //===----------------------------------------------------------------------===//
 // Atomic support
