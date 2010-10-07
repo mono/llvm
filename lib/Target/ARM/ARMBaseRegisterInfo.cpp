@@ -1782,7 +1782,7 @@ emitPrologue(MachineFunction &MF) const {
 
       // The offset is relative to the incoming stack pointer which is 
       // the cfa
-      if (AFI->isGPRCalleeSavedArea1Frame(FI)) {
+      if (AFI->isGPRCalleeSavedAreaFrame(FI)) {
         // Reg is saved at cfa + offset
         emitCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, Reg, Offset);
       }
