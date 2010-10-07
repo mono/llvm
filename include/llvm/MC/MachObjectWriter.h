@@ -36,7 +36,12 @@ public:
                                 const MCFixup &Fixup, MCValue Target,
                                 uint64_t &FixedValue);
 
-  virtual void WriteObject(const MCAssembler &Asm, const MCAsmLayout &Layout);
+  virtual bool IsFixupFullyResolved(const MCAssembler &Asm,
+                                    const MCValue Target,
+                                    bool IsPCRel,
+                                    const MCFragment *DF) const;
+
+  virtual void WriteObject(MCAssembler &Asm, const MCAsmLayout &Layout);
 };
 
 } // End llvm namespace

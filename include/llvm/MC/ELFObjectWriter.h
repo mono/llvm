@@ -10,6 +10,7 @@
 #ifndef LLVM_MC_ELFOBJECTWRITER_H
 #define LLVM_MC_ELFOBJECTWRITER_H
 
+#include "llvm/ADT/Triple.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
@@ -25,8 +26,8 @@ class ELFObjectWriter : public MCObjectWriter {
   void *Impl;
 
 public:
-  ELFObjectWriter(raw_ostream &OS, bool Is64Bit, bool IsLittleEndian = true,
-                  bool HasRelocationAddend = true);
+  ELFObjectWriter(raw_ostream &OS, bool Is64Bit, Triple::OSType OSType, 
+                  bool IsLittleEndian = true, bool HasRelocationAddend = true);
 
   virtual ~ELFObjectWriter();
 
@@ -38,7 +39,12 @@ public:
                                 const MCFixup &Fixup, MCValue Target,
                                 uint64_t &FixedValue);
 
-  virtual void WriteObject(const MCAssembler &Asm, const MCAsmLayout &Layout);
+  virtual bool IsFixupFullyResolved(const MCAssembler &Asm,
+                                    const MCValue Target,
+                                    bool IsPCRel,
+                                    const MCFragment *DF) const;
+
+  virtual void WriteObject(MCAssembler &Asm, const MCAsmLayout &Layout);
 };
 
 } // End llvm namespace

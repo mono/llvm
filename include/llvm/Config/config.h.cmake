@@ -461,6 +461,9 @@
 /* Define to 1 if you have the <valgrind/valgrind.h> header file. */
 #cmakedefine HAVE_VALGRIND_VALGRIND_H ${HAVE_VALGRIND_VALGRIND_H}
 
+/* Define to 1 if you have the <fenv.h> header file. */
+#cmakedefine HAVE_FENV_H ${HAVE_FENV_H}
+
 /* Define to 1 if you have the <windows.h> header file. */
 #cmakedefine HAVE_WINDOWS_H ${HAVE_WINDOWS_H}
 
@@ -626,10 +629,16 @@
 /* Define to a function implementing strdup */
 #cmakedefine strdup ${strdup}
 
-/* Native LLVM architecture */
-#cmakedefine LLVM_NATIVE_ARCH ${LLVM_NATIVE_ARCH}Target
-
-/* Native LLVM architecture, short name */
-#cmakedefine LLVM_NATIVE_ARCHNAME ${LLVM_NATIVE_ARCH}
+/* LLVM architecture name for the native architecture, if available */
+#cmakedefine LLVM_NATIVE_ARCH ${LLVM_NATIVE_ARCH}
+  
+/* LLVM name for the native Target init function, if available */
+#cmakedefine LLVM_NATIVE_TARGET LLVMInitialize${LLVM_NATIVE_ARCH}Target
+ 
+/* LLVM name for the native TargetInfo init function, if available */
+#cmakedefine LLVM_NATIVE_TARGETINFO LLVMInitialize${LLVM_NATIVE_ARCH}TargetInfo
+ 
+/* LLVM name for the native AsmPrinter init function, if available */
+#cmakedefine LLVM_NATIVE_ASMPRINTER LLVMInitialize${LLVM_NATIVE_ARCH}AsmPrinter
 
 #endif

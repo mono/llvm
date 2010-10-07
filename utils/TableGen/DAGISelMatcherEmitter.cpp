@@ -633,8 +633,9 @@ void MatcherTableEmitter::EmitPredicateFunctions(formatted_raw_ostream &OS) {
   // Emit CompletePattern matchers.
   // FIXME: This should be const.
   if (!ComplexPatterns.empty()) {
-    OS << "bool CheckComplexPattern(SDNode *Root, SDValue N,\n";
-    OS << "      unsigned PatternNo, SmallVectorImpl<SDValue> &Result) {\n";
+    OS << "bool CheckComplexPattern(SDNode *Root, SDNode *Parent, SDValue N,\n";
+    OS << "                         unsigned PatternNo,\n";
+    OS << "         SmallVectorImpl<std::pair<SDValue, SDNode*> > &Result) {\n";
     OS << "  unsigned NextRes = Result.size();\n";
     OS << "  switch (PatternNo) {\n";
     OS << "  default: assert(0 && \"Invalid pattern # in table?\");\n";
@@ -649,9 +650,20 @@ void MatcherTableEmitter::EmitPredicateFunctions(formatted_raw_ostream &OS) {
       OS << "    Result.resize(NextRes+" << NumOps << ");\n";
       OS << "    return "  << P.getSelectFunc();
 
-      OS << "(Root, N";
+      OS << "(";
+      // If the complex pattern wants the root of the match, pass it in as the
+      // first argument.
+      if (P.hasProperty(SDNPWantRoot))
+        OS << "Root, ";
+      
+      // If the complex pattern wants the parent of the operand being matched,
+      // pass it in as the next argument.
+      if (P.hasProperty(SDNPWantParent))
+        OS << "Parent, ";
+      
+      OS << "N";
       for (unsigned i = 0; i != NumOps; ++i)
-        OS << ", Result[NextRes+" << i << ']';
+        OS << ", Result[NextRes+" << i << "].first";
       OS << ");\n";
     }
     OS << "  }\n";

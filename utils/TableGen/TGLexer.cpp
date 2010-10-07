@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "TGLexer.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Config/config.h"
@@ -36,17 +37,17 @@ SMLoc TGLexer::getLoc() const {
 
 /// ReturnError - Set the error to the specified string at the specified
 /// location.  This is defined to always return tgtok::Error.
-tgtok::TokKind TGLexer::ReturnError(const char *Loc, const std::string &Msg) {
+tgtok::TokKind TGLexer::ReturnError(const char *Loc, const Twine &Msg) {
   PrintError(Loc, Msg);
   return tgtok::Error;
 }
 
 
-void TGLexer::PrintError(const char *Loc, const std::string &Msg) const {
+void TGLexer::PrintError(const char *Loc, const Twine &Msg) const {
   SrcMgr.PrintMessage(SMLoc::getFromPointer(Loc), Msg, "error");
 }
 
-void TGLexer::PrintError(SMLoc Loc, const std::string &Msg) const {
+void TGLexer::PrintError(SMLoc Loc, const Twine &Msg) const {
   SrcMgr.PrintMessage(Loc, Msg, "error");
 }
 
@@ -95,7 +96,7 @@ tgtok::TokKind TGLexer::LexToken() {
 
   switch (CurChar) {
   default:
-    // Handle letters: [a-zA-Z_]
+    // Handle letters: [a-zA-Z_#]
     if (isalpha(CurChar) || CurChar == '_' || CurChar == '#')
       return LexIdentifier();
       
@@ -214,23 +215,13 @@ tgtok::TokKind TGLexer::LexVarName() {
 
 
 tgtok::TokKind TGLexer::LexIdentifier() {
-  // The first letter is [a-zA-Z_].
+  // The first letter is [a-zA-Z_#].
   const char *IdentStart = TokStart;
   
-  // Match the rest of the identifier regex: [0-9a-zA-Z_]*
-  while (isalpha(*CurPtr) || isdigit(*CurPtr) || *CurPtr == '_'
-         || *CurPtr == '#') {
-    // If this contains a '#', make sure it's value
-    if (*CurPtr == '#') {
-      if (strncmp(CurPtr, "#NAME#", 6) != 0) {
-        return tgtok::Error;
-      }
-      CurPtr += 6;
-    }
-    else {
-      ++CurPtr;
-    }
-  }
+  // Match the rest of the identifier regex: [0-9a-zA-Z_#]*
+  while (isalpha(*CurPtr) || isdigit(*CurPtr) || *CurPtr == '_' ||
+         *CurPtr == '#')
+    ++CurPtr;
   
   
   // Check to see if this identifier is a keyword.
@@ -436,7 +427,6 @@ tgtok::TokKind TGLexer::LexExclaim() {
   if (Len == 3  && !memcmp(Start, "shl", 3)) return tgtok::XSHL;
   if (Len == 2  && !memcmp(Start, "eq", 2)) return tgtok::XEq;
   if (Len == 9  && !memcmp(Start, "strconcat", 9))   return tgtok::XStrConcat;
-  if (Len == 10 && !memcmp(Start, "nameconcat", 10)) return tgtok::XNameConcat;
   if (Len == 5 && !memcmp(Start, "subst", 5)) return tgtok::XSubst;
   if (Len == 7 && !memcmp(Start, "foreach", 7)) return tgtok::XForEach;
   if (Len == 4 && !memcmp(Start, "cast", 4)) return tgtok::XCast;

@@ -171,7 +171,7 @@ SDValue DAGTypeLegalizer::ScalarizeVecRes_LOAD(LoadSDNode *N) {
                                N->getDebugLoc(),
                                N->getChain(), N->getBasePtr(),
                                DAG.getUNDEF(N->getBasePtr().getValueType()),
-                               N->getSrcValue(), N->getSrcValueOffset(),
+                               N->getPointerInfo(),
                                N->getMemoryVT().getVectorElementType(),
                                N->isVolatile(), N->isNonTemporal(),
                                N->getOriginalAlignment());
@@ -365,14 +365,13 @@ SDValue DAGTypeLegalizer::ScalarizeVecOp_STORE(StoreSDNode *N, unsigned OpNo){
   if (N->isTruncatingStore())
     return DAG.getTruncStore(N->getChain(), dl,
                              GetScalarizedVector(N->getOperand(1)),
-                             N->getBasePtr(),
-                             N->getSrcValue(), N->getSrcValueOffset(),
+                             N->getBasePtr(), N->getPointerInfo(),
                              N->getMemoryVT().getVectorElementType(),
                              N->isVolatile(), N->isNonTemporal(),
                              N->getAlignment());
 
   return DAG.getStore(N->getChain(), dl, GetScalarizedVector(N->getOperand(1)),
-                      N->getBasePtr(), N->getSrcValue(), N->getSrcValueOffset(),
+                      N->getBasePtr(), N->getPointerInfo(),
                       N->isVolatile(), N->isNonTemporal(),
                       N->getOriginalAlignment());
 }
@@ -705,8 +704,8 @@ void DAGTypeLegalizer::SplitVecRes_INSERT_VECTOR_ELT(SDNode *N, SDValue &Lo,
   EVT VecVT = Vec.getValueType();
   EVT EltVT = VecVT.getVectorElementType();
   SDValue StackPtr = DAG.CreateStackTemporary(VecVT);
-  SDValue Store = DAG.getStore(DAG.getEntryNode(), dl, Vec, StackPtr, NULL, 0,
-                               false, false, 0);
+  SDValue Store = DAG.getStore(DAG.getEntryNode(), dl, Vec, StackPtr,
+                               MachinePointerInfo(), false, false, 0);
 
   // Store the new element.  This may be larger than the vector element type,
   // so use a truncating store.
@@ -714,11 +713,11 @@ void DAGTypeLegalizer::SplitVecRes_INSERT_VECTOR_ELT(SDNode *N, SDValue &Lo,
   const Type *VecType = VecVT.getTypeForEVT(*DAG.getContext());
   unsigned Alignment =
     TLI.getTargetData()->getPrefTypeAlignment(VecType);
-  Store = DAG.getTruncStore(Store, dl, Elt, EltPtr, NULL, 0, EltVT,
+  Store = DAG.getTruncStore(Store, dl, Elt, EltPtr, MachinePointerInfo(), EltVT,
                             false, false, 0);
 
   // Load the Lo part from the stack slot.
-  Lo = DAG.getLoad(Lo.getValueType(), dl, Store, StackPtr, NULL, 0,
+  Lo = DAG.getLoad(Lo.getValueType(), dl, Store, StackPtr, MachinePointerInfo(),
                    false, false, 0);
 
   // Increment the pointer to the other part.
@@ -727,8 +726,8 @@ void DAGTypeLegalizer::SplitVecRes_INSERT_VECTOR_ELT(SDNode *N, SDValue &Lo,
                          DAG.getIntPtrConstant(IncrementSize));
 
   // Load the Hi part from the stack slot.
-  Hi = DAG.getLoad(Hi.getValueType(), dl, Store, StackPtr, NULL, 0, false,
-                   false, MinAlign(Alignment, IncrementSize));
+  Hi = DAG.getLoad(Hi.getValueType(), dl, Store, StackPtr, MachinePointerInfo(),
+                   false, false, MinAlign(Alignment, IncrementSize));
 }
 
 void DAGTypeLegalizer::SplitVecRes_SCALAR_TO_VECTOR(SDNode *N, SDValue &Lo,
@@ -751,8 +750,6 @@ void DAGTypeLegalizer::SplitVecRes_LOAD(LoadSDNode *LD, SDValue &Lo,
   SDValue Ch = LD->getChain();
   SDValue Ptr = LD->getBasePtr();
   SDValue Offset = DAG.getUNDEF(Ptr.getValueType());
-  const Value *SV = LD->getSrcValue();
-  int SVOffset = LD->getSrcValueOffset();
   EVT MemoryVT = LD->getMemoryVT();
   unsigned Alignment = LD->getOriginalAlignment();
   bool isVolatile = LD->isVolatile();
@@ -762,14 +759,15 @@ void DAGTypeLegalizer::SplitVecRes_LOAD(LoadSDNode *LD, SDValue &Lo,
   GetSplitDestVTs(MemoryVT, LoMemVT, HiMemVT);
 
   Lo = DAG.getLoad(ISD::UNINDEXED, ExtType, LoVT, dl, Ch, Ptr, Offset,
-                   SV, SVOffset, LoMemVT, isVolatile, isNonTemporal, Alignment);
+                   LD->getPointerInfo(), LoMemVT, isVolatile, isNonTemporal,
+                   Alignment);
 
   unsigned IncrementSize = LoMemVT.getSizeInBits()/8;
   Ptr = DAG.getNode(ISD::ADD, dl, Ptr.getValueType(), Ptr,
                     DAG.getIntPtrConstant(IncrementSize));
-  SVOffset += IncrementSize;
   Hi = DAG.getLoad(ISD::UNINDEXED, ExtType, HiVT, dl, Ch, Ptr, Offset,
-                   SV, SVOffset, HiMemVT, isVolatile, isNonTemporal, Alignment);
+                   LD->getPointerInfo().getWithOffset(IncrementSize),
+                   HiMemVT, isVolatile, isNonTemporal, Alignment);
 
   // Build a factor node to remember that this load is independent of the
   // other one.
@@ -1099,15 +1097,13 @@ SDValue DAGTypeLegalizer::SplitVecOp_EXTRACT_VECTOR_ELT(SDNode *N) {
   EVT EltVT = VecVT.getVectorElementType();
   DebugLoc dl = N->getDebugLoc();
   SDValue StackPtr = DAG.CreateStackTemporary(VecVT);
-  int SPFI = cast<FrameIndexSDNode>(StackPtr.getNode())->getIndex();
-  const Value *SV = PseudoSourceValue::getFixedStack(SPFI);
-  SDValue Store = DAG.getStore(DAG.getEntryNode(), dl, Vec, StackPtr, SV, 0,
-                               false, false, 0);
+  SDValue Store = DAG.getStore(DAG.getEntryNode(), dl, Vec, StackPtr,
+                               MachinePointerInfo(), false, false, 0);
 
   // Load back the required element.
   StackPtr = GetVectorElementPointer(StackPtr, EltVT, Idx);
   return DAG.getExtLoad(ISD::EXTLOAD, N->getValueType(0), dl, Store, StackPtr,
-                        SV, 0, EltVT, false, false, 0);
+                        MachinePointerInfo(), EltVT, false, false, 0);
 }
 
 SDValue DAGTypeLegalizer::SplitVecOp_STORE(StoreSDNode *N, unsigned OpNo) {
@@ -1118,7 +1114,6 @@ SDValue DAGTypeLegalizer::SplitVecOp_STORE(StoreSDNode *N, unsigned OpNo) {
   bool isTruncating = N->isTruncatingStore();
   SDValue Ch  = N->getChain();
   SDValue Ptr = N->getBasePtr();
-  int SVOffset = N->getSrcValueOffset();
   EVT MemoryVT = N->getMemoryVT();
   unsigned Alignment = N->getOriginalAlignment();
   bool isVol = N->isVolatile();
@@ -1132,22 +1127,23 @@ SDValue DAGTypeLegalizer::SplitVecOp_STORE(StoreSDNode *N, unsigned OpNo) {
   unsigned IncrementSize = LoMemVT.getSizeInBits()/8;
 
   if (isTruncating)
-    Lo = DAG.getTruncStore(Ch, DL, Lo, Ptr, N->getSrcValue(), SVOffset,
+    Lo = DAG.getTruncStore(Ch, DL, Lo, Ptr, N->getPointerInfo(),
                            LoMemVT, isVol, isNT, Alignment);
   else
-    Lo = DAG.getStore(Ch, DL, Lo, Ptr, N->getSrcValue(), SVOffset,
+    Lo = DAG.getStore(Ch, DL, Lo, Ptr, N->getPointerInfo(),
                       isVol, isNT, Alignment);
 
   // Increment the pointer to the other half.
   Ptr = DAG.getNode(ISD::ADD, DL, Ptr.getValueType(), Ptr,
                     DAG.getIntPtrConstant(IncrementSize));
-  SVOffset += IncrementSize;
 
   if (isTruncating)
-    Hi = DAG.getTruncStore(Ch, DL, Hi, Ptr, N->getSrcValue(), SVOffset,
+    Hi = DAG.getTruncStore(Ch, DL, Hi, Ptr,
+                           N->getPointerInfo().getWithOffset(IncrementSize),
                            HiMemVT, isVol, isNT, Alignment);
   else
-    Hi = DAG.getStore(Ch, DL, Hi, Ptr, N->getSrcValue(), SVOffset,
+    Hi = DAG.getStore(Ch, DL, Hi, Ptr,
+                      N->getPointerInfo().getWithOffset(IncrementSize),
                       isVol, isNT, Alignment);
 
   return DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Lo, Hi);
@@ -1576,7 +1572,8 @@ SDValue DAGTypeLegalizer::WidenVecRes_BIT_CONVERT(SDNode *N) {
 
   unsigned WidenSize = WidenVT.getSizeInBits();
   unsigned InSize = InVT.getSizeInBits();
-  if (WidenSize % InSize == 0) {
+  // x86mmx is not an acceptable vector element type, so don't try.
+  if (WidenSize % InSize == 0 && InVT != MVT::x86mmx) {
     // Determine new input vector type.  The new input vector type will use
     // the same element type (if its a vector) or use the input type as a
     // vector.  It is the same size as the type to widen to.
@@ -2053,7 +2050,8 @@ SDValue DAGTypeLegalizer::WidenVecOp_BIT_CONVERT(SDNode *N) {
   // Check if we can convert between two legal vector types and extract.
   unsigned InWidenSize = InWidenVT.getSizeInBits();
   unsigned Size = VT.getSizeInBits();
-  if (InWidenSize % Size == 0 && !VT.isVector()) {
+  // x86mmx is not an acceptable vector element type, so don't try.
+  if (InWidenSize % Size == 0 && !VT.isVector() && VT != MVT::x86mmx) {
     unsigned NewNumElts = InWidenSize / Size;
     EVT NewVT = EVT::getVectorVT(*DAG.getContext(), VT, NewNumElts);
     if (TLI.isTypeSynthesizable(NewVT)) {
@@ -2212,8 +2210,8 @@ static SDValue BuildVectorFromScalar(SelectionDAG& DAG, EVT VecTy,
   return DAG.getNode(ISD::BIT_CONVERT, dl, VecTy, VecOp);
 }
 
-SDValue DAGTypeLegalizer::GenWidenVectorLoads(SmallVector<SDValue, 16>& LdChain,
-                                              LoadSDNode * LD) {
+SDValue DAGTypeLegalizer::GenWidenVectorLoads(SmallVector<SDValue, 16> &LdChain,
+                                              LoadSDNode *LD) {
   // The strategy assumes that we can efficiently load powers of two widths.
   // The routines chops the vector into the largest vector loads with the same
   // element type or scalar loads and then recombines it to the widen vector
@@ -2228,11 +2226,9 @@ SDValue DAGTypeLegalizer::GenWidenVectorLoads(SmallVector<SDValue, 16>& LdChain,
   // Load information
   SDValue   Chain = LD->getChain();
   SDValue   BasePtr = LD->getBasePtr();
-  int       SVOffset = LD->getSrcValueOffset();
   unsigned  Align    = LD->getAlignment();
   bool      isVolatile = LD->isVolatile();
   bool      isNonTemporal = LD->isNonTemporal();
-  const Value *SV = LD->getSrcValue();
 
   int LdWidth = LdVT.getSizeInBits();
   int WidthDiff = WidenWidth - LdWidth;          // Difference
@@ -2241,7 +2237,7 @@ SDValue DAGTypeLegalizer::GenWidenVectorLoads(SmallVector<SDValue, 16>& LdChain,
   // Find the vector type that can load from.
   EVT NewVT = FindMemType(DAG, TLI, LdWidth, WidenVT, LdAlign, WidthDiff);
   int NewVTWidth = NewVT.getSizeInBits();
-  SDValue LdOp = DAG.getLoad(NewVT, dl, Chain, BasePtr, SV, SVOffset,
+  SDValue LdOp = DAG.getLoad(NewVT, dl, Chain, BasePtr, LD->getPointerInfo(),
                              isVolatile, isNonTemporal, Align);
   LdChain.push_back(LdOp.getValue(1));
 
@@ -2286,8 +2282,9 @@ SDValue DAGTypeLegalizer::GenWidenVectorLoads(SmallVector<SDValue, 16>& LdChain,
       NewVTWidth = NewVT.getSizeInBits();
     }
 
-    SDValue LdOp = DAG.getLoad(NewVT, dl, Chain, BasePtr, SV,
-                               SVOffset+Offset, isVolatile,
+    SDValue LdOp = DAG.getLoad(NewVT, dl, Chain, BasePtr,
+                               LD->getPointerInfo().getWithOffset(Offset),
+                               isVolatile,
                                isNonTemporal, MinAlign(Align, Increment));
     LdChain.push_back(LdOp.getValue(1));
     LdOps.push_back(LdOp);
@@ -2362,11 +2359,9 @@ DAGTypeLegalizer::GenWidenVectorExtLoads(SmallVector<SDValue, 16>& LdChain,
   // Load information
   SDValue   Chain = LD->getChain();
   SDValue   BasePtr = LD->getBasePtr();
-  int       SVOffset = LD->getSrcValueOffset();
   unsigned  Align    = LD->getAlignment();
   bool      isVolatile = LD->isVolatile();
   bool      isNonTemporal = LD->isNonTemporal();
-  const Value *SV = LD->getSrcValue();
 
   EVT EltVT = WidenVT.getVectorElementType();
   EVT LdEltVT = LdVT.getVectorElementType();
@@ -2376,16 +2371,17 @@ DAGTypeLegalizer::GenWidenVectorExtLoads(SmallVector<SDValue, 16>& LdChain,
   unsigned WidenNumElts = WidenVT.getVectorNumElements();
   SmallVector<SDValue, 16> Ops(WidenNumElts);
   unsigned Increment = LdEltVT.getSizeInBits() / 8;
-  Ops[0] = DAG.getExtLoad(ExtType, EltVT, dl, Chain, BasePtr, SV, SVOffset,
+  Ops[0] = DAG.getExtLoad(ExtType, EltVT, dl, Chain, BasePtr,
+                          LD->getPointerInfo(),
                           LdEltVT, isVolatile, isNonTemporal, Align);
   LdChain.push_back(Ops[0].getValue(1));
   unsigned i = 0, Offset = Increment;
   for (i=1; i < NumElts; ++i, Offset += Increment) {
     SDValue NewBasePtr = DAG.getNode(ISD::ADD, dl, BasePtr.getValueType(),
                                      BasePtr, DAG.getIntPtrConstant(Offset));
-    Ops[i] = DAG.getExtLoad(ExtType, EltVT, dl, Chain, NewBasePtr, SV,
-                            SVOffset + Offset, LdEltVT, isVolatile,
-                            isNonTemporal, Align);
+    Ops[i] = DAG.getExtLoad(ExtType, EltVT, dl, Chain, NewBasePtr,
+                            LD->getPointerInfo().getWithOffset(Offset), LdEltVT,
+                            isVolatile, isNonTemporal, Align);
     LdChain.push_back(Ops[i].getValue(1));
   }
 
@@ -2405,8 +2401,6 @@ void DAGTypeLegalizer::GenWidenVectorStores(SmallVector<SDValue, 16>& StChain,
   // element type or scalar stores.
   SDValue  Chain = ST->getChain();
   SDValue  BasePtr = ST->getBasePtr();
-  const    Value *SV = ST->getSrcValue();
-  int      SVOffset = ST->getSrcValueOffset();
   unsigned Align = ST->getAlignment();
   bool     isVolatile = ST->isVolatile();
   bool     isNonTemporal = ST->isNonTemporal();
@@ -2433,9 +2427,9 @@ void DAGTypeLegalizer::GenWidenVectorStores(SmallVector<SDValue, 16>& StChain,
       do {
         SDValue EOp = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, NewVT, ValOp,
                                    DAG.getIntPtrConstant(Idx));
-        StChain.push_back(DAG.getStore(Chain, dl, EOp, BasePtr, SV,
-                                       SVOffset + Offset, isVolatile,
-                                       isNonTemporal,
+        StChain.push_back(DAG.getStore(Chain, dl, EOp, BasePtr,
+                                    ST->getPointerInfo().getWithOffset(Offset),
+                                       isVolatile, isNonTemporal,
                                        MinAlign(Align, Offset)));
         StWidth -= NewVTWidth;
         Offset += Increment;
@@ -2453,9 +2447,10 @@ void DAGTypeLegalizer::GenWidenVectorStores(SmallVector<SDValue, 16>& StChain,
       do {
         SDValue EOp = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, NewVT, VecOp,
                       DAG.getIntPtrConstant(Idx++));
-        StChain.push_back(DAG.getStore(Chain, dl, EOp, BasePtr, SV,
-                                       SVOffset + Offset, isVolatile,
-                                       isNonTemporal, MinAlign(Align, Offset)));
+        StChain.push_back(DAG.getStore(Chain, dl, EOp, BasePtr,
+                                    ST->getPointerInfo().getWithOffset(Offset),
+                                       isVolatile, isNonTemporal,
+                                       MinAlign(Align, Offset)));
         StWidth -= NewVTWidth;
         Offset += Increment;
         BasePtr = DAG.getNode(ISD::ADD, dl, BasePtr.getValueType(), BasePtr,
@@ -2474,8 +2469,6 @@ DAGTypeLegalizer::GenWidenVectorTruncStores(SmallVector<SDValue, 16>& StChain,
   // and then store it.  Instead, we extract each element and then store it.
   SDValue  Chain = ST->getChain();
   SDValue  BasePtr = ST->getBasePtr();
-  const    Value *SV = ST->getSrcValue();
-  int      SVOffset = ST->getSrcValueOffset();
   unsigned Align = ST->getAlignment();
   bool     isVolatile = ST->isVolatile();
   bool     isNonTemporal = ST->isNonTemporal();
@@ -2499,8 +2492,8 @@ DAGTypeLegalizer::GenWidenVectorTruncStores(SmallVector<SDValue, 16>& StChain,
   unsigned NumElts = StVT.getVectorNumElements();
   SDValue EOp = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, ValEltVT, ValOp,
                             DAG.getIntPtrConstant(0));
-  StChain.push_back(DAG.getTruncStore(Chain, dl, EOp, BasePtr, SV,
-                                      SVOffset, StEltVT,
+  StChain.push_back(DAG.getTruncStore(Chain, dl, EOp, BasePtr,
+                                      ST->getPointerInfo(), StEltVT,
                                       isVolatile, isNonTemporal, Align));
   unsigned Offset = Increment;
   for (unsigned i=1; i < NumElts; ++i, Offset += Increment) {
@@ -2508,9 +2501,9 @@ DAGTypeLegalizer::GenWidenVectorTruncStores(SmallVector<SDValue, 16>& StChain,
                                      BasePtr, DAG.getIntPtrConstant(Offset));
     SDValue EOp = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, ValEltVT, ValOp,
                             DAG.getIntPtrConstant(0));
-    StChain.push_back(DAG.getTruncStore(Chain, dl, EOp, NewBasePtr, SV,
-                                        SVOffset + Offset, StEltVT,
-                                        isVolatile, isNonTemporal,
+    StChain.push_back(DAG.getTruncStore(Chain, dl, EOp, NewBasePtr,
+                                      ST->getPointerInfo().getWithOffset(Offset),
+                                        StEltVT, isVolatile, isNonTemporal,
                                         MinAlign(Align, Offset)));
   }
 }

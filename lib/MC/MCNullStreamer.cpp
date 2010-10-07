@@ -25,7 +25,11 @@ namespace {
     /// @name MCStreamer Interface
     /// @{
 
+    virtual void InitSections() {
+    }
+
     virtual void SwitchSection(const MCSection *Section) {
+      PrevSection = CurSection;
       CurSection = Section;
     }
 

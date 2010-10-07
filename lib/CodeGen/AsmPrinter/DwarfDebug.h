@@ -23,6 +23,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/UniqueVector.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/DebugLoc.h"
 
 namespace llvm {
 
@@ -375,9 +376,9 @@ private:
   void addBlockByrefAddress(DbgVariable *&DV, DIE *Die, unsigned Attribute,
                             const MachineLocation &Location);
 
-  /// addVariableAddress - Add DW_AT_location attribute for a DbgVariable.
-  void addVariableAddress(DbgVariable *&DV, DIE *Die, unsigned Attribute,
-                          const MachineLocation &Location);
+  /// addVariableAddress - Add DW_AT_location attribute for a DbgVariable based
+  /// on provided frame index.
+  void addVariableAddress(DbgVariable *&DV, DIE *Die, int64_t FI);
 
   /// addToContextOwner - Add Die into the list of its context owner's children.
   void addToContextOwner(DIE *Die, DIDescriptor Context);
@@ -421,7 +422,7 @@ private:
   DIE *createMemberDIE(DIDerivedType DT);
 
   /// createSubprogramDIE - Create new DIE using SP.
-  DIE *createSubprogramDIE(DISubprogram SP, bool MakeDecl = false);
+  DIE *createSubprogramDIE(DISubprogram SP);
 
   /// getOrCreateDbgScope - Create DbgScope for the scope.
   DbgScope *getOrCreateDbgScope(const MDNode *Scope, const MDNode *InlinedAt);

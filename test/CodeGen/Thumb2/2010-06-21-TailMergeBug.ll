@@ -1,4 +1,4 @@
-; RUN: llc < %s -mtriple=thumbv7-apple-darwin -O3 -relocation-model=pic -mcpu=cortex-a8 | FileCheck %s
+; RUN: llc < %s -mtriple=thumbv7-apple-darwin -O3 -relocation-model=pic | FileCheck %s
 ; rdar://8115404
 ; Tail merging must not split an IT block.
 
@@ -32,15 +32,14 @@
 
 define fastcc i32 @parse_percent_token() nounwind {
 entry:
-; CHECK: ittt eq
-; CHECK: ittt eq
-; CHECK: ittt eq
-; CHECK: ittt eq
-; CHECK: ittt eq
+; CHECK: itt eq
+; CHECK: itt eq
+; CHECK: itt eq
+; CHECK: itt eq
+; CHECK: itt eq
 ; CHECK: moveq r0
 ; CHECK-NOT: LBB0_
-; CHECK: ldreq
-; CHECK: popeq
+; CHECK: ldmiaeq
   switch i32 undef, label %bb7 [
     i32 37, label %bb43
     i32 48, label %bb5

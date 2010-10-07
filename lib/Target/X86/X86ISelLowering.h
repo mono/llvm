@@ -57,35 +57,6 @@ namespace llvm {
       /// corresponds to X86::PSRLDQ.
       FSRL,
 
-      /// FILD, FILD_FLAG - This instruction implements SINT_TO_FP with the
-      /// integer source in memory and FP reg result.  This corresponds to the
-      /// X86::FILD*m instructions. It has three inputs (token chain, address,
-      /// and source type) and two outputs (FP value and token chain). FILD_FLAG
-      /// also produces a flag).
-      FILD,
-      FILD_FLAG,
-
-      /// FP_TO_INT*_IN_MEM - This instruction implements FP_TO_SINT with the
-      /// integer destination in memory and a FP reg source.  This corresponds
-      /// to the X86::FIST*m instructions and the rounding mode change stuff. It
-      /// has two inputs (token chain and address) and two outputs (int value
-      /// and token chain).
-      FP_TO_INT16_IN_MEM,
-      FP_TO_INT32_IN_MEM,
-      FP_TO_INT64_IN_MEM,
-
-      /// FLD - This instruction implements an extending load to FP stack slots.
-      /// This corresponds to the X86::FLD32m / X86::FLD64m. It takes a chain
-      /// operand, ptr to load from, and a ValueType node indicating the type
-      /// to load to.
-      FLD,
-
-      /// FST - This instruction implements a truncating store to FP stack
-      /// slots. This corresponds to the X86::FST32m / X86::FST64m. It takes a
-      /// chain operand, value to store, address, and a ValueType to store it
-      /// as.
-      FST,
-
       /// CALL - These operations represent an abstract X86 call
       /// instruction, which includes a bunch of information.  In particular the
       /// operands of these node are:
@@ -157,10 +128,14 @@ namespace llvm {
       /// relative displacements.
       WrapperRIP,
 
-      /// MOVQ2DQ - Copies a 64-bit value from a vector to another vector.
-      /// Can be used to move a vector value from a MMX register to a XMM
-      /// register.
+      /// MOVQ2DQ - Copies a 64-bit value from an MMX vector to the low word
+      /// of an XMM vector, with the high word zero filled.
       MOVQ2DQ,
+
+      /// MOVDQ2Q - Copies a 64-bit value from the low word of an XMM vector
+      /// to an MMX vector.  If you think this is too close to the previous
+      /// mnemonic, so do I; blame Intel.
+      MOVDQ2Q,
 
       /// PEXTRB - Extract an 8-bit value from a vector and zero extend it to
       /// i32, corresponds to X86::PEXTRB.
@@ -201,9 +176,6 @@ namespace llvm {
       // thunk at the address from an earlier relocation.
       TLSCALL,
 
-      // SegmentBaseAddress - The address segment:0
-      SegmentBaseAddress,
-
       // EH_RETURN - Exception Handling helpers.
       EH_RETURN,
       
@@ -214,18 +186,8 @@ namespace llvm {
       ///   operand #3 optional in flag
       TC_RETURN,
 
-      // LCMPXCHG_DAG, LCMPXCHG8_DAG - Compare and swap.
-      LCMPXCHG_DAG,
-      LCMPXCHG8_DAG,
-
-      // FNSTCW16m - Store FP control world into i16 memory.
-      FNSTCW16m,
-
       // VZEXT_MOVL - Vector move low and zero extend.
       VZEXT_MOVL,
-
-      // VZEXT_LOAD - Load, scalar_to_vector, and zero extend.
-      VZEXT_LOAD,
 
       // VSHL, VSRL - Vector logical left / right shift.
       VSHL, VSRL,
@@ -266,11 +228,9 @@ namespace llvm {
       MOVSHDUP_LD,
       MOVSLDUP_LD,
       MOVLHPS,
-      MOVHLPS,
       MOVLHPD,
+      MOVHLPS,
       MOVHLPD,
-      MOVHPS,
-      MOVHPD,
       MOVLPS,
       MOVLPD,
       MOVSD,
@@ -311,8 +271,47 @@ namespace llvm {
       MEMBARRIER,
       MFENCE,
       SFENCE,
-      LFENCE
+      LFENCE,
+      
+      // LCMPXCHG_DAG, LCMPXCHG8_DAG - Compare and swap.
+      LCMPXCHG_DAG,
+      LCMPXCHG8_DAG,
 
+      // VZEXT_LOAD - Load, scalar_to_vector, and zero extend.
+      VZEXT_LOAD,
+      
+      // FNSTCW16m - Store FP control world into i16 memory.
+      FNSTCW16m,
+      
+      /// FP_TO_INT*_IN_MEM - This instruction implements FP_TO_SINT with the
+      /// integer destination in memory and a FP reg source.  This corresponds
+      /// to the X86::FIST*m instructions and the rounding mode change stuff. It
+      /// has two inputs (token chain and address) and two outputs (int value
+      /// and token chain).
+      FP_TO_INT16_IN_MEM,
+      FP_TO_INT32_IN_MEM,
+      FP_TO_INT64_IN_MEM,
+      
+      /// FILD, FILD_FLAG - This instruction implements SINT_TO_FP with the
+      /// integer source in memory and FP reg result.  This corresponds to the
+      /// X86::FILD*m instructions. It has three inputs (token chain, address,
+      /// and source type) and two outputs (FP value and token chain). FILD_FLAG
+      /// also produces a flag).
+      FILD,
+      FILD_FLAG,
+      
+      /// FLD - This instruction implements an extending load to FP stack slots.
+      /// This corresponds to the X86::FLD32m / X86::FLD64m. It takes a chain
+      /// operand, ptr to load from, and a ValueType node indicating the type
+      /// to load to.
+      FLD,
+      
+      /// FST - This instruction implements a truncating store to FP stack
+      /// slots. This corresponds to the X86::FST32m / X86::FST64m. It takes a
+      /// chain operand, value to store, address, and a ValueType to store it
+      /// as.
+      FST
+      
       // WARNING: Do not add anything in the end unless you want the node to
       // have memop! In fact, starting from ATOMADD64_DAG all opcodes will be
       // thought as target memory ops!
@@ -525,6 +524,11 @@ namespace llvm {
                                                 const SelectionDAG &DAG,
                                                 unsigned Depth = 0) const;
 
+    // ComputeNumSignBitsForTargetNode - Determine the number of bits in the
+    // operation that are sign bits.
+    virtual unsigned ComputeNumSignBitsForTargetNode(SDValue Op,
+                                                     unsigned Depth) const;
+
     virtual bool
     isGAPlusOffset(SDNode *N, const GlobalValue* &GA, int64_t &Offset) const;
     
@@ -533,6 +537,12 @@ namespace llvm {
     virtual bool ExpandInlineAsm(CallInst *CI) const;
     
     ConstraintType getConstraintType(const std::string &Constraint) const;
+  
+    /// Examine constraint string and operand type and determine a weight value,
+    /// where: -1 = invalid match, and 0 = so-so match to 3 = good match.
+    /// The operand object must already have been set up with the operand type.
+    virtual int getSingleConstraintMatchWeight(
+      AsmOperandInfo &info, const char *constraint) const;
      
     std::vector<unsigned> 
       getRegClassForInlineAsmConstraint(const std::string &Constraint,

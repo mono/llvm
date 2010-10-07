@@ -26,6 +26,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include <map>
+#include <set>
 using namespace llvm;
 
 char LazyValueInfo::ID = 0;
@@ -173,10 +175,6 @@ public:
     assert(isUndefined());
     if (NewR.isEmptySet())
       return markOverdefined();
-    else if (NewR.isFullSet()) {
-      Tag = undefined;
-      return true;
-    }
     
     Tag = constantrange;
     Range = NewR;
@@ -196,13 +194,15 @@ public:
             isa<ConstantExpr>(RHS.getNotConstant()))
           return markOverdefined();
         return false;
-      }
-      if (isConstant()) {
+      } else if (isConstant()) {
         if (getConstant() == RHS.getNotConstant() ||
             isa<ConstantExpr>(RHS.getNotConstant()) ||
             isa<ConstantExpr>(getConstant()))
           return markOverdefined();
         return markNotConstant(RHS.getNotConstant());
+      } else if (isConstantRange()) {
+         // FIXME: This could be made more precise.
+        return markOverdefined();
       }
       
       assert(isUndefined() && "Unexpected lattice");
@@ -224,9 +224,12 @@ public:
       return markConstantRange(RHS.getConstantRange());
     }
     
-    // RHS must be a constant, we must be undef, constant, or notconstant.
-    assert(!isConstantRange() &&
-           "Constant and ConstantRange cannot be merged.");
+    // RHS must be a constant, we must be constantrange, 
+    // undef, constant, or notconstant.
+    if (isConstantRange()) {
+      // FIXME: This could be made more precise.
+      return markOverdefined();
+    }
     
     if (isUndefined())
       return markConstant(RHS.getConstant());
@@ -295,10 +298,6 @@ namespace {
       void deleted();
       void allUsesReplacedWith(Value* V) {
         deleted();
-      }
-
-      LVIValueHandle &operator=(Value *V) {
-        return *this = LVIValueHandle(V, Parent);
       }
     };
 
@@ -455,14 +454,15 @@ LVILatticeVal LVIQuery::getBlockValue(BasicBlock *BB) {
     
     // If this is a pointer, and there's a load from that pointer in this BB,
     // then we know that the pointer can't be NULL.
+    bool NotNull = false;
     if (Val->getType()->isPointerTy()) {
-      const PointerType *PTy = cast<PointerType>(Val->getType());
       for (BasicBlock::iterator BI = BB->begin(), BE = BB->end();BI != BE;++BI){
         LoadInst *L = dyn_cast<LoadInst>(BI);
         if (L && L->getPointerAddressSpace() == 0 &&
             L->getPointerOperand()->getUnderlyingObject() ==
               Val->getUnderlyingObject()) {
-          return LVILatticeVal::getNot(ConstantPointerNull::get(PTy));
+          NotNull = true;
+          break;
         }
       }
     }
@@ -478,10 +478,18 @@ LVILatticeVal LVIQuery::getBlockValue(BasicBlock *BB) {
       if (Result.isOverdefined()) {
         DEBUG(dbgs() << " compute BB '" << BB->getName()
                      << "' - overdefined because of pred.\n");
+        // If we previously determined that this is a pointer that can't be null
+        // then return that rather than giving up entirely.
+        if (NotNull) {
+          const PointerType *PTy = cast<PointerType>(Val->getType());
+          Result = LVILatticeVal::getNot(ConstantPointerNull::get(PTy));
+        }
+        
         return Result;
       }
       ++NumPreds;
     }
+    
     
     // If this is the entry block, we must be asking about an argument.  The
     // value is overdefined.
@@ -600,6 +608,12 @@ LVILatticeVal LVIQuery::getBlockValue(BasicBlock *BB) {
   case Instruction::BitCast:
     Result.markConstantRange(LHSRange);
     break;
+  case Instruction::And:
+    Result.markConstantRange(LHSRange.binaryAnd(RHSRange));
+    break;
+  case Instruction::Or:
+    Result.markConstantRange(LHSRange.binaryOr(RHSRange));
+    break;
   
   // Unhandled instructions are overdefined.
   default:
@@ -673,25 +687,11 @@ LVILatticeVal LVIQuery::getEdgeValue(BasicBlock *BBFrom, BasicBlock *BBTo) {
   // If the edge was formed by a switch on the value, then we may know exactly
   // what it is.
   if (SwitchInst *SI = dyn_cast<SwitchInst>(BBFrom->getTerminator())) {
-    // If BBTo is the default destination of the switch, we know that it 
-    // doesn't have the same value as any of the cases.
     if (SI->getCondition() == Val) {
+      // We don't know anything in the default case.
       if (SI->getDefaultDest() == BBTo) {
-        const IntegerType *IT = cast<IntegerType>(Val->getType());
-        ConstantRange CR(IT->getBitWidth());
-        
-        for (unsigned i = 1, e = SI->getNumSuccessors(); i != e; ++i) {
-          const APInt CaseVal = SI->getCaseValue(i)->getValue();
-          ConstantRange CaseRange(CaseVal, CaseVal+1);
-          CaseRange = CaseRange.inverse();
-          CR = CR.intersectWith(CaseRange);
-        }
-        
         LVILatticeVal Result;
-        if (CR.isFullSet() || CR.isEmptySet())
-          Result.markOverdefined();
-        else
-          Result.markConstantRange(CR);
+        Result.markOverdefined();
         return Result;
       }
       

@@ -227,9 +227,12 @@ public:
   /// cheaper to allocate caller saved registers.
   ///
   /// These methods take a MachineFunction argument, which can be used to tune
-  /// the allocatable registers based on the characteristics of the function.
-  /// One simple example is that the frame pointer register can be used if
-  /// frame-pointer-elimination is performed.
+  /// the allocatable registers based on the characteristics of the function,
+  /// subtarget, or other criteria.
+  ///
+  /// Register allocators should account for the fact that an allocation
+  /// order iterator may return a reserved register and always check
+  /// if the register is allocatable (getAllocatableSet()) before using it.
   ///
   /// By default, these methods return all registers in the class.
   ///
@@ -301,7 +304,7 @@ public:
     /// considered to be a 'virtual' register, which is part of the SSA
     /// namespace.  This must be the same for all targets, which means that each
     /// target is limited to this fixed number of registers.
-    FirstVirtualRegister = 1024
+    FirstVirtualRegister = 16384
   };
 
   /// isPhysicalRegister - Return true if the specified register number is in

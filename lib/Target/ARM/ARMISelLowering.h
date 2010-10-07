@@ -47,6 +47,8 @@ namespace llvm {
 
       PIC_ADD,      // Add with a PC operand and a PIC label.
 
+      AND,          // ARM "and" instruction that sets the 's' flag in CPSR.
+
       CMP,          // ARM compare instructions.
       CMPZ,         // ARM compare that sets only Z flag.
       CMPFP,        // ARM VFP compare instruction, sets FPSCR.
@@ -142,6 +144,10 @@ namespace llvm {
       VZIP,         // zip (interleave)
       VUZP,         // unzip (deinterleave)
       VTRN,         // transpose
+
+      // Vector multiply long:
+      VMULLs,       // ...signed
+      VMULLu,       // ...unsigned
 
       // Operands of the standard BUILD_VECTOR node are not legalized, which
       // is fine if BUILD_VECTORs are always lowered to shuffles or other
@@ -284,6 +290,9 @@ namespace llvm {
     /// materialize the FP immediate as a load from a constant pool.
     virtual bool isFPImmLegal(const APFloat &Imm, EVT VT) const;
 
+    virtual bool getTgtMemIntrinsic(IntrinsicInfo &Info,
+                                    const CallInst &I,
+                                    unsigned Intrinsic) const;
   protected:
     std::pair<const TargetRegisterClass*, uint8_t>
     findRepresentativeClass(EVT VT) const;
@@ -294,6 +303,8 @@ namespace llvm {
     const ARMSubtarget *Subtarget;
 
     const TargetRegisterInfo *RegInfo;
+
+    const InstrItineraryData *Itins;
 
     /// ARMPCLabelIndex - Keep track of the number of ARM PC labels created.
     ///

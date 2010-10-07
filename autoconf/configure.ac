@@ -31,7 +31,7 @@ dnl===
 dnl===-----------------------------------------------------------------------===
 dnl Initialize autoconf and define the package name, version number and
 dnl email address for reporting bugs.
-AC_INIT([[llvm]],[[2.8svn]],[llvmbugs@cs.uiuc.edu])
+AC_INIT([[llvm]],[[2.9svn]],[llvmbugs@cs.uiuc.edu])
 
 dnl Provide a copyright substitution and ensure the copyright notice is included
 dnl in the output of --version option of the generated configure script.
@@ -332,6 +332,7 @@ AC_CACHE_CHECK([target architecture],[llvm_cv_target_arch],
   s390x-*)                llvm_cv_target_arch="SystemZ" ;;
   bfin-*)                 llvm_cv_target_arch="Blackfin" ;;
   mblaze-*)               llvm_cv_target_arch="MBlaze" ;;
+  ptx-*)                  llvm_cv_target_arch="PTX" ;;
   *)                      llvm_cv_target_arch="Unknown" ;;
 esac])
 
@@ -469,6 +470,7 @@ else
     SystemZ)     AC_SUBST(TARGET_HAS_JIT,0) ;;
     Blackfin)    AC_SUBST(TARGET_HAS_JIT,0) ;;
     MBlaze)      AC_SUBST(TARGET_HAS_JIT,0) ;;
+    PTX)         AC_SUBST(TARGET_HAS_JIT,0) ;;
     *)           AC_SUBST(TARGET_HAS_JIT,0) ;;
   esac
 fi
@@ -543,13 +545,13 @@ TARGETS_TO_BUILD=""
 AC_ARG_ENABLE([targets],AS_HELP_STRING([--enable-targets],
     [Build specific host targets: all or target1,target2,... Valid targets are:
      host, x86, x86_64, sparc, powerpc, alpha, arm, mips, spu, pic16,
-     xcore, msp430, systemz, blackfin, cbe, and cpp (default=all)]),,
+     xcore, msp430, systemz, blackfin, ptx, cbe, and cpp (default=all)]),,
     enableval=all)
 if test "$enableval" = host-only ; then
   enableval=host
 fi
 case "$enableval" in
-  all) TARGETS_TO_BUILD="X86 Sparc PowerPC Alpha ARM Mips CellSPU PIC16 XCore MSP430 SystemZ Blackfin CBackend CppBackend MBlaze" ;;
+  all) TARGETS_TO_BUILD="X86 Sparc PowerPC Alpha ARM Mips CellSPU PIC16 XCore MSP430 SystemZ Blackfin CBackend CppBackend MBlaze PTX" ;;
   *)for a_target in `echo $enableval|sed -e 's/,/ /g' ` ; do
       case "$a_target" in
         x86)      TARGETS_TO_BUILD="X86 $TARGETS_TO_BUILD" ;;
@@ -568,6 +570,7 @@ case "$enableval" in
         cbe)      TARGETS_TO_BUILD="CBackend $TARGETS_TO_BUILD" ;;
         cpp)      TARGETS_TO_BUILD="CppBackend $TARGETS_TO_BUILD" ;;
         mblaze)   TARGETS_TO_BUILD="MBlaze $TARGETS_TO_BUILD" ;;
+        ptx)      TARGETS_TO_BUILD="PTX $TARGETS_TO_BUILD" ;;
         host) case "$llvm_cv_target_arch" in
             x86)         TARGETS_TO_BUILD="X86 $TARGETS_TO_BUILD" ;;
             x86_64)      TARGETS_TO_BUILD="X86 $TARGETS_TO_BUILD" ;;
@@ -583,6 +586,7 @@ case "$enableval" in
             MSP430)      TARGETS_TO_BUILD="MSP430 $TARGETS_TO_BUILD" ;;
             s390x)       TARGETS_TO_BUILD="SystemZ $TARGETS_TO_BUILD" ;;
             Blackfin)    TARGETS_TO_BUILD="Blackfin $TARGETS_TO_BUILD" ;;
+            PTX)         TARGETS_TO_BUILD="PTX $TARGETS_TO_BUILD" ;;
             *)       AC_MSG_ERROR([Can not set target to build]) ;;
           esac ;;
         *) AC_MSG_ERROR([Unrecognized target $a_target]) ;;
@@ -596,11 +600,17 @@ AC_SUBST(TARGETS_TO_BUILD,$TARGETS_TO_BUILD)
 # If so, define LLVM_NATIVE_ARCH to that LLVM target.
 for a_target in $TARGETS_TO_BUILD; do
   if test "$a_target" = "$LLVM_NATIVE_ARCH"; then
-    LLVM_NATIVE_ARCHTARGET="${LLVM_NATIVE_ARCH}Target"
-    AC_DEFINE_UNQUOTED(LLVM_NATIVE_ARCHNAME,$LLVM_NATIVE_ARCH,
-      [Short LLVM architecture name for the native architecture, if available])
-    AC_DEFINE_UNQUOTED(LLVM_NATIVE_ARCH,$LLVM_NATIVE_ARCHTARGET,
+    AC_DEFINE_UNQUOTED(LLVM_NATIVE_ARCH, $LLVM_NATIVE_ARCH,
       [LLVM architecture name for the native architecture, if available])
+    LLVM_NATIVE_TARGET="LLVMInitialize${LLVM_NATIVE_ARCH}Target"
+    LLVM_NATIVE_TARGETINFO="LLVMInitialize${LLVM_NATIVE_ARCH}TargetInfo"
+    LLVM_NATIVE_ASMPRINTER="LLVMInitialize${LLVM_NATIVE_ARCH}AsmPrinter"
+    AC_DEFINE_UNQUOTED(LLVM_NATIVE_TARGET, $LLVM_NATIVE_TARGET,
+      [LLVM name for the native Target init function, if available])
+    AC_DEFINE_UNQUOTED(LLVM_NATIVE_TARGETINFO, $LLVM_NATIVE_TARGETINFO,
+      [LLVM name for the native TargetInfo init function, if available])
+    AC_DEFINE_UNQUOTED(LLVM_NATIVE_ASMPRINTER, $LLVM_NATIVE_ASMPRINTER,
+      [LLVM name for the native AsmPrinter init function, if available])
   fi
 done
 
@@ -969,6 +979,16 @@ if test "$DOTTY" != "echo dotty" ; then
   AC_DEFINE_UNQUOTED([LLVM_PATH_DOTTY],"$DOTTY${EXEEXT}",
    [Define to path to dotty program if found or 'echo dotty' otherwise])
 fi
+AC_PATH_PROG(XDOT_PY, [xdot.py], [echo xdot.py])
+if test "$XDOT_PY" != "echo xdot.py" ; then
+  AC_DEFINE([HAVE_XDOT_PY],[1],[Define if the xdot.py program is available])
+  dnl If we're targeting for mingw we should emit windows paths, not msys
+  if test "$llvm_cv_os_type" = "MingW" ; then
+    XDOT_PY=`echo $XDOT_PY | sed 's/^\/\([[A-Za-z]]\)\//\1:\//' `
+  fi
+  AC_DEFINE_UNQUOTED([LLVM_PATH_XDOT_PY],"$XDOT_PY${EXEEXT}",
+   [Define to path to xdot.py program if found or 'echo xdot.py' otherwise])
+fi
 
 dnl Look for a sufficiently recent version of Perl.
 LLVM_PROG_PERL([5.006])
@@ -1252,6 +1272,7 @@ AC_CHECK_HEADERS([utime.h windows.h])
 AC_CHECK_HEADERS([sys/mman.h sys/param.h sys/resource.h sys/time.h])
 AC_CHECK_HEADERS([sys/types.h sys/ioctl.h malloc/malloc.h mach/mach.h])
 AC_CHECK_HEADERS([valgrind/valgrind.h])
+AC_CHECK_HEADERS([fenv.h])
 if test "$ENABLE_THREADS" -eq 1 ; then
   AC_CHECK_HEADERS(pthread.h,
                    AC_SUBST(HAVE_PTHREAD, 1),

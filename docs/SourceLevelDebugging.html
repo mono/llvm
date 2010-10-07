@@ -460,15 +460,17 @@ provide details such as name, type and where the variable is defined.</p>
 <div class="doc_code">
 <pre>
 !3 = metadata !{
-  i32,     ;; Tag = 13 + <a href="#LLVMDebugVersion">LLVMDebugVersion</a> (DW_TAG_lexical_block)
-  metadata ;; Reference to context descriptor
+  i32,     ;; Tag = 11 + <a href="#LLVMDebugVersion">LLVMDebugVersion</a> (DW_TAG_lexical_block)
+  metadata,;; Reference to context descriptor
+  i32,     ;; Line number
+  i32      ;; Column number
 }
 </pre>
 </div>
 
 <p>These descriptors provide debug information about nested blocks within a
-   subprogram.  The array of member descriptors is used to define local
-   variables and deeper nested blocks.</p>
+   subprogram. The line number and column numbers are used to dinstinguish
+   two lexical blocks at same depth. </p>
 
 </div>
 
@@ -539,9 +541,9 @@ DW_ATE_unsigned_char = 8
   metadata, ;; Name (may be "" for anonymous types)
   metadata, ;; Reference to file where defined (may be NULL)
   i32,      ;; Line number where defined (may be 0)
-  i32,      ;; Size in bits
-  i32,      ;; Alignment in bits
-  i32,      ;; Offset in bits
+  i64,      ;; Size in bits
+  i64,      ;; Alignment in bits
+  i64,      ;; Offset in bits
   metadata  ;; Reference to type derived from
 }
 </pre>
@@ -789,11 +791,11 @@ DW_TAG_return_variable = 258
 
 <div class="doc_text">
 <pre>
-  void %<a href="#format_common_declare">llvm.dbg.declare</a>({}*, metadata)
+  void %<a href="#format_common_declare">llvm.dbg.declare</a>(metadata, metadata)
 </pre>
 
 <p>This intrinsic provides information about a local element (ex. variable.) The
-   first argument is the alloca for the variable, cast to a <tt>{}*</tt>. The
+   first argument is metadata holding alloca for the variable.</tt>. The
    second argument is
    the <tt>%<a href="#format_variables">llvm.dbg.variable</a></tt> containing
    the description of the variable. </p>

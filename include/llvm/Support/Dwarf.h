@@ -22,7 +22,8 @@ namespace llvm {
 // Debug info constants.
 
 enum {
-  LLVMDebugVersion = (8 << 16),         // Current version of debug information.
+  LLVMDebugVersion = (9 << 16),         // Current version of debug information.
+  LLVMDebugVersion8 = (8 << 16),         // Cconstant for version 8.
   LLVMDebugVersion7 = (7 << 16),        // Constant for version 7.
   LLVMDebugVersion6 = (6 << 16),        // Constant for version 6.
   LLVMDebugVersion5 = (5 << 16),        // Constant for version 5.
@@ -509,6 +510,7 @@ enum dwarf_constants {
   DW_DSC_range = 0x01,
 
   // Line Number Standard Opcode Encodings
+  DW_LNS_extended_op = 0x00,
   DW_LNS_copy = 0x01,
   DW_LNS_advance_pc = 0x02,
   DW_LNS_advance_line = 0x03,

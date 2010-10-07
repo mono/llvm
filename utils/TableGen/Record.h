@@ -535,6 +535,12 @@ public:
   virtual Init *convertInitializerBitRange(const std::vector<unsigned> &Bits);
   virtual Init *convertInitListSlice(const std::vector<unsigned> &Elements);
 
+  /// getFieldType - This method is used to implement the FieldInit class.
+  /// Implementors of this method should return the type of the named field if
+  /// they are of record type.
+  ///
+  virtual RecTy *getFieldType(const std::string &FieldName) const;
+
   /// resolveBitReference - This method is used to implement
   /// VarBitInit::resolveReferences.  If the bit is able to be resolved, we
   /// simply return the resolved value, otherwise we return null.
@@ -835,12 +841,6 @@ public:
 
   virtual Init *resolveReferences(Record &R, const RecordVal *RV);
 
-  /// getFieldType - This method is used to implement the FieldInit class.
-  /// Implementors of this method should return the type of the named field if
-  /// they are of record type.
-  ///
-  virtual RecTy *getFieldType(const std::string &FieldName) const;
-
   virtual std::string getAsString() const;
 };
 
@@ -848,7 +848,7 @@ public:
 ///
 class BinOpInit : public OpInit {
 public:
-  enum BinaryOp { SHL, SRA, SRL, STRCONCAT, CONCAT, NAMECONCAT, EQ };
+  enum BinaryOp { SHL, SRA, SRL, STRCONCAT, CONCAT, EQ };
 private:
   BinaryOp Opc;
   Init *LHS, *RHS;
@@ -1233,10 +1233,10 @@ public:
     ID(LastID++), Name(N), Loc(loc) {}
   ~Record() {}
 
-  
+
   static unsigned getNewUID() { return LastID++; }
-    
-    
+
+
   unsigned getID() const { return ID; }
 
   const std::string &getName() const { return Name; }
@@ -1350,9 +1350,9 @@ public:
   ///
   std::vector<Record*> getValueAsListOfDefs(StringRef FieldName) const;
 
-  /// getValueAsListOfInts - This method looks up the specified field and returns
-  /// its value as a vector of integers, throwing an exception if the field does
-  /// not exist or if the value is not the right type.
+  /// getValueAsListOfInts - This method looks up the specified field and
+  /// returns its value as a vector of integers, throwing an exception if the
+  /// field does not exist or if the value is not the right type.
   ///
   std::vector<int64_t> getValueAsListOfInts(StringRef FieldName) const;
 
@@ -1490,7 +1490,7 @@ raw_ostream &operator<<(raw_ostream &OS, const RecordKeeper &RK);
 
 extern RecordKeeper Records;
 
-void PrintError(SMLoc ErrorLoc, const std::string &Msg);
+void PrintError(SMLoc ErrorLoc, const Twine &Msg);
 
 } // End llvm namespace
 

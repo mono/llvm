@@ -17,9 +17,12 @@
 using namespace llvm;
 
 MCObjectStreamer::MCObjectStreamer(MCContext &Context, TargetAsmBackend &TAB,
-                                   raw_ostream &_OS, MCCodeEmitter *_Emitter)
+                                   raw_ostream &_OS, MCCodeEmitter *_Emitter,
+                                   bool _PadSectionToAlignment)
   : MCStreamer(Context), Assembler(new MCAssembler(Context, TAB,
-                                                   *_Emitter, _OS)),
+                                                   *_Emitter,
+                                                   _PadSectionToAlignment,
+                                                   _OS)),
     CurSectionData(0)
 {
 }
@@ -77,6 +80,7 @@ void MCObjectStreamer::SwitchSection(const MCSection *Section) {
   // If already in this section, then this is a noop.
   if (Section == CurSection) return;
 
+  PrevSection = CurSection;
   CurSection = Section;
   CurSectionData = &getAssembler().getOrCreateSectionData(*Section);
 }

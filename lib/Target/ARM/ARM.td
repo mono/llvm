@@ -16,6 +16,7 @@
 
 include "llvm/Target/Target.td"
 
+
 //===----------------------------------------------------------------------===//
 // ARM Subtarget features.
 //
@@ -91,6 +92,15 @@ def ArchV7M     : SubtargetFeature<"v7m", "ARMArchVersion", "V7M",
 
 include "ARMSchedule.td"
 
+// ARM processor families.
+def ProcOthers  : SubtargetFeature<"others", "ARMProcFamily", "Others",
+                                   "One of the other ARM processor families">;
+def ProcA8      : SubtargetFeature<"a8", "ARMProcFamily", "CortexA8",
+                                   "Cortex-A8 ARM processors",
+                                   [FeatureSlowFPBrcc, FeatureNEONForFP]>;
+def ProcA9      : SubtargetFeature<"a9", "ARMProcFamily", "CortexA9",
+                                   "Cortex-A9 ARM processors">;
+
 class ProcNoItin<string Name, list<SubtargetFeature> Features>
  : Processor<Name, GenericItineraries, Features>;
 
@@ -150,10 +160,10 @@ def : Processor<"arm1156t2f-s",     ARMV6Itineraries, [ArchV6T2, FeatureVFP2]>;
 
 // V7 Processors.
 def : Processor<"cortex-a8",        CortexA8Itineraries,
-                [ArchV7A, FeatureHasSlowVMLx,
-                 FeatureSlowFPBrcc, FeatureNEONForFP, FeatureT2XtPk]>;
+                                    [ArchV7A, ProcA8,
+                                     FeatureHasSlowVMLx, FeatureT2XtPk]>;
 def : Processor<"cortex-a9",        CortexA9Itineraries,
-                [ArchV7A, FeatureT2XtPk]>;
+                                    [ArchV7A, ProcA9, FeatureT2XtPk]>;
 
 // V7M Processors.
 def : ProcNoItin<"cortex-m3",       [ArchV7M]>;
@@ -175,6 +185,17 @@ include "ARMInstrInfo.td"
 
 def ARMInstrInfo : InstrInfo;
 
+
+//===----------------------------------------------------------------------===//
+// Assembly printer
+//===----------------------------------------------------------------------===//
+// ARM Uses the MC printer for asm output, so make sure the TableGen
+// AsmWriter bits get associated with the correct class.
+def ARMAsmWriter : AsmWriter {
+  string AsmWriterClassName  = "InstPrinter";
+  bit isMCAsmWriter = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // Declare the target which we are implementing
 //===----------------------------------------------------------------------===//
@@ -182,4 +203,6 @@ def ARMInstrInfo : InstrInfo;
 def ARM : Target {
   // Pull in Instruction Info:
   let InstructionSet = ARMInstrInfo;
+
+  let AssemblyWriters = [ARMAsmWriter];
 }

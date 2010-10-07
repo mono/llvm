@@ -38,7 +38,7 @@ public:
   ~X86MCCodeEmitter() {}
 
   unsigned getNumFixupKinds() const {
-    return 5;
+    return 6;
   }
 
   const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const {
@@ -47,7 +47,8 @@ public:
       { "reloc_pcrel_1byte", 0, 1 * 8, MCFixupKindInfo::FKF_IsPCRel },
       { "reloc_pcrel_2byte", 0, 2 * 8, MCFixupKindInfo::FKF_IsPCRel },
       { "reloc_riprel_4byte", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel },
-      { "reloc_riprel_4byte_movq_load", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel }
+      { "reloc_riprel_4byte_movq_load", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel },
+      { "reloc_signed_4byte", 0, 4 * 8, 0}
     };
 
     if (Kind < FirstTargetFixupKind)
@@ -179,6 +180,18 @@ static MCFixupKind getImmFixupKind(uint64_t TSFlags) {
   }
 }
 
+/// Is32BitMemOperand - Return true if the specified instruction with a memory
+/// operand should emit the 0x67 prefix byte in 64-bit mode due to a 32-bit
+/// memory operand.  Op specifies the operand # of the memoperand.
+static bool Is32BitMemOperand(const MCInst &MI, unsigned Op) {
+  const MCOperand &BaseReg  = MI.getOperand(Op+X86::AddrBaseReg);
+  const MCOperand &IndexReg = MI.getOperand(Op+X86::AddrIndexReg);
+  
+  if ((BaseReg.getReg() != 0 && X86::GR32RegClass.contains(BaseReg.getReg())) ||
+      (IndexReg.getReg() != 0 && X86::GR32RegClass.contains(IndexReg.getReg())))
+    return true;
+  return false;
+}
 
 void X86MCCodeEmitter::
 EmitImmediate(const MCOperand &DispOp, unsigned Size, MCFixupKind FixupKind,
@@ -221,10 +234,10 @@ void X86MCCodeEmitter::EmitMemModRMByte(const MCInst &MI, unsigned Op,
                                         uint64_t TSFlags, unsigned &CurByte,
                                         raw_ostream &OS,
                                         SmallVectorImpl<MCFixup> &Fixups) const{
-  const MCOperand &Disp     = MI.getOperand(Op+3);
-  const MCOperand &Base     = MI.getOperand(Op);
-  const MCOperand &Scale    = MI.getOperand(Op+1);
-  const MCOperand &IndexReg = MI.getOperand(Op+2);
+  const MCOperand &Disp     = MI.getOperand(Op+X86::AddrDisp);
+  const MCOperand &Base     = MI.getOperand(Op+X86::AddrBaseReg);
+  const MCOperand &Scale    = MI.getOperand(Op+X86::AddrScaleAmt);
+  const MCOperand &IndexReg = MI.getOperand(Op+X86::AddrIndexReg);
   unsigned BaseReg = Base.getReg();
 
   // Handle %rip relative addressing.
@@ -295,7 +308,8 @@ void X86MCCodeEmitter::EmitMemModRMByte(const MCInst &MI, unsigned Op,
 
     // Otherwise, emit the most general non-SIB encoding: [REG+disp32]
     EmitByte(ModRMByte(2, RegOpcodeField, BaseRegNo), CurByte, OS);
-    EmitImmediate(Disp, 4, FK_Data_4, CurByte, OS, Fixups);
+    EmitImmediate(Disp, 4, MCFixupKind(X86::reloc_signed_4byte), CurByte, OS,
+                  Fixups);
     return;
   }
 
@@ -355,7 +369,8 @@ void X86MCCodeEmitter::EmitMemModRMByte(const MCInst &MI, unsigned Op,
   if (ForceDisp8)
     EmitImmediate(Disp, 1, FK_Data_1, CurByte, OS, Fixups);
   else if (ForceDisp32 || Disp.getImm() != 0)
-    EmitImmediate(Disp, 4, FK_Data_4, CurByte, OS, Fixups);
+    EmitImmediate(Disp, 4, MCFixupKind(X86::reloc_signed_4byte), CurByte, OS,
+                  Fixups);
 }
 
 /// EmitVEXOpcodePrefix - AVX instructions are encoded using a opcode prefix
@@ -708,13 +723,14 @@ void X86MCCodeEmitter::EmitOpcodePrefix(uint64_t TSFlags, unsigned &CurByte,
   if ((TSFlags & X86II::Op0Mask) == X86II::REP)
     EmitByte(0xF3, CurByte, OS);
 
+  // Emit the address size opcode prefix as needed.
+  if ((TSFlags & X86II::AdSize) ||
+      (MemOperand != -1 && Is64BitMode && Is32BitMemOperand(MI, MemOperand)))
+    EmitByte(0x67, CurByte, OS);
+  
   // Emit the operand size opcode prefix as needed.
   if (TSFlags & X86II::OpSize)
     EmitByte(0x66, CurByte, OS);
-
-  // Emit the address size opcode prefix as needed.
-  if (TSFlags & X86II::AdSize)
-    EmitByte(0x67, CurByte, OS);
 
   bool Need0FPrefix = false;
   switch (TSFlags & X86II::Op0Mask) {
@@ -806,6 +822,7 @@ EncodeInstruction(const MCInst &MI, raw_ostream &OS,
   if ((TSFlags >> 32) & X86II::VEX_4V)
     HasVEX_4V = true;
 
+  
   // Determine where the memory operand starts, if present.
   int MemoryOperand = X86II::getMemoryOperandNo(TSFlags);
   if (MemoryOperand != -1) MemoryOperand += CurOp;
@@ -815,7 +832,12 @@ EncodeInstruction(const MCInst &MI, raw_ostream &OS,
   else
     EmitVEXOpcodePrefix(TSFlags, CurByte, MemoryOperand, MI, Desc, OS);
 
+  
   unsigned char BaseOpcode = X86II::getBaseOpcodeFor(TSFlags);
+  
+  if ((TSFlags >> 32) & X86II::Has3DNow0F0FOpcode)
+    BaseOpcode = 0x0F;   // Weird 3DNow! encoding.
+  
   unsigned SrcRegNum = 0;
   switch (TSFlags & X86II::FormMask) {
   case X86II::MRMInitReg:
@@ -828,6 +850,13 @@ EncodeInstruction(const MCInst &MI, raw_ostream &OS,
     EmitByte(BaseOpcode, CurByte, OS);
     break;
       
+  case X86II::RawFrmImm8:
+    EmitByte(BaseOpcode, CurByte, OS);
+    EmitImmediate(MI.getOperand(CurOp++),
+                  X86II::getSizeOfImm(TSFlags), getImmFixupKind(TSFlags),
+                  CurByte, OS, Fixups);
+    EmitImmediate(MI.getOperand(CurOp++), 1, FK_Data_1, CurByte, OS, Fixups);
+    break;
   case X86II::RawFrmImm16:
     EmitByte(BaseOpcode, CurByte, OS);
     EmitImmediate(MI.getOperand(CurOp++),
@@ -963,12 +992,21 @@ EncodeInstruction(const MCInst &MI, raw_ostream &OS,
       RegNum |= GetX86RegNum(MO) << 4;
       EmitImmediate(MCOperand::CreateImm(RegNum), 1, FK_Data_1, CurByte, OS,
                     Fixups);
-    } else
+    } else {
+      unsigned FixupKind;
+      if (MI.getOpcode() == X86::MOV64ri32 || MI.getOpcode() == X86::MOV64mi32)
+        FixupKind = X86::reloc_signed_4byte;
+      else
+        FixupKind = getImmFixupKind(TSFlags);
       EmitImmediate(MI.getOperand(CurOp++),
-                    X86II::getSizeOfImm(TSFlags), getImmFixupKind(TSFlags),
+                    X86II::getSizeOfImm(TSFlags), MCFixupKind(FixupKind),
                     CurByte, OS, Fixups);
+    }
   }
 
+  if ((TSFlags >> 32) & X86II::Has3DNow0F0FOpcode)
+    EmitByte(X86II::getBaseOpcodeFor(TSFlags), CurByte, OS);
+  
 
 #ifndef NDEBUG
   // FIXME: Verify.

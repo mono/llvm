@@ -14,17 +14,19 @@
 
 namespace llvm {
   class AsmPrinter;
+  class GlobalValue;
   class MCAsmInfo;
   class MCContext;
   class MCInst;
   class MCOperand;
   class MCSymbol;
+  class MCSymbolRefExpr;
   class MachineInstr;
   class MachineModuleInfoMachO;
   class MachineOperand;
   class Mangler;
   //class ARMSubtarget;
-  
+
 /// ARMMCInstLower - This class is used to lower an MachineInstr into an MCInst.
 class LLVM_LIBRARY_VISIBILITY ARMMCInstLower {
   MCContext &Ctx;
@@ -35,16 +37,20 @@ class LLVM_LIBRARY_VISIBILITY ARMMCInstLower {
 public:
   ARMMCInstLower(MCContext &ctx, Mangler &mang, AsmPrinter &printer)
     : Ctx(ctx), Mang(mang), Printer(printer) {}
-  
+
   void Lower(const MachineInstr *MI, MCInst &OutMI) const;
 
   //MCSymbol *GetPICBaseSymbol() const;
-  MCSymbol *GetGlobalAddressSymbol(const MachineOperand &MO) const;
-  MCSymbol *GetExternalSymbolSymbol(const MachineOperand &MO) const;
+  MCSymbol *GetGlobalAddressSymbol(const GlobalValue *GV) const;
+  const MCSymbolRefExpr *GetSymbolRef(const MachineOperand &MO) const;
+  const MCSymbolRefExpr *GetExternalSymbolSymbol(const MachineOperand &MO)
+    const;
   MCSymbol *GetJumpTableSymbol(const MachineOperand &MO) const;
   MCSymbol *GetConstantPoolIndexSymbol(const MachineOperand &MO) const;
+  MCOperand LowerSymbolRefOperand(const MachineOperand &MO,
+                                  const MCSymbolRefExpr *Expr) const;
   MCOperand LowerSymbolOperand(const MachineOperand &MO, MCSymbol *Sym) const;
-  
+
 /*
 private:
   MachineModuleInfoMachO &getMachOMMI() const;

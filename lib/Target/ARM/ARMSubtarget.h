@@ -29,6 +29,10 @@ protected:
     V4, V4T, V5T, V5TE, V6, V6M, V6T2, V7A, V7M
   };
 
+  enum ARMProcFamilyEnum {
+    Others, CortexA8, CortexA9
+  };
+
   enum ARMFPEnum {
     None, VFPv2, VFPv3, NEON
   };
@@ -41,6 +45,9 @@ protected:
   /// ARMArchVersion - ARM architecture version: V4, V4T (base), V5T, V5TE,
   /// V6, V6T2, V7A, V7M.
   ARMArchEnum ARMArchVersion;
+
+  /// ARMProcFamily - ARM processor family: Cortex-A8, Cortex-A9, and others.
+  ARMProcFamilyEnum ARMProcFamily;
 
   /// ARMFPUType - Floating Point Unit type.
   ARMFPEnum ARMFPUType;
@@ -99,6 +106,11 @@ protected:
   /// precision.
   bool FPOnlySP;
 
+  /// AllowsUnalignedMem - If true, the subtarget allows unaligned memory
+  /// accesses for some types.  For details, see
+  /// ARMTargetLowering::allowsUnalignedMemoryAccesses().
+  bool AllowsUnalignedMem;
+
   /// stackAlignment - The minimum alignment known to hold of the stack frame on
   /// entry to the function and which must be maintained by every function.
   unsigned stackAlignment;
@@ -143,6 +155,9 @@ protected:
   bool hasV6T2Ops() const { return ARMArchVersion >= V6T2; }
   bool hasV7Ops()   const { return ARMArchVersion >= V7A;  }
 
+  bool isCortexA8() const { return ARMProcFamily == CortexA8; }
+  bool isCortexA9() const { return ARMProcFamily == CortexA9; }
+
   bool hasARMOps() const { return !NoARM; }
 
   bool hasVFP2() const { return ARMFPUType >= VFPv2; }
@@ -175,8 +190,12 @@ protected:
 
   bool useMovt() const { return UseMovt && hasV6T2Ops(); }
 
+  bool allowsUnalignedMem() const { return AllowsUnalignedMem; }
+
   const std::string & getCPUString() const { return CPUString; }
 
+  unsigned getMispredictionPenalty() const;
+  
   /// enablePostRAScheduler - True at 'More' optimization.
   bool enablePostRAScheduler(CodeGenOpt::Level OptLevel,
                              TargetSubtarget::AntiDepBreakMode& Mode,

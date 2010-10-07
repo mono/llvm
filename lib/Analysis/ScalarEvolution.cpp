@@ -340,8 +340,8 @@ bool SCEVAddRecExpr::isLoopInvariant(const Loop *QueryLoop) const {
 
   // This recurrence is variant w.r.t. QueryLoop if any of its operands
   // are variant.
-  for (unsigned i = 0, e = getNumOperands(); i != e; ++i)
-    if (!getOperand(i)->isLoopInvariant(QueryLoop))
+  for (op_iterator I = op_begin(), E = op_end(); I != E; ++I)
+    if (!(*I)->isLoopInvariant(QueryLoop))
       return false;
 
   // Otherwise it's loop-invariant.
@@ -704,8 +704,9 @@ static void GroupByComplexity(SmallVectorImpl<const SCEV *> &Ops,
   if (Ops.size() == 2) {
     // This is the common case, which also happens to be trivially simple.
     // Special case it.
-    if (SCEVComplexityCompare(LI)(Ops[1], Ops[0]))
-      std::swap(Ops[0], Ops[1]);
+    const SCEV *&LHS = Ops[0], *&RHS = Ops[1];
+    if (SCEVComplexityCompare(LI)(RHS, LHS))
+      std::swap(LHS, RHS);
     return;
   }
 
@@ -1588,7 +1589,6 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
         }
 
       // Check this multiply against other multiplies being added together.
-      bool AnyFold = false;
       for (unsigned OtherMulIdx = Idx+1;
            OtherMulIdx < Ops.size() && isa<SCEVMulExpr>(Ops[OtherMulIdx]);
            ++OtherMulIdx) {
@@ -1616,14 +1616,12 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
             const SCEV *InnerMulSum = getAddExpr(InnerMul1,InnerMul2);
             const SCEV *OuterMul = getMulExpr(MulOpSCEV, InnerMulSum);
             if (Ops.size() == 2) return OuterMul;
-            Ops[Idx] = OuterMul;
-            Ops.erase(Ops.begin()+OtherMulIdx);
-            OtherMulIdx = Idx;
-            AnyFold = true;
+            Ops.erase(Ops.begin()+Idx);
+            Ops.erase(Ops.begin()+OtherMulIdx-1);
+            Ops.push_back(OuterMul);
+            return getAddExpr(Ops);
           }
       }
-      if (AnyFold)
-        return getAddExpr(Ops);
     }
   }
 
@@ -1686,15 +1684,18 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
                                                AddRec->op_end());
         for (; OtherIdx != Ops.size() && isa<SCEVAddRecExpr>(Ops[OtherIdx]);
              ++OtherIdx)
-          if (const SCEVAddRecExpr *AR =
+          if (const SCEVAddRecExpr *OtherAddRec =
                 dyn_cast<SCEVAddRecExpr>(Ops[OtherIdx]))
-            if (AR->getLoop() == AddRecLoop) {
-              for (unsigned i = 0, e = AR->getNumOperands(); i != e; ++i) {
+            if (OtherAddRec->getLoop() == AddRecLoop) {
+              for (unsigned i = 0, e = OtherAddRec->getNumOperands();
+                   i != e; ++i) {
                 if (i >= AddRecOps.size()) {
-                  AddRecOps.append(AR->op_begin()+i, AR->op_end());
+                  AddRecOps.append(OtherAddRec->op_begin()+i,
+                                   OtherAddRec->op_end());
                   break;
                 }
-                AddRecOps[i] = getAddExpr(AddRecOps[i], AR->getOperand(i));
+                AddRecOps[i] = getAddExpr(AddRecOps[i],
+                                          OtherAddRec->getOperand(i));
               }
               Ops.erase(Ops.begin() + OtherIdx); --OtherIdx;
             }
@@ -1710,7 +1711,6 @@ const SCEV *ScalarEvolution::getAddExpr(SmallVectorImpl<const SCEV *> &Ops,
   // already have one, otherwise create a new one.
   FoldingSetNodeID ID;
   ID.AddInteger(scAddExpr);
-  ID.AddInteger(Ops.size());
   for (unsigned i = 0, e = Ops.size(); i != e; ++i)
     ID.AddPointer(Ops[i]);
   void *IP = 0;
@@ -1843,8 +1843,9 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
     // they are loop invariant w.r.t. the recurrence.
     SmallVector<const SCEV *, 8> LIOps;
     const SCEVAddRecExpr *AddRec = cast<SCEVAddRecExpr>(Ops[Idx]);
+    const Loop *AddRecLoop = AddRec->getLoop();
     for (unsigned i = 0, e = Ops.size(); i != e; ++i)
-      if (Ops[i]->isLoopInvariant(AddRec->getLoop())) {
+      if (Ops[i]->isLoopInvariant(AddRecLoop)) {
         LIOps.push_back(Ops[i]);
         Ops.erase(Ops.begin()+i);
         --i; --e;
@@ -1861,7 +1862,7 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
 
       // Build the new addrec. Propagate the NUW and NSW flags if both the
       // outer mul and the inner addrec are guaranteed to have no overflow.
-      const SCEV *NewRec = getAddRecExpr(NewOps, AddRec->getLoop(),
+      const SCEV *NewRec = getAddRecExpr(NewOps, AddRecLoop,
                                          HasNUW && AddRec->hasNoUnsignedWrap(),
                                          HasNSW && AddRec->hasNoSignedWrap());
 
@@ -1881,27 +1882,30 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
     // there are multiple AddRec's with the same loop induction variable being
     // multiplied together.  If so, we can fold them.
     for (unsigned OtherIdx = Idx+1;
-         OtherIdx < Ops.size() && isa<SCEVAddRecExpr>(Ops[OtherIdx]);++OtherIdx)
-      if (OtherIdx != Idx) {
-        const SCEVAddRecExpr *OtherAddRec = cast<SCEVAddRecExpr>(Ops[OtherIdx]);
-        if (AddRec->getLoop() == OtherAddRec->getLoop()) {
-          // F * G  -->  {A,+,B} * {C,+,D}  -->  {A*C,+,F*D + G*B + B*D}
-          const SCEVAddRecExpr *F = AddRec, *G = OtherAddRec;
-          const SCEV *NewStart = getMulExpr(F->getStart(), G->getStart());
-          const SCEV *B = F->getStepRecurrence(*this);
-          const SCEV *D = G->getStepRecurrence(*this);
-          const SCEV *NewStep = getAddExpr(getMulExpr(F, D),
-                                           getMulExpr(G, B),
-                                           getMulExpr(B, D));
-          const SCEV *NewAddRec = getAddRecExpr(NewStart, NewStep,
-                                                F->getLoop());
-          if (Ops.size() == 2) return NewAddRec;
-
-          Ops.erase(Ops.begin()+Idx);
-          Ops.erase(Ops.begin()+OtherIdx-1);
-          Ops.push_back(NewAddRec);
-          return getMulExpr(Ops);
-        }
+         OtherIdx < Ops.size() && isa<SCEVAddRecExpr>(Ops[OtherIdx]);
+         ++OtherIdx)
+      if (AddRecLoop == cast<SCEVAddRecExpr>(Ops[OtherIdx])->getLoop()) {
+        // F * G, where F = {A,+,B}<L> and G = {C,+,D}<L>  -->
+        // {A*C,+,F*D + G*B + B*D}<L>
+        for (; OtherIdx != Ops.size() && isa<SCEVAddRecExpr>(Ops[OtherIdx]);
+             ++OtherIdx)
+          if (const SCEVAddRecExpr *OtherAddRec =
+                dyn_cast<SCEVAddRecExpr>(Ops[OtherIdx]))
+            if (OtherAddRec->getLoop() == AddRecLoop) {
+              const SCEVAddRecExpr *F = AddRec, *G = OtherAddRec;
+              const SCEV *NewStart = getMulExpr(F->getStart(), G->getStart());
+              const SCEV *B = F->getStepRecurrence(*this);
+              const SCEV *D = G->getStepRecurrence(*this);
+              const SCEV *NewStep = getAddExpr(getMulExpr(F, D),
+                                               getMulExpr(G, B),
+                                               getMulExpr(B, D));
+              const SCEV *NewAddRec = getAddRecExpr(NewStart, NewStep,
+                                                    F->getLoop());
+              if (Ops.size() == 2) return NewAddRec;
+              Ops[Idx] = AddRec = cast<SCEVAddRecExpr>(NewAddRec);
+              Ops.erase(Ops.begin() + OtherIdx); --OtherIdx;
+            }
+        return getMulExpr(Ops);
       }
 
     // Otherwise couldn't fold anything into this recurrence.  Move onto the
@@ -1912,7 +1916,6 @@ const SCEV *ScalarEvolution::getMulExpr(SmallVectorImpl<const SCEV *> &Ops,
   // already have one, otherwise create a new one.
   FoldingSetNodeID ID;
   ID.AddInteger(scMulExpr);
-  ID.AddInteger(Ops.size());
   for (unsigned i = 0, e = Ops.size(); i != e; ++i)
     ID.AddPointer(Ops[i]);
   void *IP = 0;
@@ -2126,7 +2129,6 @@ ScalarEvolution::getAddRecExpr(SmallVectorImpl<const SCEV *> &Operands,
   // already have one, otherwise create a new one.
   FoldingSetNodeID ID;
   ID.AddInteger(scAddRecExpr);
-  ID.AddInteger(Operands.size());
   for (unsigned i = 0, e = Operands.size(); i != e; ++i)
     ID.AddPointer(Operands[i]);
   ID.AddPointer(L);
@@ -2237,7 +2239,6 @@ ScalarEvolution::getSMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   // already have one, otherwise create a new one.
   FoldingSetNodeID ID;
   ID.AddInteger(scSMaxExpr);
-  ID.AddInteger(Ops.size());
   for (unsigned i = 0, e = Ops.size(); i != e; ++i)
     ID.AddPointer(Ops[i]);
   void *IP = 0;
@@ -2342,7 +2343,6 @@ ScalarEvolution::getUMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   // already have one, otherwise create a new one.
   FoldingSetNodeID ID;
   ID.AddInteger(scUMaxExpr);
-  ID.AddInteger(Ops.size());
   for (unsigned i = 0, e = Ops.size(); i != e; ++i)
     ID.AddPointer(Ops[i]);
   void *IP = 0;
@@ -3327,11 +3327,16 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
     // LLVM IR canonical form means we need only traverse the left operands.
     SmallVector<const SCEV *, 4> AddOps;
     AddOps.push_back(getSCEV(U->getOperand(1)));
-    for (Value *Op = U->getOperand(0);
-         Op->getValueID() == Instruction::Add + Value::InstructionVal;
-         Op = U->getOperand(0)) {
+    for (Value *Op = U->getOperand(0); ; Op = U->getOperand(0)) {
+      unsigned Opcode = Op->getValueID() - Value::InstructionVal;
+      if (Opcode != Instruction::Add && Opcode != Instruction::Sub)
+        break;
       U = cast<Operator>(Op);
-      AddOps.push_back(getSCEV(U->getOperand(1)));
+      const SCEV *Op1 = getSCEV(U->getOperand(1));
+      if (Opcode == Instruction::Sub)
+        AddOps.push_back(getNegativeSCEV(Op1));
+      else
+        AddOps.push_back(Op1);
     }
     AddOps.push_back(getSCEV(U->getOperand(0)));
     return getAddExpr(AddOps);

@@ -64,10 +64,46 @@ int AsmLexer::getNextChar() {
   }
 }
 
+/// LexFloatLiteral: [0-9]*[.][0-9]*([eE][+-]?[0-9]*)?
+///
+/// The leading integral digit sequence and dot should have already been
+/// consumed, some or all of the fractional digit sequence *can* have been
+/// consumed.
+AsmToken AsmLexer::LexFloatLiteral() {
+  // Skip the fractional digit sequence.
+  while (isdigit(*CurPtr))
+    ++CurPtr;
+
+  // Check for exponent; we intentionally accept a slighlty wider set of
+  // literals here and rely on the upstream client to reject invalid ones (e.g.,
+  // "1e+").
+  if (*CurPtr == 'e' || *CurPtr == 'E') {
+    ++CurPtr;
+    if (*CurPtr == '-' || *CurPtr == '+')
+      ++CurPtr;
+    while (isdigit(*CurPtr))
+      ++CurPtr;
+  }
+
+  return AsmToken(AsmToken::Real,
+                  StringRef(TokStart, CurPtr - TokStart));
+}
+
 /// LexIdentifier: [a-zA-Z_.][a-zA-Z0-9_$.@]*
+static bool IsIdentifierChar(char c) {
+  return isalnum(c) || c == '_' || c == '$' || c == '.' || c == '@';
+}
 AsmToken AsmLexer::LexIdentifier() {
-  while (isalnum(*CurPtr) || *CurPtr == '_' || *CurPtr == '$' ||
-         *CurPtr == '.' || *CurPtr == '@')
+  // Check for floating point literals.
+  if (CurPtr[-1] == '.' && isdigit(*CurPtr)) {
+    // Disambiguate a .1243foo identifier from a floating literal.
+    while (isdigit(*CurPtr))
+      ++CurPtr;
+    if (*CurPtr == 'e' || *CurPtr == 'E' || !IsIdentifierChar(*CurPtr))
+      return LexFloatLiteral();
+  }
+
+  while (IsIdentifierChar(*CurPtr))
     ++CurPtr;
   
   // Handle . as a special case.
@@ -124,7 +160,6 @@ static void SkipIgnoredIntegerSuffix(const char *&CurPtr) {
     CurPtr += 3;
 }
 
-
 /// LexDigit: First character is [0-9].
 ///   Local Label: [0-9][:]
 ///   Forward/Backward Label: [0-9][fb]
@@ -132,13 +167,18 @@ static void SkipIgnoredIntegerSuffix(const char *&CurPtr) {
 ///   Octal integer: 0[0-7]+
 ///   Hex integer: 0x[0-9a-fA-F]+
 ///   Decimal integer: [1-9][0-9]*
-/// TODO: FP literal.
 AsmToken AsmLexer::LexDigit() {
   // Decimal integer: [1-9][0-9]*
-  if (CurPtr[-1] != '0') {
+  if (CurPtr[-1] != '0' || CurPtr[0] == '.') {
     while (isdigit(*CurPtr))
       ++CurPtr;
-    
+
+    // Check for floating point literals.
+    if (*CurPtr == '.' || *CurPtr == 'e') {
+      ++CurPtr;
+      return LexFloatLiteral();
+    }
+
     StringRef Result(TokStart, CurPtr - TokStart);
 
     long long Value;

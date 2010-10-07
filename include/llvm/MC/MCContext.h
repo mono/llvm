@@ -26,6 +26,7 @@ namespace llvm {
   class MCLabel;
   class MCDwarfFile;
   class MCDwarfLoc;
+  class MCLineSection;
   class StringRef;
   class Twine;
   class MCSectionMachO;
@@ -74,6 +75,10 @@ namespace llvm {
     /// The current dwarf line information from the last dwarf .loc directive.
     MCDwarfLoc CurrentDwarfLoc;
     bool DwarfLocSeen;
+
+    /// The dwarf line information from the .loc directives for the sections
+    /// with assembled machine instructions have after seeing .loc directives.
+    DenseMap<const MCSection *, MCLineSection *> MCLineSections;
 
     /// Allocator - Allocator object used for creating machine code objects.
     ///
@@ -155,7 +160,11 @@ namespace llvm {
     /// GetDwarfFile - creates an entry in the dwarf file and directory tables.
     unsigned GetDwarfFile(StringRef FileName, unsigned FileNumber);
 
-    bool ValidateDwarfFileNumber(unsigned FileNumber);
+    bool isValidDwarfFileNumber(unsigned FileNumber);
+
+    bool hasDwarfFiles(void) {
+      return MCDwarfFiles.size() != 0;
+    }
 
     const std::vector<MCDwarfFile *> &getMCDwarfFiles() {
       return MCDwarfFiles;
@@ -163,9 +172,13 @@ namespace llvm {
     const std::vector<StringRef> &getMCDwarfDirs() {
       return MCDwarfDirs;
     }
+    DenseMap<const MCSection *, MCLineSection *> &getMCLineSections() {
+      return MCLineSections;
+    }
 
     /// setCurrentDwarfLoc - saves the information from the currently parsed
-    /// dwarf .loc directive and sets DwarfLocSeen.  When the next instruction      /// is assembled an entry in the line number table with this information and
+    /// dwarf .loc directive and sets DwarfLocSeen.  When the next instruction
+    /// is assembled an entry in the line number table with this information and
     /// the address of the instruction will be created.
     void setCurrentDwarfLoc(unsigned FileNum, unsigned Line, unsigned Column,
                             unsigned Flags, unsigned Isa) {
@@ -176,6 +189,10 @@ namespace llvm {
       CurrentDwarfLoc.setIsa(Isa);
       DwarfLocSeen = true;
     }
+    void ClearDwarfLocSeen() { DwarfLocSeen = false; }
+
+    bool getDwarfLocSeen() { return DwarfLocSeen; }
+    const MCDwarfLoc &getCurrentDwarfLoc() { return CurrentDwarfLoc; }
 
     /// @}
 

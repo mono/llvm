@@ -17,7 +17,7 @@
 #define LLVM_CODEGEN_ASMPRINTER_H
 
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/Support/DebugLoc.h"
+#include "llvm/System/DataTypes.h"
 
 namespace llvm {
   class BlockAddress;
@@ -327,6 +327,12 @@ namespace llvm {
     /// specify the labels.  This implicitly uses .set if it is available.
     void EmitLabelOffsetDifference(const MCSymbol *Hi, uint64_t Offset,
                                    const MCSymbol *Lo, unsigned Size) const;
+
+    /// EmitLabelPlusOffset - Emit something like ".long Label+Offset"
+    /// where the size in bytes of the directive is specified by Size and Label
+    /// specifies the label.  This implicitly uses .set if it is available.
+    void EmitLabelPlusOffset(const MCSymbol *Label, uint64_t Offset,
+                                   unsigned Size) const;
 
     //===------------------------------------------------------------------===//
     // Dwarf Emission Helper Routines

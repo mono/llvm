@@ -50,9 +50,11 @@ void MCExpr::print(raw_ostream &OS) const {
     else
       OS << Sym;
 
-    if (SRE.getKind() != MCSymbolRefExpr::VK_None &&
-        SRE.getKind() != MCSymbolRefExpr::VK_ARM_HI16 &&
-        SRE.getKind() != MCSymbolRefExpr::VK_ARM_LO16)
+    if (SRE.getKind() == MCSymbolRefExpr::VK_ARM_PLT)
+      OS << MCSymbolRefExpr::getVariantKindName(SRE.getKind());
+    else if (SRE.getKind() != MCSymbolRefExpr::VK_None &&
+             SRE.getKind() != MCSymbolRefExpr::VK_ARM_HI16 &&
+             SRE.getKind() != MCSymbolRefExpr::VK_ARM_LO16)
       OS << '@' << MCSymbolRefExpr::getVariantKindName(SRE.getKind());
 
     return;
@@ -177,6 +179,7 @@ StringRef MCSymbolRefExpr::getVariantKindName(VariantKind Kind) {
   case VK_TPOFF: return "TPOFF";
   case VK_ARM_HI16: return ":upper16:";
   case VK_ARM_LO16: return ":lower16:";
+  case VK_ARM_PLT: return "(PLT)";
   case VK_TLVP: return "TLVP";
   }
 }
@@ -212,8 +215,23 @@ bool MCExpr::EvaluateAsAbsolute(int64_t &Res, const MCAsmLayout *Layout) const {
     return true;
   }
 
-  if (!EvaluateAsRelocatable(Value, Layout) || !Value.isAbsolute())
+  if (!EvaluateAsRelocatable(Value, Layout) || !Value.isAbsolute()) {
+    // EvaluateAsAbsolute is defined to return the "current value" of
+    // the expression if we are given a Layout object, even in cases
+    // when the value is not fixed.
+    if (Layout) {
+      Res = Value.getConstant();
+      if (Value.getSymA()) {
+	Res += Layout->getSymbolAddress(
+          &Layout->getAssembler().getSymbolData(Value.getSymA()->getSymbol()));
+      }
+      if (Value.getSymB()) {
+	Res -= Layout->getSymbolAddress(
+          &Layout->getAssembler().getSymbolData(Value.getSymB()->getSymbol()));
+      }
+    }
     return false;
+  }
 
   Res = Value.getConstant();
   return true;

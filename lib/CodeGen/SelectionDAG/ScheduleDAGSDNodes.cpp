@@ -34,8 +34,8 @@ using namespace llvm;
 STATISTIC(LoadsClustered, "Number of loads clustered together");
 
 ScheduleDAGSDNodes::ScheduleDAGSDNodes(MachineFunction &mf)
-  : ScheduleDAG(mf) {
-}
+  : ScheduleDAG(mf),
+    InstrItins(mf.getTarget().getInstrItineraryData()) {}
 
 /// Run - perform scheduling.
 ///
@@ -429,8 +429,7 @@ void ScheduleDAGSDNodes::ComputeLatency(SUnit *SU) {
     return;
   }
 
-  const InstrItineraryData &InstrItins = TM.getInstrItineraryData();
-  if (InstrItins.isEmpty()) {
+  if (!InstrItins || InstrItins->isEmpty()) {
     SU->Latency = 1;
     return;
   }
@@ -440,7 +439,7 @@ void ScheduleDAGSDNodes::ComputeLatency(SUnit *SU) {
   SU->Latency = 0;
   for (SDNode *N = SU->getNode(); N; N = N->getFlaggedNode())
     if (N->isMachineOpcode()) {
-      SU->Latency += InstrItins.
+      SU->Latency += InstrItins->
         getStageLatency(TII->get(N->getMachineOpcode()).getSchedClass());
     }
 }
@@ -451,32 +450,13 @@ void ScheduleDAGSDNodes::ComputeOperandLatency(SDNode *Def, SDNode *Use,
   if (ForceUnitLatencies())
     return;
 
-  const InstrItineraryData &InstrItins = TM.getInstrItineraryData();
-  if (InstrItins.isEmpty())
-    return;
-  
   if (dep.getKind() != SDep::Data)
     return;
 
   unsigned DefIdx = Use->getOperand(OpIdx).getResNo();
-  if (Def->isMachineOpcode()) {
-    const TargetInstrDesc &II = TII->get(Def->getMachineOpcode());
-    if (DefIdx >= II.getNumDefs())
-      return;
-    int DefCycle = InstrItins.getOperandCycle(II.getSchedClass(), DefIdx);
-    if (DefCycle < 0)
-      return;
-    int UseCycle = 1;
-    if (Use->isMachineOpcode()) {
-      const unsigned UseClass = TII->get(Use->getMachineOpcode()).getSchedClass();
-      UseCycle = InstrItins.getOperandCycle(UseClass, OpIdx);
-    }
-    if (UseCycle >= 0) {
-      int Latency = DefCycle - UseCycle + 1;
-      if (Latency >= 0)
-        dep.setLatency(Latency);
-    }
-  }
+  int Latency = TII->getOperandLatency(InstrItins, Def, DefIdx, Use, OpIdx);
+  if (Latency >= 0)
+    dep.setLatency(Latency);
 }
 
 void ScheduleDAGSDNodes::dumpNode(const SUnit *SU) const {

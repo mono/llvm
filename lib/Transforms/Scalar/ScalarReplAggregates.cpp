@@ -28,6 +28,7 @@
 #include "llvm/Instructions.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/LLVMContext.h"
+#include "llvm/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Target/TargetData.h"
@@ -193,6 +194,27 @@ private:
 };
 } // end anonymous namespace.
 
+
+/// IsVerbotenVectorType - Return true if this is a vector type ScalarRepl isn't
+/// allowed to form.  We do this to avoid MMX types, which is a complete hack,
+/// but is required until the backend is fixed.
+static bool IsVerbotenVectorType(const VectorType *VTy, const Instruction *I) {
+  StringRef Triple(I->getParent()->getParent()->getParent()->getTargetTriple());
+  if (!Triple.startswith("i386") &&
+      !Triple.startswith("x86_64"))
+    return false;
+  
+  // Reject all the MMX vector types.
+  switch (VTy->getNumElements()) {
+  default: return false;
+  case 1: return VTy->getElementType()->isIntegerTy(64);
+  case 2: return VTy->getElementType()->isIntegerTy(32);
+  case 4: return VTy->getElementType()->isIntegerTy(16);
+  case 8: return VTy->getElementType()->isIntegerTy(8);
+  }
+}
+
+
 /// TryConvert - Analyze the specified alloca, and if it is safe to do so,
 /// rewrite it to be a new alloca which is mem2reg'able.  This returns the new
 /// alloca if possible or null if not.
@@ -209,7 +231,8 @@ AllocaInst *ConvertToScalarInfo::TryConvert(AllocaInst *AI) {
   // we just get a lot of insert/extracts.  If at least one vector is
   // involved, then we probably really do have a union of vector/array.
   const Type *NewTy;
-  if (VectorTy && VectorTy->isVectorTy() && HadAVector) {
+  if (VectorTy && VectorTy->isVectorTy() && HadAVector &&
+      !IsVerbotenVectorType(cast<VectorType>(VectorTy), AI)) {
     DEBUG(dbgs() << "CONVERT TO VECTOR: " << *AI << "\n  TYPE = "
           << *VectorTy << '\n');
     NewTy = VectorTy;  // Use the vector type.
@@ -298,6 +321,9 @@ bool ConvertToScalarInfo::CanConvertToScalar(Value *V, uint64_t Offset) {
       // Don't break volatile loads.
       if (LI->isVolatile())
         return false;
+      // Don't touch MMX operations.
+      if (LI->getType()->isX86_MMXTy())
+        return false;
       MergeInType(LI->getType(), Offset);
       continue;
     }
@@ -305,6 +331,9 @@ bool ConvertToScalarInfo::CanConvertToScalar(Value *V, uint64_t Offset) {
     if (StoreInst *SI = dyn_cast<StoreInst>(User)) {
       // Storing the pointer, not into the value?
       if (SI->getOperand(0) == V || SI->isVolatile()) return false;
+      // Don't touch MMX operations.
+      if (SI->getOperand(0)->getType()->isX86_MMXTy())
+        return false;
       MergeInType(SI->getOperand(0)->getType(), Offset);
       continue;
     }
@@ -1662,6 +1691,12 @@ void SROA::RewriteLoadUserOfWholeAlloca(LoadInst *LI, AllocaInst *AI,
 /// HasPadding - Return true if the specified type has any structure or
 /// alignment padding, false otherwise.
 static bool HasPadding(const Type *Ty, const TargetData &TD) {
+  if (const ArrayType *ATy = dyn_cast<ArrayType>(Ty))
+    return HasPadding(ATy->getElementType(), TD);
+  
+  if (const VectorType *VTy = dyn_cast<VectorType>(Ty))
+    return HasPadding(VTy->getElementType(), TD);
+  
   if (const StructType *STy = dyn_cast<StructType>(Ty)) {
     const StructLayout *SL = TD.getStructLayout(STy);
     unsigned PrevFieldBitOffset = 0;
@@ -1691,12 +1726,8 @@ static bool HasPadding(const Type *Ty, const TargetData &TD) {
       if (PrevFieldEnd < SL->getSizeInBits())
         return true;
     }
-
-  } else if (const ArrayType *ATy = dyn_cast<ArrayType>(Ty)) {
-    return HasPadding(ATy->getElementType(), TD);
-  } else if (const VectorType *VTy = dyn_cast<VectorType>(Ty)) {
-    return HasPadding(VTy->getElementType(), TD);
   }
+  
   return TD.getTypeSizeInBits(Ty) != TD.getTypeAllocSizeInBits(Ty);
 }
 

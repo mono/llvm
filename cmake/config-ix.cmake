@@ -69,6 +69,7 @@ check_include_file(unistd.h HAVE_UNISTD_H)
 check_include_file(utime.h HAVE_UTIME_H)
 check_include_file(valgrind/valgrind.h HAVE_VALGRIND_VALGRIND_H)
 check_include_file(windows.h HAVE_WINDOWS_H)
+check_include_file(fenv.h HAVE_FENV_H)
 
 # library checks
 if( NOT LLVM_ON_WIN32 )
@@ -201,20 +202,22 @@ elseif (LLVM_NATIVE_ARCH MATCHES "xcore")
 elseif (LLVM_NATIVE_ARCH MATCHES "msp430")
   set(LLVM_NATIVE_ARCH MSP430)
 else ()
-  message(STATUS 
+  message(STATUS
     "Unknown architecture ${LLVM_NATIVE_ARCH}; lli will not JIT code")
   set(LLVM_NATIVE_ARCH)
 endif ()
-  
+
 if (LLVM_NATIVE_ARCH)
-  set(LLVM_NATIVE_ARCHNAME ${LLVM_NATIVE_ARCH})
   list(FIND LLVM_TARGETS_TO_BUILD ${LLVM_NATIVE_ARCH} NATIVE_ARCH_IDX)
   if (NATIVE_ARCH_IDX EQUAL -1)
-    message(STATUS 
+    message(STATUS
       "Native target ${LLVM_NATIVE_ARCH} is not selected; lli will not JIT code")
     set(LLVM_NATIVE_ARCH)
   else ()
     message(STATUS "Native target architecture is ${LLVM_NATIVE_ARCH}")
+    set(LLVM_NATIVE_TARGET LLVMInitialize${LLVM_NATIVE_ARCH}Target)
+    set(LLVM_NATIVE_TARGETINFO LLVMInitialize${LLVM_NATIVE_ARCH}TargetInfo)
+    set(LLVM_NATIVE_ASMPRINTER LLVMInitialize${LLVM_NATIVE_ARCH}AsmPrinter)
   endif ()
 endif()
 

@@ -33,7 +33,7 @@ namespace ARMII {
     //===------------------------------------------------------------------===//
     // This four-bit field describes the addressing mode used.
 
-    AddrModeMask  = 0xf,
+    AddrModeMask  = 0x1f,
     AddrModeNone    = 0,
     AddrMode1       = 1,
     AddrMode2       = 2,
@@ -52,7 +52,7 @@ namespace ARMII {
     AddrModeT2_i8s4 = 15, // i8 * 4
 
     // Size* - Flags to keep track of the size of an instruction.
-    SizeShift     = 4,
+    SizeShift     = 5,
     SizeMask      = 7 << SizeShift,
     SizeSpecial   = 1,   // 0 byte pseudo or special case.
     Size8Bytes    = 2,
@@ -61,7 +61,7 @@ namespace ARMII {
 
     // IndexMode - Unindex, pre-indexed, or post-indexed are valid for load
     // and store ops only.  Generic "updating" flag is used for ld/st multiple.
-    IndexModeShift = 7,
+    IndexModeShift = 8,
     IndexModeMask  = 3 << IndexModeShift,
     IndexModePre   = 1,
     IndexModePost  = 2,
@@ -70,7 +70,7 @@ namespace ARMII {
     //===------------------------------------------------------------------===//
     // Instruction encoding formats.
     //
-    FormShift     = 9,
+    FormShift     = 10,
     FormMask      = 0x3f << FormShift,
 
     // Pseudo instructions
@@ -143,15 +143,15 @@ namespace ARMII {
 
     // UnaryDP - Indicates this is a unary data processing instruction, i.e.
     // it doesn't have a Rn operand.
-    UnaryDP       = 1 << 15,
+    UnaryDP       = 1 << 16,
 
     // Xform16Bit - Indicates this Thumb2 instruction may be transformed into
     // a 16-bit Thumb instruction if certain conditions are met.
-    Xform16Bit    = 1 << 16,
+    Xform16Bit    = 1 << 17,
 
     //===------------------------------------------------------------------===//
     // Code domain.
-    DomainShift   = 17,
+    DomainShift   = 18,
     DomainMask    = 3 << DomainShift,
     DomainGeneral = 0 << DomainShift,
     DomainVFP     = 1 << DomainShift,
@@ -180,22 +180,6 @@ namespace ARMII {
     P_BitShift     = 24,
     I_BitShift     = 25,
     CondShift      = 28
-  };
-
-  /// Target Operand Flag enum.
-  enum TOF {
-    //===------------------------------------------------------------------===//
-    // ARM Specific MachineOperand flags.
-
-    MO_NO_FLAG,
-
-    /// MO_LO16 - On a symbol operand, this represents a relocation containing
-    /// lower 16 bit of the address. Used only via movw instruction.
-    MO_LO16,
-
-    /// MO_HI16 - On a symbol operand, this represents a relocation containing
-    /// higher 16 bit of the address. Used only via movt instruction.
-    MO_HI16
   };
 }
 
@@ -328,13 +312,17 @@ public:
                                     const MachineFunction &MF) const;
 
   virtual bool isProfitableToIfCvt(MachineBasicBlock &MBB,
-                                   unsigned NumInstrs) const;
+                                   unsigned NumInstrs,
+                                   float Prob, float Confidence) const;
 
   virtual bool isProfitableToIfCvt(MachineBasicBlock &TMBB,unsigned NumT,
-                                   MachineBasicBlock &FMBB,unsigned NumF) const;
+                                   MachineBasicBlock &FMBB,unsigned NumF,
+                                   float Probability, float Confidence) const;
 
   virtual bool isProfitableToDupForIfCvt(MachineBasicBlock &MBB,
-                                         unsigned NumInstrs) const {
+                                         unsigned NumInstrs,
+                                         float Probability,
+                                         float Confidence) const {
     return NumInstrs && NumInstrs == 1;
   }
 
@@ -342,12 +330,31 @@ public:
   /// in SrcReg and the value it compares against in CmpValue. Return true if
   /// the comparison instruction can be analyzed.
   virtual bool AnalyzeCompare(const MachineInstr *MI, unsigned &SrcReg,
-                              int &CmpValue) const;
+                              int &CmpMask, int &CmpValue) const;
 
-  /// ConvertToSetZeroFlag - Convert the instruction to set the zero flag so
+  /// OptimizeCompareInstr - Convert the instruction to set the zero flag so
   /// that we can remove a "comparison with zero".
-  virtual bool ConvertToSetZeroFlag(MachineInstr *Instr,
-                                    MachineInstr *CmpInstr) const;
+  virtual bool OptimizeCompareInstr(MachineInstr *CmpInstr, unsigned SrcReg,
+                                    int CmpMask, int CmpValue,
+                                    MachineBasicBlock::iterator &MII) const;
+
+  virtual unsigned getNumMicroOps(const MachineInstr *MI,
+                                  const InstrItineraryData *ItinData) const;
+
+  virtual
+  int getOperandLatency(const InstrItineraryData *ItinData,
+                        const MachineInstr *DefMI, unsigned DefIdx,
+                        const MachineInstr *UseMI, unsigned UseIdx) const;
+  virtual
+  int getOperandLatency(const InstrItineraryData *ItinData,
+                        SDNode *DefNode, unsigned DefIdx,
+                        SDNode *UseNode, unsigned UseIdx) const;
+private:
+  int getOperandLatency(const InstrItineraryData *ItinData,
+                        const TargetInstrDesc &DefTID,
+                        unsigned DefIdx, unsigned DefAlign,
+                        const TargetInstrDesc &UseTID,
+                        unsigned UseIdx, unsigned UseAlign) const;
 };
 
 static inline

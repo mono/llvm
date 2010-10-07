@@ -61,7 +61,6 @@ STATISTIC(NumPRELoad,   "Number of loads PRE'd");
 static cl::opt<bool> EnablePRE("enable-pre",
                                cl::init(true), cl::Hidden);
 static cl::opt<bool> EnableLoadPRE("enable-load-pre", cl::init(true));
-static cl::opt<bool> EnableFullLoadPRE("enable-full-load-pre", cl::init(false));
 
 //===----------------------------------------------------------------------===//
 //                         ValueTable Class
@@ -140,9 +139,9 @@ namespace {
       }
     }
 
-    bool operator!=(const Expression &other) const {
+    /*bool operator!=(const Expression &other) const {
       return !(*this == other);
-    }
+    }*/
   };
 
   class ValueTable {
@@ -165,7 +164,6 @@ namespace {
       Expression create_expression(CastInst* C);
       Expression create_expression(GetElementPtrInst* G);
       Expression create_expression(CallInst* C);
-      Expression create_expression(Constant* C);
       Expression create_expression(ExtractValueInst* C);
       Expression create_expression(InsertValueInst* C);
       
@@ -177,7 +175,6 @@ namespace {
       void add(Value *V, uint32_t num);
       void clear();
       void erase(Value *v);
-      unsigned size();
       void setAliasAnalysis(AliasAnalysis* A) { AA = A; }
       AliasAnalysis *getAliasAnalysis() const { return AA; }
       void setMemDep(MemoryDependenceAnalysis* M) { MD = M; }
@@ -1311,7 +1308,7 @@ static Value *ConstructSSAForLoadSet(LoadInst *LI,
   // Otherwise, we have to construct SSA form.
   SmallVector<PHINode*, 8> NewPHIs;
   SSAUpdater SSAUpdate(&NewPHIs);
-  SSAUpdate.Initialize(LI);
+  SSAUpdate.Initialize(LI->getType(), LI->getName());
   
   const Type *LoadTy = LI->getType();
   
@@ -1534,25 +1531,18 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
       return false;
     if (Blockers.count(TmpBB))
       return false;
+    
+    // If any of these blocks has more than one successor (i.e. if the edge we
+    // just traversed was critical), then there are other paths through this 
+    // block along which the load may not be anticipated.  Hoisting the load 
+    // above this block would be adding the load to execution paths along
+    // which it was not previously executed.
     if (TmpBB->getTerminator()->getNumSuccessors() != 1)
-      allSingleSucc = false;
+      return false;
   }
 
   assert(TmpBB);
   LoadBB = TmpBB;
-
-  // If we have a repl set with LI itself in it, this means we have a loop where
-  // at least one of the values is LI.  Since this means that we won't be able
-  // to eliminate LI even if we insert uses in the other predecessors, we will
-  // end up increasing code size.  Reject this by scanning for LI.
-  for (unsigned i = 0, e = ValuesPerBlock.size(); i != e; ++i) {
-    if (ValuesPerBlock[i].isSimpleValue() &&
-        ValuesPerBlock[i].getSimpleValue() == LI) {
-      // Skip cases where LI is the only definition, even for EnableFullLoadPRE.
-      if (!EnableFullLoadPRE || e == 1)
-        return false;
-    }
-  }
 
   // FIXME: It is extremely unclear what this loop is doing, other than
   // artificially restricting loadpre.
@@ -1613,14 +1603,13 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   unsigned NumUnavailablePreds = PredLoads.size();
   assert(NumUnavailablePreds != 0 &&
          "Fully available value should be eliminated above!");
-  if (!EnableFullLoadPRE) {
-    // If this load is unavailable in multiple predecessors, reject it.
-    // FIXME: If we could restructure the CFG, we could make a common pred with
-    // all the preds that don't have an available LI and insert a new load into
-    // that one block.
-    if (NumUnavailablePreds != 1)
+  
+  // If this load is unavailable in multiple predecessors, reject it.
+  // FIXME: If we could restructure the CFG, we could make a common pred with
+  // all the preds that don't have an available LI and insert a new load into
+  // that one block.
+  if (NumUnavailablePreds != 1)
       return false;
-  }
 
   // Check if the load can safely be moved to all the unavailable predecessors.
   bool CanDoPRE = true;

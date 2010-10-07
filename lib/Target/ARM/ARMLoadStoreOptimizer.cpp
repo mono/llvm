@@ -324,6 +324,7 @@ void ARMLoadStoreOpt::MergeOpsUpdate(MachineBasicBlock &MBB,
       if (KilledRegs.count(Reg)) {
         unsigned j = Killer[Reg];
         memOps[j].MBBI->getOperand(0).setIsKill(false);
+        memOps[j].isKill = false;
       }
     }
     MBB.erase(memOps[i].MBBI);
@@ -348,7 +349,7 @@ ARMLoadStoreOpt::MergeLDR_STR(MachineBasicBlock &MBB, unsigned SIndex,
   const MachineOperand &PMO = Loc->getOperand(0);
   unsigned PReg = PMO.getReg();
   unsigned PRegNum = PMO.isUndef() ? UINT_MAX
-    : ARMRegisterInfo::getRegisterNumbering(PReg);
+    : getARMRegisterNumbering(PReg);
   unsigned Count = 1;
 
   for (unsigned i = SIndex+1, e = MemOps.size(); i != e; ++i) {
@@ -356,7 +357,7 @@ ARMLoadStoreOpt::MergeLDR_STR(MachineBasicBlock &MBB, unsigned SIndex,
     const MachineOperand &MO = MemOps[i].MBBI->getOperand(0);
     unsigned Reg = MO.getReg();
     unsigned RegNum = MO.isUndef() ? UINT_MAX
-      : ARMRegisterInfo::getRegisterNumbering(Reg);
+      : getARMRegisterNumbering(Reg);
     // Register numbers must be in ascending order.  For VFP, the registers
     // must also be consecutive and there is a limit of 16 double-word
     // registers per instruction.
@@ -457,9 +458,10 @@ static inline unsigned getLSMultipleTransferSize(MachineInstr *MI) {
   case ARM::t2STM:
   case ARM::VLDMS:
   case ARM::VSTMS:
+    return (MI->getNumOperands() - MI->getDesc().getNumOperands() + 1) * 4;
   case ARM::VLDMD:
   case ARM::VSTMD:
-    return (MI->getNumOperands() - 4) * 4;
+    return (MI->getNumOperands() - MI->getDesc().getNumOperands() + 1) * 8;
   }
 }
 
@@ -1368,7 +1370,7 @@ ARMPreAllocLoadStoreOpt::CanFormLdStDWord(MachineInstr *Op0, MachineInstr *Op1,
   unsigned Align = (*Op0->memoperands_begin())->getAlignment();
   const Function *Func = MF->getFunction();
   unsigned ReqAlign = STI->hasV6Ops()
-    ? TD->getPrefTypeAlignment(Type::getInt64Ty(Func->getContext())) 
+    ? TD->getABITypeAlignment(Type::getInt64Ty(Func->getContext())) 
     : 8;  // Pre-v6 need 8-byte align
   if (Align < ReqAlign)
     return false;

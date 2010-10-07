@@ -28,11 +28,26 @@ LLVMContext& llvm::getGlobalContext() {
 }
 
 LLVMContext::LLVMContext() : pImpl(new LLVMContextImpl(*this)) {
-  // Create the first metadata kind, which is always 'dbg'.
+  // Create the fixed metadata kinds. This is done in the same order as the
+  // MD_* enum values so that they correspond.
+
+  // Create the 'dbg' metadata kind. 
   unsigned DbgID = getMDKindID("dbg");
   assert(DbgID == MD_dbg && "dbg kind id drifted"); (void)DbgID;
+
+  // Create the 'tbaa' metadata kind.
+  unsigned TBAAID = getMDKindID("tbaa");
+  assert(TBAAID == MD_tbaa && "tbaa kind id drifted"); (void)TBAAID;
 }
 LLVMContext::~LLVMContext() { delete pImpl; }
+
+void LLVMContext::addModule(Module *M) {
+  pImpl->OwnedModules.insert(M);
+}
+
+void LLVMContext::removeModule(Module *M) {
+  pImpl->OwnedModules.erase(M);
+}
 
 //===----------------------------------------------------------------------===//
 // Recoverable Backend Errors

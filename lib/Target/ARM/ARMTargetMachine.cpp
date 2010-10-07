@@ -31,6 +31,27 @@ static MCAsmInfo *createMCAsmInfo(const Target &T, StringRef TT) {
   }
 }
 
+// This is duplicated code. Refactor this.
+static MCStreamer *createMCStreamer(const Target &T, const std::string &TT,
+                                    MCContext &Ctx, TargetAsmBackend &TAB,
+                                    raw_ostream &_OS,
+                                    MCCodeEmitter *_Emitter,
+                                    bool RelaxAll) {
+  Triple TheTriple(TT);
+  switch (TheTriple.getOS()) {
+  case Triple::Darwin:
+    return createMachOStreamer(Ctx, TAB, _OS, _Emitter, RelaxAll);
+  case Triple::MinGW32:
+  case Triple::MinGW64:
+  case Triple::Cygwin:
+  case Triple::Win32:
+    llvm_unreachable("ARM does not support Windows COFF format");
+    return NULL;
+  default:
+    return createELFStreamer(Ctx, TAB, _OS, _Emitter, RelaxAll);
+  }
+}
+
 extern "C" void LLVMInitializeARMTarget() {
   // Register the target.
   RegisterTargetMachine<ARMTargetMachine> X(TheARMTarget);
@@ -39,6 +60,25 @@ extern "C" void LLVMInitializeARMTarget() {
   // Register the target asm info.
   RegisterAsmInfoFn A(TheARMTarget, createMCAsmInfo);
   RegisterAsmInfoFn B(TheThumbTarget, createMCAsmInfo);
+
+  // Register the MC Code Emitter
+  TargetRegistry::RegisterCodeEmitter(TheARMTarget,
+                                      createARMMCCodeEmitter);
+  TargetRegistry::RegisterCodeEmitter(TheThumbTarget,
+                                      createARMMCCodeEmitter);
+
+  // Register the asm backend.
+  TargetRegistry::RegisterAsmBackend(TheARMTarget,
+                                     createARMAsmBackend);
+  TargetRegistry::RegisterAsmBackend(TheThumbTarget,
+                                     createARMAsmBackend);
+
+  // Register the object streamer.
+  TargetRegistry::RegisterObjectStreamer(TheARMTarget,
+                                         createMCStreamer);
+  TargetRegistry::RegisterObjectStreamer(TheThumbTarget,
+                                         createMCStreamer);
+
 }
 
 /// TargetMachine ctor - Create an ARM architecture model.
@@ -51,7 +91,8 @@ ARMBaseTargetMachine::ARMBaseTargetMachine(const Target &T,
     Subtarget(TT, FS, isThumb),
     FrameInfo(Subtarget),
     JITInfo(),
-    InstrItins(Subtarget.getInstrItineraryData()) {
+    InstrItins(Subtarget.getInstrItineraryData())
+{
   DefRelocModel = getRelocationModel();
 }
 
@@ -59,10 +100,11 @@ ARMTargetMachine::ARMTargetMachine(const Target &T, const std::string &TT,
                                    const std::string &FS)
   : ARMBaseTargetMachine(T, TT, FS, false), InstrInfo(Subtarget),
     DataLayout(Subtarget.isAPCS_ABI() ?
-               std::string("e-p:32:32-f64:32:32-i64:32:32-"
+               std::string("e-p:32:32-f64:32:64-i64:32:64-"
                            "v128:32:128-v64:32:64-n32") :
                std::string("e-p:32:32-f64:64:64-i64:64:64-"
                            "v128:64:128-v64:64:64-n32")),
+    ELFWriterInfo(*this),
     TLInfo(*this),
     TSInfo(*this) {
   if (!Subtarget.hasARMOps())
@@ -77,12 +119,13 @@ ThumbTargetMachine::ThumbTargetMachine(const Target &T, const std::string &TT,
               ? ((ARMBaseInstrInfo*)new Thumb2InstrInfo(Subtarget))
               : ((ARMBaseInstrInfo*)new Thumb1InstrInfo(Subtarget))),
     DataLayout(Subtarget.isAPCS_ABI() ?
-               std::string("e-p:32:32-f64:32:32-i64:32:32-"
+               std::string("e-p:32:32-f64:32:64-i64:32:64-"
                            "i16:16:32-i8:8:32-i1:8:32-"
                            "v128:32:128-v64:32:64-a:0:32-n32") :
                std::string("e-p:32:32-f64:64:64-i64:64:64-"
                            "i16:16:32-i8:8:32-i1:8:32-"
                            "v128:64:128-v64:64:64-a:0:32-n32")),
+    ELFWriterInfo(*this),
     TLInfo(*this),
     TSInfo(*this) {
 }
@@ -104,9 +147,6 @@ bool ARMBaseTargetMachine::addInstSelector(PassManagerBase &PM,
 
 bool ARMBaseTargetMachine::addPreRegAlloc(PassManagerBase &PM,
                                           CodeGenOpt::Level OptLevel) {
-  if (Subtarget.hasNEON())
-    PM.add(createNEONPreAllocPass());
-
   // FIXME: temporarily disabling load / store optimization pass for Thumb1.
   if (OptLevel != CodeGenOpt::None && !Subtarget.isThumb1Only())
     PM.add(createARMLoadStoreOptimizationPass(true));

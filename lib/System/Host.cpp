@@ -92,7 +92,8 @@ static bool GetX86CpuIDAndInfo(unsigned value, unsigned *rEAX,
   return true;
 }
 
-static void DetectX86FamilyModel(unsigned EAX, unsigned &Family, unsigned &Model) {
+static void DetectX86FamilyModel(unsigned EAX, unsigned &Family,
+                                 unsigned &Model) {
   Family = (EAX >> 8) & 0xf; // Bits 8 - 11
   Model  = (EAX >> 4) & 0xf; // Bits 4 - 7
   if (Family == 6 || Family == 0xf) {
@@ -112,9 +113,9 @@ std::string sys::getHostCPUName() {
   unsigned Model  = 0;
   DetectX86FamilyModel(EAX, Family, Model);
 
+  bool HasSSE3 = (ECX & 0x1);
   GetX86CpuIDAndInfo(0x80000001, &EAX, &EBX, &ECX, &EDX);
   bool Em64T = (EDX >> 29) & 0x1;
-  bool HasSSE3 = (ECX & 0x1);
 
   union {
     unsigned u[3];
@@ -128,21 +129,21 @@ std::string sys::getHostCPUName() {
       return "i386";
     case 4:
       switch (Model) {
-      case 0: // Intel486TM DX processors
-      case 1: // Intel486TM DX processors
+      case 0: // Intel486 DX processors
+      case 1: // Intel486 DX processors
       case 2: // Intel486 SX processors
-      case 3: // Intel487TM processors, IntelDX2 OverDrive® processors,
-              // IntelDX2TM processors
+      case 3: // Intel487 processors, IntelDX2 OverDrive processors,
+              // IntelDX2 processors
       case 4: // Intel486 SL processor
-      case 5: // IntelSX2TM processors
+      case 5: // IntelSX2 processors
       case 7: // Write-Back Enhanced IntelDX2 processors
-      case 8: // IntelDX4 OverDrive processors, IntelDX4TM processors
+      case 8: // IntelDX4 OverDrive processors, IntelDX4 processors
       default: return "i486";
       }
     case 5:
       switch (Model) {
       case  1: // Pentium OverDrive processor for Pentium processor (60, 66),
-               // Pentium® processors (60, 66)
+               // Pentium processors (60, 66)
       case  2: // Pentium OverDrive processor for Pentium processor (75, 90,
                // 100, 120, 133), Pentium processors (75, 90, 100, 120, 133,
                // 150, 166, 200)
@@ -150,9 +151,9 @@ std::string sys::getHostCPUName() {
                // systems
         return "pentium";
 
-      case  4: // Pentium OverDrive processor with MMXTM technology for Pentium
+      case  4: // Pentium OverDrive processor with MMX technology for Pentium
                // processor (75, 90, 100, 120, 133), Pentium processor with
-               // MMXTM technology (166, 200)
+               // MMX technology (166, 200)
         return "pentium-mmx";
 
       default: return "pentium";
@@ -165,7 +166,7 @@ std::string sys::getHostCPUName() {
       case  3: // Intel Pentium II OverDrive processor, Pentium II processor,
                // model 03
       case  5: // Pentium II processor, model 05, Pentium II Xeon processor,
-               // model 05, and Intel® Celeron® processor, model 05
+               // model 05, and Intel Celeron processor, model 05
       case  6: // Celeron processor, model 06
         return "pentium2";
 
@@ -182,13 +183,13 @@ std::string sys::getHostCPUName() {
                // 0Dh. All processors are manufactured using the 90 nm process.
         return "pentium-m";
 
-      case 14: // Intel CoreTM Duo processor, Intel CoreTM Solo processor, model
+      case 14: // Intel Core Duo processor, Intel Core Solo processor, model
                // 0Eh. All processors are manufactured using the 65 nm process.
         return "yonah";
 
-      case 15: // Intel CoreTM2 Duo processor, Intel CoreTM2 Duo mobile
-               // processor, Intel CoreTM2 Quad processor, Intel CoreTM2 Quad
-               // mobile processor, Intel CoreTM2 Extreme processor, Intel
+      case 15: // Intel Core 2 Duo processor, Intel Core 2 Duo mobile
+               // processor, Intel Core 2 Quad processor, Intel Core 2 Quad
+               // mobile processor, Intel Core 2 Extreme processor, Intel
                // Pentium Dual-Core processor, Intel Xeon processor, model
                // 0Fh. All processors are manufactured using the 65 nm process.
       case 22: // Intel Celeron processor model 16h. All processors are
@@ -199,7 +200,7 @@ std::string sys::getHostCPUName() {
                // Integrated Processor with Intel QuickAssist Technology
         return "i686"; // FIXME: ???
 
-      case 23: // Intel CoreTM2 Extreme processor, Intel Xeon processor, model
+      case 23: // Intel Core 2 Extreme processor, Intel Xeon processor, model
                // 17h. All processors are manufactured using the 45 nm process.
                //
                // 45nm: Penryn , Wolfdale, Yorkfield (XE)
@@ -209,6 +210,9 @@ std::string sys::getHostCPUName() {
                // processors are manufactured using the 45 nm process.
       case 29: // Intel Xeon processor MP. All processors are manufactured using
                // the 45 nm process.
+      case 30: // Intel(R) Core(TM) i7 CPU         870  @ 2.93GHz.
+               // As found in a Summer 2010 model iMac.
+      case 37: // Intel Core i7, laptop version.
         return "corei7";
 
       case 28: // Intel Atom processor. All processors are manufactured using
@@ -224,7 +228,7 @@ std::string sys::getHostCPUName() {
       case  1: // Pentium 4 processor, Intel Xeon processor, Intel Xeon
                // processor MP, and Intel Celeron processor. All processors are
                // model 01h and manufactured using the 0.18 micron process.
-      case  2: // Pentium 4 processor, Mobile Intel Pentium 4 processor – M,
+      case  2: // Pentium 4 processor, Mobile Intel Pentium 4 processor - M,
                // Intel Xeon processor, Intel Xeon processor MP, Intel Celeron
                // processor, and Mobile Intel Celeron processor. All processors
                // are model 02h and manufactured using the 0.13 micron process.
@@ -277,14 +281,12 @@ std::string sys::getHostCPUName() {
         default: return "athlon";
         }
       case 15:
-        if (HasSSE3) {
+        if (HasSSE3)
           return "k8-sse3";
-        } else {
-          switch (Model) {
-          case 1:  return "opteron";
-          case 5:  return "athlon-fx"; // also opteron
-          default: return "athlon64";
-          }
+        switch (Model) {
+        case 1:  return "opteron";
+        case 5:  return "athlon-fx"; // also opteron
+        default: return "athlon64";
         }
       case 16:
         return "amdfam10";

@@ -1244,7 +1244,7 @@ SDValue PPCTargetLowering::LowerGlobalAddress(SDValue Op,
 
   // If the global is weak or external, we have to go through the lazy
   // resolution stub.
-  return DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), Lo, NULL, 0,
+  return DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), Lo, MachinePointerInfo(),
                      false, false, 0);
 }
 
@@ -1353,7 +1353,8 @@ SDValue PPCTargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG,
     EVT PtrVT = DAG.getTargetLoweringInfo().getPointerTy();
     SDValue FR = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
     const Value *SV = cast<SrcValueSDNode>(Op.getOperand(2))->getValue();
-    return DAG.getStore(Op.getOperand(0), dl, FR, Op.getOperand(1), SV, 0,
+    return DAG.getStore(Op.getOperand(0), dl, FR, Op.getOperand(1),
+                        MachinePointerInfo(SV),
                         false, false, 0);
   }
 
@@ -1406,28 +1407,32 @@ SDValue PPCTargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG,
 
   // Store first byte : number of int regs
   SDValue firstStore = DAG.getTruncStore(Op.getOperand(0), dl, ArgGPR,
-                                         Op.getOperand(1), SV, 0, MVT::i8,
-                                         false, false, 0);
+                                         Op.getOperand(1),
+                                         MachinePointerInfo(SV),
+                                         MVT::i8, false, false, 0);
   uint64_t nextOffset = FPROffset;
   SDValue nextPtr = DAG.getNode(ISD::ADD, dl, PtrVT, Op.getOperand(1),
                                   ConstFPROffset);
 
   // Store second byte : number of float regs
   SDValue secondStore =
-    DAG.getTruncStore(firstStore, dl, ArgFPR, nextPtr, SV, nextOffset, MVT::i8,
+    DAG.getTruncStore(firstStore, dl, ArgFPR, nextPtr,
+                      MachinePointerInfo(SV, nextOffset), MVT::i8,
                       false, false, 0);
   nextOffset += StackOffset;
   nextPtr = DAG.getNode(ISD::ADD, dl, PtrVT, nextPtr, ConstStackOffset);
 
   // Store second word : arguments given on stack
   SDValue thirdStore =
-    DAG.getStore(secondStore, dl, StackOffsetFI, nextPtr, SV, nextOffset,
+    DAG.getStore(secondStore, dl, StackOffsetFI, nextPtr,
+                 MachinePointerInfo(SV, nextOffset),
                  false, false, 0);
   nextOffset += FrameOffset;
   nextPtr = DAG.getNode(ISD::ADD, dl, PtrVT, nextPtr, ConstFrameOffset);
 
   // Store third word : arguments given in registers
-  return DAG.getStore(thirdStore, dl, FR, nextPtr, SV, nextOffset,
+  return DAG.getStore(thirdStore, dl, FR, nextPtr,
+                      MachinePointerInfo(SV, nextOffset),
                       false, false, 0);
 
 }
@@ -1635,7 +1640,8 @@ PPCTargetLowering::LowerFormalArguments_SVR4(
 
       // Create load nodes to retrieve arguments from the stack.
       SDValue FIN = DAG.getFrameIndex(FI, PtrVT);
-      InVals.push_back(DAG.getLoad(VA.getValVT(), dl, Chain, FIN, NULL, 0,
+      InVals.push_back(DAG.getLoad(VA.getValVT(), dl, Chain, FIN,
+                                   MachinePointerInfo(),
                                    false, false, 0));
     }
   }
@@ -1710,7 +1716,7 @@ PPCTargetLowering::LowerFormalArguments_SVR4(
     unsigned GPRIndex = 0;
     for (; GPRIndex != FuncInfo->getVarArgsNumGPR(); ++GPRIndex) {
       SDValue Val = DAG.getRegister(GPArgRegs[GPRIndex], PtrVT);
-      SDValue Store = DAG.getStore(Chain, dl, Val, FIN, NULL, 0,
+      SDValue Store = DAG.getStore(Chain, dl, Val, FIN, MachinePointerInfo(),
                                    false, false, 0);
       MemOps.push_back(Store);
       // Increment the address by four for the next argument to store
@@ -1725,8 +1731,8 @@ PPCTargetLowering::LowerFormalArguments_SVR4(
       unsigned VReg = MF.addLiveIn(GPArgRegs[GPRIndex], &PPC::GPRCRegClass);
 
       SDValue Val = DAG.getCopyFromReg(Chain, dl, VReg, PtrVT);
-      SDValue Store = DAG.getStore(Val.getValue(1), dl, Val, FIN, NULL, 0,
-                                   false, false, 0);
+      SDValue Store = DAG.getStore(Val.getValue(1), dl, Val, FIN,
+                                   MachinePointerInfo(), false, false, 0);
       MemOps.push_back(Store);
       // Increment the address by four for the next argument to store
       SDValue PtrOff = DAG.getConstant(PtrVT.getSizeInBits()/8, PtrVT);
@@ -1741,7 +1747,7 @@ PPCTargetLowering::LowerFormalArguments_SVR4(
     unsigned FPRIndex = 0;
     for (FPRIndex = 0; FPRIndex != FuncInfo->getVarArgsNumFPR(); ++FPRIndex) {
       SDValue Val = DAG.getRegister(FPArgRegs[FPRIndex], MVT::f64);
-      SDValue Store = DAG.getStore(Chain, dl, Val, FIN, NULL, 0,
+      SDValue Store = DAG.getStore(Chain, dl, Val, FIN, MachinePointerInfo(),
                                    false, false, 0);
       MemOps.push_back(Store);
       // Increment the address by eight for the next argument to store
@@ -1754,8 +1760,8 @@ PPCTargetLowering::LowerFormalArguments_SVR4(
       unsigned VReg = MF.addLiveIn(FPArgRegs[FPRIndex], &PPC::F8RCRegClass);
 
       SDValue Val = DAG.getCopyFromReg(Chain, dl, VReg, MVT::f64);
-      SDValue Store = DAG.getStore(Val.getValue(1), dl, Val, FIN, NULL, 0,
-                                   false, false, 0);
+      SDValue Store = DAG.getStore(Val.getValue(1), dl, Val, FIN,
+                                   MachinePointerInfo(), false, false, 0);
       MemOps.push_back(Store);
       // Increment the address by eight for the next argument to store
       SDValue PtrOff = DAG.getConstant(EVT(MVT::f64).getSizeInBits()/8,
@@ -1918,7 +1924,7 @@ PPCTargetLowering::LowerFormalArguments_Darwin(
           unsigned VReg = MF.addLiveIn(GPR[GPR_idx], &PPC::GPRCRegClass);
           SDValue Val = DAG.getCopyFromReg(Chain, dl, VReg, PtrVT);
           SDValue Store = DAG.getTruncStore(Val.getValue(1), dl, Val, FIN,
-                                            NULL, 0,
+                                            MachinePointerInfo(),
                                             ObjSize==1 ? MVT::i8 : MVT::i16,
                                             false, false, 0);
           MemOps.push_back(Store);
@@ -1938,7 +1944,8 @@ PPCTargetLowering::LowerFormalArguments_Darwin(
           int FI = MFI->CreateFixedObject(PtrByteSize, ArgOffset, true);
           SDValue FIN = DAG.getFrameIndex(FI, PtrVT);
           SDValue Val = DAG.getCopyFromReg(Chain, dl, VReg, PtrVT);
-          SDValue Store = DAG.getStore(Val.getValue(1), dl, Val, FIN, NULL, 0,
+          SDValue Store = DAG.getStore(Val.getValue(1), dl, Val, FIN,
+                                       MachinePointerInfo(),
                                        false, false, 0);
           MemOps.push_back(Store);
           ++GPR_idx;
@@ -2063,7 +2070,7 @@ PPCTargetLowering::LowerFormalArguments_Darwin(
                                       CurArgOffset + (ArgSize - ObjSize),
                                       isImmutable);
       SDValue FIN = DAG.getFrameIndex(FI, PtrVT);
-      ArgVal = DAG.getLoad(ObjectVT, dl, Chain, FIN, NULL, 0,
+      ArgVal = DAG.getLoad(ObjectVT, dl, Chain, FIN, MachinePointerInfo(),
                            false, false, 0);
     }
 
@@ -2111,8 +2118,8 @@ PPCTargetLowering::LowerFormalArguments_Darwin(
         VReg = MF.addLiveIn(GPR[GPR_idx], &PPC::GPRCRegClass);
 
       SDValue Val = DAG.getCopyFromReg(Chain, dl, VReg, PtrVT);
-      SDValue Store = DAG.getStore(Val.getValue(1), dl, Val, FIN, NULL, 0,
-                                   false, false, 0);
+      SDValue Store = DAG.getStore(Val.getValue(1), dl, Val, FIN,
+                                   MachinePointerInfo(), false, false, 0);
       MemOps.push_back(Store);
       // Increment the address by four for the next argument to store
       SDValue PtrOff = DAG.getConstant(PtrVT.getSizeInBits()/8, PtrVT);
@@ -2292,8 +2299,8 @@ StoreTailCallArgumentsToStackSlot(SelectionDAG &DAG,
     int FI = TailCallArgs[i].FrameIdx;
     // Store relative to framepointer.
     MemOpChains.push_back(DAG.getStore(Chain, dl, Arg, FIN,
-                                       PseudoSourceValue::getFixedStack(FI),
-                                       0, false, false, 0));
+                                       MachinePointerInfo::getFixedStack(FI),
+                                       false, false, 0));
   }
 }
 
@@ -2318,7 +2325,7 @@ static SDValue EmitTailCallStoreFPAndRetAddr(SelectionDAG &DAG,
     EVT VT = isPPC64 ? MVT::i64 : MVT::i32;
     SDValue NewRetAddrFrIdx = DAG.getFrameIndex(NewRetAddr, VT);
     Chain = DAG.getStore(Chain, dl, OldRetAddr, NewRetAddrFrIdx,
-                         PseudoSourceValue::getFixedStack(NewRetAddr), 0,
+                         MachinePointerInfo::getFixedStack(NewRetAddr),
                          false, false, 0);
 
     // When using the 32/64-bit SVR4 ABI there is no need to move the FP stack
@@ -2330,7 +2337,7 @@ static SDValue EmitTailCallStoreFPAndRetAddr(SelectionDAG &DAG,
                                                           true);
       SDValue NewFramePtrIdx = DAG.getFrameIndex(NewFPIdx, VT);
       Chain = DAG.getStore(Chain, dl, OldFP, NewFramePtrIdx,
-                           PseudoSourceValue::getFixedStack(NewFPIdx), 0,
+                           MachinePointerInfo::getFixedStack(NewFPIdx),
                            false, false, 0);
     }
   }
@@ -2369,7 +2376,7 @@ SDValue PPCTargetLowering::EmitTailCallLoadFPAndRetAddr(SelectionDAG & DAG,
     // Load the LR and FP stack slot for later adjusting.
     EVT VT = PPCSubTarget.isPPC64() ? MVT::i64 : MVT::i32;
     LROpOut = getReturnAddrFrameIndex(DAG);
-    LROpOut = DAG.getLoad(VT, dl, Chain, LROpOut, NULL, 0,
+    LROpOut = DAG.getLoad(VT, dl, Chain, LROpOut, MachinePointerInfo(),
                           false, false, 0);
     Chain = SDValue(LROpOut.getNode(), 1);
     
@@ -2377,7 +2384,7 @@ SDValue PPCTargetLowering::EmitTailCallLoadFPAndRetAddr(SelectionDAG & DAG,
     // slot as the FP is never overwritten.
     if (isDarwinABI) {
       FPOpOut = getFramePointerFrameIndex(DAG);
-      FPOpOut = DAG.getLoad(VT, dl, Chain, FPOpOut, NULL, 0,
+      FPOpOut = DAG.getLoad(VT, dl, Chain, FPOpOut, MachinePointerInfo(),
                             false, false, 0);
       Chain = SDValue(FPOpOut.getNode(), 1);
     }
@@ -2397,7 +2404,8 @@ CreateCopyOfByValArgument(SDValue Src, SDValue Dst, SDValue Chain,
                           DebugLoc dl) {
   SDValue SizeNode = DAG.getConstant(Flags.getByValSize(), MVT::i32);
   return DAG.getMemcpy(Chain, dl, Dst, Src, SizeNode, Flags.getByValAlign(),
-                       false, false, NULL, 0, NULL, 0);
+                       false, false, MachinePointerInfo(0),
+                       MachinePointerInfo(0));
 }
 
 /// LowerMemOpCallTo - Store the argument to the stack or remember it in case of
@@ -2407,7 +2415,7 @@ LowerMemOpCallTo(SelectionDAG &DAG, MachineFunction &MF, SDValue Chain,
                  SDValue Arg, SDValue PtrOff, int SPDiff,
                  unsigned ArgOffset, bool isPPC64, bool isTailCall,
                  bool isVector, SmallVector<SDValue, 8> &MemOpChains,
-                 SmallVector<TailCallArgumentInfo, 8>& TailCallArguments,
+                 SmallVector<TailCallArgumentInfo, 8> &TailCallArguments,
                  DebugLoc dl) {
   EVT PtrVT = DAG.getTargetLoweringInfo().getPointerTy();
   if (!isTailCall) {
@@ -2420,8 +2428,8 @@ LowerMemOpCallTo(SelectionDAG &DAG, MachineFunction &MF, SDValue Chain,
       PtrOff = DAG.getNode(ISD::ADD, dl, PtrVT, StackPtr,
                            DAG.getConstant(ArgOffset, PtrVT));
     }
-    MemOpChains.push_back(DAG.getStore(Chain, dl, Arg, PtrOff, NULL, 0,
-                                       false, false, 0));
+    MemOpChains.push_back(DAG.getStore(Chain, dl, Arg, PtrOff,
+                                       MachinePointerInfo(), false, false, 0));
   // Calculate and remember argument location.
   } else CalculateTailCallArgDest(DAG, MF, isPPC64, Arg, SPDiff, ArgOffset,
                                   TailCallArguments);
@@ -2903,7 +2911,7 @@ PPCTargetLowering::LowerCall_SVR4(SDValue Chain, SDValue Callee,
         PtrOff = DAG.getNode(ISD::ADD, dl, getPointerTy(), StackPtr, PtrOff);
 
         MemOpChains.push_back(DAG.getStore(Chain, dl, Arg, PtrOff,
-                                           PseudoSourceValue::getStack(), LocMemOffset,
+                                           MachinePointerInfo(),
                                            false, false, 0));
       } else {
         // Calculate and remember argument location.
@@ -3067,7 +3075,8 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
         EVT VT = (Size==1) ? MVT::i8 : MVT::i16;
         if (GPR_idx != NumGPRs) {
           SDValue Load = DAG.getExtLoad(ISD::EXTLOAD, PtrVT, dl, Chain, Arg,
-                                        NULL, 0, VT, false, false, 0);
+                                        MachinePointerInfo(), VT,
+                                        false, false, 0);
           MemOpChains.push_back(Load.getValue(1));
           RegsToPass.push_back(std::make_pair(GPR[GPR_idx++], Load));
 
@@ -3104,7 +3113,8 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
         SDValue Const = DAG.getConstant(j, PtrOff.getValueType());
         SDValue AddArg = DAG.getNode(ISD::ADD, dl, PtrVT, Arg, Const);
         if (GPR_idx != NumGPRs) {
-          SDValue Load = DAG.getLoad(PtrVT, dl, Chain, AddArg, NULL, 0,
+          SDValue Load = DAG.getLoad(PtrVT, dl, Chain, AddArg,
+                                     MachinePointerInfo(),
                                      false, false, 0);
           MemOpChains.push_back(Load.getValue(1));
           RegsToPass.push_back(std::make_pair(GPR[GPR_idx++], Load));
@@ -3136,21 +3146,22 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
         RegsToPass.push_back(std::make_pair(FPR[FPR_idx++], Arg));
 
         if (isVarArg) {
-          SDValue Store = DAG.getStore(Chain, dl, Arg, PtrOff, NULL, 0,
-                                       false, false, 0);
+          SDValue Store = DAG.getStore(Chain, dl, Arg, PtrOff,
+                                       MachinePointerInfo(), false, false, 0);
           MemOpChains.push_back(Store);
 
           // Float varargs are always shadowed in available integer registers
           if (GPR_idx != NumGPRs) {
-            SDValue Load = DAG.getLoad(PtrVT, dl, Store, PtrOff, NULL, 0,
-                                       false, false, 0);
+            SDValue Load = DAG.getLoad(PtrVT, dl, Store, PtrOff,
+                                       MachinePointerInfo(), false, false, 0);
             MemOpChains.push_back(Load.getValue(1));
             RegsToPass.push_back(std::make_pair(GPR[GPR_idx++], Load));
           }
           if (GPR_idx != NumGPRs && Arg.getValueType() == MVT::f64 && !isPPC64){
             SDValue ConstFour = DAG.getConstant(4, PtrOff.getValueType());
             PtrOff = DAG.getNode(ISD::ADD, dl, PtrVT, PtrOff, ConstFour);
-            SDValue Load = DAG.getLoad(PtrVT, dl, Store, PtrOff, NULL, 0,
+            SDValue Load = DAG.getLoad(PtrVT, dl, Store, PtrOff,
+                                       MachinePointerInfo(),
                                        false, false, 0);
             MemOpChains.push_back(Load.getValue(1));
             RegsToPass.push_back(std::make_pair(GPR[GPR_idx++], Load));
@@ -3194,11 +3205,12 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
         // entirely in R registers.  Maybe later.
         PtrOff = DAG.getNode(ISD::ADD, dl, PtrVT, StackPtr,
                             DAG.getConstant(ArgOffset, PtrVT));
-        SDValue Store = DAG.getStore(Chain, dl, Arg, PtrOff, NULL, 0,
-                                     false, false, 0);
+        SDValue Store = DAG.getStore(Chain, dl, Arg, PtrOff,
+                                     MachinePointerInfo(), false, false, 0);
         MemOpChains.push_back(Store);
         if (VR_idx != NumVRs) {
-          SDValue Load = DAG.getLoad(MVT::v4f32, dl, Store, PtrOff, NULL, 0,
+          SDValue Load = DAG.getLoad(MVT::v4f32, dl, Store, PtrOff, 
+                                     MachinePointerInfo(),
                                      false, false, 0);
           MemOpChains.push_back(Load.getValue(1));
           RegsToPass.push_back(std::make_pair(VR[VR_idx++], Load));
@@ -3209,7 +3221,7 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
             break;
           SDValue Ix = DAG.getNode(ISD::ADD, dl, PtrVT, PtrOff,
                                   DAG.getConstant(i, PtrVT));
-          SDValue Load = DAG.getLoad(PtrVT, dl, Store, Ix, NULL, 0,
+          SDValue Load = DAG.getLoad(PtrVT, dl, Store, Ix, MachinePointerInfo(),
                                      false, false, 0);
           MemOpChains.push_back(Load.getValue(1));
           RegsToPass.push_back(std::make_pair(GPR[GPR_idx++], Load));
@@ -3275,7 +3287,7 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
     // TOC save area offset.
     SDValue PtrOff = DAG.getIntPtrConstant(40);
     SDValue AddPtr = DAG.getNode(ISD::ADD, dl, PtrVT, StackPtr, PtrOff);
-    Chain = DAG.getStore(Val.getValue(1), dl, Val, AddPtr, NULL, 0,
+    Chain = DAG.getStore(Val.getValue(1), dl, Val, AddPtr, MachinePointerInfo(),
                          false, false, 0);
   }
 
@@ -3362,14 +3374,15 @@ SDValue PPCTargetLowering::LowerSTACKRESTORE(SDValue Op, SelectionDAG &DAG,
   SDValue SaveSP = Op.getOperand(1);
 
   // Load the old link SP.
-  SDValue LoadLinkSP = DAG.getLoad(PtrVT, dl, Chain, StackPtr, NULL, 0,
+  SDValue LoadLinkSP = DAG.getLoad(PtrVT, dl, Chain, StackPtr,
+                                   MachinePointerInfo(),
                                    false, false, 0);
 
   // Restore the stack pointer.
   Chain = DAG.getCopyToReg(LoadLinkSP.getValue(1), dl, SP, SaveSP);
 
   // Store the old link SP.
-  return DAG.getStore(Chain, dl, LoadLinkSP, StackPtr, NULL, 0,
+  return DAG.getStore(Chain, dl, LoadLinkSP, StackPtr, MachinePointerInfo(),
                       false, false, 0);
 }
 
@@ -3545,15 +3558,15 @@ SDValue PPCTargetLowering::LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG,
   SDValue FIPtr = DAG.CreateStackTemporary(MVT::f64);
 
   // Emit a store to the stack slot.
-  SDValue Chain = DAG.getStore(DAG.getEntryNode(), dl, Tmp, FIPtr, NULL, 0,
-                               false, false, 0);
+  SDValue Chain = DAG.getStore(DAG.getEntryNode(), dl, Tmp, FIPtr,
+                               MachinePointerInfo(), false, false, 0);
 
   // Result is a load from the stack slot.  If loading 4 bytes, make sure to
   // add in a bias.
   if (Op.getValueType() == MVT::i32)
     FIPtr = DAG.getNode(ISD::ADD, dl, FIPtr.getValueType(), FIPtr,
                         DAG.getConstant(4, FIPtr.getValueType()));
-  return DAG.getLoad(Op.getValueType(), dl, Chain, FIPtr, NULL, 0,
+  return DAG.getLoad(Op.getValueType(), dl, Chain, FIPtr, MachinePointerInfo(),
                      false, false, 0);
 }
 
@@ -3591,14 +3604,15 @@ SDValue PPCTargetLowering::LowerSINT_TO_FP(SDValue Op,
 
   // STD the extended value into the stack slot.
   MachineMemOperand *MMO =
-    MF.getMachineMemOperand(PseudoSourceValue::getFixedStack(FrameIdx),
-                            MachineMemOperand::MOStore, 0, 8, 8);
+    MF.getMachineMemOperand(MachinePointerInfo::getFixedStack(FrameIdx),
+                            MachineMemOperand::MOStore, 8, 8);
   SDValue Ops[] = { DAG.getEntryNode(), Ext64, FIdx };
   SDValue Store =
     DAG.getMemIntrinsicNode(PPCISD::STD_32, dl, DAG.getVTList(MVT::Other),
                             Ops, 4, MVT::i64, MMO);
   // Load the value as a double.
-  SDValue Ld = DAG.getLoad(MVT::f64, dl, Store, FIdx, NULL, 0, false, false, 0);
+  SDValue Ld = DAG.getLoad(MVT::f64, dl, Store, FIdx, MachinePointerInfo(),
+                           false, false, 0);
 
   // FCFID it and return it.
   SDValue FP = DAG.getNode(PPCISD::FCFID, dl, MVT::f64, Ld);
@@ -3644,12 +3658,12 @@ SDValue PPCTargetLowering::LowerFLT_ROUNDS_(SDValue Op,
   int SSFI = MF.getFrameInfo()->CreateStackObject(8, 8, false);
   SDValue StackSlot = DAG.getFrameIndex(SSFI, PtrVT);
   SDValue Store = DAG.getStore(DAG.getEntryNode(), dl, Chain,
-                               StackSlot, NULL, 0, false, false, 0);
+                               StackSlot, MachinePointerInfo(), false, false,0);
 
   // Load FP Control Word from low 32 bits of stack slot.
   SDValue Four = DAG.getConstant(4, PtrVT);
   SDValue Addr = DAG.getNode(ISD::ADD, dl, PtrVT, StackSlot, Four);
-  SDValue CWD = DAG.getLoad(MVT::i32, dl, Store, Addr, NULL, 0,
+  SDValue CWD = DAG.getLoad(MVT::i32, dl, Store, Addr, MachinePointerInfo(),
                             false, false, 0);
 
   // Transform as necessary
@@ -4317,10 +4331,10 @@ SDValue PPCTargetLowering::LowerSCALAR_TO_VECTOR(SDValue Op,
 
   // Store the input value into Value#0 of the stack slot.
   SDValue Store = DAG.getStore(DAG.getEntryNode(), dl,
-                               Op.getOperand(0), FIdx, NULL, 0,
+                               Op.getOperand(0), FIdx, MachinePointerInfo(),
                                false, false, 0);
   // Load it out.
-  return DAG.getLoad(Op.getValueType(), dl, Store, FIdx, NULL, 0,
+  return DAG.getLoad(Op.getValueType(), dl, Store, FIdx, MachinePointerInfo(),
                      false, false, 0);
 }
 
@@ -5542,13 +5556,13 @@ SDValue PPCTargetLowering::LowerRETURNADDR(SDValue Op,
     return DAG.getLoad(getPointerTy(), dl, DAG.getEntryNode(),
                        DAG.getNode(ISD::ADD, dl, getPointerTy(),
                                    FrameAddr, Offset),
-                       NULL, 0, false, false, 0);
+                       MachinePointerInfo(), false, false, 0);
   }
 
   // Just load the return address off the stack.
   SDValue RetAddrFI = getReturnAddrFrameIndex(DAG);
   return DAG.getLoad(getPointerTy(), dl, DAG.getEntryNode(),
-                     RetAddrFI, NULL, 0, false, false, 0);
+                     RetAddrFI, MachinePointerInfo(), false, false, 0);
 }
 
 SDValue PPCTargetLowering::LowerFRAMEADDR(SDValue Op,
@@ -5571,7 +5585,7 @@ SDValue PPCTargetLowering::LowerFRAMEADDR(SDValue Op,
                                          PtrVT);
   while (Depth--)
     FrameAddr = DAG.getLoad(Op.getValueType(), dl, DAG.getEntryNode(),
-                            FrameAddr, NULL, 0, false, false, 0);
+                            FrameAddr, MachinePointerInfo(), false, false, 0);
   return FrameAddr;
 }
 

@@ -115,6 +115,10 @@ public:
   
 class LLVMContextImpl {
 public:
+  /// OwnedModules - The set of modules instantiated in this context, and which
+  /// will be automatically deleted if this context is deleted.
+  SmallPtrSet<Module*, 4> OwnedModules;
+  
   void *InlineAsmDiagHandler, *InlineAsmDiagContext;
   
   typedef DenseMap<DenseMapAPIntKeyInfo::KeyTy, ConstantInt*, 
@@ -170,6 +174,7 @@ public:
   const Type X86_FP80Ty;
   const Type FP128Ty;
   const Type PPC_FP128Ty;
+  const Type X86_MMXTy;
   const IntegerType Int1Ty;
   const IntegerType Int8Ty;
   const IntegerType Int16Ty;

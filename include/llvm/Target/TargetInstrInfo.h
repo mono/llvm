@@ -304,27 +304,36 @@ public:
   }
 
   /// isProfitableToIfCvt - Return true if it's profitable to first "NumInstrs"
-  /// of the specified basic block.
+  /// of the specified basic block, where the probability of the instructions
+  /// being executed is given by Probability, and Confidence is a measure
+  /// of our confidence that it will be properly predicted.
   virtual
-  bool isProfitableToIfCvt(MachineBasicBlock &MBB, unsigned NumInstrs) const {
+  bool isProfitableToIfCvt(MachineBasicBlock &MBB, unsigned NumInstrs,
+                           float Probability, float Confidence) const {
     return false;
   }
   
   /// isProfitableToIfCvt - Second variant of isProfitableToIfCvt, this one
   /// checks for the case where two basic blocks from true and false path
   /// of a if-then-else (diamond) are predicated on mutally exclusive
-  /// predicates.
+  /// predicates, where the probability of the true path being taken is given
+  /// by Probability, and Confidence is a measure of our confidence that it
+  /// will be properly predicted.
   virtual bool
   isProfitableToIfCvt(MachineBasicBlock &TMBB, unsigned NumTInstrs,
-                      MachineBasicBlock &FMBB, unsigned NumFInstrs) const {
+                      MachineBasicBlock &FMBB, unsigned NumFInstrs,
+                      float Probability, float Confidence) const {
     return false;
   }
 
   /// isProfitableToDupForIfCvt - Return true if it's profitable for
   /// if-converter to duplicate a specific number of instructions in the
-  /// specified MBB to enable if-conversion.
+  /// specified MBB to enable if-conversion, where the probability of the 
+  /// instructions being executed is given by Probability, and Confidence is
+  /// a measure of our confidence that it will be properly predicted.
   virtual bool
-  isProfitableToDupForIfCvt(MachineBasicBlock &MBB,unsigned NumInstrs) const {
+  isProfitableToDupForIfCvt(MachineBasicBlock &MBB, unsigned NumInstrs,
+                            float Probability, float Confidence) const {
     return false;
   }
   
@@ -575,22 +584,46 @@ public:
   /// to use for this target when scheduling the machine instructions after
   /// register allocation.
   virtual ScheduleHazardRecognizer*
-  CreateTargetPostRAHazardRecognizer(const InstrItineraryData&) const = 0;
+  CreateTargetPostRAHazardRecognizer(const InstrItineraryData*) const = 0;
 
   /// AnalyzeCompare - For a comparison instruction, return the source register
   /// in SrcReg and the value it compares against in CmpValue. Return true if
   /// the comparison instruction can be analyzed.
   virtual bool AnalyzeCompare(const MachineInstr *MI,
-                              unsigned &SrcReg, int &CmpValue) const {
+                              unsigned &SrcReg, int &Mask, int &Value) const {
     return false;
   }
 
-  /// ConvertToSetZeroFlag - Convert the instruction to set the zero flag so
-  /// that we can remove a "comparison with zero".
-  virtual bool ConvertToSetZeroFlag(MachineInstr *Instr,
-                                    MachineInstr *CmpInstr) const {
+  /// OptimizeCompareInstr - See if the comparison instruction can be converted
+  /// into something more efficient. E.g., on ARM most instructions can set the
+  /// flags register, obviating the need for a separate CMP. Update the iterator
+  /// *only* if a transformation took place.
+  virtual bool OptimizeCompareInstr(MachineInstr *CmpInstr,
+                                    unsigned SrcReg, int Mask, int Value,
+                                    MachineBasicBlock::iterator &) const {
     return false;
   }
+
+  /// getNumMicroOps - Return the number of u-operations the given machine
+  /// instruction will be decoded to on the target cpu.
+  virtual unsigned getNumMicroOps(const MachineInstr *MI,
+                                  const InstrItineraryData *ItinData) const;
+
+  /// getOperandLatency - Compute and return the use operand latency of a given
+  /// itinerary class and operand index if the value is produced by an
+  /// instruction of the specified itinerary class and def operand index.
+  /// In most cases, the static scheduling itinerary was enough to determine the
+  /// operand latency. But it may not be possible for instructions with variable
+  /// number of defs / uses.
+  virtual
+  int getOperandLatency(const InstrItineraryData *ItinData,
+                        const MachineInstr *DefMI, unsigned DefIdx,
+                        const MachineInstr *UseMI, unsigned UseIdx) const;
+
+  virtual
+  int getOperandLatency(const InstrItineraryData *ItinData,
+                        SDNode *DefNode, unsigned DefIdx,
+                        SDNode *UseNode, unsigned UseIdx) const;
 };
 
 /// TargetInstrInfoImpl - This is the default implementation of
@@ -626,7 +659,7 @@ public:
                                     const MachineFunction &MF) const;
 
   virtual ScheduleHazardRecognizer *
-  CreateTargetPostRAHazardRecognizer(const InstrItineraryData&) const;
+  CreateTargetPostRAHazardRecognizer(const InstrItineraryData*) const;
 };
 
 } // End llvm namespace

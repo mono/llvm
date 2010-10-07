@@ -361,8 +361,15 @@ public:
     return dominatedBySlowTreeWalk(A, B);
   }
 
-  inline bool properlyDominates(NodeT *A, NodeT *B) {
-    return properlyDominates(getNode(A), getNode(B));
+  inline bool properlyDominates(const NodeT *A, const NodeT *B) {
+    if (A == B)
+      return false;
+
+    // Cast away the const qualifiers here. This is ok since
+    // this function doesn't actually return the values returned
+    // from getNode.
+    return properlyDominates(getNode(const_cast<NodeT *>(A)),
+                             getNode(const_cast<NodeT *>(B)));
   }
 
   bool dominatedBySlowTreeWalk(const DomTreeNodeBase<NodeT> *A,
@@ -377,7 +384,7 @@ public:
 
   /// isReachableFromEntry - Return true if A is dominated by the entry
   /// block of the function containing it.
-  bool isReachableFromEntry(NodeT* A) {
+  bool isReachableFromEntry(const NodeT* A) {
     assert(!this->isPostDominator() &&
            "This is not implemented for post dominators");
     return dominates(&A->getParent()->front(), A);
@@ -478,6 +485,13 @@ public:
     return NULL;
   }
 
+  const NodeT *findNearestCommonDominator(const NodeT *A, const NodeT *B) {
+    // Cast away the const qualifiers here. This is ok since
+    // const is re-introduced on the return type.
+    return findNearestCommonDominator(const_cast<NodeT *>(A),
+                                      const_cast<NodeT *>(B));
+  }
+
   //===--------------------------------------------------------------------===//
   // API to update (Post)DominatorTree information based on modifications to
   // the CFG...
@@ -509,7 +523,7 @@ public:
   }
 
   /// eraseNode - Removes a node from the dominator tree. Block must not
-  /// domiante any other blocks. Removes node from its immediate dominator's
+  /// dominate any other blocks. Removes node from its immediate dominator's
   /// children list. Deletes dominator node associated with basic block BB.
   void eraseNode(NodeT *BB) {
     DomTreeNodeBase<NodeT> *Node = getNode(BB);
@@ -767,13 +781,18 @@ public:
     return DT->properlyDominates(A, B);
   }
 
-  bool properlyDominates(BasicBlock *A, BasicBlock *B) const {
+  bool properlyDominates(const BasicBlock *A, const BasicBlock *B) const {
     return DT->properlyDominates(A, B);
   }
 
   /// findNearestCommonDominator - Find nearest common dominator basic block
   /// for basic block A and B. If there is no such block then return NULL.
   inline BasicBlock *findNearestCommonDominator(BasicBlock *A, BasicBlock *B) {
+    return DT->findNearestCommonDominator(A, B);
+  }
+
+  inline const BasicBlock *findNearestCommonDominator(const BasicBlock *A,
+                                                      const BasicBlock *B) {
     return DT->findNearestCommonDominator(A, B);
   }
 
@@ -807,7 +826,7 @@ public:
   }
 
   /// eraseNode - Removes a node from the dominator tree. Block must not
-  /// domiante any other blocks. Removes node from its immediate dominator's
+  /// dominate any other blocks. Removes node from its immediate dominator's
   /// children list. Deletes dominator node associated with basic block BB.
   inline void eraseNode(BasicBlock *BB) {
     DT->eraseNode(BB);
@@ -819,7 +838,7 @@ public:
     DT->splitBlock(NewBB);
   }
 
-  bool isReachableFromEntry(BasicBlock* A) {
+  bool isReachableFromEntry(const BasicBlock* A) {
     return DT->isReachableFromEntry(A);
   }
 

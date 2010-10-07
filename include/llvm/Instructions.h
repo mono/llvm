@@ -1207,6 +1207,10 @@ public:
     setName(NameStr);
   }
 
+  Value *getPointerOperand() { return getOperand(0); }
+  const Value *getPointerOperand() const { return getOperand(0); }
+  static unsigned getPointerOperandIndex() { return 0U; }
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const VAArgInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -1985,11 +1989,9 @@ public:
   /// Provide fast operand accessors
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
-  /// Convenience accessor
-  Value *getReturnValue(unsigned n = 0) const {
-    return n < getNumOperands()
-      ? getOperand(n)
-      : 0;
+  /// Convenience accessor. Returns null if there is no return value.
+  Value *getReturnValue() const {
+    return getNumOperands() != 0 ? getOperand(0) : 0;
   }
 
   unsigned getNumSuccessors() const { return 0; }

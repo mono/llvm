@@ -67,23 +67,16 @@ VirtRegRewriter::~VirtRegRewriter() {}
 /// Note that operands may be added, so the MO reference is no longer valid.
 static void substitutePhysReg(MachineOperand &MO, unsigned Reg,
                               const TargetRegisterInfo &TRI) {
-  if (unsigned SubIdx = MO.getSubReg()) {
-    // Insert the physical subreg and reset the subreg field.
-    MO.setReg(TRI.getSubReg(Reg, SubIdx));
-    MO.setSubReg(0);
+  if (MO.getSubReg()) {
+    MO.substPhysReg(Reg, TRI);
 
-    // Any def, dead, and kill flags apply to the full virtual register, so they
-    // also apply to the full physical register. Add imp-def/dead and imp-kill
-    // as needed.
+    // Any kill flags apply to the full virtual register, so they also apply to
+    // the full physical register.
+    // We assume that partial defs have already been decorated with a super-reg
+    // <imp-def> operand by LiveIntervals.
     MachineInstr &MI = *MO.getParent();
-    if (MO.isDef())
-      if (MO.isDead())
-        MI.addRegisterDead(Reg, &TRI, /*AddIfNotFound=*/ true);
-      else
-        MI.addRegisterDefined(Reg, &TRI);
-    else if (!MO.isUndef() &&
-             (MO.isKill() ||
-              MI.isRegTiedToDefOperand(&MO-&MI.getOperand(0))))
+    if (MO.isUse() && !MO.isUndef() &&
+        (MO.isKill() || MI.isRegTiedToDefOperand(&MO-&MI.getOperand(0))))
       MI.addRegisterKilled(Reg, &TRI, /*AddIfNotFound=*/ true);
   } else {
     MO.setReg(Reg);
@@ -2027,14 +2020,16 @@ LocalRewriter::RewriteMBB(LiveIntervals *LIs,
           CanReuse = !ReusedOperands.isClobbered(PhysReg) &&
             Spills.canClobberPhysReg(PhysReg);
         }
-        // If this is an asm, and PhysReg is used elsewhere as an earlyclobber
-        // operand, we can't also use it as an input.  (Outputs always come
-        // before inputs, so we can stop looking at i.)
+        // If this is an asm, and a PhysReg alias is used elsewhere as an
+        // earlyclobber operand, we can't also use it as an input.
         if (MI.isInlineAsm()) {
-          for (unsigned k=0; k<i; ++k) {
+          for (unsigned k = 0, e = MI.getNumOperands(); k != e; ++k) {
             MachineOperand &MOk = MI.getOperand(k);
-            if (MOk.isReg() && MOk.getReg()==PhysReg && MOk.isEarlyClobber()) {
+            if (MOk.isReg() && MOk.isEarlyClobber() &&
+                TRI->regsOverlap(MOk.getReg(), PhysReg)) {
               CanReuse = false;
+              DEBUG(dbgs() << "Not reusing physreg " << TRI->getName(PhysReg)
+                           << " for vreg" << VirtReg << ": " << MOk << '\n');
               break;
             }
           }

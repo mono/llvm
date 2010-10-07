@@ -65,6 +65,7 @@ public:
     x86_64,  // X86-64: amd64, x86_64
     xcore,   // XCore: xcore
     mblaze,  // MBlaze: mblaze
+    ptx,     // PTX: ptx
 
     InvalidArch
   };
@@ -94,6 +95,9 @@ public:
     Haiku,
     Minix
   };
+  enum EnvironmentType {
+    UnknownEnvironment
+  };
   
 private:
   std::string Data;
@@ -107,10 +111,14 @@ private:
   /// The parsed OS type.
   mutable OSType OS;
 
+  /// The parsed Environment type.
+  mutable EnvironmentType Environment;
+
   bool isInitialized() const { return Arch != InvalidArch; }
   static ArchType ParseArch(StringRef ArchName);
   static VendorType ParseVendor(StringRef VendorName);
   static OSType ParseOS(StringRef OSName);
+  static EnvironmentType ParseEnvironment(StringRef EnvironmentName);
   void Parse() const;
 
 public:
@@ -125,6 +133,17 @@ public:
     Data += VendorStr;
     Data += '-';
     Data += OSStr;
+  }
+
+  explicit Triple(StringRef ArchStr, StringRef VendorStr, StringRef OSStr,
+    StringRef EnvironmentStr)
+    : Data(ArchStr), Arch(InvalidArch) {
+    Data += '-';
+    Data += VendorStr;
+    Data += '-';
+    Data += OSStr;
+    Data += '-';
+    Data += EnvironmentStr;
   }
 
   /// @}
@@ -163,6 +182,12 @@ public:
   /// (fourth) component?
   bool hasEnvironment() const {
     return getEnvironmentName() != "";
+  }
+
+  /// getEnvironment - Get the parsed environment type of this triple.
+  EnvironmentType getEnvironment() const { 
+    if (!isInitialized()) Parse(); 
+    return Environment;
   }
 
   /// @}
@@ -224,6 +249,10 @@ public:
   /// to a known type.
   void setOS(OSType Kind);
 
+  /// setEnvironment - Set the environment (fourth) component of the triple
+  /// to a known type.
+  void setEnvironment(EnvironmentType Kind);
+
   /// setTriple - Set all components to the new triple \arg Str.
   void setTriple(const Twine &Str);
 
@@ -271,8 +300,13 @@ public:
   /// vendor.
   static const char *getVendorTypeName(VendorType Kind);
 
-  /// getOSTypeName - Get the canonical name for the \arg Kind vendor.
+  /// getOSTypeName - Get the canonical name for the \arg Kind operating
+  /// system.
   static const char *getOSTypeName(OSType Kind);
+
+  /// getEnvironmentTypeName - Get the canonical name for the \arg Kind
+  /// environment.
+  static const char *getEnvironmentTypeName(EnvironmentType Kind);
 
   /// @}
   /// @name Static helpers for converting alternate architecture names.

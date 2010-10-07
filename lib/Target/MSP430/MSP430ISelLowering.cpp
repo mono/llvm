@@ -376,7 +376,7 @@ MSP430TargetLowering::LowerCCCArguments(SDValue Chain,
       //from this parameter
       SDValue FIN = DAG.getFrameIndex(FI, MVT::i16);
       InVals.push_back(DAG.getLoad(VA.getLocVT(), dl, Chain, FIN,
-                                   PseudoSourceValue::getFixedStack(FI), 0,
+                                   MachinePointerInfo::getFixedStack(FI),
                                    false, false, 0));
     }
   }
@@ -507,8 +507,7 @@ MSP430TargetLowering::LowerCCCCallTo(SDValue Chain, SDValue Callee,
 
 
       MemOpChains.push_back(DAG.getStore(Chain, dl, Arg, PtrOff,
-                                         PseudoSourceValue::getStack(),
-                                         VA.getLocMemOffset(), false, false, 0));
+                                         MachinePointerInfo(),false, false, 0));
     }
   }
 
@@ -914,13 +913,13 @@ SDValue MSP430TargetLowering::LowerRETURNADDR(SDValue Op,
     return DAG.getLoad(getPointerTy(), dl, DAG.getEntryNode(),
                        DAG.getNode(ISD::ADD, dl, getPointerTy(),
                                    FrameAddr, Offset),
-                       NULL, 0, false, false, 0);
+                       MachinePointerInfo(), false, false, 0);
   }
 
   // Just load the return address.
   SDValue RetAddrFI = getReturnAddressFrameIndex(DAG);
   return DAG.getLoad(getPointerTy(), dl, DAG.getEntryNode(),
-                     RetAddrFI, NULL, 0, false, false, 0);
+                     RetAddrFI, MachinePointerInfo(), false, false, 0);
 }
 
 SDValue MSP430TargetLowering::LowerFRAMEADDR(SDValue Op,
@@ -934,7 +933,8 @@ SDValue MSP430TargetLowering::LowerFRAMEADDR(SDValue Op,
   SDValue FrameAddr = DAG.getCopyFromReg(DAG.getEntryNode(), dl,
                                          MSP430::FPW, VT);
   while (Depth--)
-    FrameAddr = DAG.getLoad(VT, dl, DAG.getEntryNode(), FrameAddr, NULL, 0,
+    FrameAddr = DAG.getLoad(VT, dl, DAG.getEntryNode(), FrameAddr,
+                            MachinePointerInfo(),
                             false, false, 0);
   return FrameAddr;
 }

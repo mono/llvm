@@ -73,10 +73,6 @@ let TargetPrefix = "arm" in {  // All intrinsics start with "llvm.arm.".
                 [LLVMTruncatedElementVectorType<0>,
                  LLVMTruncatedElementVectorType<0>],
                 [IntrNoMem]>;
-  class Neon_2Arg_Wide_Intrinsic
-    : Intrinsic<[llvm_anyvector_ty],
-                [LLVMMatchType<0>, LLVMTruncatedElementVectorType<0>],
-                [IntrNoMem]>;
   class Neon_3Arg_Intrinsic
     : Intrinsic<[llvm_anyvector_ty],
                 [LLVMMatchType<0>, LLVMMatchType<0>, LLVMMatchType<0>],
@@ -128,25 +124,13 @@ let Properties = [IntrNoMem, Commutative] in {
   def int_arm_neon_vqaddu : Neon_2Arg_Intrinsic;
   def int_arm_neon_vaddhn : Neon_2Arg_Narrow_Intrinsic;
   def int_arm_neon_vraddhn : Neon_2Arg_Narrow_Intrinsic;
-  def int_arm_neon_vaddls : Neon_2Arg_Long_Intrinsic;
-  def int_arm_neon_vaddlu : Neon_2Arg_Long_Intrinsic;
-  def int_arm_neon_vaddws : Neon_2Arg_Wide_Intrinsic;
-  def int_arm_neon_vaddwu : Neon_2Arg_Wide_Intrinsic;
 
   // Vector Multiply.
   def int_arm_neon_vmulp : Neon_2Arg_Intrinsic;
   def int_arm_neon_vqdmulh : Neon_2Arg_Intrinsic;
   def int_arm_neon_vqrdmulh : Neon_2Arg_Intrinsic;
-  def int_arm_neon_vmulls : Neon_2Arg_Long_Intrinsic;
-  def int_arm_neon_vmullu : Neon_2Arg_Long_Intrinsic;
   def int_arm_neon_vmullp : Neon_2Arg_Long_Intrinsic;
   def int_arm_neon_vqdmull : Neon_2Arg_Long_Intrinsic;
-
-  // Vector Multiply and Accumulate/Subtract.
-  def int_arm_neon_vmlals : Neon_3Arg_Long_Intrinsic;
-  def int_arm_neon_vmlalu : Neon_3Arg_Long_Intrinsic;
-  def int_arm_neon_vmlsls : Neon_3Arg_Long_Intrinsic;
-  def int_arm_neon_vmlslu : Neon_3Arg_Long_Intrinsic;
   def int_arm_neon_vqdmlal : Neon_3Arg_Long_Intrinsic;
   def int_arm_neon_vqdmlsl : Neon_3Arg_Long_Intrinsic;
 
@@ -172,10 +156,6 @@ def int_arm_neon_vqsubs : Neon_2Arg_Intrinsic;
 def int_arm_neon_vqsubu : Neon_2Arg_Intrinsic;
 def int_arm_neon_vsubhn : Neon_2Arg_Narrow_Intrinsic;
 def int_arm_neon_vrsubhn : Neon_2Arg_Narrow_Intrinsic;
-def int_arm_neon_vsubls : Neon_2Arg_Long_Intrinsic;
-def int_arm_neon_vsublu : Neon_2Arg_Long_Intrinsic;
-def int_arm_neon_vsubws : Neon_2Arg_Wide_Intrinsic;
-def int_arm_neon_vsubwu : Neon_2Arg_Wide_Intrinsic;
 
 // Vector Absolute Compare.
 let TargetPrefix = "arm" in {
@@ -196,14 +176,6 @@ let TargetPrefix = "arm" in {
 // Vector Absolute Differences.
 def int_arm_neon_vabds : Neon_2Arg_Intrinsic;
 def int_arm_neon_vabdu : Neon_2Arg_Intrinsic;
-def int_arm_neon_vabdls : Neon_2Arg_Long_Intrinsic;
-def int_arm_neon_vabdlu : Neon_2Arg_Long_Intrinsic;
-
-// Vector Absolute Difference and Accumulate.
-def int_arm_neon_vabas : Neon_3Arg_Intrinsic;
-def int_arm_neon_vabau : Neon_3Arg_Intrinsic;
-def int_arm_neon_vabals : Neon_3Arg_Long_Intrinsic;
-def int_arm_neon_vabalu : Neon_3Arg_Long_Intrinsic;
 
 // Vector Pairwise Add.
 def int_arm_neon_vpadd : Neon_2Arg_Intrinsic;
@@ -314,8 +286,7 @@ def int_arm_neon_vcvtfp2fxu : Neon_CvtFPToFx_Intrinsic;
 def int_arm_neon_vcvtfxs2fp : Neon_CvtFxToFP_Intrinsic;
 def int_arm_neon_vcvtfxu2fp : Neon_CvtFxToFP_Intrinsic;
 
-// Narrowing and Lengthening Vector Moves.
-def int_arm_neon_vmovn : Neon_1Arg_Narrow_Intrinsic;
+// Narrowing Saturating Vector Moves.
 def int_arm_neon_vqmovns : Neon_1Arg_Narrow_Intrinsic;
 def int_arm_neon_vqmovnu : Neon_1Arg_Narrow_Intrinsic;
 def int_arm_neon_vqmovnsu : Neon_1Arg_Narrow_Intrinsic;

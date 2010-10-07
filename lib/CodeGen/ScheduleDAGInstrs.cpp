@@ -32,9 +32,9 @@ using namespace llvm;
 ScheduleDAGInstrs::ScheduleDAGInstrs(MachineFunction &mf,
                                      const MachineLoopInfo &mli,
                                      const MachineDominatorTree &mdt)
-  : ScheduleDAG(mf), MLI(mli), MDT(mdt), Defs(TRI->getNumRegs()),
-    Uses(TRI->getNumRegs()), LoopRegs(MLI, MDT) {
-  MFI = mf.getFrameInfo();
+  : ScheduleDAG(mf), MLI(mli), MDT(mdt), MFI(mf.getFrameInfo()),
+    InstrItins(mf.getTarget().getInstrItineraryData()),
+    Defs(TRI->getNumRegs()), Uses(TRI->getNumRegs()), LoopRegs(MLI, MDT) {
   DbgValueVec.clear();
 }
 
@@ -498,23 +498,22 @@ void ScheduleDAGInstrs::FinishBlock() {
 }
 
 void ScheduleDAGInstrs::ComputeLatency(SUnit *SU) {
-  const InstrItineraryData &InstrItins = TM.getInstrItineraryData();
-
   // Compute the latency for the node.
-  SU->Latency =
-    InstrItins.getStageLatency(SU->getInstr()->getDesc().getSchedClass());
+  if (!InstrItins || InstrItins->isEmpty()) {
+    SU->Latency = 1;
 
-  // Simplistic target-independent heuristic: assume that loads take
-  // extra time.
-  if (InstrItins.isEmpty())
+    // Simplistic target-independent heuristic: assume that loads take
+    // extra time.
     if (SU->getInstr()->getDesc().mayLoad())
       SU->Latency += 2;
+  } else
+    SU->Latency =
+      InstrItins->getStageLatency(SU->getInstr()->getDesc().getSchedClass());
 }
 
 void ScheduleDAGInstrs::ComputeOperandLatency(SUnit *Def, SUnit *Use, 
                                               SDep& dep) const {
-  const InstrItineraryData &InstrItins = TM.getInstrItineraryData();
-  if (InstrItins.isEmpty())
+  if (!InstrItins || InstrItins->isEmpty())
     return;
   
   // For a data dependency with a known register...
@@ -528,26 +527,19 @@ void ScheduleDAGInstrs::ComputeOperandLatency(SUnit *Def, SUnit *Use,
   MachineInstr *DefMI = Def->getInstr();
   int DefIdx = DefMI->findRegisterDefOperandIdx(Reg);
   if (DefIdx != -1) {
-    int DefCycle = InstrItins.getOperandCycle(DefMI->getDesc().getSchedClass(),
-                                              DefIdx);
-    if (DefCycle >= 0) {
-      MachineInstr *UseMI = Use->getInstr();
-      const unsigned UseClass = UseMI->getDesc().getSchedClass();
+    MachineInstr *UseMI = Use->getInstr();
+    // For all uses of the register, calculate the maxmimum latency
+    int Latency = -1;
+    for (unsigned i = 0, e = UseMI->getNumOperands(); i != e; ++i) {
+      const MachineOperand &MO = UseMI->getOperand(i);
+      if (!MO.isReg() || !MO.isUse())
+        continue;
+      unsigned MOReg = MO.getReg();
+      if (MOReg != Reg)
+        continue;
 
-      // For all uses of the register, calculate the maxmimum latency
-      int Latency = -1;
-      for (unsigned i = 0, e = UseMI->getNumOperands(); i != e; ++i) {
-        const MachineOperand &MO = UseMI->getOperand(i);
-        if (!MO.isReg() || !MO.isUse())
-          continue;
-        unsigned MOReg = MO.getReg();
-        if (MOReg != Reg)
-          continue;
-
-        int UseCycle = InstrItins.getOperandCycle(UseClass, i);
-        if (UseCycle >= 0)
-          Latency = std::max(Latency, DefCycle - UseCycle + 1);
-      }
+      int UseCycle = TII->getOperandLatency(InstrItins, DefMI, DefIdx, UseMI, i);
+      Latency = std::max(Latency, UseCycle);
 
       // If we found a latency, then replace the existing dependence latency.
       if (Latency >= 0)

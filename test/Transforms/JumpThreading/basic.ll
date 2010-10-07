@@ -1,4 +1,4 @@
-; RUN: opt %s -jump-threading -S -enable-jump-threading-lvi | FileCheck %s
+; RUN: opt %s -jump-threading -S | FileCheck %s
 
 declare i32 @f1()
 declare i32 @f2()
@@ -421,4 +421,58 @@ F2:
 ; CHECK-NEXT:   br i1 %N, label %T2, label %F2
 }
 
+; CHECK: @test14
+define i32 @test14(i32 %in) {
+entry:
+	%A = icmp eq i32 %in, 0
+; CHECK: br i1 %A, label %right_ret, label %merge
+  br i1 %A, label %left, label %right
+
+; CHECK-NOT: left:
+left:
+	br label %merge
+
+; CHECK-NOT: right:
+right:
+  %B = call i32 @f1()
+	br label %merge
+
+merge:
+; CHECK-NOT: %C = phi i32 [%in, %left], [%B, %right]
+	%C = phi i32 [%in, %left], [%B, %right]
+	%D = add i32 %C, 1
+	%E = icmp eq i32 %D, 2
+	br i1 %E, label %left_ret, label %right_ret
+
+; CHECK: left_ret:
+left_ret:
+	ret i32 0
+
+right_ret:
+	ret i32 1
+}
+
+; PR5652
+; CHECK: @test15
+define i32 @test15(i32 %len) {
+entry:
+; CHECK: icmp ult i32 %len, 13
+  %tmp = icmp ult i32 %len, 13
+  br i1 %tmp, label %check, label %exit0
+
+exit0:
+  ret i32 0
+
+check:
+  %tmp9 = icmp ult i32 %len, 21
+  br i1 %tmp9, label %exit1, label %exit2
+
+exit2:
+; CHECK-NOT: ret i32 2
+  ret i32 2
+
+exit1:
+  ret i32 1
+; CHECK: }
+}
 

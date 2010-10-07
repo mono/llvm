@@ -152,8 +152,8 @@ public:
   /// getInstrItineraryData - Returns instruction itinerary data for the target
   /// or specific subtarget.
   ///
-  virtual const InstrItineraryData getInstrItineraryData() const {  
-    return InstrItineraryData();
+  virtual const InstrItineraryData *getInstrItineraryData() const {  
+    return 0;
   }
 
   /// getELFWriterInfo - If this target supports an ELF writer, return
@@ -279,6 +279,8 @@ private:
   virtual void setCodeModelForStatic();
   
 public:
+  
+  const std::string &getTargetTriple() const { return TargetTriple; }
   
   /// addPassesToEmitFile - Add passes to the specified pass manager to get the
   /// specified file emitted.  Typically this will involve several steps of code

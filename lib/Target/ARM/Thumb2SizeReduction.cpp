@@ -217,8 +217,8 @@ Thumb2SizeReduce::VerifyPredAndCC(MachineInstr *MI, const ReduceEntry &Entry,
     /// Old opcode has an optional def of CPSR.
     if (HasCC)
       return true;
-    // If both old opcode does not implicit CPSR def, then it's not ok since
-    // these new opcodes CPSR def is not meant to be thrown away. e.g. CMP.
+    // If old opcode does not implicitly define CPSR, then it's not ok since
+    // these new opcodes' CPSR def is not meant to be thrown away. e.g. CMP.
     if (!HasImplicitCPSRDef(MI->getDesc()))
       return false;
     HasCC = true;
@@ -315,6 +315,18 @@ Thumb2SizeReduce::ReduceLoadStore(MachineBasicBlock &MBB, MachineInstr *MI,
     ARM_AM::AMSubMode Mode = ARM_AM::getAM4SubMode(MI->getOperand(1).getImm());
     if (!isARMLowRegister(BaseReg) || Mode != ARM_AM::ia)
       return false;
+    // For the non-writeback version (this one), the base register must be
+    // one of the registers being loaded.
+    bool isOK = false;
+    for (unsigned i = 4; i < MI->getNumOperands(); ++i) {
+      if (MI->getOperand(i).getReg() == BaseReg) {
+        isOK = true;
+        break;
+      }
+    }
+    if (!isOK)
+      return false;
+
     OpNum = 0;
     isLdStMul = true;
     break;

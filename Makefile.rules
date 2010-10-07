@@ -129,11 +129,8 @@ reconfigure:
 	  $(ConfigStatusScript) --recheck $(ConfigureScriptFLAGS) && \
 	  $(ConfigStatusScript)
 
-# FIXME: The {PIC16,MSP430}/AsmPrinter line here is a hack to force a reconfigure to pick
-# up AsmPrinter changes. Remove it after a reasonable delay from 2009-08-13.
-
 .PRECIOUS: $(ConfigStatusScript)
-$(ConfigStatusScript): $(ConfigureScript) $(LLVM_SRC_ROOT)/lib/Target/PIC16/AsmPrinter/Makefile $(LLVM_SRC_ROOT)/lib/Target/MSP430/AsmPrinter/Makefile
+$(ConfigStatusScript): $(ConfigureScript)
 	$(Echo) Reconfiguring with $<
 	$(Verb) cd $(PROJ_OBJ_ROOT) && \
 	  if test -w $(PROJ_OBJ_ROOT)/config.cache ; then \
@@ -161,9 +158,13 @@ endif
 # If the Makefile in the source tree has been updated, copy it over into the
 # build tree. But, only do this if the source and object makefiles differ
 #------------------------------------------------------------------------
+ifndef PROJ_MAKEFILE
+PROJ_MAKEFILE := $(PROJ_SRC_DIR)/Makefile
+endif
+
 ifneq ($(PROJ_OBJ_DIR),$(PROJ_SRC_DIR))
 
-Makefile: $(PROJ_SRC_DIR)/Makefile $(ExtraMakefiles)
+Makefile: $(PROJ_MAKEFILE) $(ExtraMakefiles)
 	$(Echo) "Updating Makefile"
 	$(Verb) $(MKDIR) $(@D)
 	$(Verb) $(CP) -f $< $@
@@ -171,7 +172,7 @@ Makefile: $(PROJ_SRC_DIR)/Makefile $(ExtraMakefiles)
 # Copy the Makefile.* files unless we're in the root directory which avoids
 # the copying of Makefile.config.in or other things that should be explicitly
 # taken care of.
-$(PROJ_OBJ_DIR)/Makefile% : $(PROJ_SRC_DIR)/Makefile%
+$(PROJ_OBJ_DIR)/Makefile% : $(PROJ_MAKEFILE)%
 	@case '$?' in \
           *Makefile.rules) ;; \
           *.in) ;; \
@@ -890,10 +891,13 @@ LLVMUsedLibs    := $(patsubst %.a.o, lib%.a, $(addsuffix .o, $(LLVMLIBS)))
 LLVMLibsPaths   := $(addprefix $(LLVMLibDir)/,$(LLVMUsedLibs))
 endif
 
-# Win32.DLL may refer to other components.
-ifeq ($(HOST_OS), $(filter $(HOST_OS), Cygwin MingW))
+# Loadable module for Win32 requires all symbols resolved for linking.
+# Then all symbols in LLVM.dll will be available.
+ifeq ($(ENABLE_SHARED),1)
   ifdef LOADABLE_MODULE
-    LINK_COMPONENTS := all
+    ifneq (,$(filter $(HOST_OS),Cygwin MingW))
+      LINK_COMPONENTS += all
+    endif
   endif
 endif
 
@@ -917,9 +921,20 @@ endif
 LLVMLibsOptions += -lLLVM-$(LLVMVersion)
 LLVMLibsPaths += $(SharedLibDir)/$(SharedPrefix)LLVM-$(LLVMVersion)$(SHLIBEXT)
 else
-LLVMLibsOptions += $(shell $(LLVM_CONFIG) --libs     $(LINK_COMPONENTS))
-LLVMLibsPaths   += $(LLVM_CONFIG) \
-                   $(shell $(LLVM_CONFIG) --libfiles $(LINK_COMPONENTS))
+
+ifndef NO_LLVM_CONFIG
+LLVMConfigLibs := $(shell $(LLVM_CONFIG) --libs $(LINK_COMPONENTS) || echo Error)
+ifeq ($(LLVMConfigLibs),Error)
+$(error llvm-config --libs failed)
+endif
+LLVMLibsOptions += $(LLVMConfigLibs)
+LLVMConfigLibfiles := $(shell $(LLVM_CONFIG) --libfiles $(LINK_COMPONENTS) || echo Error)
+ifeq ($(LLVMConfigLibfiles),Error)
+$(error llvm-config --libfiles failed)
+endif
+LLVMLibsPaths += $(LLVM_CONFIG) $(LLVMConfigLibfiles)
+endif
+
 endif
 endif
 endif
@@ -929,6 +944,11 @@ ifdef EXPORTED_SYMBOL_FILE
 
 # First, set up the native export file, which may differ from the source
 # export file.
+
+# The option --version-script is not effective on GNU ld win32.
+ifneq (,$(filter $(HOST_OS),Cygwin MingW))
+  HAVE_LINK_VERSION_SCRIPT := 0
+endif
 
 ifeq ($(HOST_OS),Darwin)
 # Darwin convention prefixes symbols with underscores.
@@ -950,23 +970,9 @@ $(NativeExportsFile): $(EXPORTED_SYMBOL_FILE) $(ObjDir)/.dir
 clean-local::
 	-$(Verb) $(RM) -f $(NativeExportsFile)
 else
-NativeExportsFile := $(EXPORTED_SYMBOL_FILE)
-endif
-endif
-
-# Now add the linker command-line options to use the native export file.
-
-ifeq ($(HOST_OS),Darwin)
-LLVMLibsOptions += -Wl,-exported_symbols_list,$(NativeExportsFile)
-endif
-
-# GNU ld Win32 accepts .DEF files that contain "DATA" entries.
 ifeq ($(HOST_OS), $(filter $(HOST_OS), Cygwin MingW))
+# GNU ld Win32 accepts .DEF files that contain "DATA" entries.
 NativeExportsFile := $(ObjDir)/$(notdir $(EXPORTED_SYMBOL_FILE:.exports=.def))
-
-# LLVMLibsOptions is invalidated at processing tools/llvm-shlib.
-SharedLinkOptions += $(NativeExportsFile)
-
 $(NativeExportsFile): $(EXPORTED_SYMBOL_FILE) $(ObjDir)/.dir
 	$(Echo) Generating $(notdir $@)
 	$(Verb) $(ECHO) "EXPORTS" > $@
@@ -974,12 +980,28 @@ $(NativeExportsFile): $(EXPORTED_SYMBOL_FILE) $(ObjDir)/.dir
 clean-local::
 	-$(Verb) $(RM) -f $(NativeExportsFile)
 else
+# Default behavior: just use the exports file verbatim.
+NativeExportsFile := $(EXPORTED_SYMBOL_FILE)
+endif
+endif
+endif
+
+# Now add the linker command-line options to use the native export file.
+
+# Darwin
+ifeq ($(HOST_OS),Darwin)
+LLVMLibsOptions += -Wl,-exported_symbols_list,$(NativeExportsFile)
+endif
 
 # gold, bfd ld, etc.
 ifeq ($(HAVE_LINK_VERSION_SCRIPT),1)
 LLVMLibsOptions += -Wl,--version-script,$(NativeExportsFile)
 endif
 
+# Windows
+ifeq ($(HOST_OS), $(filter $(HOST_OS), Cygwin MingW))
+# LLVMLibsOptions is invalidated at processing tools/llvm-shlib.
+SharedLinkOptions += $(NativeExportsFile)
 endif
 
 endif
@@ -1306,6 +1328,18 @@ endif
 endif
 
 #---------------------------------------------------------
+# Tool Order File Support
+#---------------------------------------------------------
+
+ifeq ($(HOST_OS),Darwin)
+ifdef TOOL_ORDER_FINE
+
+LD.Flags += -Wl,-order_file,$(TOOL_ORDER_FILE)
+
+endif
+endif
+
+#---------------------------------------------------------
 # Tool Version Info Support
 #---------------------------------------------------------
 
@@ -1423,27 +1457,27 @@ DEPEND_OPTIONS = -MMD -MP -MF "$(ObjDir)/$*.d.tmp" \
 DEPEND_MOVEFILE = then $(MV) -f "$(ObjDir)/$*.d.tmp" "$(ObjDir)/$*.d"; \
                   else $(RM) "$(ObjDir)/$*.d.tmp"; exit 1; fi
 
-$(ObjDir)/%.o: %.cpp $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_SRC_DIR)/Makefile
+$(ObjDir)/%.o: %.cpp $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_MAKEFILE)
 	$(Echo) "Compiling $*.cpp for $(BuildMode) build" $(PIC_FLAG)
 	$(Verb) if $(Compile.CXX) $(DEPEND_OPTIONS) $< -o $(ObjDir)/$*.o ; \
 	        $(DEPEND_MOVEFILE)
 
-$(ObjDir)/%.o: %.mm $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_SRC_DIR)/Makefile
+$(ObjDir)/%.o: %.mm $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_MAKEFILE)
 	$(Echo) "Compiling $*.mm for $(BuildMode) build" $(PIC_FLAG)
 	$(Verb) if $(Compile.CXX) $(DEPEND_OPTIONS) $< -o $(ObjDir)/$*.o ; \
 	        $(DEPEND_MOVEFILE)
 
-$(ObjDir)/%.o: %.cc $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_SRC_DIR)/Makefile
+$(ObjDir)/%.o: %.cc $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_MAKEFILE)
 	$(Echo) "Compiling $*.cc for $(BuildMode) build" $(PIC_FLAG)
 	$(Verb) if $(Compile.CXX) $(DEPEND_OPTIONS) $< -o $(ObjDir)/$*.o ; \
 	        $(DEPEND_MOVEFILE)
 
-$(ObjDir)/%.o: %.c $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_SRC_DIR)/Makefile
+$(ObjDir)/%.o: %.c $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_MAKEFILE)
 	$(Echo) "Compiling $*.c for $(BuildMode) build" $(PIC_FLAG)
 	$(Verb) if $(Compile.C) $(DEPEND_OPTIONS) $< -o $(ObjDir)/$*.o ; \
 	        $(DEPEND_MOVEFILE)
 
-$(ObjDir)/%.o: %.m $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_SRC_DIR)/Makefile
+$(ObjDir)/%.o: %.m $(ObjDir)/.dir $(BUILT_SOURCES) $(PROJ_MAKEFILE)
 	$(Echo) "Compiling $*.m for $(BuildMode) build" $(PIC_FLAG)
 	$(Verb) if $(Compile.C) $(DEPEND_OPTIONS) $< -o $(ObjDir)/$*.o ; \
 	        $(DEPEND_MOVEFILE)
@@ -1745,7 +1779,7 @@ $(INCTMPFiles) : $(TBLGEN) $(TDFiles)
 
 $(ObjDir)/%.inc.tmp: %.td $(ObjDir)/.dir
 	$(Echo) "Building LLVMC compilation graph description with tblgen"
-	$(Verb) $(TableGen) -gen-llvmc -o $(call SYSPATH, $@) $<
+	$(Verb) $(TableGen) -gen-llvmc -llvmc-temp-hack -o $(call SYSPATH, $@) $<
 
 clean-local::
 	-$(Verb) $(RM) -f $(INCFiles)

@@ -103,7 +103,7 @@ namespace llvm {
   /// PBQPRegisterAllocation Pass - This pass implements the Partitioned Boolean
   /// Quadratic Prograaming (PBQP) based register allocator.
   ///
-  FunctionPass *createPBQPRegisterAllocator();
+  FunctionPass *createDefaultPBQPRegisterAllocator();
 
   /// SimpleRegisterCoalescing Pass - Coalesce all copies possible.  Can run
   /// independently of the register allocator.
@@ -192,7 +192,7 @@ namespace llvm {
 
   /// createDwarfEHPass - This pass mulches exception handling code into a form
   /// adapted to code generation.  Required if using dwarf exception handling.
-  FunctionPass *createDwarfEHPass(const TargetMachine *tm, bool fast);
+  FunctionPass *createDwarfEHPass(const TargetMachine *tm);
 
   /// createSjLjEHPass - This pass adapts exception handling code to use
   /// the GCC-style builtin setjmp/longjmp (sjlj) to handling EH control flow.

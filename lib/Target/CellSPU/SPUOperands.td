@@ -98,12 +98,6 @@ def immU8 : PatLeaf<(imm), [{
   return (N->getZExtValue() <= 0xff);
 }]>;
 
-// i64ImmSExt10 predicate - True if the i64 immediate fits in a 10-bit sign
-// extended field.  Used by RI10Form instructions like 'ldq'.
-def i64ImmSExt10  : PatLeaf<(imm), [{
-  return isI64IntS10Immediate(N);
-}]>;
-
 // i32ImmSExt10 predicate - True if the i32 immediate fits in a 10-bit sign
 // extended field.  Used by RI10Form instructions like 'ldq'.
 def i32ImmSExt10  : PatLeaf<(imm), [{
@@ -660,7 +654,11 @@ def memrr : Operand<iPTR> {
 // A-form   : abs     (256K LSA offset)
 // D-form(2): [r+I7]  (7-bit signed offset + reg)
 
-def dform_addr   : ComplexPattern<iPTR, 2, "SelectDFormAddr",     [], []>;
-def xform_addr   : ComplexPattern<iPTR, 2, "SelectXFormAddr",     [], []>;
-def aform_addr   : ComplexPattern<iPTR, 2, "SelectAFormAddr",     [], []>;
-def dform2_addr  : ComplexPattern<iPTR, 2, "SelectDForm2Addr",    [], []>;
+def dform_addr   : ComplexPattern<iPTR, 2, "SelectDFormAddr",
+                                  [], [SDNPWantRoot]>;
+def xform_addr   : ComplexPattern<iPTR, 2, "SelectXFormAddr",
+                                  [], [SDNPWantRoot]>;
+def aform_addr   : ComplexPattern<iPTR, 2, "SelectAFormAddr",
+                                  [], [SDNPWantRoot]>;
+def dform2_addr  : ComplexPattern<iPTR, 2, "SelectDForm2Addr",
+                                  [], [SDNPWantRoot]>;

@@ -360,8 +360,8 @@ X86InstrInfo::X86InstrInfo(X86TargetMachine &tm)
     { X86::Int_CVTPD2PSrr,  X86::Int_CVTPD2PSrm, 16 },
     { X86::Int_CVTPS2DQrr,  X86::Int_CVTPS2DQrm, 16 },
     { X86::Int_CVTPS2PDrr,  X86::Int_CVTPS2PDrm, 0 },
-    { X86::Int_CVTSD2SI64rr,X86::Int_CVTSD2SI64rm, 0 },
-    { X86::Int_CVTSD2SIrr,  X86::Int_CVTSD2SIrm, 0 },
+    { X86::CVTSD2SI64rr,    X86::CVTSD2SI64rm, 0 },
+    { X86::CVTSD2SIrr,      X86::CVTSD2SIrm, 0 },
     { X86::Int_CVTSD2SSrr,  X86::Int_CVTSD2SSrm, 0 },
     { X86::Int_CVTSI2SD64rr,X86::Int_CVTSI2SD64rm, 0 },
     { X86::Int_CVTSI2SDrr,  X86::Int_CVTSI2SDrm, 0 },
@@ -370,8 +370,8 @@ X86InstrInfo::X86InstrInfo(X86TargetMachine &tm)
     { X86::Int_CVTSS2SDrr,  X86::Int_CVTSS2SDrm, 0 },
     { X86::Int_CVTSS2SI64rr,X86::Int_CVTSS2SI64rm, 0 },
     { X86::Int_CVTSS2SIrr,  X86::Int_CVTSS2SIrm, 0 },
-    { X86::Int_CVTTPD2DQrr, X86::Int_CVTTPD2DQrm, 16 },
-    { X86::Int_CVTTPS2DQrr, X86::Int_CVTTPS2DQrm, 16 },
+    { X86::CVTTPD2DQrr,     X86::CVTTPD2DQrm, 16 },
+    { X86::CVTTPS2DQrr,     X86::CVTTPS2DQrm, 16 },
     { X86::Int_CVTTSD2SI64rr,X86::Int_CVTTSD2SI64rm, 0 },
     { X86::Int_CVTTSD2SIrr, X86::Int_CVTTSD2SIrm, 0 },
     { X86::Int_CVTTSS2SI64rr,X86::Int_CVTTSS2SI64rm, 0 },
@@ -1099,7 +1099,7 @@ X86InstrInfo::convertToThreeAddressWithLEA(unsigned MIOpc,
   unsigned Opc = TM.getSubtarget<X86Subtarget>().is64Bit()
     ? X86::LEA64_32r : X86::LEA32r;
   MachineRegisterInfo &RegInfo = MFI->getParent()->getRegInfo();
-  unsigned leaInReg = RegInfo.createVirtualRegister(&X86::GR32RegClass);
+  unsigned leaInReg = RegInfo.createVirtualRegister(&X86::GR32_NOSPRegClass);
   unsigned leaOutReg = RegInfo.createVirtualRegister(&X86::GR32RegClass);
             
   // Build and insert into an implicit UNDEF value. This is OK because
@@ -1149,7 +1149,7 @@ X86InstrInfo::convertToThreeAddressWithLEA(unsigned MIOpc,
       // just a single insert_subreg.
       addRegReg(MIB, leaInReg, true, leaInReg, false);
     } else {
-      leaInReg2 = RegInfo.createVirtualRegister(&X86::GR32RegClass);
+      leaInReg2 = RegInfo.createVirtualRegister(&X86::GR32_NOSPRegClass);
       // Build and insert into an implicit UNDEF value. This is OK because
       // well be shifting and then extracting the lower 16-bits. 
       BuildMI(*MFI, MIB, MI->getDebugLoc(), get(X86::IMPLICIT_DEF), leaInReg2);
@@ -1236,6 +1236,11 @@ X86InstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
     unsigned ShAmt = MI->getOperand(2).getImm();
     if (ShAmt == 0 || ShAmt >= 4) return 0;
 
+    // LEA can't handle RSP.
+    if (TargetRegisterInfo::isVirtualRegister(Src) &&
+        !MF.getRegInfo().constrainRegClass(Src, &X86::GR64_NOSPRegClass))
+      return 0;
+
     NewMI = BuildMI(MF, MI->getDebugLoc(), get(X86::LEA64r))
       .addReg(Dest, RegState::Define | getDeadRegState(isDead))
       .addReg(0).addImm(1 << ShAmt)
@@ -1249,6 +1254,11 @@ X86InstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
     // the flags produced by a shift yet, so this is safe.
     unsigned ShAmt = MI->getOperand(2).getImm();
     if (ShAmt == 0 || ShAmt >= 4) return 0;
+
+    // LEA can't handle ESP.
+    if (TargetRegisterInfo::isVirtualRegister(Src) &&
+        !MF.getRegInfo().constrainRegClass(Src, &X86::GR32_NOSPRegClass))
+      return 0;
 
     unsigned Opc = is64Bit ? X86::LEA64_32r : X86::LEA32r;
     NewMI = BuildMI(MF, MI->getDebugLoc(), get(Opc))
@@ -1288,6 +1298,14 @@ X86InstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
       assert(MI->getNumOperands() >= 2 && "Unknown inc instruction!");
       unsigned Opc = MIOpc == X86::INC64r ? X86::LEA64r
         : (is64Bit ? X86::LEA64_32r : X86::LEA32r);
+
+      // LEA can't handle RSP.
+      if (TargetRegisterInfo::isVirtualRegister(Src) &&
+          !MF.getRegInfo().constrainRegClass(Src,
+                            MIOpc == X86::INC64r ? X86::GR64_NOSPRegisterClass :
+                                                   X86::GR32_NOSPRegisterClass))
+        return 0;
+
       NewMI = addRegOffset(BuildMI(MF, MI->getDebugLoc(), get(Opc))
                               .addReg(Dest, RegState::Define |
                                       getDeadRegState(isDead)),
@@ -1310,6 +1328,13 @@ X86InstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
       assert(MI->getNumOperands() >= 2 && "Unknown dec instruction!");
       unsigned Opc = MIOpc == X86::DEC64r ? X86::LEA64r
         : (is64Bit ? X86::LEA64_32r : X86::LEA32r);
+      // LEA can't handle RSP.
+      if (TargetRegisterInfo::isVirtualRegister(Src) &&
+          !MF.getRegInfo().constrainRegClass(Src,
+                            MIOpc == X86::DEC64r ? X86::GR64_NOSPRegisterClass :
+                                                   X86::GR32_NOSPRegisterClass))
+        return 0;
+
       NewMI = addRegOffset(BuildMI(MF, MI->getDebugLoc(), get(Opc))
                               .addReg(Dest, RegState::Define |
                                       getDeadRegState(isDead)),
@@ -1333,6 +1358,14 @@ X86InstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
         : (is64Bit ? X86::LEA64_32r : X86::LEA32r);
       unsigned Src2 = MI->getOperand(2).getReg();
       bool isKill2 = MI->getOperand(2).isKill();
+
+      // LEA can't handle RSP.
+      if (TargetRegisterInfo::isVirtualRegister(Src2) &&
+          !MF.getRegInfo().constrainRegClass(Src2,
+                           MIOpc == X86::ADD64rr ? X86::GR64_NOSPRegisterClass :
+                                                   X86::GR32_NOSPRegisterClass))
+        return 0;
+
       NewMI = addRegReg(BuildMI(MF, MI->getDebugLoc(), get(Opc))
                         .addReg(Dest, RegState::Define |
                                 getDeadRegState(isDead)),
@@ -2343,8 +2376,8 @@ MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
     case X86::Int_CVTSS2SDrr:
     case X86::RCPSSr:
     case X86::RCPSSr_Int:
-    case X86::ROUNDSDr_Int:
-    case X86::ROUNDSSr_Int:
+    case X86::ROUNDSDr:
+    case X86::ROUNDSSr:
     case X86::RSQRTSSr:
     case X86::RSQRTSSr_Int:
     case X86::SQRTSSr:
@@ -2395,8 +2428,8 @@ MachineInstr* X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF,
     case X86::Int_CVTSS2SDrr:
     case X86::RCPSSr:
     case X86::RCPSSr_Int:
-    case X86::ROUNDSDr_Int:
-    case X86::ROUNDSSr_Int:
+    case X86::ROUNDSDr:
+    case X86::ROUNDSSr:
     case X86::RSQRTSSr:
     case X86::RSQRTSSr_Int:
     case X86::SQRTSSr:
@@ -2993,6 +3026,8 @@ bool X86InstrInfo::isX86_64ExtendedReg(unsigned RegNo) {
   case X86::XMM12: case X86::XMM13: case X86::XMM14: case X86::XMM15:
   case X86::YMM8:  case X86::YMM9:  case X86::YMM10: case X86::YMM11:
   case X86::YMM12: case X86::YMM13: case X86::YMM14: case X86::YMM15:
+  case X86::CR8:   case X86::CR9:   case X86::CR10:  case X86::CR11:
+  case X86::CR12:  case X86::CR13:  case X86::CR14:  case X86::CR15:
     return true;
   }
   return false;
@@ -3108,6 +3143,13 @@ namespace {
       if (TM->getRelocationModel() != Reloc::PIC_)
         return false;
 
+      X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
+      unsigned GlobalBaseReg = X86FI->getGlobalBaseReg();
+
+      // If we didn't need a GlobalBaseReg, don't insert code.
+      if (GlobalBaseReg == 0)
+        return false;
+
       // Insert the set of GlobalBaseReg into the first MBB of the function
       MachineBasicBlock &FirstMBB = MF.front();
       MachineBasicBlock::iterator MBBI = FirstMBB.begin();
@@ -3119,7 +3161,7 @@ namespace {
       if (TM->getSubtarget<X86Subtarget>().isPICStyleGOT())
         PC = RegInfo.createVirtualRegister(X86::GR32RegisterClass);
       else
-        PC = TII->getGlobalBaseReg(&MF);
+        PC = GlobalBaseReg;
   
       // Operand of MovePCtoStack is completely ignored by asm printer. It's
       // only used in JIT code emission as displacement to pc.
@@ -3128,7 +3170,6 @@ namespace {
       // If we're using vanilla 'GOT' PIC style, we should use relative addressing
       // not to pc, but to _GLOBAL_OFFSET_TABLE_ external.
       if (TM->getSubtarget<X86Subtarget>().isPICStyleGOT()) {
-        unsigned GlobalBaseReg = TII->getGlobalBaseReg(&MF);
         // Generate addl $__GLOBAL_OFFSET_TABLE_ + [.-piclabel], %some_register
         BuildMI(FirstMBB, MBBI, DL, TII->get(X86::ADD32ri), GlobalBaseReg)
           .addReg(PC).addExternalSymbol("_GLOBAL_OFFSET_TABLE_",

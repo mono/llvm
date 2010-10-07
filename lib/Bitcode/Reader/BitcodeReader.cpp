@@ -136,7 +136,6 @@ namespace {
   /// @brief A class for maintaining the slot number definition
   /// as a placeholder for the actual definition for forward constants defs.
   class ConstantPlaceHolder : public ConstantExpr {
-    ConstantPlaceHolder();                       // DO NOT IMPLEMENT
     void operator=(const ConstantPlaceHolder &); // DO NOT IMPLEMENT
   public:
     // allocate space for exactly one operand
@@ -149,7 +148,7 @@ namespace {
     }
 
     /// @brief Methods to support type inquiry through isa, cast, and dyn_cast.
-    static inline bool classof(const ConstantPlaceHolder *) { return true; }
+    //static inline bool classof(const ConstantPlaceHolder *) { return true; }
     static bool classof(const Value *V) {
       return isa<ConstantExpr>(V) &&
              cast<ConstantExpr>(V)->getOpcode() == Instruction::UserOp1;
@@ -550,6 +549,9 @@ bool BitcodeReader::ParseTypeTable() {
     case bitc::TYPE_CODE_METADATA:  // METADATA
       ResultTy = Type::getMetadataTy(Context);
       break;
+    case bitc::TYPE_CODE_X86_MMX:   // X86_MMX
+      ResultTy = Type::getX86_MMXTy(Context);
+      break;
     case bitc::TYPE_CODE_INTEGER:   // INTEGER: [width]
       if (Record.size() < 1)
         return Error("Invalid Integer type record");
@@ -774,7 +776,8 @@ bool BitcodeReader::ParseMetadata() {
     bool IsFunctionLocal = false;
     // Read a record.
     Record.clear();
-    switch (Stream.ReadRecord(Code, Record)) {
+    Code = Stream.ReadRecord(Code, Record);
+    switch (Code) {
     default:  // Default behavior: ignore.
       break;
     case bitc::METADATA_NAME: {
@@ -787,9 +790,13 @@ bool BitcodeReader::ParseMetadata() {
       Record.clear();
       Code = Stream.ReadCode();
 
-      // METADATA_NAME is always followed by METADATA_NAMED_NODE.
-      if (Stream.ReadRecord(Code, Record) != bitc::METADATA_NAMED_NODE)
-        assert ( 0 && "Inavlid Named Metadata record");
+      // METADATA_NAME is always followed by METADATA_NAMED_NODE2.
+      // Or METADATA_NAMED_NODE in LLVM 2.7. FIXME: Remove this in LLVM 3.0.
+      unsigned NextBitCode = Stream.ReadRecord(Code, Record);
+      if (NextBitCode == bitc::METADATA_NAMED_NODE) {
+        LLVM2_7MetadataDetected = true;
+      } else if (NextBitCode != bitc::METADATA_NAMED_NODE2)
+        assert ( 0 && "Invalid Named Metadata record");
 
       // Read named metadata elements.
       unsigned Size = Record.size();
@@ -800,14 +807,29 @@ bool BitcodeReader::ParseMetadata() {
           return Error("Malformed metadata record");
         NMD->addOperand(MD);
       }
+      // Backwards compatibility hack: NamedMDValues used to be Values,
+      // and they got their own slots in the value numbering. They are no
+      // longer Values, however we still need to account for them in the
+      // numbering in order to be able to read old bitcode files.
+      // FIXME: Remove this in LLVM 3.0.
+      if (LLVM2_7MetadataDetected)
+        MDValueList.AssignValue(0, NextMDValueNo++);
       break;
     }
-    case bitc::METADATA_FN_NODE:
+    case bitc::METADATA_FN_NODE: // FIXME: Remove in LLVM 3.0.
+    case bitc::METADATA_FN_NODE2:
       IsFunctionLocal = true;
       // fall-through
-    case bitc::METADATA_NODE: {
+    case bitc::METADATA_NODE:    // FIXME: Remove in LLVM 3.0.
+    case bitc::METADATA_NODE2: {
+
+      // Detect 2.7-era metadata.
+      // FIXME: Remove in LLVM 3.0.
+      if (Code == bitc::METADATA_FN_NODE || Code == bitc::METADATA_NODE)
+        LLVM2_7MetadataDetected = true;
+
       if (Record.size() % 2 == 1)
-        return Error("Invalid METADATA_NODE record");
+        return Error("Invalid METADATA_NODE2 record");
 
       unsigned Size = Record.size();
       SmallVector<Value*, 8> Elts;
@@ -1277,6 +1299,12 @@ bool BitcodeReader::ParseModule() {
           UpgradedIntrinsics.push_back(std::make_pair(FI, NewFn));
       }
 
+      // Look for global variables which need to be renamed.
+      for (Module::global_iterator
+             GI = TheModule->global_begin(), GE = TheModule->global_end();
+           GI != GE; ++GI)
+        UpgradeGlobalVariable(GI);
+
       // Force deallocation of memory for these vectors to favor the client that
       // want lazy deserialization.
       std::vector<std::pair<GlobalVariable*, unsigned> >().swap(GlobalInits);
@@ -1572,6 +1600,112 @@ bool BitcodeReader::ParseBitcodeInto(Module *M) {
   return false;
 }
 
+bool BitcodeReader::ParseModuleTriple(std::string &Triple) {
+  if (Stream.EnterSubBlock(bitc::MODULE_BLOCK_ID))
+    return Error("Malformed block record");
+
+  SmallVector<uint64_t, 64> Record;
+
+  // Read all the records for this module.
+  while (!Stream.AtEndOfStream()) {
+    unsigned Code = Stream.ReadCode();
+    if (Code == bitc::END_BLOCK) {
+      if (Stream.ReadBlockEnd())
+        return Error("Error at end of module block");
+
+      return false;
+    }
+
+    if (Code == bitc::ENTER_SUBBLOCK) {
+      switch (Stream.ReadSubBlockID()) {
+      default:  // Skip unknown content.
+        if (Stream.SkipBlock())
+          return Error("Malformed block record");
+        break;
+      }
+      continue;
+    }
+
+    if (Code == bitc::DEFINE_ABBREV) {
+      Stream.ReadAbbrevRecord();
+      continue;
+    }
+
+    // Read a record.
+    switch (Stream.ReadRecord(Code, Record)) {
+    default: break;  // Default behavior, ignore unknown content.
+    case bitc::MODULE_CODE_VERSION:  // VERSION: [version#]
+      if (Record.size() < 1)
+        return Error("Malformed MODULE_CODE_VERSION");
+      // Only version #0 is supported so far.
+      if (Record[0] != 0)
+        return Error("Unknown bitstream version!");
+      break;
+    case bitc::MODULE_CODE_TRIPLE: {  // TRIPLE: [strchr x N]
+      std::string S;
+      if (ConvertToString(Record, 0, S))
+        return Error("Invalid MODULE_CODE_TRIPLE record");
+      Triple = S;
+      break;
+    }
+    }
+    Record.clear();
+  }
+
+  return Error("Premature end of bitstream");
+}
+
+bool BitcodeReader::ParseTriple(std::string &Triple) {
+  if (Buffer->getBufferSize() & 3)
+    return Error("Bitcode stream should be a multiple of 4 bytes in length");
+
+  unsigned char *BufPtr = (unsigned char *)Buffer->getBufferStart();
+  unsigned char *BufEnd = BufPtr+Buffer->getBufferSize();
+
+  // If we have a wrapper header, parse it and ignore the non-bc file contents.
+  // The magic number is 0x0B17C0DE stored in little endian.
+  if (isBitcodeWrapper(BufPtr, BufEnd))
+    if (SkipBitcodeWrapperHeader(BufPtr, BufEnd))
+      return Error("Invalid bitcode wrapper header");
+
+  StreamFile.init(BufPtr, BufEnd);
+  Stream.init(StreamFile);
+
+  // Sniff for the signature.
+  if (Stream.Read(8) != 'B' ||
+      Stream.Read(8) != 'C' ||
+      Stream.Read(4) != 0x0 ||
+      Stream.Read(4) != 0xC ||
+      Stream.Read(4) != 0xE ||
+      Stream.Read(4) != 0xD)
+    return Error("Invalid bitcode signature");
+
+  // We expect a number of well-defined blocks, though we don't necessarily
+  // need to understand them all.
+  while (!Stream.AtEndOfStream()) {
+    unsigned Code = Stream.ReadCode();
+
+    if (Code != bitc::ENTER_SUBBLOCK)
+      return Error("Invalid record at top-level");
+
+    unsigned BlockID = Stream.ReadSubBlockID();
+
+    // We only know the MODULE subblock ID.
+    switch (BlockID) {
+    case bitc::MODULE_BLOCK_ID:
+      if (ParseModuleTriple(Triple))
+        return true;
+      break;
+    default:
+      if (Stream.SkipBlock())
+        return Error("Malformed block record");
+      break;
+    }
+  }
+
+  return false;
+}
+
 /// ParseMetadataAttachment - Parse metadata attachments.
 bool BitcodeReader::ParseMetadataAttachment() {
   if (Stream.EnterSubBlock(bitc::METADATA_ATTACHMENT_ID))
@@ -1594,7 +1728,10 @@ bool BitcodeReader::ParseMetadataAttachment() {
     switch (Stream.ReadRecord(Code, Record)) {
     default:  // Default behavior: ignore.
       break;
-    case bitc::METADATA_ATTACHMENT: {
+    // FIXME: Remove in LLVM 3.0.
+    case bitc::METADATA_ATTACHMENT:
+      LLVM2_7MetadataDetected = true;
+    case bitc::METADATA_ATTACHMENT2: {
       unsigned RecordLength = Record.size();
       if (Record.empty() || (RecordLength - 1) % 2 == 1)
         return Error ("Invalid METADATA_ATTACHMENT reader!");
@@ -1707,7 +1844,10 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
       I = 0;
       continue;
         
-    case bitc::FUNC_CODE_DEBUG_LOC: {      // DEBUG_LOC: [line, col, scope, ia]
+    // FIXME: Remove this in LLVM 3.0.
+    case bitc::FUNC_CODE_DEBUG_LOC:
+      LLVM2_7MetadataDetected = true;
+    case bitc::FUNC_CODE_DEBUG_LOC2: {      // DEBUG_LOC: [line, col, scope, ia]
       I = 0;     // Get the last instruction emitted.
       if (CurBB && !CurBB->empty())
         I = &CurBB->back();
@@ -2169,7 +2309,7 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
     }
     case bitc::FUNC_CODE_INST_ALLOCA: { // ALLOCA: [instty, opty, op, align]
       // For backward compatibility, tolerate a lack of an opty, and use i32.
-      // LLVM 3.0: Remove this.
+      // Remove this in LLVM 3.0.
       if (Record.size() < 3 || Record.size() > 4)
         return Error("Invalid ALLOCA record");
       unsigned OpNum = 0;
@@ -2222,7 +2362,10 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
       InstructionList.push_back(I);
       break;
     }
-    case bitc::FUNC_CODE_INST_CALL: {
+    // FIXME: Remove this in LLVM 3.0.
+    case bitc::FUNC_CODE_INST_CALL:
+      LLVM2_7MetadataDetected = true;
+    case bitc::FUNC_CODE_INST_CALL2: {
       // CALL: [paramattrs, cc, fnty, fnid, arg0, arg1...]
       if (Record.size() < 3)
         return Error("Invalid CALL record");
@@ -2341,9 +2484,21 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
     BlockAddrFwdRefs.erase(BAFRI);
   }
   
+  // FIXME: Remove this in LLVM 3.0.
+  unsigned NewMDValueListSize = MDValueList.size();
+
   // Trim the value list down to the size it was before we parsed this function.
   ValueList.shrinkTo(ModuleValueListSize);
   MDValueList.shrinkTo(ModuleMDValueListSize);
+
+  // Backwards compatibility hack: Function-local metadata numbers
+  // were previously not reset between functions. This is now fixed,
+  // however we still need to understand the old numbering in order
+  // to be able to read old bitcode files.
+  // FIXME: Remove this in LLVM 3.0.
+  if (LLVM2_7MetadataDetected)
+    MDValueList.resize(NewMDValueListSize);
+
   std::vector<BasicBlock*>().swap(FunctionBBs);
 
   return false;
@@ -2488,7 +2643,24 @@ Module *llvm::ParseBitcodeFile(MemoryBuffer *Buffer, LLVMContext& Context,
   // Read in the entire module, and destroy the BitcodeReader.
   if (M->MaterializeAllPermanently(ErrMsg)) {
     delete M;
-    return NULL;
+    return 0;
   }
+
   return M;
+}
+
+std::string llvm::getBitcodeTargetTriple(MemoryBuffer *Buffer,
+                                         LLVMContext& Context,
+                                         std::string *ErrMsg) {
+  BitcodeReader *R = new BitcodeReader(Buffer, Context);
+  // Don't let the BitcodeReader dtor delete 'Buffer'.
+  R->setBufferOwned(false);
+
+  std::string Triple("");
+  if (R->ParseTriple(Triple))
+    if (ErrMsg)
+      *ErrMsg = R->getErrorString();
+
+  delete R;
+  return Triple;
 }

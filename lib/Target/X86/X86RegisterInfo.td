@@ -231,7 +231,7 @@ let Namespace = "X86" in {
   def DR6 : Register<"dr6">;
   def DR7 : Register<"dr7">;
   
-  // Condition registers
+  // Control registers
   def CR0 : Register<"cr0">;
   def CR1 : Register<"cr1">;
   def CR2 : Register<"cr2">;
@@ -241,6 +241,13 @@ let Namespace = "X86" in {
   def CR6 : Register<"cr6">;
   def CR7 : Register<"cr7">;
   def CR8 : Register<"cr8">;
+  def CR9 : Register<"cr9">;
+  def CR10 : Register<"cr10">;
+  def CR11 : Register<"cr11">;
+  def CR12 : Register<"cr12">;
+  def CR13 : Register<"cr13">;
+  def CR14 : Register<"cr14">;
+  def CR15 : Register<"cr15">;
 
   // Pseudo index registers
   def EIZ : Register<"eiz">;
@@ -456,7 +463,8 @@ def DEBUG_REG : RegisterClass<"X86", [i32], 32,
 
 // Control registers.
 def CONTROL_REG : RegisterClass<"X86", [i64], 64,
-                                [CR0, CR1, CR2, CR3, CR4, CR5, CR6, CR7, CR8]> {
+                                [CR0, CR1, CR2, CR3, CR4, CR5, CR6, CR7, CR8,
+                                 CR9, CR10, CR11, CR12, CR13, CR14, CR15]> {
 }
 
 // GR8_ABCD_L, GR8_ABCD_H, GR16_ABCD, GR32_ABCD, GR64_ABCD - Subclasses of
@@ -784,7 +792,7 @@ def RST : RegisterClass<"X86", [f80, f64, f32], 32,
 }
 
 // Generic vector registers: VR64 and VR128.
-def VR64  : RegisterClass<"X86", [v8i8, v4i16, v2i32, v1i64], 64,
+def VR64: RegisterClass<"X86", [x86mmx], 64,
                           [MM0, MM1, MM2, MM3, MM4, MM5, MM6, MM7]>;
 def VR128 : RegisterClass<"X86", [v16i8, v8i16, v4i32, v2i64, v4f32, v2f64],128,
                           [XMM0, XMM1, XMM2, XMM3, XMM4, XMM5, XMM6, XMM7,
@@ -833,4 +841,15 @@ def VR256 : RegisterClass<"X86", [v32i8, v8i32, v4i64, v8f32, v4f64], 256,
 // Status flags registers.
 def CCR : RegisterClass<"X86", [i32], 32, [EFLAGS]> {
   let CopyCost = -1;  // Don't allow copying of status registers.
+
+  // EFLAGS is not allocatable.
+  let MethodProtos = [{
+    iterator allocation_order_end(const MachineFunction &MF) const;
+  }];
+  let MethodBodies = [{
+    CCRClass::iterator
+    CCRClass::allocation_order_end(const MachineFunction &MF) const {
+      return allocation_order_begin(MF);
+    }
+  }];
 }

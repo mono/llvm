@@ -18,35 +18,62 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 else() # Default for all other unix like systems.
   # CMake hardcodes the library locaction using rpath.
   # Therefore LD_LIBRARY_PATH is not required to run binaries in the
-  # build dir. We pass it anyways. 
+  # build dir. We pass it anyways.
   set(SHLIBPATH_VAR "LD_LIBRARY_PATH")
 endif()
 
 include(FindPythonInterp)
 if(PYTHONINTERP_FOUND)
+  get_directory_property(DEFINITIONS COMPILE_DEFINITIONS)
+  foreach(DEF ${DEFINITIONS})
+    set(DEFS "${DEFS} -D${DEF}")
+  endforeach()
+  get_directory_property(INC_DIRS INCLUDE_DIRECTORIES)
+  foreach(INC_DIR ${INC_DIRS})
+    set(IDIRS "${IDIRS} -I${INC_DIR}")
+  endforeach()
+  string(REPLACE "<CMAKE_CXX_COMPILER>" "${CMAKE_CXX_COMPILER}" TEST_COMPILE_CXX_CMD ${CMAKE_CXX_COMPILE_OBJECT})
+  string(REPLACE "<DEFINES>"            "${DEFS}"               TEST_COMPILE_CXX_CMD ${TEST_COMPILE_CXX_CMD})
+  string(REPLACE "<FLAGS>"              "${CMAKE_CXX_FLAGS}"    TEST_COMPILE_CXX_CMD ${TEST_COMPILE_CXX_CMD})
+  string(REPLACE "-o"                   ""                      TEST_COMPILE_CXX_CMD ${TEST_COMPILE_CXX_CMD})
+  string(REGEX REPLACE "<[^>]+>"        ""                      TEST_COMPILE_CXX_CMD ${TEST_COMPILE_CXX_CMD})
+  set(TEST_COMPILE_CXX_CMD "${TEST_COMPILE_CXX_CMD} ${IDIRS}")
+  if(NOT MSVC)
+    set(TEST_COMPILE_CXX_CMD "${TEST_COMPILE_CXX_CMD} -x c++")
+  endif()
   configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/site.exp.in
     ${CMAKE_CURRENT_BINARY_DIR}/site.exp)
 
   MAKE_DIRECTORY(${CMAKE_CURRENT_BINARY_DIR}/Unit)
 
+  set(LLVM_SOURCE_DIR ${LLVM_MAIN_SRC_DIR})
+  set(LLVM_BINARY_DIR ${LLVM_BINARY_DIR})
+  set(LLVM_TOOLS_DIR "${LLVM_TOOLS_BINARY_DIR}/${CMAKE_CFG_INTDIR}")
+  set(LLVMGCCDIR "")
+  set(PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})
+  if (CMAKE_CONFIGURATION_TYPES)
+    # FIXME: We have no idea. It could be any of them... So just output all of
+    # them.
+    set(LLVM_BUILD_MODE "${CMAKE_CONFIGURATION_TYPES}")
+  elseif (CMAKE_BUILD_TYPE)
+    set(LLVM_BUILD_MODE "${CMAKE_BUILD_TYPE}")
+  else()
+    set(LLVM_BUILD_MODE "None")
+  endif()
+  set(ENABLE_SHARED ${LLVM_SHARED_LIBS_ENABLED})
+  set(SHLIBPATH_VAR ${SHLIBPATH_VAR})
+
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.in
+    ${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg
+    @ONLY)
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/Unit/lit.site.cfg.in
+    ${CMAKE_CURRENT_BINARY_DIR}/Unit/lit.site.cfg
+    @ONLY)
+
   add_custom_target(check
-    COMMAND sed -e "s#\@LLVM_SOURCE_DIR\@#${LLVM_MAIN_SRC_DIR}#"
-                -e "s#\@LLVM_BINARY_DIR\@#${LLVM_BINARY_DIR}#"
-                -e "s#\@LLVM_TOOLS_DIR\@#${LLVM_TOOLS_BINARY_DIR}/${CMAKE_CFG_INTDIR}#"
-                -e "s#\@LLVMGCCDIR\@##"
-                -e "s#\@PYTHON_EXECUTABLE\@#${PYTHON_EXECUTABLE}#"
-                ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.in >
-                ${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg
-    COMMAND sed -e "s#\@LLVM_SOURCE_DIR\@#${LLVM_MAIN_SRC_DIR}#"
-                -e "s#\@LLVM_BINARY_DIR\@#${LLVM_BINARY_DIR}#"
-                -e "s#\@LLVM_TOOLS_DIR\@#${LLVM_TOOLS_BINARY_DIR}/${CMAKE_CFG_INTDIR}#"
-                -e "s#\@LLVMGCCDIR\@##"
-                -e "s#\@LLVM_BUILD_MODE\@#${CMAKE_CFG_INTDIR}#"
-                -e "s#\@ENABLE_SHARED\@#${LLVM_SHARED_LIBS_ENABLED}#"
-                -e "s#\@SHLIBPATH_VAR\@#${SHLIBPATH_VAR}#"
-                ${CMAKE_CURRENT_SOURCE_DIR}/Unit/lit.site.cfg.in >
-                ${CMAKE_CURRENT_BINARY_DIR}/Unit/lit.site.cfg
     COMMAND ${PYTHON_EXECUTABLE}
                 ${LLVM_SOURCE_DIR}/utils/lit/lit.py
                 --param llvm_site_config=${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg

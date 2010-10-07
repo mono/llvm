@@ -335,10 +335,43 @@ void MachineOperand::print(raw_ostream &OS, const TargetMachine *TM) const {
 // MachineMemOperand Implementation
 //===----------------------------------------------------------------------===//
 
-MachineMemOperand::MachineMemOperand(const Value *v, unsigned int f,
-                                     int64_t o, uint64_t s, unsigned int a)
-  : Offset(o), Size(s), V(v),
+/// getAddrSpace - Return the LLVM IR address space number that this pointer
+/// points into.
+unsigned MachinePointerInfo::getAddrSpace() const {
+  if (V == 0) return 0;
+  return cast<PointerType>(V->getType())->getAddressSpace();
+}
+
+/// getConstantPool - Return a MachinePointerInfo record that refers to the
+/// constant pool.
+MachinePointerInfo MachinePointerInfo::getConstantPool() {
+  return MachinePointerInfo(PseudoSourceValue::getConstantPool());
+}
+
+/// getFixedStack - Return a MachinePointerInfo record that refers to the
+/// the specified FrameIndex.
+MachinePointerInfo MachinePointerInfo::getFixedStack(int FI, int64_t offset) {
+  return MachinePointerInfo(PseudoSourceValue::getFixedStack(FI), offset);
+}
+
+MachinePointerInfo MachinePointerInfo::getJumpTable() {
+  return MachinePointerInfo(PseudoSourceValue::getJumpTable());
+}
+
+MachinePointerInfo MachinePointerInfo::getGOT() {
+  return MachinePointerInfo(PseudoSourceValue::getGOT());
+}
+
+MachinePointerInfo MachinePointerInfo::getStack(int64_t Offset) {
+  return MachinePointerInfo(PseudoSourceValue::getStack(), Offset);
+}
+
+MachineMemOperand::MachineMemOperand(MachinePointerInfo ptrinfo, unsigned f,
+                                     uint64_t s, unsigned int a)
+  : PtrInfo(ptrinfo), Size(s),
     Flags((f & ((1 << MOMaxBits) - 1)) | ((Log2_32(a) + 1) << MOMaxBits)) {
+  assert((PtrInfo.V == 0 || isa<PointerType>(PtrInfo.V->getType())) &&
+         "invalid pointer value");
   assert(getBaseAlignment() == a && "Alignment is not a power of 2!");
   assert((isLoad() || isStore()) && "Not a load/store!");
 }
@@ -346,9 +379,9 @@ MachineMemOperand::MachineMemOperand(const Value *v, unsigned int f,
 /// Profile - Gather unique data for the object.
 ///
 void MachineMemOperand::Profile(FoldingSetNodeID &ID) const {
-  ID.AddInteger(Offset);
+  ID.AddInteger(getOffset());
   ID.AddInteger(Size);
-  ID.AddPointer(V);
+  ID.AddPointer(getValue());
   ID.AddInteger(Flags);
 }
 
@@ -364,8 +397,7 @@ void MachineMemOperand::refineAlignment(const MachineMemOperand *MMO) {
       ((Log2_32(MMO->getBaseAlignment()) + 1) << MOMaxBits);
     // Also update the base and offset, because the new alignment may
     // not be applicable with the old ones.
-    V = MMO->getValue();
-    Offset = MMO->getOffset();
+    PtrInfo = MMO->PtrInfo;
   }
 }
 

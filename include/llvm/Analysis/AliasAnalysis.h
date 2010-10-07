@@ -83,6 +83,34 @@ public:
   /// Alias Queries...
   ///
 
+  /// Location - A description of a memory location.
+  struct Location {
+    /// Ptr - The address of the start of the location.
+    const Value *Ptr;
+    /// Size - The size of the location.
+    unsigned Size;
+    /// TBAATag - The metadata node which describes the TBAA type of
+    /// the location, or null if there is no (unique) tag.
+    const MDNode *TBAATag;
+
+    explicit Location(const Value *P = 0,
+                      unsigned S = UnknownSize,
+                      const MDNode *N = 0)
+      : Ptr(P), Size(S), TBAATag(N) {}
+
+    Location getWithNewPtr(const Value *NewPtr) const {
+      Location Copy(*this);
+      Copy.Ptr = NewPtr;
+      return Copy;
+    }
+
+    Location getWithoutTBAATag() const {
+      Location Copy(*this);
+      Copy.TBAATag = 0;
+      return Copy;
+    }
+  };
+
   /// Alias analysis result - Either we know for sure that it does not alias, we
   /// know for sure it must alias, or we don't know anything: The two pointers
   /// _might_ alias.  This enum is designed so you can do things like:
@@ -98,27 +126,41 @@ public:
   /// Returns a Result indicating whether the two pointers are aliased to each
   /// other.  This is the interface that must be implemented by specific alias
   /// analysis implementations.
-  ///
-  virtual AliasResult alias(const Value *V1, unsigned V1Size,
-                            const Value *V2, unsigned V2Size);
+  virtual AliasResult alias(const Location &LocA, const Location &LocB);
 
-  /// alias - A convenience wrapper for the case where the sizes are unknown.
+  /// alias - A convenience wrapper.
+  AliasResult alias(const Value *V1, unsigned V1Size,
+                    const Value *V2, unsigned V2Size) {
+    return alias(Location(V1, V1Size), Location(V2, V2Size));
+  }
+
+  /// alias - A convenience wrapper.
   AliasResult alias(const Value *V1, const Value *V2) {
     return alias(V1, UnknownSize, V2, UnknownSize);
   }
 
   /// isNoAlias - A trivial helper function to check to see if the specified
   /// pointers are no-alias.
-  bool isNoAlias(const Value *V1, unsigned V1Size,
-                 const Value *V2, unsigned V2Size) {
-    return alias(V1, V1Size, V2, V2Size) == NoAlias;
+  bool isNoAlias(const Location &LocA, const Location &LocB) {
+    return alias(LocA, LocB) == NoAlias;
   }
 
-  /// pointsToConstantMemory - If the specified pointer is known to point into
-  /// constant global memory, return true.  This allows disambiguation of store
+  /// isNoAlias - A convenience wrapper.
+  bool isNoAlias(const Value *V1, unsigned V1Size,
+                 const Value *V2, unsigned V2Size) {
+    return isNoAlias(Location(V1, V1Size), Location(V2, V2Size));
+  }
+
+  /// pointsToConstantMemory - If the specified memory location is known to be
+  /// constant, return true.  This allows disambiguation of store
   /// instructions from constant pointers.
   ///
-  virtual bool pointsToConstantMemory(const Value *P);
+  virtual bool pointsToConstantMemory(const Location &Loc);
+
+  /// pointsToConstantMemory - A convenient wrapper.
+  bool pointsToConstantMemory(const Value *P) {
+    return pointsToConstantMemory(Location(P));
+  }
 
   //===--------------------------------------------------------------------===//
   /// Simple mod/ref information...
@@ -220,48 +262,94 @@ public:
 
 
   /// getModRefInfo - Return information about whether or not an instruction may
-  /// read or write memory specified by the pointer operand.  An instruction
+  /// read or write the specified memory location.  An instruction
   /// that doesn't read or write memory may be trivially LICM'd for example.
-
-  /// getModRefInfo (for call sites) - Return whether information about whether
-  /// a particular call site modifies or reads the memory specified by the
-  /// pointer.
-  ///
-  virtual ModRefResult getModRefInfo(ImmutableCallSite CS,
-                                     const Value *P, unsigned Size);
-
-  /// getModRefInfo - Return information about whether two call sites may refer
-  /// to the same set of memory locations.  This function returns NoModRef if
-  /// the two calls refer to disjoint memory locations, Ref if CS1 reads memory
-  /// written by CS2, Mod if CS1 writes to memory read or written by CS2, or
-  /// ModRef if CS1 might read or write memory accessed by CS2.
-  ///
-  virtual ModRefResult getModRefInfo(ImmutableCallSite CS1,
-                                     ImmutableCallSite CS2);
-
-public:
-  /// Convenience functions...
-  ModRefResult getModRefInfo(const LoadInst *L, const Value *P, unsigned Size);
-  ModRefResult getModRefInfo(const StoreInst *S, const Value *P, unsigned Size);
-  ModRefResult getModRefInfo(const VAArgInst* I, const Value* P, unsigned Size);
-  ModRefResult getModRefInfo(const CallInst *C, const Value *P, unsigned Size) {
-    return getModRefInfo(ImmutableCallSite(C), P, Size);
-  }
-  ModRefResult getModRefInfo(const InvokeInst *I,
-                             const Value *P, unsigned Size) {
-    return getModRefInfo(ImmutableCallSite(I), P, Size);
-  }
   ModRefResult getModRefInfo(const Instruction *I,
-                             const Value *P, unsigned Size) {
+                             const Location &Loc) {
     switch (I->getOpcode()) {
-    case Instruction::VAArg:  return getModRefInfo((const VAArgInst*)I, P,Size);
-    case Instruction::Load:   return getModRefInfo((const LoadInst*)I, P, Size);
-    case Instruction::Store:  return getModRefInfo((const StoreInst*)I, P,Size);
-    case Instruction::Call:   return getModRefInfo((const CallInst*)I, P, Size);
-    case Instruction::Invoke: return getModRefInfo((const InvokeInst*)I,P,Size);
+    case Instruction::VAArg:  return getModRefInfo((const VAArgInst*)I, Loc);
+    case Instruction::Load:   return getModRefInfo((const LoadInst*)I,  Loc);
+    case Instruction::Store:  return getModRefInfo((const StoreInst*)I, Loc);
+    case Instruction::Call:   return getModRefInfo((const CallInst*)I,  Loc);
+    case Instruction::Invoke: return getModRefInfo((const InvokeInst*)I,Loc);
     default:                  return NoModRef;
     }
   }
+
+  /// getModRefInfo - A convenience wrapper.
+  ModRefResult getModRefInfo(const Instruction *I,
+                             const Value *P, unsigned Size) {
+    return getModRefInfo(I, Location(P, Size));
+  }
+
+  /// getModRefInfo (for call sites) - Return whether information about whether
+  /// a particular call site modifies or reads the specified memory location.
+  virtual ModRefResult getModRefInfo(ImmutableCallSite CS,
+                                     const Location &Loc);
+
+  /// getModRefInfo (for call sites) - A convenience wrapper.
+  ModRefResult getModRefInfo(ImmutableCallSite CS,
+                             const Value *P, unsigned Size) {
+    return getModRefInfo(CS, Location(P, Size));
+  }
+
+  /// getModRefInfo (for calls) - Return whether information about whether
+  /// a particular call modifies or reads the specified memory location.
+  ModRefResult getModRefInfo(const CallInst *C, const Location &Loc) {
+    return getModRefInfo(ImmutableCallSite(C), Loc);
+  }
+
+  /// getModRefInfo (for calls) - A convenience wrapper.
+  ModRefResult getModRefInfo(const CallInst *C, const Value *P, unsigned Size) {
+    return getModRefInfo(C, Location(P, Size));
+  }
+
+  /// getModRefInfo (for invokes) - Return whether information about whether
+  /// a particular invoke modifies or reads the specified memory location.
+  ModRefResult getModRefInfo(const InvokeInst *I,
+                             const Location &Loc) {
+    return getModRefInfo(ImmutableCallSite(I), Loc);
+  }
+
+  /// getModRefInfo (for invokes) - A convenience wrapper.
+  ModRefResult getModRefInfo(const InvokeInst *I,
+                             const Value *P, unsigned Size) {
+    return getModRefInfo(I, Location(P, Size));
+  }
+
+  /// getModRefInfo (for loads) - Return whether information about whether
+  /// a particular load modifies or reads the specified memory location.
+  ModRefResult getModRefInfo(const LoadInst *L, const Location &Loc);
+
+  /// getModRefInfo (for loads) - A convenience wrapper.
+  ModRefResult getModRefInfo(const LoadInst *L, const Value *P, unsigned Size) {
+    return getModRefInfo(L, Location(P, Size));
+  }
+
+  /// getModRefInfo (for stores) - Return whether information about whether
+  /// a particular store modifies or reads the specified memory location.
+  ModRefResult getModRefInfo(const StoreInst *S, const Location &Loc);
+
+  /// getModRefInfo (for stores) - A convenience wrapper.
+  ModRefResult getModRefInfo(const StoreInst *S, const Value *P, unsigned Size) {
+    return getModRefInfo(S, Location(P, Size));
+  }
+
+  /// getModRefInfo (for va_args) - Return whether information about whether
+  /// a particular va_arg modifies or reads the specified memory location.
+  ModRefResult getModRefInfo(const VAArgInst* I, const Location &Loc);
+
+  /// getModRefInfo (for va_args) - A convenience wrapper.
+  ModRefResult getModRefInfo(const VAArgInst* I, const Value* P, unsigned Size) {
+    return getModRefInfo(I, Location(P, Size));
+  }
+
+  /// getModRefInfo - Return information about whether two call sites may refer
+  /// to the same set of memory locations.  See 
+  ///   http://llvm.org/docs/AliasAnalysis.html#ModRefInfo
+  /// for details.
+  virtual ModRefResult getModRefInfo(ImmutableCallSite CS1,
+                                     ImmutableCallSite CS2);
 
   //===--------------------------------------------------------------------===//
   /// Higher level methods for querying mod/ref information.
@@ -269,16 +357,25 @@ public:
 
   /// canBasicBlockModify - Return true if it is possible for execution of the
   /// specified basic block to modify the value pointed to by Ptr.
-  ///
-  bool canBasicBlockModify(const BasicBlock &BB, const Value *P, unsigned Size);
+  bool canBasicBlockModify(const BasicBlock &BB, const Location &Loc);
+
+  /// canBasicBlockModify - A convenience wrapper.
+  bool canBasicBlockModify(const BasicBlock &BB, const Value *P, unsigned Size){
+    return canBasicBlockModify(BB, Location(P, Size));
+  }
 
   /// canInstructionRangeModify - Return true if it is possible for the
   /// execution of the specified instructions to modify the value pointed to by
   /// Ptr.  The instructions to consider are all of the instructions in the
   /// range of [I1,I2] INCLUSIVE.  I1 and I2 must be in the same basic block.
-  ///
   bool canInstructionRangeModify(const Instruction &I1, const Instruction &I2,
-                                 const Value *Ptr, unsigned Size);
+                                 const Location &Loc);
+
+  /// canInstructionRangeModify - A convenience wrapper.
+  bool canInstructionRangeModify(const Instruction &I1, const Instruction &I2,
+                                 const Value *Ptr, unsigned Size) {
+    return canInstructionRangeModify(I1, I2, Location(Ptr, Size));
+  }
 
   //===--------------------------------------------------------------------===//
   /// Methods that clients should call when they transform the program to allow

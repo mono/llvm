@@ -28,6 +28,7 @@
 #include <vector>
 using namespace llvm;
 
+// FIXME: this has been copied from (or to) X86AsmBackend.cpp
 static unsigned getFixupKindLog2Size(unsigned Kind) {
   switch (Kind) {
   default: llvm_unreachable("invalid fixup kind!");
@@ -38,6 +39,7 @@ static unsigned getFixupKindLog2Size(unsigned Kind) {
   case X86::reloc_pcrel_4byte:
   case X86::reloc_riprel_4byte:
   case X86::reloc_riprel_4byte_movq_load:
+  case X86::reloc_signed_4byte:
   case FK_Data_4: return 2;
   case FK_Data_8: return 3;
   }
@@ -73,6 +75,86 @@ static bool doesSymbolRequireExternRelocation(MCSymbolData *SD) {
 
   // Otherwise, we can use an internal relocation.
   return false;
+}
+
+static bool isScatteredFixupFullyResolved(const MCAssembler &Asm,
+                                          const MCValue Target,
+                                          const MCSymbolData *BaseSymbol) {
+  // The effective fixup address is
+  //     addr(atom(A)) + offset(A)
+  //   - addr(atom(B)) - offset(B)
+  //   - addr(BaseSymbol) + <fixup offset from base symbol>
+  // and the offsets are not relocatable, so the fixup is fully resolved when
+  //  addr(atom(A)) - addr(atom(B)) - addr(BaseSymbol) == 0.
+  //
+  // Note that "false" is almost always conservatively correct (it means we emit
+  // a relocation which is unnecessary), except when it would force us to emit a
+  // relocation which the target cannot encode.
+
+  const MCSymbolData *A_Base = 0, *B_Base = 0;
+  if (const MCSymbolRefExpr *A = Target.getSymA()) {
+    // Modified symbol references cannot be resolved.
+    if (A->getKind() != MCSymbolRefExpr::VK_None)
+      return false;
+
+    A_Base = Asm.getAtom(&Asm.getSymbolData(A->getSymbol()));
+    if (!A_Base)
+      return false;
+  }
+
+  if (const MCSymbolRefExpr *B = Target.getSymB()) {
+    // Modified symbol references cannot be resolved.
+    if (B->getKind() != MCSymbolRefExpr::VK_None)
+      return false;
+
+    B_Base = Asm.getAtom(&Asm.getSymbolData(B->getSymbol()));
+    if (!B_Base)
+      return false;
+  }
+
+  // If there is no base, A and B have to be the same atom for this fixup to be
+  // fully resolved.
+  if (!BaseSymbol)
+    return A_Base == B_Base;
+
+  // Otherwise, B must be missing and A must be the base.
+  return !B_Base && BaseSymbol == A_Base;
+}
+
+static bool isScatteredFixupFullyResolvedSimple(const MCAssembler &Asm,
+                                                const MCValue Target,
+                                                const MCSection *BaseSection) {
+  // The effective fixup address is
+  //     addr(atom(A)) + offset(A)
+  //   - addr(atom(B)) - offset(B)
+  //   - addr(<base symbol>) + <fixup offset from base symbol>
+  // and the offsets are not relocatable, so the fixup is fully resolved when
+  //  addr(atom(A)) - addr(atom(B)) - addr(<base symbol>)) == 0.
+  //
+  // The simple (Darwin, except on x86_64) way of dealing with this was to
+  // assume that any reference to a temporary symbol *must* be a temporary
+  // symbol in the same atom, unless the sections differ. Therefore, any PCrel
+  // relocation to a temporary symbol (in the same section) is fully
+  // resolved. This also works in conjunction with absolutized .set, which
+  // requires the compiler to use .set to absolutize the differences between
+  // symbols which the compiler knows to be assembly time constants, so we don't
+  // need to worry about considering symbol differences fully resolved.
+
+  // Non-relative fixups are only resolved if constant.
+  if (!BaseSection)
+    return Target.isAbsolute();
+
+  // Otherwise, relative fixups are only resolved if not a difference and the
+  // target is a temporary in the same section.
+  if (Target.isAbsolute() || Target.getSymB())
+    return false;
+
+  const MCSymbol *A = &Target.getSymA()->getSymbol();
+  if (!A->isTemporary() || !A->isInSection() ||
+      &A->getSection() != BaseSection)
+    return false;
+
+  return true;
 }
 
 namespace {
@@ -518,11 +600,11 @@ public:
     } else if (Target.getSymB()) { // A - B + constant
       const MCSymbol *A = &Target.getSymA()->getSymbol();
       MCSymbolData &A_SD = Asm.getSymbolData(*A);
-      const MCSymbolData *A_Base = Asm.getAtom(Layout, &A_SD);
+      const MCSymbolData *A_Base = Asm.getAtom(&A_SD);
 
       const MCSymbol *B = &Target.getSymB()->getSymbol();
       MCSymbolData &B_SD = Asm.getSymbolData(*B);
-      const MCSymbolData *B_Base = Asm.getAtom(Layout, &B_SD);
+      const MCSymbolData *B_Base = Asm.getAtom(&B_SD);
 
       // Neither symbol can be modified.
       if (Target.getSymA()->getKind() != MCSymbolRefExpr::VK_None ||
@@ -534,22 +616,32 @@ public:
       if (IsPCRel)
         report_fatal_error("unsupported pc-relative relocation of difference");
 
-      // We don't currently support any situation where one or both of the
-      // symbols would require a local relocation. This is almost certainly
-      // unused and may not be possible to encode correctly.
-      if (!A_Base || !B_Base)
-        report_fatal_error("unsupported local relocations in difference");
+      // The support for the situation where one or both of the symbols would
+      // require a local relocation is handled just like if the symbols were
+      // external.  This is certainly used in the case of debug sections where
+      // the section has only temporary symbols and thus the symbols don't have
+      // base symbols.  This is encoded using the section ordinal and
+      // non-extern relocation entries.
 
       // Darwin 'as' doesn't emit correct relocations for this (it ends up with
-      // a single SIGNED relocation); reject it for now.
-      if (A_Base == B_Base)
+      // a single SIGNED relocation); reject it for now.  Except the case where
+      // both symbols don't have a base, equal but both NULL.
+      if (A_Base == B_Base && A_Base)
         report_fatal_error("unsupported relocation with identical base");
 
-      Value += Layout.getSymbolAddress(&A_SD) - Layout.getSymbolAddress(A_Base);
-      Value -= Layout.getSymbolAddress(&B_SD) - Layout.getSymbolAddress(B_Base);
+      Value += Layout.getSymbolAddress(&A_SD) - 
+               (A_Base == NULL ? 0 : Layout.getSymbolAddress(A_Base));
+      Value -= Layout.getSymbolAddress(&B_SD) -
+               (B_Base == NULL ? 0 : Layout.getSymbolAddress(B_Base));
 
-      Index = A_Base->getIndex();
-      IsExtern = 1;
+      if (A_Base) {
+        Index = A_Base->getIndex();
+        IsExtern = 1;
+      }
+      else {
+        Index = A_SD.getFragment()->getParent()->getOrdinal() + 1;
+        IsExtern = 0;
+      }
       Type = RIT_X86_64_Unsigned;
 
       MachRelocationEntry MRE;
@@ -561,13 +653,19 @@ public:
                    (Type      << 28));
       Relocations[Fragment->getParent()].push_back(MRE);
 
-      Index = B_Base->getIndex();
-      IsExtern = 1;
+      if (B_Base) {
+        Index = B_Base->getIndex();
+        IsExtern = 1;
+      }
+      else {
+        Index = B_SD.getFragment()->getParent()->getOrdinal() + 1;
+        IsExtern = 0;
+      }
       Type = RIT_X86_64_Subtractor;
     } else {
       const MCSymbol *Symbol = &Target.getSymA()->getSymbol();
       MCSymbolData &SD = Asm.getSymbolData(*Symbol);
-      const MCSymbolData *Base = Asm.getAtom(Layout, &SD);
+      const MCSymbolData *Base = Asm.getAtom(&SD);
 
       // Relocations inside debug sections always use local relocations when
       // possible. This seems to be done because the debugger doesn't fully
@@ -797,7 +895,8 @@ public:
     unsigned Log2Size = getFixupKindLog2Size(Fixup.getKind());
 
     // If this is a 32-bit TLVP reloc it's handled a bit differently.
-    if (Target.getSymA()->getKind() == MCSymbolRefExpr::VK_TLVP) {
+    if (Target.getSymA() &&
+        Target.getSymA()->getKind() == MCSymbolRefExpr::VK_TLVP) {
       RecordTLVPRelocation(Asm, Layout, Fragment, Fixup, Target, FixedValue);
       return;
     }
@@ -1037,6 +1136,36 @@ public:
                        UndefinedSymbolData);
   }
 
+
+  bool IsFixupFullyResolved(const MCAssembler &Asm,
+                            const MCValue Target,
+                            bool IsPCRel,
+                            const MCFragment *DF) const {
+    // If we are using scattered symbols, determine whether this value is
+    // actually resolved; scattering may cause atoms to move.
+    if (Asm.getBackend().hasScatteredSymbols()) {
+      if (Asm.getBackend().hasReliableSymbolDifference()) {
+        // If this is a PCrel relocation, find the base atom (identified by its
+        // symbol) that the fixup value is relative to.
+        const MCSymbolData *BaseSymbol = 0;
+        if (IsPCRel) {
+          BaseSymbol = DF->getAtom();
+          if (!BaseSymbol)
+            return false;
+        }
+
+        return isScatteredFixupFullyResolved(Asm, Target, BaseSymbol);
+      } else {
+        const MCSection *BaseSection = 0;
+        if (IsPCRel)
+          BaseSection = &DF->getParent()->getSection();
+
+        return isScatteredFixupFullyResolvedSimple(Asm, Target, BaseSection);
+      }
+    }
+    return true;
+  }
+
   void WriteObject(const MCAssembler &Asm, const MCAsmLayout &Layout) {
     unsigned NumSections = Asm.size();
 
@@ -1223,7 +1352,15 @@ void MachObjectWriter::RecordRelocation(const MCAssembler &Asm,
                                                    Target, FixedValue);
 }
 
-void MachObjectWriter::WriteObject(const MCAssembler &Asm,
+bool MachObjectWriter::IsFixupFullyResolved(const MCAssembler &Asm,
+                                           const MCValue Target,
+                                           bool IsPCRel,
+                                           const MCFragment *DF) const {
+  return ((MachObjectWriterImpl*) Impl)->IsFixupFullyResolved(Asm, Target,
+                                                              IsPCRel, DF);
+}
+
+void MachObjectWriter::WriteObject(MCAssembler &Asm,
                                    const MCAsmLayout &Layout) {
   ((MachObjectWriterImpl*) Impl)->WriteObject(Asm, Layout);
 }

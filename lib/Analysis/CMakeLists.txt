@@ -27,11 +27,11 @@ add_llvm_library(LLVMAnalysis
   LoopDependenceAnalysis.cpp
   LoopInfo.cpp
   LoopPass.cpp
+  MemDepPrinter.cpp
   MemoryBuiltins.cpp
   MemoryDependenceAnalysis.cpp
   ModuleDebugInfoPrinter.cpp
   PHITransAddr.cpp
-  PointerTracking.cpp
   PostDominators.cpp
   ProfileEstimatorPass.cpp
   ProfileInfo.cpp
@@ -49,5 +49,3 @@ add_llvm_library(LLVMAnalysis
   TypeBasedAliasAnalysis.cpp
   ValueTracking.cpp
   )
-
-target_link_libraries (LLVMAnalysis LLVMSupport)

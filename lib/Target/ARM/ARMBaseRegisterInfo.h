@@ -52,6 +52,11 @@ protected:
   /// FramePtr - ARM physical register used as frame ptr.
   unsigned FramePtr;
 
+  /// BasePtr - ARM physical register used as a base ptr in complex stack
+  /// frames. I.e., when we need a 3rd base, not just SP and FP, due to
+  /// variable size stack objects.
+  unsigned BasePtr;
+
   // Can be only subclassed.
   explicit ARMBaseRegisterInfo(const ARMBaseInstrInfo &tii,
                                const ARMSubtarget &STI);
@@ -60,12 +65,6 @@ protected:
   unsigned getOpcode(int Op) const;
 
 public:
-  /// getRegisterNumbering - Given the enum value for some register, e.g.
-  /// ARM::LR, return the number that it corresponds to (e.g. 14). It
-  /// also returns true in isSPVFP if the register is a single precision
-  /// VFP register.
-  static unsigned getRegisterNumbering(unsigned RegEnum, bool *isSPVFP = 0);
-
   /// Code Generation virtual methods...
   const unsigned *getCalleeSavedRegs(const MachineFunction *MF = 0) const;
 
@@ -102,6 +101,7 @@ public:
                           MachineFunction &MF) const;
 
   bool hasFP(const MachineFunction &MF) const;
+  bool hasBasePointer(const MachineFunction &MF) const;
 
   bool canRealignStack(const MachineFunction &MF) const;
   bool needsStackRealignment(const MachineFunction &MF) const;

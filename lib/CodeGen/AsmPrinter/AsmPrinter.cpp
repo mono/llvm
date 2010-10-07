@@ -282,8 +282,12 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
     
     // Handle common symbols.
     if (GVKind.isCommon()) {
+      unsigned Align = 1 << AlignLog;
+      if (!getObjFileLowering().getCommDirectiveSupportsAlignment())
+        Align = 0;
+          
       // .comm _foo, 42, 4
-      OutStreamer.EmitCommonSymbol(GVSym, Size, 1 << AlignLog);
+      OutStreamer.EmitCommonSymbol(GVSym, Size, Align);
       return;
     }
     
@@ -301,11 +305,15 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
       OutStreamer.EmitLocalCommonSymbol(GVSym, Size);
       return;
     }
+
+    unsigned Align = 1 << AlignLog;
+    if (!getObjFileLowering().getCommDirectiveSupportsAlignment())
+      Align = 0;
     
     // .local _foo
     OutStreamer.EmitSymbolAttribute(GVSym, MCSA_Local);
     // .comm _foo, 42, 4
-    OutStreamer.EmitCommonSymbol(GVSym, Size, 1 << AlignLog);
+    OutStreamer.EmitCommonSymbol(GVSym, Size, Align);
     return;
   }
   
@@ -327,6 +335,13 @@ void AsmPrinter::EmitGlobalVariable(const GlobalVariable *GV) {
   // Handle thread local data for mach-o which requires us to output an
   // additional structure of data and mangle the original symbol so that we
   // can reference it later.
+  //
+  // TODO: This should become an "emit thread local global" method on TLOF.
+  // All of this macho specific stuff should be sunk down into TLOFMachO and
+  // stuff like "TLSExtraDataSection" should no longer be part of the parent
+  // TLOF class.  This will also make it more obvious that stuff like
+  // MCStreamer::EmitTBSSSymbol is macho specific and only called from macho
+  // specific code.
   if (GVKind.isThreadLocal() && MAI->hasMachoTBSSDirective()) {
     // Emit the .tbss symbol
     MCSymbol *MangSym = 
@@ -1217,6 +1232,22 @@ void AsmPrinter::EmitLabelOffsetDifference(const MCSymbol *Hi, uint64_t Offset,
     OutStreamer.EmitAssignment(SetLabel, Diff);
     OutStreamer.EmitSymbolValue(SetLabel, 4, 0/*AddrSpace*/);
   }
+}
+
+/// EmitLabelPlusOffset - Emit something like ".long Label+Offset" 
+/// where the size in bytes of the directive is specified by Size and Label
+/// specifies the label.  This implicitly uses .set if it is available.
+void AsmPrinter::EmitLabelPlusOffset(const MCSymbol *Label, uint64_t Offset,
+                                      unsigned Size) 
+  const {
+  
+  // Emit Label+Offset
+  const MCExpr *Plus =
+    MCBinaryExpr::CreateAdd(MCSymbolRefExpr::Create(Label, OutContext), 
+                            MCConstantExpr::Create(Offset, OutContext),
+                            OutContext);
+  
+  OutStreamer.EmitValue(Plus, 4, 0/*AddrSpace*/);
 }
     
 

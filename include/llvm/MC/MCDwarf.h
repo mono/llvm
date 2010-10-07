@@ -8,8 +8,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This file contains the declaration of the MCDwarfFile to support the dwarf
-// .file directive.
-// TODO: add the support needed for the .loc directive.
+// .file directive and the .loc directive.
 //
 //===----------------------------------------------------------------------===//
 
@@ -17,9 +16,18 @@
 #define LLVM_MC_MCDWARF_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCObjectStreamer.h"
+#include "llvm/MC/MCObjectWriter.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Dwarf.h"
+#include <vector>
 
 namespace llvm {
   class MCContext;
+  class MCSection;
+  class MCSymbol;
+  class MCObjectStreamer;
   class raw_ostream;
 
   /// MCDwarfFile - Instances of this class represent the name of the dwarf
@@ -57,6 +65,11 @@ namespace llvm {
     void dump() const;
   };
 
+  inline raw_ostream &operator<<(raw_ostream &OS, const MCDwarfFile &DwarfFile){
+    DwarfFile.print(OS);
+    return OS;
+  }
+
   /// MCDwarfLoc - Instances of this class represent the information from a
   /// dwarf .loc directive.
   class MCDwarfLoc {
@@ -71,6 +84,9 @@ namespace llvm {
     // Isa
     unsigned Isa;
 
+// Flag that indicates the initial value of the is_stmt_start flag.
+#define DWARF2_LINE_DEFAULT_IS_STMT     1
+
 #define DWARF2_FLAG_IS_STMT        (1 << 0)
 #define DWARF2_FLAG_BASIC_BLOCK    (1 << 1)
 #define DWARF2_FLAG_PROLOGUE_END   (1 << 2)
@@ -78,13 +94,30 @@ namespace llvm {
 
   private:  // MCContext manages these
     friend class MCContext;
+    friend class MCLineEntry;
     MCDwarfLoc(unsigned fileNum, unsigned line, unsigned column, unsigned flags,
                unsigned isa)
       : FileNum(fileNum), Line(line), Column(column), Flags(flags), Isa(isa) {}
 
-    MCDwarfLoc(const MCDwarfLoc&);       // DO NOT IMPLEMENT
-    void operator=(const MCDwarfLoc&); // DO NOT IMPLEMENT
+    // Allow the default copy constructor and assignment operator to be used
+    // for an MCDwarfLoc object.
+
   public:
+    /// getFileNum - Get the FileNum of this MCDwarfLoc.
+    unsigned getFileNum() { return FileNum; }
+
+    /// getLine - Get the Line of this MCDwarfLoc.
+    unsigned getLine() { return Line; }
+
+    /// getColumn - Get the Column of this MCDwarfLoc.
+    unsigned getColumn() { return Column; }
+
+    /// getFlags - Get the Flags of this MCDwarfLoc.
+    unsigned getFlags() { return Flags; }
+
+    /// getIsa - Get the Isa of this MCDwarfLoc.
+    unsigned getIsa() { return Isa; }
+
     /// setFileNum - Set the FileNum of this MCDwarfLoc.
     void setFileNum(unsigned fileNum) { FileNum = fileNum; }
 
@@ -101,10 +134,85 @@ namespace llvm {
     void setIsa(unsigned isa) { Isa = isa; }
   };
 
-  inline raw_ostream &operator<<(raw_ostream &OS, const MCDwarfFile &DwarfFile){
-    DwarfFile.print(OS);
-    return OS;
-  }
+  /// MCLineEntry - Instances of this class represent the line information for
+  /// the dwarf line table entries.  Which is created after a machine
+  /// instruction is assembled and uses an address from a temporary label
+  /// created at the current address in the current section and the info from
+  /// the last .loc directive seen as stored in the context.
+  class MCLineEntry : public MCDwarfLoc {
+    MCSymbol *Label;
+
+  private:
+    // Allow the default copy constructor and assignment operator to be used
+    // for an MCLineEntry object.
+
+  public:
+    // Constructor to create an MCLineEntry given a symbol and the dwarf loc.
+    MCLineEntry(MCSymbol *label, const MCDwarfLoc loc) : MCDwarfLoc(loc),
+                Label(label) {}
+
+    MCSymbol *getLabel() { return Label; }
+
+    // This is called when an instruction is assembled into the specified
+    // section and if there is information from the last .loc directive that
+    // has yet to have a line entry made for it is made.
+    static void Make(MCObjectStreamer *MCOS, const MCSection *Section);
+  };
+
+  /// MCLineSection - Instances of this class represent the line information
+  /// for a section where machine instructions have been assembled after seeing
+  /// .loc directives.  This is the information used to build the dwarf line
+  /// table for a section.
+  class MCLineSection {
+
+  private:
+    MCLineSection(const MCLineSection&);  // DO NOT IMPLEMENT
+    void operator=(const MCLineSection&); // DO NOT IMPLEMENT
+
+  public:
+    // Constructor to create an MCLineSection with an empty MCLineEntries
+    // vector.
+    MCLineSection() {}
+
+    // addLineEntry - adds an entry to this MCLineSection's line entries
+    void addLineEntry(const MCLineEntry &LineEntry) {
+      MCLineEntries.push_back(LineEntry);
+    }
+
+    typedef std::vector<MCLineEntry> MCLineEntryCollection;
+    typedef MCLineEntryCollection::iterator iterator;
+
+  private:
+    MCLineEntryCollection MCLineEntries;
+
+  public:
+    MCLineEntryCollection *getMCLineEntries() { return &MCLineEntries; }
+  };
+
+  class MCDwarfFileTable {
+  public:
+    //
+    // This emits the Dwarf file and the line tables.
+    //
+    static void Emit(MCObjectStreamer *MCOS, const MCSection *DwarfLineSection);
+  };
+
+  class MCDwarfLineAddr {
+  public:
+    /// Utility function to encode a Dwarf pair of LineDelta and AddrDeltas.
+    static void Encode(int64_t LineDelta, uint64_t AddrDelta, raw_ostream &OS);
+
+    /// Utility function to emit the encoding to a streamer.
+    static void Emit(MCObjectStreamer *MCOS,
+                     int64_t LineDelta,uint64_t AddrDelta);
+
+    /// Utility function to compute the size of the encoding.
+    static uint64_t ComputeSize(int64_t LineDelta, uint64_t AddrDelta);
+
+    /// Utility function to write the encoding to an object writer.
+    static void Write(MCObjectWriter *OW,
+                      int64_t LineDelta, uint64_t AddrDelta);
+  };
 } // end namespace llvm
 
 #endif

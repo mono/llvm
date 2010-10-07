@@ -28,6 +28,7 @@ MCAsmInfo::MCAsmInfo() {
   SeparatorChar = ';';
   CommentColumn = 40;
   CommentString = "#";
+  LabelSuffix = ":";
   GlobalPrefix = "";
   PrivateGlobalPrefix = ".";
   LinkerPrivateGlobalPrefix = "";
@@ -68,7 +69,9 @@ MCAsmInfo::MCAsmInfo() {
   ExceptionsType = ExceptionHandling::None;
   DwarfRequiresFrameSection = true;
   DwarfUsesInlineInfoSection = false;
+  DwarfUsesAbsoluteLabelForStmtList = true;
   DwarfSectionOffsetDirective = 0;
+  DwarfUsesLabelOffsetForRanges = true;
   HasMicrosoftFastStdCallMangling = false;
 
   AsmTransCBE = 0;

@@ -13,8 +13,10 @@
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCObjectWriter.h"
+#include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/MC/MCDwarf.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
@@ -221,96 +223,15 @@ MCSymbolData::MCSymbolData(const MCSymbol &_Symbol, MCFragment *_Fragment,
 /* *** */
 
 MCAssembler::MCAssembler(MCContext &_Context, TargetAsmBackend &_Backend,
-                         MCCodeEmitter &_Emitter, raw_ostream &_OS)
+                         MCCodeEmitter &_Emitter, bool _PadSectionToAlignment,
+                         raw_ostream &_OS)
   : Context(_Context), Backend(_Backend), Emitter(_Emitter),
-    OS(_OS), RelaxAll(false), SubsectionsViaSymbols(false)
+    OS(_OS), RelaxAll(false), SubsectionsViaSymbols(false),
+    PadSectionToAlignment(_PadSectionToAlignment)
 {
 }
 
 MCAssembler::~MCAssembler() {
-}
-
-static bool isScatteredFixupFullyResolvedSimple(const MCAssembler &Asm,
-                                                const MCFixup &Fixup,
-                                                const MCValue Target,
-                                                const MCSection *BaseSection) {
-  // The effective fixup address is
-  //     addr(atom(A)) + offset(A)
-  //   - addr(atom(B)) - offset(B)
-  //   - addr(<base symbol>) + <fixup offset from base symbol>
-  // and the offsets are not relocatable, so the fixup is fully resolved when
-  //  addr(atom(A)) - addr(atom(B)) - addr(<base symbol>)) == 0.
-  //
-  // The simple (Darwin, except on x86_64) way of dealing with this was to
-  // assume that any reference to a temporary symbol *must* be a temporary
-  // symbol in the same atom, unless the sections differ. Therefore, any PCrel
-  // relocation to a temporary symbol (in the same section) is fully
-  // resolved. This also works in conjunction with absolutized .set, which
-  // requires the compiler to use .set to absolutize the differences between
-  // symbols which the compiler knows to be assembly time constants, so we don't
-  // need to worry about considering symbol differences fully resolved.
-
-  // Non-relative fixups are only resolved if constant.
-  if (!BaseSection)
-    return Target.isAbsolute();
-
-  // Otherwise, relative fixups are only resolved if not a difference and the
-  // target is a temporary in the same section.
-  if (Target.isAbsolute() || Target.getSymB())
-    return false;
-
-  const MCSymbol *A = &Target.getSymA()->getSymbol();
-  if (!A->isTemporary() || !A->isInSection() ||
-      &A->getSection() != BaseSection)
-    return false;
-
-  return true;
-}
-
-static bool isScatteredFixupFullyResolved(const MCAssembler &Asm,
-                                          const MCAsmLayout &Layout,
-                                          const MCFixup &Fixup,
-                                          const MCValue Target,
-                                          const MCSymbolData *BaseSymbol) {
-  // The effective fixup address is
-  //     addr(atom(A)) + offset(A)
-  //   - addr(atom(B)) - offset(B)
-  //   - addr(BaseSymbol) + <fixup offset from base symbol>
-  // and the offsets are not relocatable, so the fixup is fully resolved when
-  //  addr(atom(A)) - addr(atom(B)) - addr(BaseSymbol) == 0.
-  //
-  // Note that "false" is almost always conservatively correct (it means we emit
-  // a relocation which is unnecessary), except when it would force us to emit a
-  // relocation which the target cannot encode.
-
-  const MCSymbolData *A_Base = 0, *B_Base = 0;
-  if (const MCSymbolRefExpr *A = Target.getSymA()) {
-    // Modified symbol references cannot be resolved.
-    if (A->getKind() != MCSymbolRefExpr::VK_None)
-      return false;
-
-    A_Base = Asm.getAtom(Layout, &Asm.getSymbolData(A->getSymbol()));
-    if (!A_Base)
-      return false;
-  }
-
-  if (const MCSymbolRefExpr *B = Target.getSymB()) {
-    // Modified symbol references cannot be resolved.
-    if (B->getKind() != MCSymbolRefExpr::VK_None)
-      return false;
-
-    B_Base = Asm.getAtom(Layout, &Asm.getSymbolData(B->getSymbol()));
-    if (!B_Base)
-      return false;
-  }
-
-  // If there is no base, A and B have to be the same atom for this fixup to be
-  // fully resolved.
-  if (!BaseSymbol)
-    return A_Base == B_Base;
-
-  // Otherwise, B must be missing and A must be the base.
-  return !B_Base && BaseSymbol == A_Base;
 }
 
 bool MCAssembler::isSymbolLinkerVisible(const MCSymbol &Symbol) const {
@@ -326,8 +247,7 @@ bool MCAssembler::isSymbolLinkerVisible(const MCSymbol &Symbol) const {
   return getBackend().doesSectionRequireSymbols(Symbol.getSection());
 }
 
-const MCSymbolData *MCAssembler::getAtom(const MCAsmLayout &Layout,
-                                         const MCSymbolData *SD) const {
+const MCSymbolData *MCAssembler::getAtom(const MCSymbolData *SD) const {
   // Linker visible symbols define atoms.
   if (isSymbolLinkerVisible(SD->getSymbol()))
     return SD;
@@ -346,7 +266,8 @@ const MCSymbolData *MCAssembler::getAtom(const MCAsmLayout &Layout,
   return SD->getFragment()->getAtom();
 }
 
-bool MCAssembler::EvaluateFixup(const MCAsmLayout &Layout,
+bool MCAssembler::EvaluateFixup(const MCObjectWriter &Writer,
+                                const MCAsmLayout &Layout,
                                 const MCFixup &Fixup, const MCFragment *DF,
                                 MCValue &Target, uint64_t &Value) const {
   ++stats::EvaluateFixup;
@@ -376,31 +297,8 @@ bool MCAssembler::EvaluateFixup(const MCAsmLayout &Layout,
       IsResolved = false;
   }
 
-  // If we are using scattered symbols, determine whether this value is actually
-  // resolved; scattering may cause atoms to move.
-  if (IsResolved && getBackend().hasScatteredSymbols()) {
-    if (getBackend().hasReliableSymbolDifference()) {
-      // If this is a PCrel relocation, find the base atom (identified by its
-      // symbol) that the fixup value is relative to.
-      const MCSymbolData *BaseSymbol = 0;
-      if (IsPCRel) {
-        BaseSymbol = DF->getAtom();
-        if (!BaseSymbol)
-          IsResolved = false;
-      }
-
-      if (IsResolved)
-        IsResolved = isScatteredFixupFullyResolved(*this, Layout, Fixup, Target,
-                                                   BaseSymbol);
-    } else {
-      const MCSection *BaseSection = 0;
-      if (IsPCRel)
-        BaseSection = &DF->getParent()->getSection();
-
-      IsResolved = isScatteredFixupFullyResolvedSimple(*this, Fixup, Target,
-                                                       BaseSection);
-    }
-  }
+  if (IsResolved)
+    IsResolved = Writer.IsFixupFullyResolved(*this, Target, IsPCRel, DF);
 
   if (IsPCRel)
     Value -= Layout.getFragmentAddress(DF) + Fixup.getOffset();
@@ -447,11 +345,25 @@ uint64_t MCAssembler::ComputeFragmentSize(MCAsmLayout &Layout,
 
     // FIXME: We need a way to communicate this error.
     int64_t Offset = TargetLocation - FragmentOffset;
-    if (Offset < 0)
+    if (Offset < 0 || Offset >= 0x40000000)
       report_fatal_error("invalid .org offset '" + Twine(TargetLocation) +
-                         "' (at offset '" + Twine(FragmentOffset) + "'");
+                         "' (at offset '" + Twine(FragmentOffset) + "')");
 
     return Offset;
+  }
+
+  case MCFragment::FT_Dwarf: {
+    const MCDwarfLineAddrFragment &OF = cast<MCDwarfLineAddrFragment>(F);
+
+    // The AddrDelta is really unsigned and it can only increase.
+    int64_t AddrDelta;
+
+    OF.getAddrDelta().EvaluateAsAbsolute(AddrDelta, &Layout);
+
+    int64_t LineDelta;
+    LineDelta = OF.getLineDelta();
+
+    return MCDwarfLineAddr::ComputeSize(LineDelta, AddrDelta);
   }
   }
 
@@ -610,6 +522,20 @@ static void WriteFragmentData(const MCAssembler &Asm, const MCAsmLayout &Layout,
 
     break;
   }
+
+  case MCFragment::FT_Dwarf: {
+    const MCDwarfLineAddrFragment &OF = cast<MCDwarfLineAddrFragment>(F);
+
+    // The AddrDelta is really unsigned and it can only increase.
+    int64_t AddrDelta;
+    OF.getAddrDelta().EvaluateAsAbsolute(AddrDelta, &Layout);
+
+    int64_t LineDelta;
+    LineDelta = OF.getLineDelta();
+
+    MCDwarfLineAddr::Write(OW, LineDelta, (uint64_t)AddrDelta);
+    break;
+  }
   }
 
   assert(OW->getStream().tell() - Start == FragmentSize);
@@ -667,7 +593,8 @@ void MCAssembler::WriteSectionData(const MCSectionData *SD,
   assert(OW->getStream().tell() - Start == Layout.getSectionFileSize(SD));
 }
 
-void MCAssembler::AddSectionToTheEnd(MCSectionData &SD, MCAsmLayout &Layout) {
+void MCAssembler::AddSectionToTheEnd(const MCObjectWriter &Writer,
+                                     MCSectionData &SD, MCAsmLayout &Layout) {
   // Create dummy fragments and assign section ordinals.
   unsigned SectionIndex = 0;
   for (MCAssembler::iterator it = begin(), ie = end(); it != ie; ++it)
@@ -696,7 +623,7 @@ void MCAssembler::AddSectionToTheEnd(MCSectionData &SD, MCAsmLayout &Layout) {
   Layout.LayoutSection(&SD);
 
   // Layout until everything fits.
-  while (LayoutOnce(Layout))
+  while (LayoutOnce(Writer, Layout))
     continue;
 
 }
@@ -712,25 +639,25 @@ void MCAssembler::Finish(MCObjectWriter *Writer) {
   // Insert additional align fragments for concrete sections to explicitly pad
   // the previous section to match their alignment requirements. This is for
   // 'gas' compatibility, it shouldn't strictly be necessary.
-  //
-  // FIXME: This may be Mach-O specific.
-  for (unsigned i = 1, e = Layout.getSectionOrder().size(); i < e; ++i) {
-    MCSectionData *SD = Layout.getSectionOrder()[i];
+  if (PadSectionToAlignment) {
+    for (unsigned i = 1, e = Layout.getSectionOrder().size(); i < e; ++i) {
+      MCSectionData *SD = Layout.getSectionOrder()[i];
 
-    // Ignore sections without alignment requirements.
-    unsigned Align = SD->getAlignment();
-    if (Align <= 1)
-      continue;
+      // Ignore sections without alignment requirements.
+      unsigned Align = SD->getAlignment();
+      if (Align <= 1)
+        continue;
 
-    // Ignore virtual sections, they don't cause file size modifications.
-    if (getBackend().isVirtualSection(SD->getSection()))
-      continue;
+      // Ignore virtual sections, they don't cause file size modifications.
+      if (getBackend().isVirtualSection(SD->getSection()))
+        continue;
 
-    // Otherwise, create a new align fragment at the end of the previous
-    // section.
-    MCAlignFragment *AF = new MCAlignFragment(Align, 0, 1, Align,
-                                              Layout.getSectionOrder()[i - 1]);
-    AF->setOnlyAlignAddress(true);
+      // Otherwise, create a new align fragment at the end of the previous
+      // section.
+      MCAlignFragment *AF = new MCAlignFragment(Align, 0, 1, Align,
+                                                Layout.getSectionOrder()[i - 1]);
+      AF->setOnlyAlignAddress(true);
+    }
   }
 
   // Create dummy fragments and assign section ordinals.
@@ -739,7 +666,7 @@ void MCAssembler::Finish(MCObjectWriter *Writer) {
     // Create dummy fragments to eliminate any empty sections, this simplifies
     // layout.
     if (it->getFragmentList().empty())
-      new MCFillFragment(0, 1, 0, it);
+      new MCDataFragment(it);
 
     it->setOrdinal(SectionIndex++);
   }
@@ -755,8 +682,17 @@ void MCAssembler::Finish(MCObjectWriter *Writer) {
       it2->setLayoutOrder(FragmentIndex++);
   }
 
+  llvm::OwningPtr<MCObjectWriter> OwnWriter(0);
+  if (Writer == 0) {
+    //no custom Writer_ : create the default one life-managed by OwningPtr
+    OwnWriter.reset(getBackend().createObjectWriter(OS));
+    Writer = OwnWriter.get();
+    if (!Writer)
+      report_fatal_error("unable to create object writer!");
+  }
+
   // Layout until everything fits.
-  while (LayoutOnce(Layout))
+  while (LayoutOnce(*Writer, Layout))
     continue;
 
   DEBUG_WITH_TYPE("mc-dump", {
@@ -771,15 +707,6 @@ void MCAssembler::Finish(MCObjectWriter *Writer) {
       dump(); });
 
   uint64_t StartOffset = OS.tell();
-
-  llvm::OwningPtr<MCObjectWriter> OwnWriter(0);
-  if (Writer == 0) {
-    //no custom Writer_ : create the default one life-managed by OwningPtr
-    OwnWriter.reset(getBackend().createObjectWriter(OS));
-    Writer = OwnWriter.get();
-    if (!Writer)
-      report_fatal_error("unable to create object writer!");
-  }
 
   // Allow the object writer a chance to perform post-layout binding (for
   // example, to set the index fields in the symbol data).
@@ -800,7 +727,7 @@ void MCAssembler::Finish(MCObjectWriter *Writer) {
         // Evaluate the fixup.
         MCValue Target;
         uint64_t FixedValue;
-        if (!EvaluateFixup(Layout, Fixup, DF, Target, FixedValue)) {
+        if (!EvaluateFixup(*Writer, Layout, Fixup, DF, Target, FixedValue)) {
           // The fixup was unresolved, we need a relocation. Inform the object
           // writer of the relocation, and give it an opportunity to adjust the
           // fixup value if need be.
@@ -818,7 +745,8 @@ void MCAssembler::Finish(MCObjectWriter *Writer) {
   stats::ObjectBytes += OS.tell() - StartOffset;
 }
 
-bool MCAssembler::FixupNeedsRelaxation(const MCFixup &Fixup,
+bool MCAssembler::FixupNeedsRelaxation(const MCObjectWriter &Writer,
+                                       const MCFixup &Fixup,
                                        const MCFragment *DF,
                                        const MCAsmLayout &Layout) const {
   if (getRelaxAll())
@@ -827,7 +755,7 @@ bool MCAssembler::FixupNeedsRelaxation(const MCFixup &Fixup,
   // If we cannot resolve the fixup value, it requires relaxation.
   MCValue Target;
   uint64_t Value;
-  if (!EvaluateFixup(Layout, Fixup, DF, Target, Value))
+  if (!EvaluateFixup(Writer, Layout, Fixup, DF, Target, Value))
     return true;
 
   // Otherwise, relax if the value is too big for a (signed) i8.
@@ -836,7 +764,8 @@ bool MCAssembler::FixupNeedsRelaxation(const MCFixup &Fixup,
   return int64_t(Value) != int64_t(int8_t(Value));
 }
 
-bool MCAssembler::FragmentNeedsRelaxation(const MCInstFragment *IF,
+bool MCAssembler::FragmentNeedsRelaxation(const MCObjectWriter &Writer,
+                                          const MCInstFragment *IF,
                                           const MCAsmLayout &Layout) const {
   // If this inst doesn't ever need relaxation, ignore it. This occurs when we
   // are intentionally pushing out inst fragments, or because we relaxed a
@@ -846,13 +775,14 @@ bool MCAssembler::FragmentNeedsRelaxation(const MCInstFragment *IF,
 
   for (MCInstFragment::const_fixup_iterator it = IF->fixup_begin(),
          ie = IF->fixup_end(); it != ie; ++it)
-    if (FixupNeedsRelaxation(*it, IF, Layout))
+    if (FixupNeedsRelaxation(Writer, *it, IF, Layout))
       return true;
 
   return false;
 }
 
-bool MCAssembler::LayoutOnce(MCAsmLayout &Layout) {
+bool MCAssembler::LayoutOnce(const MCObjectWriter &Writer,
+                             MCAsmLayout &Layout) {
   ++stats::RelaxationSteps;
 
   // Layout the sections in order.
@@ -867,7 +797,7 @@ bool MCAssembler::LayoutOnce(MCAsmLayout &Layout) {
            ie2 = SD.end(); it2 != ie2; ++it2) {
       // Check if this is an instruction fragment that needs relaxation.
       MCInstFragment *IF = dyn_cast<MCInstFragment>(it2);
-      if (!IF || !FragmentNeedsRelaxation(IF, Layout))
+      if (!IF || !FragmentNeedsRelaxation(Writer, IF, Layout))
         continue;
 
       ++stats::RelaxedInstructions;
@@ -972,6 +902,7 @@ void MCFragment::dump() {
   case MCFragment::FT_Fill:  OS << "MCFillFragment"; break;
   case MCFragment::FT_Inst:  OS << "MCInstFragment"; break;
   case MCFragment::FT_Org:   OS << "MCOrgFragment"; break;
+  case MCFragment::FT_Dwarf: OS << "MCDwarfFragment"; break;
   }
 
   OS << "<MCFragment " << (void*) this << " LayoutOrder:" << LayoutOrder
@@ -1030,6 +961,13 @@ void MCFragment::dump() {
     const MCOrgFragment *OF = cast<MCOrgFragment>(this);
     OS << "\n       ";
     OS << " Offset:" << OF->getOffset() << " Value:" << OF->getValue();
+    break;
+  }
+  case MCFragment::FT_Dwarf:  {
+    const MCDwarfLineAddrFragment *OF = cast<MCDwarfLineAddrFragment>(this);
+    OS << "\n       ";
+    OS << " AddrDelta:" << OF->getAddrDelta()
+       << " LineDelta:" << OF->getLineDelta();
     break;
   }
   }

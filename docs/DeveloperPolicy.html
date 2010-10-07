@@ -29,7 +29,6 @@
     <li><a href="#copyright">Copyright</a></li>
     <li><a href="#license">License</a></li>
     <li><a href="#patents">Patents</a></li>
-    <li><a href="#devagree">Developer Agreements</a></li>
   </ol></li>
 </ol>
 <div class="doc_author">Written by the LLVM Oversight Team</div>
@@ -43,7 +42,8 @@
    is to eliminate miscommunication, rework, and confusion that might arise from
    the distributed nature of LLVM's development.  By stating the policy in clear
    terms, we hope each developer can know ahead of time what to expect when
-   making LLVM contributions.</p>
+   making LLVM contributions.  This policy covers all llvm.org subprojects,
+   including Clang, LLDB, etc.</p>
 <p>This policy is also designed to accomplish the following objectives:</p>
 
 <ol>
@@ -77,17 +77,28 @@
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsection"> <a name="informed">Stay Informed</a> </div>
 <div class="doc_text">
-<p>Developers should stay informed by reading at least the 
-   <a href="http://lists.cs.uiuc.edu/mailman/listinfo/llvmdev">llvmdev</a> email
-  list.  If you are doing anything more than just casual work on LLVM, it is
-  suggested that you also subscribe to the
-  <a href="http://lists.cs.uiuc.edu/mailman/listinfo/llvm-commits">llvm-commits</a>
-  list and pay attention to changes being made by others.</p>
+<p>Developers should stay informed by reading at least the "dev" mailing list
+   for the projects you are interested in, such as 
+   <a href="http://lists.cs.uiuc.edu/mailman/listinfo/llvmdev">llvmdev</a> for
+   LLVM, <a href="http://lists.cs.uiuc.edu/mailman/listinfo/cfe-dev">cfe-dev</a>
+   for Clang, or <a
+   href="http://lists.cs.uiuc.edu/mailman/listinfo/lldb-dev">lldb-dev</a>
+   for LLDB.  If you are doing anything more than just casual work on LLVM, it
+   is suggested that you also subscribe to the "commits" mailing list for the
+   subproject you're interested in, such as
+  <a href="http://lists.cs.uiuc.edu/mailman/listinfo/llvm-commits">llvm-commits</a>,
+  <a href="http://lists.cs.uiuc.edu/mailman/listinfo/cfe-commits">cfe-commits</a>,
+  or <a href="http://lists.cs.uiuc.edu/mailman/listinfo/lldb-commits">lldb-commits</a>.
+   Reading the "commits" list and paying attention to changes being made by
+   others is a good way to see what other people are interested in and watching
+   the flow of the project as a whole.</p>
 
 <p>We recommend that active developers register an email account with 
    <a href="http://llvm.org/bugs/">LLVM Bugzilla</a> and preferably subscribe to
    the <a href="http://lists.cs.uiuc.edu/mailman/listinfo/llvmbugs">llvm-bugs</a>
-   email list to keep track of bugs and enhancements occurring in LLVM.</p>
+   email list to keep track of bugs and enhancements occurring in LLVM.  We
+   really appreciate people who are proactive at catching incoming bugs in their
+   components and dealing with them promptly.</p>
 </div>
 
 <!-- _______________________________________________________________________ -->
@@ -184,7 +195,11 @@
 <ol>
   <li><b>Evan Cheng</b>: Code generator and all targets.</li>
 
-  <li><b>Doug Gregor</b>: Clang Basic, Lex, Parse, and Sema Libraries.</li>
+  <li><b>Greg Clayton</b>: LLDB.</li>
+
+  <li><b>Doug Gregor</b>: Clang Frontend Libraries.</li>
+
+  <li><b>Howard Hinnant</b>: libc++.</li>
 
   <li><b>Anton Korobeynikov</b>: Exception handling, debug information, and
       Windows codegen.</li>
@@ -234,8 +249,9 @@
       them short.</li>
 </ol>
   
-<p>Note that llvm/test is designed for regression and small feature tests
-   only. More extensive test cases (e.g., entire applications, benchmarks, etc)
+<p>Note that llvm/test and clang/test are designed for regression and small
+   feature tests only. More extensive test cases (e.g., entire applications,
+   benchmarks, etc)
    should be added to the <tt>llvm-test</tt> test suite.  The llvm-test suite is
    for coverage (correctness, performance, etc) testing, not feature or
    regression testing.</p>
@@ -258,7 +274,7 @@
       testcase</a> so we know if the fix/feature ever regresses in the
       future.</li>
 
-  <li>Code must pass the dejagnu (<tt>llvm/test</tt>) test suite.</li>
+  <li>Code must pass the <tt>llvm/test</tt> test suite.</li>
 
   <li>The code must not cause regressions on a reasonable subset of llvm-test,
       where "reasonable" depends on the contributor's judgement and the scope of
@@ -493,20 +509,24 @@ Changes</a></div>
 <!-- _______________________________________________________________________ -->
 <div class="doc_subsection"><a name="copyright">Copyright</a></div>
 <div class="doc_text">
-<p>For consistency and ease of management, the project requires the copyright
-   for all LLVM software to be held by a single copyright holder: the University
-   of Illinois (UIUC).</p>
-  
-<p>Although UIUC may eventually reassign the copyright of the software to
-   another entity (e.g. a dedicated non-profit "LLVM Organization") the intent
-   for the project is to always have a single entity hold the copyrights to LLVM
-   at any given time.</p>
 
-<p>We believe that having a single copyright holder is in the best interests of
-   all developers and users as it greatly reduces the managerial burden for any
-   kind of administrative or technical decisions about LLVM.  The goal of the
-   LLVM project is to always keep the code open and <a href="#license">licensed
-   under a very liberal license</a>.</p>
+<p>The LLVM project does not require copyright assignments, which means that the
+   copyright for the code in the project is held by its respective contributors
+   who have each agreed to release their contributed code under the terms of the
+   <a href="#license">LLVM License</a>.</p>
+   
+<p>An implication of this is that the LLVM license is unlikely to ever change:
+   changing it would require tracking down all the contributors to LLVM and
+   getting them to agree that a license change is acceptable for their
+   contribution.  Since there are no plans to change the license, this is not a
+   cause for concern.</p>
+   
+<p>As a contributor to the project, this means that you (or your company) retain
+   ownership of the code you contribute, that it cannot be used in a way that
+   contradicts the license (which is a liberal BSD-style license), and that the
+   license for your contributions won't change without your approval in the
+   future.</p>
+   
 </div>
 
 <!-- _______________________________________________________________________ -->
@@ -569,21 +589,6 @@ Changes</a></div>
    other user of LLVM to freely use your patent.  Please contact
    the <a href="mailto:llvm-oversight@cs.uiuc.edu">oversight group</a> for more
    details.</p>
-</div>
-
-<!-- _______________________________________________________________________ -->
-<div class="doc_subsection"><a name="devagree">Developer Agreements</a></div>
-<div class="doc_text">
-<p>With regards to the LLVM copyright and licensing, developers agree to assign
-   their copyrights to UIUC for any contribution made so that the entire
-   software base can be managed by a single copyright holder.  This implies that
-   any contributions can be licensed under the license that the project
-   uses.</p>
-
-<p>When contributing code, you also affirm that you are legally entitled to
-   grant this copyright, personally or on behalf of your employer.  If the code
-   belongs to some other entity, please raise this issue with the oversight
-   group before the code is committed.</p>
 </div>
 
 <!-- *********************************************************************** -->

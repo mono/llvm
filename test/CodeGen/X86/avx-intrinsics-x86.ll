@@ -1715,28 +1715,12 @@ define i32 @test_x86_sse_ucomineq_ss(<4 x float> %a0, <4 x float> %a1) {
 declare i32 @llvm.x86.sse.ucomineq.ss(<4 x float>, <4 x float>) nounwind readnone
 
 
-define <8 x i8> @test_x86_ssse3_pabs_b(<8 x i8> %a0) {
-  ; CHECK: vpabsb
-  %res = call <8 x i8> @llvm.x86.ssse3.pabs.b(<8 x i8> %a0) ; <<8 x i8>> [#uses=1]
-  ret <8 x i8> %res
-}
-declare <8 x i8> @llvm.x86.ssse3.pabs.b(<8 x i8>) nounwind readnone
-
-
 define <16 x i8> @test_x86_ssse3_pabs_b_128(<16 x i8> %a0) {
   ; CHECK: vpabsb
   %res = call <16 x i8> @llvm.x86.ssse3.pabs.b.128(<16 x i8> %a0) ; <<16 x i8>> [#uses=1]
   ret <16 x i8> %res
 }
 declare <16 x i8> @llvm.x86.ssse3.pabs.b.128(<16 x i8>) nounwind readnone
-
-
-define <2 x i32> @test_x86_ssse3_pabs_d(<2 x i32> %a0) {
-  ; CHECK: vpabsd
-  %res = call <2 x i32> @llvm.x86.ssse3.pabs.d(<2 x i32> %a0) ; <<2 x i32>> [#uses=1]
-  ret <2 x i32> %res
-}
-declare <2 x i32> @llvm.x86.ssse3.pabs.d(<2 x i32>) nounwind readnone
 
 
 define <4 x i32> @test_x86_ssse3_pabs_d_128(<4 x i32> %a0) {
@@ -1747,28 +1731,12 @@ define <4 x i32> @test_x86_ssse3_pabs_d_128(<4 x i32> %a0) {
 declare <4 x i32> @llvm.x86.ssse3.pabs.d.128(<4 x i32>) nounwind readnone
 
 
-define <4 x i16> @test_x86_ssse3_pabs_w(<4 x i16> %a0) {
-  ; CHECK: vpabsw
-  %res = call <4 x i16> @llvm.x86.ssse3.pabs.w(<4 x i16> %a0) ; <<4 x i16>> [#uses=1]
-  ret <4 x i16> %res
-}
-declare <4 x i16> @llvm.x86.ssse3.pabs.w(<4 x i16>) nounwind readnone
-
-
 define <8 x i16> @test_x86_ssse3_pabs_w_128(<8 x i16> %a0) {
   ; CHECK: vpabsw
   %res = call <8 x i16> @llvm.x86.ssse3.pabs.w.128(<8 x i16> %a0) ; <<8 x i16>> [#uses=1]
   ret <8 x i16> %res
 }
 declare <8 x i16> @llvm.x86.ssse3.pabs.w.128(<8 x i16>) nounwind readnone
-
-
-define <2 x i32> @test_x86_ssse3_phadd_d(<2 x i32> %a0, <2 x i32> %a1) {
-  ; CHECK: vphaddd
-  %res = call <2 x i32> @llvm.x86.ssse3.phadd.d(<2 x i32> %a0, <2 x i32> %a1) ; <<2 x i32>> [#uses=1]
-  ret <2 x i32> %res
-}
-declare <2 x i32> @llvm.x86.ssse3.phadd.d(<2 x i32>, <2 x i32>) nounwind readnone
 
 
 define <4 x i32> @test_x86_ssse3_phadd_d_128(<4 x i32> %a0, <4 x i32> %a1) {
@@ -1779,28 +1747,12 @@ define <4 x i32> @test_x86_ssse3_phadd_d_128(<4 x i32> %a0, <4 x i32> %a1) {
 declare <4 x i32> @llvm.x86.ssse3.phadd.d.128(<4 x i32>, <4 x i32>) nounwind readnone
 
 
-define <4 x i16> @test_x86_ssse3_phadd_sw(<4 x i16> %a0, <4 x i16> %a1) {
-  ; CHECK: vphaddsw
-  %res = call <4 x i16> @llvm.x86.ssse3.phadd.sw(<4 x i16> %a0, <4 x i16> %a1) ; <<4 x i16>> [#uses=1]
-  ret <4 x i16> %res
-}
-declare <4 x i16> @llvm.x86.ssse3.phadd.sw(<4 x i16>, <4 x i16>) nounwind readnone
-
-
 define <4 x i32> @test_x86_ssse3_phadd_sw_128(<4 x i32> %a0, <4 x i32> %a1) {
   ; CHECK: vphaddsw
   %res = call <4 x i32> @llvm.x86.ssse3.phadd.sw.128(<4 x i32> %a0, <4 x i32> %a1) ; <<4 x i32>> [#uses=1]
   ret <4 x i32> %res
 }
 declare <4 x i32> @llvm.x86.ssse3.phadd.sw.128(<4 x i32>, <4 x i32>) nounwind readnone
-
-
-define <4 x i16> @test_x86_ssse3_phadd_w(<4 x i16> %a0, <4 x i16> %a1) {
-  ; CHECK: vphaddw
-  %res = call <4 x i16> @llvm.x86.ssse3.phadd.w(<4 x i16> %a0, <4 x i16> %a1) ; <<4 x i16>> [#uses=1]
-  ret <4 x i16> %res
-}
-declare <4 x i16> @llvm.x86.ssse3.phadd.w(<4 x i16>, <4 x i16>) nounwind readnone
 
 
 define <8 x i16> @test_x86_ssse3_phadd_w_128(<8 x i16> %a0, <8 x i16> %a1) {
@@ -1811,28 +1763,12 @@ define <8 x i16> @test_x86_ssse3_phadd_w_128(<8 x i16> %a0, <8 x i16> %a1) {
 declare <8 x i16> @llvm.x86.ssse3.phadd.w.128(<8 x i16>, <8 x i16>) nounwind readnone
 
 
-define <2 x i32> @test_x86_ssse3_phsub_d(<2 x i32> %a0, <2 x i32> %a1) {
-  ; CHECK: vphsubd
-  %res = call <2 x i32> @llvm.x86.ssse3.phsub.d(<2 x i32> %a0, <2 x i32> %a1) ; <<2 x i32>> [#uses=1]
-  ret <2 x i32> %res
-}
-declare <2 x i32> @llvm.x86.ssse3.phsub.d(<2 x i32>, <2 x i32>) nounwind readnone
-
-
 define <4 x i32> @test_x86_ssse3_phsub_d_128(<4 x i32> %a0, <4 x i32> %a1) {
   ; CHECK: vphsubd
   %res = call <4 x i32> @llvm.x86.ssse3.phsub.d.128(<4 x i32> %a0, <4 x i32> %a1) ; <<4 x i32>> [#uses=1]
   ret <4 x i32> %res
 }
 declare <4 x i32> @llvm.x86.ssse3.phsub.d.128(<4 x i32>, <4 x i32>) nounwind readnone
-
-
-define <4 x i16> @test_x86_ssse3_phsub_sw(<4 x i16> %a0, <4 x i16> %a1) {
-  ; CHECK: vphsubsw
-  %res = call <4 x i16> @llvm.x86.ssse3.phsub.sw(<4 x i16> %a0, <4 x i16> %a1) ; <<4 x i16>> [#uses=1]
-  ret <4 x i16> %res
-}
-declare <4 x i16> @llvm.x86.ssse3.phsub.sw(<4 x i16>, <4 x i16>) nounwind readnone
 
 
 define <8 x i16> @test_x86_ssse3_phsub_sw_128(<8 x i16> %a0, <8 x i16> %a1) {
@@ -1843,28 +1779,12 @@ define <8 x i16> @test_x86_ssse3_phsub_sw_128(<8 x i16> %a0, <8 x i16> %a1) {
 declare <8 x i16> @llvm.x86.ssse3.phsub.sw.128(<8 x i16>, <8 x i16>) nounwind readnone
 
 
-define <4 x i16> @test_x86_ssse3_phsub_w(<4 x i16> %a0, <4 x i16> %a1) {
-  ; CHECK: vphsubw
-  %res = call <4 x i16> @llvm.x86.ssse3.phsub.w(<4 x i16> %a0, <4 x i16> %a1) ; <<4 x i16>> [#uses=1]
-  ret <4 x i16> %res
-}
-declare <4 x i16> @llvm.x86.ssse3.phsub.w(<4 x i16>, <4 x i16>) nounwind readnone
-
-
 define <8 x i16> @test_x86_ssse3_phsub_w_128(<8 x i16> %a0, <8 x i16> %a1) {
   ; CHECK: vphsubw
   %res = call <8 x i16> @llvm.x86.ssse3.phsub.w.128(<8 x i16> %a0, <8 x i16> %a1) ; <<8 x i16>> [#uses=1]
   ret <8 x i16> %res
 }
 declare <8 x i16> @llvm.x86.ssse3.phsub.w.128(<8 x i16>, <8 x i16>) nounwind readnone
-
-
-define <4 x i16> @test_x86_ssse3_pmadd_ub_sw(<4 x i16> %a0, <4 x i16> %a1) {
-  ; CHECK: vpmaddubsw
-  %res = call <4 x i16> @llvm.x86.ssse3.pmadd.ub.sw(<4 x i16> %a0, <4 x i16> %a1) ; <<4 x i16>> [#uses=1]
-  ret <4 x i16> %res
-}
-declare <4 x i16> @llvm.x86.ssse3.pmadd.ub.sw(<4 x i16>, <4 x i16>) nounwind readnone
 
 
 define <8 x i16> @test_x86_ssse3_pmadd_ub_sw_128(<8 x i16> %a0, <8 x i16> %a1) {
@@ -1875,28 +1795,12 @@ define <8 x i16> @test_x86_ssse3_pmadd_ub_sw_128(<8 x i16> %a0, <8 x i16> %a1) {
 declare <8 x i16> @llvm.x86.ssse3.pmadd.ub.sw.128(<8 x i16>, <8 x i16>) nounwind readnone
 
 
-define <4 x i16> @test_x86_ssse3_pmul_hr_sw(<4 x i16> %a0, <4 x i16> %a1) {
-  ; CHECK: vpmulhrsw
-  %res = call <4 x i16> @llvm.x86.ssse3.pmul.hr.sw(<4 x i16> %a0, <4 x i16> %a1) ; <<4 x i16>> [#uses=1]
-  ret <4 x i16> %res
-}
-declare <4 x i16> @llvm.x86.ssse3.pmul.hr.sw(<4 x i16>, <4 x i16>) nounwind readnone
-
-
 define <8 x i16> @test_x86_ssse3_pmul_hr_sw_128(<8 x i16> %a0, <8 x i16> %a1) {
   ; CHECK: vpmulhrsw
   %res = call <8 x i16> @llvm.x86.ssse3.pmul.hr.sw.128(<8 x i16> %a0, <8 x i16> %a1) ; <<8 x i16>> [#uses=1]
   ret <8 x i16> %res
 }
 declare <8 x i16> @llvm.x86.ssse3.pmul.hr.sw.128(<8 x i16>, <8 x i16>) nounwind readnone
-
-
-define <8 x i8> @test_x86_ssse3_pshuf_b(<8 x i8> %a0, <8 x i8> %a1) {
-  ; CHECK: vpshufb
-  %res = call <8 x i8> @llvm.x86.ssse3.pshuf.b(<8 x i8> %a0, <8 x i8> %a1) ; <<8 x i8>> [#uses=1]
-  ret <8 x i8> %res
-}
-declare <8 x i8> @llvm.x86.ssse3.pshuf.b(<8 x i8>, <8 x i8>) nounwind readnone
 
 
 define <16 x i8> @test_x86_ssse3_pshuf_b_128(<16 x i8> %a0, <16 x i8> %a1) {
@@ -1907,14 +1811,6 @@ define <16 x i8> @test_x86_ssse3_pshuf_b_128(<16 x i8> %a0, <16 x i8> %a1) {
 declare <16 x i8> @llvm.x86.ssse3.pshuf.b.128(<16 x i8>, <16 x i8>) nounwind readnone
 
 
-define <8 x i8> @test_x86_ssse3_psign_b(<8 x i8> %a0, <8 x i8> %a1) {
-  ; CHECK: vpsignb
-  %res = call <8 x i8> @llvm.x86.ssse3.psign.b(<8 x i8> %a0, <8 x i8> %a1) ; <<8 x i8>> [#uses=1]
-  ret <8 x i8> %res
-}
-declare <8 x i8> @llvm.x86.ssse3.psign.b(<8 x i8>, <8 x i8>) nounwind readnone
-
-
 define <16 x i8> @test_x86_ssse3_psign_b_128(<16 x i8> %a0, <16 x i8> %a1) {
   ; CHECK: vpsignb
   %res = call <16 x i8> @llvm.x86.ssse3.psign.b.128(<16 x i8> %a0, <16 x i8> %a1) ; <<16 x i8>> [#uses=1]
@@ -1923,28 +1819,12 @@ define <16 x i8> @test_x86_ssse3_psign_b_128(<16 x i8> %a0, <16 x i8> %a1) {
 declare <16 x i8> @llvm.x86.ssse3.psign.b.128(<16 x i8>, <16 x i8>) nounwind readnone
 
 
-define <2 x i32> @test_x86_ssse3_psign_d(<2 x i32> %a0, <2 x i32> %a1) {
-  ; CHECK: vpsignd
-  %res = call <2 x i32> @llvm.x86.ssse3.psign.d(<2 x i32> %a0, <2 x i32> %a1) ; <<2 x i32>> [#uses=1]
-  ret <2 x i32> %res
-}
-declare <2 x i32> @llvm.x86.ssse3.psign.d(<2 x i32>, <2 x i32>) nounwind readnone
-
-
 define <4 x i32> @test_x86_ssse3_psign_d_128(<4 x i32> %a0, <4 x i32> %a1) {
   ; CHECK: vpsignd
   %res = call <4 x i32> @llvm.x86.ssse3.psign.d.128(<4 x i32> %a0, <4 x i32> %a1) ; <<4 x i32>> [#uses=1]
   ret <4 x i32> %res
 }
 declare <4 x i32> @llvm.x86.ssse3.psign.d.128(<4 x i32>, <4 x i32>) nounwind readnone
-
-
-define <4 x i16> @test_x86_ssse3_psign_w(<4 x i16> %a0, <4 x i16> %a1) {
-  ; CHECK: vpsignw
-  %res = call <4 x i16> @llvm.x86.ssse3.psign.w(<4 x i16> %a0, <4 x i16> %a1) ; <<4 x i16>> [#uses=1]
-  ret <4 x i16> %res
-}
-declare <4 x i16> @llvm.x86.ssse3.psign.w(<4 x i16>, <4 x i16>) nounwind readnone
 
 
 define <8 x i16> @test_x86_ssse3_psign_w_128(<8 x i16> %a0, <8 x i16> %a1) {
