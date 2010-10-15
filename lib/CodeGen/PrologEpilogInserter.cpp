@@ -44,8 +44,12 @@ using namespace llvm;
 
 char PEI::ID = 0;
 
-INITIALIZE_PASS(PEI, "prologepilog",
-                "Prologue/Epilogue Insertion", false, false);
+INITIALIZE_PASS_BEGIN(PEI, "prologepilog",
+                "Prologue/Epilogue Insertion", false, false)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
+INITIALIZE_PASS_DEPENDENCY(MachineDominatorTree)
+INITIALIZE_PASS_END(PEI, "prologepilog",
+                "Prologue/Epilogue Insertion", false, false)
 
 STATISTIC(NumVirtualFrameRegs, "Number of virtual frame regs encountered");
 STATISTIC(NumScavengedRegs, "Number of frame index regs scavenged");

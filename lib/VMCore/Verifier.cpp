@@ -103,7 +103,7 @@ namespace {  // Anonymous namespace for class
 
 char PreVerifier::ID = 0;
 INITIALIZE_PASS(PreVerifier, "preverify", "Preliminary module verification", 
-                false, false);
+                false, false)
 char &PreVerifyID = PreVerifier::ID;
 
 namespace {
@@ -393,7 +393,10 @@ namespace {
 } // End anonymous namespace
 
 char Verifier::ID = 0;
-INITIALIZE_PASS(Verifier, "verify", "Module Verifier", false, false);
+INITIALIZE_PASS_BEGIN(Verifier, "verify", "Module Verifier", false, false)
+INITIALIZE_PASS_DEPENDENCY(PreVerifier)
+INITIALIZE_PASS_DEPENDENCY(DominatorTree)
+INITIALIZE_PASS_END(Verifier, "verify", "Module Verifier", false, false)
 
 // Assert - We know that cond should be true, if not print an error message.
 #define Assert(C, M) \

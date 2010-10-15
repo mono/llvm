@@ -66,20 +66,6 @@ add_llvm_unittest(JIT
   ExecutionEngine/JIT/MultiJITTest.cpp
   )
 
-add_llvm_unittest(Support
-  Support/AllocatorTest.cpp
-  Support/Casting.cpp
-  Support/CommandLineTest.cpp
-  Support/ConstantRangeTest.cpp
-  Support/LeakDetectorTest.cpp
-  Support/MathExtrasTest.cpp
-  Support/raw_ostream_test.cpp
-  Support/RegexTest.cpp
-  Support/System.cpp
-  Support/TypeBuilderTest.cpp
-  Support/ValueHandleTest.cpp
-  )
-
 add_llvm_unittest(Transforms
   Transforms/Utils/Cloning.cpp
   )
@@ -91,4 +77,25 @@ add_llvm_unittest(VMCore
   VMCore/MetadataTest.cpp
   VMCore/PassManagerTest.cpp
   VMCore/VerifierTest.cpp
+  )
+
+set(LLVM_LINK_COMPONENTS
+  System
+  Support
+  Core
+  )
+
+add_llvm_unittest(Support
+  Support/AllocatorTest.cpp
+  Support/Casting.cpp
+  Support/CommandLineTest.cpp
+  Support/ConstantRangeTest.cpp
+  Support/LeakDetectorTest.cpp
+  Support/MathExtrasTest.cpp
+  Support/raw_ostream_test.cpp
+  Support/RegexTest.cpp
+  Support/System.cpp
+  Support/SwapByteOrderTest.cpp
+  Support/TypeBuilderTest.cpp
+  Support/ValueHandleTest.cpp
   )

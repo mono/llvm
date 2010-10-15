@@ -1207,7 +1207,7 @@ multiclass T2Ipl<bit instr, bit write, string opc> {
     let Inst{15-12} = 0b1111;
   }
 
-  def r   : T2I<(outs), (ins GPR:$base, GPR:$a), IIC_iLoad_i, opc,
+  def r : T2I<(outs), (ins GPR:$base, GPR:$a), IIC_iLoad_i, opc,
                 "\t[$base, $a]", []> {
     let Inst{31-25} = 0b1111100;
     let Inst{24} = instr;
@@ -1220,7 +1220,7 @@ multiclass T2Ipl<bit instr, bit write, string opc> {
     let Inst{5-4} = 0b00; // no shift is applied
   }
 
-  def s   : T2I<(outs), (ins GPR:$base, GPR:$a, i32imm:$shamt), IIC_iLoad_i, opc,
+  def s : T2I<(outs), (ins GPR:$base, GPR:$a, i32imm:$shamt), IIC_iLoad_i, opc,
                 "\t[$base, $a, lsl $shamt]", []> {
     let Inst{31-25} = 0b1111100;
     let Inst{24} = instr;
@@ -1598,7 +1598,7 @@ defm t2ASR  : T2I_sh_ir<0b10, "asr", BinOpFrag<(sra  node:$LHS, node:$RHS)>>;
 defm t2ROR  : T2I_sh_ir<0b11, "ror", BinOpFrag<(rotr node:$LHS, node:$RHS)>>;
 
 let Uses = [CPSR] in {
-def t2MOVrx : T2sI<(outs rGPR:$dst), (ins rGPR:$src), IIC_iMOVsi,
+def t2RRX : T2sI<(outs rGPR:$dst), (ins rGPR:$src), IIC_iMOVsi,
                    "rrx", "\t$dst, $src",
                    [(set rGPR:$dst, (ARMrrx rGPR:$src))]> {
   let Inst{31-27} = 0b11101;
@@ -1657,10 +1657,6 @@ defm t2EOR  : T2I_bin_w_irs<0b0100, "eor",
 defm t2BIC  : T2I_bin_w_irs<0b0001, "bic",
                             IIC_iBITi, IIC_iBITr, IIC_iBITsi,
                             BinOpFrag<(and node:$LHS, (not node:$RHS))>>;
-
-defm t2ANDS : T2I_bin_s_irs<0b0000, "and",
-                            IIC_iBITi, IIC_iBITr, IIC_iBITsi,
-                            BinOpFrag<(ARMand node:$LHS, node:$RHS)>, 1>;
 
 let Constraints = "$src = $dst" in
 def t2BFC : T2I<(outs rGPR:$dst), (ins rGPR:$src, bf_inv_mask_imm:$imm),

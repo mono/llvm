@@ -55,8 +55,17 @@ STATISTIC(numFolds     , "Number of loads/stores folded into instructions");
 STATISTIC(numSplits    , "Number of intervals split");
 
 char LiveIntervals::ID = 0;
-INITIALIZE_PASS(LiveIntervals, "liveintervals",
-                "Live Interval Analysis", false, false);
+INITIALIZE_PASS_BEGIN(LiveIntervals, "liveintervals",
+                "Live Interval Analysis", false, false)
+INITIALIZE_PASS_DEPENDENCY(LiveVariables)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
+INITIALIZE_PASS_DEPENDENCY(PHIElimination)
+INITIALIZE_PASS_DEPENDENCY(TwoAddressInstructionPass)
+INITIALIZE_PASS_DEPENDENCY(ProcessImplicitDefs)
+INITIALIZE_PASS_DEPENDENCY(SlotIndexes)
+INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
+INITIALIZE_PASS_END(LiveIntervals, "liveintervals",
+                "Live Interval Analysis", false, false)
 
 void LiveIntervals::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesCFG();
@@ -570,11 +579,11 @@ exit:
   assert(start < end && "did not find end of interval?");
 
   // Already exists? Extend old live interval.
-  LiveInterval::iterator OldLR = interval.FindLiveRangeContaining(start);
-  bool Extend = OldLR != interval.end();
-  VNInfo *ValNo = Extend
-    ? OldLR->valno : interval.getNextValue(start, CopyMI, VNInfoAllocator);
-  if (MO.isEarlyClobber() && Extend)
+  VNInfo *ValNo = interval.getVNInfoAt(start);
+  bool Extend = ValNo != 0;
+  if (!Extend)
+    ValNo = interval.getNextValue(start, CopyMI, VNInfoAllocator);
+  if (Extend && MO.isEarlyClobber())
     ValNo->setHasRedefByEC(true);
   LiveRange LR(start, end, ValNo);
   interval.addRange(LR);
@@ -799,10 +808,8 @@ unsigned LiveIntervals::getReMatImplicitUse(const LiveInterval &li,
 /// which reaches the given instruction also reaches the specified use index.
 bool LiveIntervals::isValNoAvailableAt(const LiveInterval &li, MachineInstr *MI,
                                        SlotIndex UseIdx) const {
-  SlotIndex Index = getInstructionIndex(MI);
-  VNInfo *ValNo = li.FindLiveRangeContaining(Index)->valno;
-  LiveInterval::const_iterator UI = li.FindLiveRangeContaining(UseIdx);
-  return UI != li.end() && UI->valno == ValNo;
+  VNInfo *UValNo = li.getVNInfoAt(UseIdx);
+  return UValNo && UValNo == li.getVNInfoAt(getInstructionIndex(MI));
 }
 
 /// isReMaterializable - Returns true if the definition MI of the specified
@@ -828,7 +835,7 @@ bool LiveIntervals::isReMaterializable(const LiveInterval &li,
          ri != re; ++ri) {
       MachineInstr *UseMI = &*ri;
       SlotIndex UseIdx = getInstructionIndex(UseMI);
-      if (li.FindLiveRangeContaining(UseIdx)->valno != ValNo)
+      if (li.getVNInfoAt(UseIdx) != ValNo)
         continue;
       if (!isValNoAvailableAt(ImpLi, MI, UseIdx))
         return false;

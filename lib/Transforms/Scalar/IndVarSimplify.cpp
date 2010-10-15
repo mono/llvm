@@ -117,8 +117,16 @@ namespace {
 }
 
 char IndVarSimplify::ID = 0;
-INITIALIZE_PASS(IndVarSimplify, "indvars",
-                "Canonicalize Induction Variables", false, false);
+INITIALIZE_PASS_BEGIN(IndVarSimplify, "indvars",
+                "Canonicalize Induction Variables", false, false)
+INITIALIZE_PASS_DEPENDENCY(DominatorTree)
+INITIALIZE_PASS_DEPENDENCY(LoopInfo)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
+INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
+INITIALIZE_PASS_DEPENDENCY(LCSSA)
+INITIALIZE_PASS_DEPENDENCY(IVUsers)
+INITIALIZE_PASS_END(IndVarSimplify, "indvars",
+                "Canonicalize Induction Variables", false, false)
 
 Pass *llvm::createIndVarSimplifyPass() {
   return new IndVarSimplify();

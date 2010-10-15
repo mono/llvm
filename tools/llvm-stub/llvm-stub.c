@@ -1,10 +1,10 @@
 /*===- llvm-stub.c - Stub executable to run llvm bitcode files ------------===//
-// 
+//
 //                     The LLVM Compiler Infrastructure
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-// 
+//
 //===----------------------------------------------------------------------===//
 //
 // This tool is used by the gccld program to enable transparent execution of
@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
   memcpy((char **)Args+2, argv+1, sizeof(char*)*argc);
 
   /* Run the JIT. */
-  execvp(Interp, (char **)Args);
+  execvp(Interp, Args);
   /* if _execv returns, the JIT could not be started. */
   fprintf(stderr, "Could not execute the LLVM JIT.  Either add 'lli' to your"
           " path, or set the\ninterpreter you want to use in the LLVMINTERP "

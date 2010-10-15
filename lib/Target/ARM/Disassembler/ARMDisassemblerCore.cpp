@@ -2743,8 +2743,8 @@ static bool DisassembleN3RegVecShFrm(MCInst &MI, unsigned Opcode,
   return DisassembleNVdVnVmOptImm(MI, Opcode, insn, NumOps, NumOpsAdded,
                                   N3V_VectorShift, B);
 }
-static bool DisassembleNVecExtractFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
-    unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
+static bool DisassembleNVecExtractFrm(MCInst &MI, unsigned Opcode,
+    uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
   return DisassembleNVdVnVmOptImm(MI, Opcode, insn, NumOps, NumOpsAdded,
                                   N3V_VectorExtract, B);
@@ -2998,11 +2998,15 @@ static bool DisassembleMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
   case ARM::WFE:
   case ARM::WFI:
   case ARM::SEV:
-  case ARM::SETENDBE:
-  case ARM::SETENDLE:
     return true;
   default:
     break;
+  }
+
+  if (Opcode == ARM::SETEND) {
+    NumOpsAdded = 1;
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 9, 9)));
+    return true;
   }
 
   // CPS has a singleton $opt operand that contains the following information:

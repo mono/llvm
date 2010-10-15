@@ -14,18 +14,16 @@
 //
 // Scheduling information derived from "Cortex-A8 Technical Reference Manual".
 // Functional Units.
-def A8_Issue   : FuncUnit; // issue
 def A8_Pipe0   : FuncUnit; // pipeline 0
 def A8_Pipe1   : FuncUnit; // pipeline 1
-def A8_LdSt0   : FuncUnit; // pipeline 0 load/store
-def A8_LdSt1   : FuncUnit; // pipeline 1 load/store
+def A8_LSPipe  : FuncUnit; // Load / store pipeline
 def A8_NPipe   : FuncUnit; // NEON ALU/MUL pipe
 def A8_NLSPipe : FuncUnit; // NEON LS pipe
 //
 // Dual issue pipeline represented by A8_Pipe0 | A8_Pipe1
 //
 def CortexA8Itineraries : ProcessorItineraries<
-  [A8_Issue, A8_Pipe0, A8_Pipe1, A8_LdSt0, A8_LdSt1, A8_NPipe, A8_NLSPipe],
+  [A8_Pipe0, A8_Pipe1, A8_LSPipe, A8_NPipe, A8_NLSPipe],
   [], [
   // Two fully-pipelined integer ALU pipelines
   //
@@ -91,216 +89,141 @@ def CortexA8Itineraries : ProcessorItineraries<
   // so we use 6 for those cases
   //
   InstrItinData<IIC_iMUL16   , [InstrStage<1, [A8_Pipe0]>], [5, 1, 1]>,
-  InstrItinData<IIC_iMAC16   , [InstrStage<1, [A8_Pipe1], 0>,
-                                InstrStage<2, [A8_Pipe0]>], [6, 1, 1, 4]>,
-  InstrItinData<IIC_iMUL32   , [InstrStage<1, [A8_Pipe1], 0>,
-                                InstrStage<2, [A8_Pipe0]>], [6, 1, 1]>,
-  InstrItinData<IIC_iMAC32   , [InstrStage<1, [A8_Pipe1], 0>,
-                                InstrStage<2, [A8_Pipe0]>], [6, 1, 1, 4]>,
-  InstrItinData<IIC_iMUL64   , [InstrStage<2, [A8_Pipe1], 0>,
-                                InstrStage<3, [A8_Pipe0]>], [6, 6, 1, 1]>,
-  InstrItinData<IIC_iMAC64   , [InstrStage<2, [A8_Pipe1], 0>,
-                                InstrStage<3, [A8_Pipe0]>], [6, 6, 1, 1]>,
+  InstrItinData<IIC_iMAC16   , [InstrStage<2, [A8_Pipe0]>], [6, 1, 1, 4]>,
+  InstrItinData<IIC_iMUL32   , [InstrStage<2, [A8_Pipe0]>], [6, 1, 1]>,
+  InstrItinData<IIC_iMAC32   , [InstrStage<2, [A8_Pipe0]>], [6, 1, 1, 4]>,
+  InstrItinData<IIC_iMUL64   , [InstrStage<3, [A8_Pipe0]>], [6, 6, 1, 1]>,
+  InstrItinData<IIC_iMAC64   , [InstrStage<3, [A8_Pipe0]>], [6, 6, 1, 1]>,
 
   // Integer load pipeline
   //
-  // loads have an extra cycle of latency, but are fully pipelined
-  // use A8_Issue to enforce the 1 load/store per cycle limit
-  //
   // Immediate offset
-  InstrItinData<IIC_iLoad_i   , [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1]>,
-  InstrItinData<IIC_iLoad_bh_i, [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1]>,
-  InstrItinData<IIC_iLoad_d_i,  [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1]>,
+  InstrItinData<IIC_iLoad_i   , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1]>,
+  InstrItinData<IIC_iLoad_bh_i, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1]>,
+  InstrItinData<IIC_iLoad_d_i,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1]>,
   //
   // Register offset
-  InstrItinData<IIC_iLoad_r   , [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1, 1]>,
-  InstrItinData<IIC_iLoad_bh_r, [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1, 1]>,
-  InstrItinData<IIC_iLoad_d_r , [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1, 1]>,
+  InstrItinData<IIC_iLoad_r   , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1, 1]>,
+  InstrItinData<IIC_iLoad_bh_r, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1, 1]>,
+  InstrItinData<IIC_iLoad_d_r , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1, 1]>,
   //
   // Scaled register offset, issues over 2 cycles
-  InstrItinData<IIC_iLoad_si  , [InstrStage<2, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0], 0>,
-                                 InstrStage<1, [A8_Pipe1]>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [4, 1, 1]>,
-  InstrItinData<IIC_iLoad_bh_si,[InstrStage<2, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0], 0>,
-                                 InstrStage<1, [A8_Pipe1]>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [4, 1, 1]>,
+  // FIXME: lsl by 2 takes 1 cycle.
+  InstrItinData<IIC_iLoad_si  , [InstrStage<2, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [4, 1, 1]>,
+  InstrItinData<IIC_iLoad_bh_si,[InstrStage<2, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [4, 1, 1]>,
   //
   // Immediate offset with update
-  InstrItinData<IIC_iLoad_iu  , [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 2, 1]>,
-  InstrItinData<IIC_iLoad_bh_iu,[InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 2, 1]>,
+  InstrItinData<IIC_iLoad_iu  , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 2, 1]>,
+  InstrItinData<IIC_iLoad_bh_iu,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 2, 1]>,
   //
   // Register offset with update
-  InstrItinData<IIC_iLoad_ru  , [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 2, 1, 1]>,
-  InstrItinData<IIC_iLoad_bh_ru,[InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 2, 1, 1]>,
-  InstrItinData<IIC_iLoad_d_ru, [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 2, 1, 1]>,
+  InstrItinData<IIC_iLoad_ru  , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 2, 1, 1]>,
+  InstrItinData<IIC_iLoad_bh_ru,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 2, 1, 1]>,
+  InstrItinData<IIC_iLoad_d_ru, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 2, 1, 1]>,
   //
   // Scaled register offset with update, issues over 2 cycles
-  InstrItinData<IIC_iLoad_siu , [InstrStage<2, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0], 0>,
-                                 InstrStage<1, [A8_Pipe1]>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [4, 3, 1, 1]>,
-  InstrItinData<IIC_iLoad_bh_siu,[InstrStage<2, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0], 0>,
-                                 InstrStage<1, [A8_Pipe1]>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [4, 3, 1, 1]>,
+  InstrItinData<IIC_iLoad_siu , [InstrStage<2, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [4, 3, 1, 1]>,
+  InstrItinData<IIC_iLoad_bh_siu,[InstrStage<2, [A8_Pipe0, A8_Pipe1]>,
+                                  InstrStage<1, [A8_LSPipe]>], [4, 3, 1, 1]>,
   //
-  // Load multiple, def is the 5th operand.
-  InstrItinData<IIC_iLoad_m  , [InstrStage<2, [A8_Issue], 0>,
-                                InstrStage<2, [A8_Pipe0], 0>,
-                                InstrStage<2, [A8_Pipe1]>,
-                                InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                InstrStage<1, [A8_LdSt0]>], [1, 1, 1, 1, 3]>,
+  // Load multiple, def is the 5th operand. Pipeline 0 only.
+  // FIXME: A8_LSPipe cycle time is dynamic, this assumes 3 to 4 registers.
+  InstrItinData<IIC_iLoad_m  , [InstrStage<1, [A8_Pipe0]>,
+                                InstrStage<2, [A8_LSPipe]>], [1, 1, 1, 1, 3]>,
   //
   // Load multiple + update, defs are the 1st and 5th operands.
-  InstrItinData<IIC_iLoad_mu , [InstrStage<2, [A8_Issue], 0>,
-                                InstrStage<2, [A8_Pipe0], 0>,
-                                InstrStage<2, [A8_Pipe1]>,
-                                InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                InstrStage<1, [A8_LdSt0]>], [2, 1, 1, 1, 3]>,
+  InstrItinData<IIC_iLoad_mu , [InstrStage<1, [A8_Pipe0]>,
+                                InstrStage<3, [A8_LSPipe]>], [2, 1, 1, 1, 3]>,
   //
   // Load multiple plus branch
-  InstrItinData<IIC_iLoad_mBr, [InstrStage<2, [A8_Issue], 0>,
-                                InstrStage<2, [A8_Pipe0], 0>,
-                                InstrStage<2, [A8_Pipe1]>,
-                                InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                InstrStage<1, [A8_LdSt0]>,
+  InstrItinData<IIC_iLoad_mBr, [InstrStage<1, [A8_Pipe0]>,
+                                InstrStage<3, [A8_LSPipe]>,
                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>],
                                [1, 2, 1, 1, 3]>,
   //
   // Pop, def is the 3rd operand.
-  InstrItinData<IIC_iPop  ,    [InstrStage<2, [A8_Issue], 0>,
-                                InstrStage<2, [A8_Pipe0], 0>,
-                                InstrStage<2, [A8_Pipe1]>,
-                                InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                InstrStage<1, [A8_LdSt0]>], [1, 1, 3]>,
+  InstrItinData<IIC_iPop  ,    [InstrStage<1, [A8_Pipe0]>,
+                                InstrStage<3, [A8_LSPipe]>], [1, 1, 3]>,
   //
   // Push, def is the 3th operand.
-  InstrItinData<IIC_iPop_Br,   [InstrStage<2, [A8_Issue], 0>,
-                                InstrStage<2, [A8_Pipe0], 0>,
-                                InstrStage<2, [A8_Pipe1]>,
-                                InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                InstrStage<1, [A8_LdSt0]>,
+  InstrItinData<IIC_iPop_Br,   [InstrStage<1, [A8_Pipe0]>,
+                                InstrStage<3, [A8_LSPipe]>,
                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>],
                                [1, 1, 3]>,
 
   //
   // iLoadi + iALUr for t2LDRpci_pic.
-  InstrItinData<IIC_iLoadiALU, [InstrStage<1, [A8_Issue], 0>,
-                                InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                InstrStage<1, [A8_LdSt0]>,
+  InstrItinData<IIC_iLoadiALU, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                InstrStage<1, [A8_LSPipe]>,
                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>], [4, 1]>,
 
 
   // Integer store pipeline
   //
-  // use A8_Issue to enforce the 1 load/store per cycle limit
-  //
   // Immediate offset
-  InstrItinData<IIC_iStore_i  , [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1]>,
-  InstrItinData<IIC_iStore_bh_i,[InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1]>,
-  InstrItinData<IIC_iStore_d_i, [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1]>,
+  InstrItinData<IIC_iStore_i  , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1]>,
+  InstrItinData<IIC_iStore_bh_i,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1]>,
+  InstrItinData<IIC_iStore_d_i, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1]>,
   //
   // Register offset
-  InstrItinData<IIC_iStore_r  , [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1, 1]>,
-  InstrItinData<IIC_iStore_bh_r,[InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1, 1]>,
-  InstrItinData<IIC_iStore_d_r, [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1, 1]>,
+  InstrItinData<IIC_iStore_r  , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1, 1]>,
+  InstrItinData<IIC_iStore_bh_r,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1, 1]>,
+  InstrItinData<IIC_iStore_d_r, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [3, 1, 1]>,
   //
   // Scaled register offset, issues over 2 cycles
-  InstrItinData<IIC_iStore_si , [InstrStage<2, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0], 0>,
-                                 InstrStage<1, [A8_Pipe1]>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1, 1]>,
-  InstrItinData<IIC_iStore_bh_si,[InstrStage<2, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0], 0>,
-                                 InstrStage<1, [A8_Pipe1]>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 1, 1]>,
+  InstrItinData<IIC_iStore_si , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<2, [A8_LSPipe]>], [3, 1, 1]>,
+  InstrItinData<IIC_iStore_bh_si,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                  InstrStage<2, [A8_LSPipe]>], [3, 1, 1]>,
   //
   // Immediate offset with update
-  InstrItinData<IIC_iStore_iu , [InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [2, 3, 1]>,
-  InstrItinData<IIC_iStore_bh_iu,[InstrStage<1, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [2, 3, 1]>,
+  InstrItinData<IIC_iStore_iu , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [2, 3, 1]>,
+  InstrItinData<IIC_iStore_bh_iu,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<1, [A8_LSPipe]>], [2, 3, 1]>,
   //
   // Register offset with update
-  InstrItinData<IIC_iStore_ru  , [InstrStage<1, [A8_Issue], 0>,
-                                  InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                  InstrStage<1, [A8_LdSt0]>], [2, 3, 1, 1]>,
-  InstrItinData<IIC_iStore_bh_ru,[InstrStage<1, [A8_Issue], 0>,
-                                  InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                  InstrStage<1, [A8_LdSt0]>], [2, 3, 1, 1]>,
-  InstrItinData<IIC_iStore_d_ru, [InstrStage<1, [A8_Issue], 0>,
-                                  InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                  InstrStage<1, [A8_LdSt0]>], [2, 3, 1, 1]>,
+  InstrItinData<IIC_iStore_ru  , [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                  InstrStage<1, [A8_LSPipe]>], [2, 3, 1, 1]>,
+  InstrItinData<IIC_iStore_bh_ru,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                  InstrStage<1, [A8_LSPipe]>], [2, 3, 1, 1]>,
+  InstrItinData<IIC_iStore_d_ru, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                  InstrStage<1, [A8_LSPipe]>], [2, 3, 1, 1]>,
   //
   // Scaled register offset with update, issues over 2 cycles
-  InstrItinData<IIC_iStore_siu, [InstrStage<2, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0], 0>,
-                                 InstrStage<1, [A8_Pipe1]>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 3, 1, 1]>,
-  InstrItinData<IIC_iStore_bh_siu,[InstrStage<2, [A8_Issue], 0>,
-                                 InstrStage<1, [A8_Pipe0], 0>,
-                                 InstrStage<1, [A8_Pipe1]>,
-                                 InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                 InstrStage<1, [A8_LdSt0]>], [3, 3, 1, 1]>,
+  InstrItinData<IIC_iStore_siu, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                 InstrStage<2, [A8_LSPipe]>], [3, 3, 1, 1]>,
+  InstrItinData<IIC_iStore_bh_siu,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                   InstrStage<2, [A8_LSPipe]>], [3, 3, 1, 1]>,
   //
-  // Store multiple
-  InstrItinData<IIC_iStore_m , [InstrStage<2, [A8_Issue], 0>,
-                                InstrStage<2, [A8_Pipe0], 0>,
-                                InstrStage<2, [A8_Pipe1]>,
-                                InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                InstrStage<1, [A8_LdSt0]>]>,
+  // Store multiple. Pipeline 0 only.
+  // FIXME: A8_LSPipe cycle time is dynamic, this assumes 3 to 4 registers.
+  InstrItinData<IIC_iStore_m , [InstrStage<1, [A8_Pipe0]>,
+                                InstrStage<2, [A8_LSPipe]>]>,
   //
   // Store multiple + update
-  InstrItinData<IIC_iStore_mu, [InstrStage<2, [A8_Issue], 0>,
-                                InstrStage<2, [A8_Pipe0], 0>,
-                                InstrStage<2, [A8_Pipe1]>,
-                                InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                InstrStage<1, [A8_LdSt0]>], [2]>,
+  InstrItinData<IIC_iStore_mu, [InstrStage<1, [A8_Pipe0]>,
+                                InstrStage<2, [A8_LSPipe]>], [2]>,
 
   // Branch
   //
@@ -410,100 +333,323 @@ def CortexA8Itineraries : ProcessorItineraries<
                                InstrStage<29, [A8_NLSPipe]>], [29, 1]>,
   //
   // Single-precision FP Load
-  // use A8_Issue to enforce the 1 load/store per cycle limit
-  InstrItinData<IIC_fpLoad32, [InstrStage<1, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<2, [A8_NLSPipe]>],
+  InstrItinData<IIC_fpLoad32, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>],
                               [2, 1]>,
   //
   // Double-precision FP Load
-  // use A8_Issue to enforce the 1 load/store per cycle limit
-  InstrItinData<IIC_fpLoad64, [InstrStage<2, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<2, [A8_NLSPipe]>],
+  InstrItinData<IIC_fpLoad64, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>],
                               [2, 1]>,
   //
   // FP Load Multiple
-  // use A8_Issue to enforce the 1 load/store per cycle limit
-  InstrItinData<IIC_fpLoad_m, [InstrStage<3, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<1, [A8_NLSPipe]>], [1, 1, 1, 2]>,
+  // FIXME: A8_LSPipe cycle time is dynamic, this assumes 3 to 4 registers.
+  InstrItinData<IIC_fpLoad_m, [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>], [1, 1, 1, 2]>,
   //
   // FP Load Multiple + update
-  InstrItinData<IIC_fpLoad_mu,[InstrStage<3, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<1, [A8_NLSPipe]>], [2, 1, 1, 1, 2]>,
+  InstrItinData<IIC_fpLoad_mu,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>], [2, 1, 1, 1, 2]>,
   //
   // Single-precision FP Store
-  // use A8_Issue to enforce the 1 load/store per cycle limit
-  InstrItinData<IIC_fpStore32,[InstrStage<1, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<2, [A8_NLSPipe]>],
+  InstrItinData<IIC_fpStore32,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>],
                               [1, 1]>,
   //
   // Double-precision FP Store
-  // use A8_Issue to enforce the 1 load/store per cycle limit
-  InstrItinData<IIC_fpStore64,[InstrStage<2, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<2, [A8_NLSPipe]>],
+  InstrItinData<IIC_fpStore64,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>],
                               [1, 1]>,
   //
   // FP Store Multiple
-  // use A8_Issue to enforce the 1 load/store per cycle limit
-  InstrItinData<IIC_fpStore_m,[InstrStage<3, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<1, [A8_NLSPipe]>], [1, 1, 1, 1]>,
+  InstrItinData<IIC_fpStore_m,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>,
+                               InstrStage<1, [A8_NLSPipe]>,
+                               InstrStage<1, [A8_LSPipe]>], [1, 1, 1, 1]>,
   //
   // FP Store Multiple + update
-  InstrItinData<IIC_fpStore_mu,[InstrStage<3, [A8_Issue], 0>,
-                                InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                                InstrStage<1, [A8_LdSt0], 0>,
-                                InstrStage<1, [A8_NLSPipe]>], [2, 1, 1, 1, 1]>,
+  InstrItinData<IIC_fpStore_mu,[InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                                InstrStage<1, [A8_NLSPipe]>,
+                                InstrStage<1, [A8_LSPipe]>,
+                                InstrStage<1, [A8_NLSPipe]>,
+                                InstrStage<1, [A8_LSPipe]>], [2, 1, 1, 1, 1]>,
 
   // NEON
   // Issue through integer pipeline, and execute in NEON unit.
   //
   // VLD1
-  // FIXME: We don't model this instruction properly
-  InstrItinData<IIC_VLD1,     [InstrStage<1, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<1, [A8_NLSPipe]>]>,
+  InstrItinData<IIC_VLD1,     [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 1]>,
+  // VLD1x2
+  InstrItinData<IIC_VLD1x2,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 2, 1]>,
+  //
+  // VLD1x3
+  InstrItinData<IIC_VLD1x3,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 2, 3, 1]>,
+  //
+  // VLD1x4
+  InstrItinData<IIC_VLD1x4,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 2, 3, 3, 1]>,
+  //
+  // VLD1u
+  InstrItinData<IIC_VLD1u,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 2, 1]>,
+  //
+  // VLD1x2u
+  InstrItinData<IIC_VLD1x2u,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 2, 2, 1]>,
+  //
+  // VLD1x3u
+  InstrItinData<IIC_VLD1x3u,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 2, 3, 2, 1]>,
+  //
+  // VLD1x4u
+  InstrItinData<IIC_VLD1x4u,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 2, 3, 3, 2, 1]>,
   //
   // VLD2
-  // FIXME: We don't model this instruction properly
-  InstrItinData<IIC_VLD2,     [InstrStage<1, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<1, [A8_NLSPipe]>], [2, 2, 1]>,
+  InstrItinData<IIC_VLD2,     [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 2, 1]>,
+  //
+  // VLD2x2
+  InstrItinData<IIC_VLD2x2,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 2, 3, 3, 1]>,
+  //
+  // VLD2ln
+  InstrItinData<IIC_VLD2ln,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [3, 3, 1, 1, 1, 1]>,
+  //
+  // VLD2u
+  InstrItinData<IIC_VLD2u,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 2, 2, 1, 1, 1]>,
+  //
+  // VLD2x2u
+  InstrItinData<IIC_VLD2x2u,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 2, 3, 3, 2, 1]>,
+  //
+  // VLD2lnu
+  InstrItinData<IIC_VLD2lnu,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [3, 3, 2, 1, 1, 1, 1, 1]>,
   //
   // VLD3
-  // FIXME: We don't model this instruction properly
-  InstrItinData<IIC_VLD3,     [InstrStage<1, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<1, [A8_NLSPipe]>], [2, 2, 2, 1]>,
+  InstrItinData<IIC_VLD3,     [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [3, 3, 4, 1]>,
+  //
+  // VLD3ln
+  InstrItinData<IIC_VLD3ln,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<5, [A8_NLSPipe], 1>,
+                               InstrStage<5, [A8_LSPipe]>],
+                              [4, 4, 5, 1, 1, 1, 1, 2]>,
+  //
+  // VLD3u
+  InstrItinData<IIC_VLD3u,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [3, 3, 4, 2, 1]>,
+  //
+  // VLD3lnu
+  InstrItinData<IIC_VLD3lnu,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<5, [A8_NLSPipe], 1>,
+                               InstrStage<5, [A8_LSPipe]>],
+                              [4, 4, 5, 2, 1, 1, 1, 1, 1, 2]>,
   //
   // VLD4
-  // FIXME: We don't model this instruction properly
-  InstrItinData<IIC_VLD4,     [InstrStage<1, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<1, [A8_NLSPipe]>], [2, 2, 2, 2, 1]>,
+  InstrItinData<IIC_VLD4,     [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [3, 3, 4, 4, 1]>,
   //
-  // VST
-  // FIXME: We don't model this instruction properly
-  InstrItinData<IIC_VST,      [InstrStage<1, [A8_Issue], 0>,
-                               InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
-                               InstrStage<1, [A8_LdSt0], 0>,
-                               InstrStage<1, [A8_NLSPipe]>]>,
+  // VLD4ln
+  InstrItinData<IIC_VLD4ln,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<5, [A8_NLSPipe], 1>,
+                               InstrStage<5, [A8_LSPipe]>],
+                              [4, 4, 5, 5, 1, 1, 1, 1, 2, 2]>,
+  //
+  // VLD4u
+  InstrItinData<IIC_VLD4u,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [3, 3, 4, 4, 2, 1]>,
+  //
+  // VLD4lnu
+  InstrItinData<IIC_VLD4lnu,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<5, [A8_NLSPipe], 1>,
+                               InstrStage<5, [A8_LSPipe]>],
+                              [4, 4, 5, 5, 2, 1, 1, 1, 1, 1, 2, 2]>,
+  //
+  // VST1
+  InstrItinData<IIC_VST1,     [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [1, 1, 1]>,
+  //
+  // VST1x2
+  InstrItinData<IIC_VST1x2,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [1, 1, 1, 1]>,
+  //
+  // VST1x3
+  InstrItinData<IIC_VST1x3,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [1, 1, 1, 1, 2]>,
+  //
+  // VST1x4
+  InstrItinData<IIC_VST1x4,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [1, 1, 1, 1, 2, 2]>,
+  //
+  // VST1u
+  InstrItinData<IIC_VST1u,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1]>,
+  //
+  // VST1x2u
+  InstrItinData<IIC_VST1x2u,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1]>,
+  //
+  // VST1x3u
+  InstrItinData<IIC_VST1x3u,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1, 2]>,
+  //
+  // VST1x4u
+  InstrItinData<IIC_VST1x4u,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1, 2, 2]>,
+  //
+  // VST2
+  InstrItinData<IIC_VST2,     [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [1, 1, 1, 1]>,
+  //
+  // VST2x2
+  InstrItinData<IIC_VST2x2,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [1, 1, 1, 1, 2, 2]>,
+  //
+  // VST2u
+  InstrItinData<IIC_VST2u,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1]>,
+  //
+  // VST2x2u
+  InstrItinData<IIC_VST2x2u,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1, 2, 2]>,
+  //
+  // VST2ln
+  InstrItinData<IIC_VST2ln,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [1, 1, 1, 1]>,
+  //
+  // VST2lnu
+  InstrItinData<IIC_VST2lnu,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<2, [A8_NLSPipe], 1>,
+                               InstrStage<2, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1]>,
+  //
+  // VST3
+  InstrItinData<IIC_VST3,     [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [1, 1, 1, 1, 2]>,
+  //
+  // VST3u
+  InstrItinData<IIC_VST3u,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1, 2]>,
+  //
+  // VST3ln
+  InstrItinData<IIC_VST3ln,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [1, 1, 1, 1, 2]>,
+  //
+  // VST3lnu
+  InstrItinData<IIC_VST3lnu,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<3, [A8_NLSPipe], 1>,
+                               InstrStage<3, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1, 2]>,
+  //
+  // VST4
+  InstrItinData<IIC_VST4,     [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [1, 1, 1, 1, 2, 2]>,
+  //
+  // VST4u
+  InstrItinData<IIC_VST4u,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1, 2, 2]>,
+  //
+  // VST4ln
+  InstrItinData<IIC_VST4ln,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [1, 1, 1, 1, 2, 2]>,
+  //
+  // VST4lnu
+  InstrItinData<IIC_VST4lnu,  [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<4, [A8_NLSPipe], 1>,
+                               InstrStage<4, [A8_LSPipe]>],
+                              [2, 1, 1, 1, 1, 1, 2, 2]>,
   //
   // Double-register FP Unary
   InstrItinData<IIC_VUNAD,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
@@ -519,11 +665,24 @@ def CortexA8Itineraries : ProcessorItineraries<
   InstrItinData<IIC_VBIND,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
                                InstrStage<1, [A8_NPipe]>], [5, 2, 2]>,
   //
+  // VPADD, etc.
+  InstrItinData<IIC_VPBIND,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NPipe]>], [5, 2, 2]>,
+  //
+  // Double-register FP VMUL
+  InstrItinData<IIC_VFMULD,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NPipe]>], [5, 2, 1]>,
+
+  //
   // Quad-register FP Binary
   // Result written in N5, but that is relative to the last cycle of multicycle,
   // so we use 6 for those cases
   InstrItinData<IIC_VBINQ,    [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
                                InstrStage<2, [A8_NPipe]>], [6, 2, 2]>,
+  //
+  // Quad-register FP VMUL
+  InstrItinData<IIC_VFMULQ,   [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,
+                               InstrStage<1, [A8_NPipe]>], [6, 2, 1]>,
   //
   // Move
   InstrItinData<IIC_VMOV,     [InstrStage<1, [A8_Pipe0, A8_Pipe1]>,

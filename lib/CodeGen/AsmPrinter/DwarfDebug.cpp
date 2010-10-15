@@ -507,6 +507,8 @@ void DwarfDebug::addSourceLine(DIE *Die, DIVariable V) {
     return;
 
   unsigned Line = V.getLineNumber();
+  if (Line == 0)
+    return;
   unsigned FileID = GetOrCreateSourceID(V.getContext().getDirectory(),
                                         V.getContext().getFilename());
   assert(FileID && "Invalid file id");
@@ -522,6 +524,8 @@ void DwarfDebug::addSourceLine(DIE *Die, DIGlobalVariable G) {
     return;
 
   unsigned Line = G.getLineNumber();
+  if (Line == 0)
+    return;
   unsigned FileID = GetOrCreateSourceID(G.getContext().getDirectory(),
                                         G.getContext().getFilename());
   assert(FileID && "Invalid file id");
@@ -557,7 +561,7 @@ void DwarfDebug::addSourceLine(DIE *Die, DIType Ty) {
     return;
 
   unsigned Line = Ty.getLineNumber();
-  if (!Ty.getContext().Verify())
+  if (Line == 0 || !Ty.getContext().Verify())
     return;
   unsigned FileID = GetOrCreateSourceID(Ty.getContext().getDirectory(),
                                         Ty.getContext().getFilename());
@@ -574,6 +578,8 @@ void DwarfDebug::addSourceLine(DIE *Die, DINameSpace NS) {
     return;
 
   unsigned Line = NS.getLineNumber();
+  if (Line == 0)
+    return;
   StringRef FN = NS.getFilename();
   StringRef Dir = NS.getDirectory();
 
@@ -1059,8 +1065,6 @@ void DwarfDebug::constructTypeDIE(DIE &Buffer, DICompositeType CTy) {
     // Add prototype flag.
     if (isPrototyped)
       addUInt(&Buffer, dwarf::DW_AT_prototyped, dwarf::DW_FORM_flag, 1);
-
-
   }
     break;
   case dwarf::DW_TAG_structure_type:
@@ -1318,10 +1322,7 @@ DIE *DwarfDebug::createSubprogramDIE(DISubprogram SP) {
 
   addSourceLine(SPDie, SP);
 
-  // Add prototyped tag, if C or ObjC.
-  unsigned Lang = SP.getCompileUnit().getLanguage();
-  if (Lang == dwarf::DW_LANG_C99 || Lang == dwarf::DW_LANG_C89 ||
-      Lang == dwarf::DW_LANG_ObjC)
+  if (SP.isPrototyped()) 
     addUInt(SPDie, dwarf::DW_AT_prototyped, dwarf::DW_FORM_flag, 1);
 
   // Add Return Type.

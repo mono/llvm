@@ -96,9 +96,11 @@ namespace llvm {
     public:
       unsigned ConstantWeight;
       unsigned AllocaWeight;
+      unsigned ConstantBonus;
 
-      ArgInfo(unsigned CWeight, unsigned AWeight)
-        : ConstantWeight(CWeight), AllocaWeight(AWeight) {}
+      ArgInfo(unsigned CWeight, unsigned AWeight, unsigned CBonus)
+        : ConstantWeight(CWeight), AllocaWeight(AWeight), ConstantBonus(CBonus)
+          {}
     };
 
     struct FunctionInfo {
@@ -140,6 +142,18 @@ namespace llvm {
     InlineCost getInlineCost(CallSite CS,
                              Function *Callee,
                              SmallPtrSet<const Function *, 16> &NeverInline);
+
+    /// getSpecializationBonus - The heuristic used to determine the per-call
+    /// performance boost for using a specialization of Callee with argument
+    /// SpecializedArgNos replaced by a constant.
+    int getSpecializationBonus(Function *Callee,
+             SmallVectorImpl<unsigned> &SpecializedArgNo);
+
+    /// getSpecializationCost - The heuristic used to determine the code-size
+    /// impact of creating a specialized version of Callee with argument
+    /// SpecializedArgNo replaced by a constant.
+    InlineCost getSpecializationCost(Function *Callee,
+               SmallVectorImpl<unsigned> &SpecializedArgNo);
 
     /// getInlineFudgeFactor - Return a > 1.0 factor if the inliner should use a
     /// higher threshold to determine if the function call should be inlined.

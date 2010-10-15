@@ -24,11 +24,12 @@
 #include <limits>
 using namespace llvm;
 
-template<>
-char llvm::ProfileInfoT<Function,BasicBlock>::ID = 0;
+namespace llvm {
+  template<> char ProfileInfoT<Function,BasicBlock>::ID = 0;
+}
 
 // Register the ProfileInfo interface, providing a nice name to refer to.
-INITIALIZE_ANALYSIS_GROUP(ProfileInfo, "Profile Information");
+INITIALIZE_ANALYSIS_GROUP(ProfileInfo, "Profile Information", NoProfileInfo)
 
 namespace llvm {
 
@@ -1097,6 +1098,6 @@ namespace {
 char NoProfileInfo::ID = 0;
 // Register this pass...
 INITIALIZE_AG_PASS(NoProfileInfo, ProfileInfo, "no-profile",
-                   "No Profile Information", false, true, true);
+                   "No Profile Information", false, true, true)
 
 ImmutablePass *llvm::createNoProfileInfoPass() { return new NoProfileInfo(); }

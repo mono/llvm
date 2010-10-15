@@ -497,9 +497,10 @@ PMTopLevelManager::PMTopLevelManager(PMDataManager *PMDM) {
 }
 
 /// Set pass P as the last user of the given analysis passes.
-void PMTopLevelManager::setLastUser(SmallVector<Pass *, 12> &AnalysisPasses,
-                                    Pass *P) {
-  for (SmallVector<Pass *, 12>::iterator I = AnalysisPasses.begin(),
+void
+PMTopLevelManager::setLastUser(const SmallVectorImpl<Pass *> &AnalysisPasses,
+                               Pass *P) {
+  for (SmallVectorImpl<Pass *>::const_iterator I = AnalysisPasses.begin(),
          E = AnalysisPasses.end(); I != E; ++I) {
     Pass *AP = *I;
     LastUser[AP] = P;
@@ -520,7 +521,7 @@ void PMTopLevelManager::setLastUser(SmallVector<Pass *, 12> &AnalysisPasses,
 }
 
 /// Collect passes whose last user is P
-void PMTopLevelManager::collectLastUses(SmallVector<Pass *, 12> &LastUses,
+void PMTopLevelManager::collectLastUses(SmallVectorImpl<Pass *> &LastUses,
                                         Pass *P) {
   DenseMap<Pass *, SmallPtrSet<Pass *, 8> >::iterator DMI =
     InversedLastUser.find(P);
@@ -612,41 +613,40 @@ void PMTopLevelManager::schedulePass(Pass *P) {
 /// then return NULL.
 Pass *PMTopLevelManager::findAnalysisPass(AnalysisID AID) {
 
-  Pass *P = NULL;
   // Check pass managers
-  for (SmallVector<PMDataManager *, 8>::iterator I = PassManagers.begin(),
-         E = PassManagers.end(); P == NULL && I != E; ++I) {
-    PMDataManager *PMD = *I;
-    P = PMD->findAnalysisPass(AID, false);
-  }
+  for (SmallVectorImpl<PMDataManager *>::iterator I = PassManagers.begin(),
+         E = PassManagers.end(); I != E; ++I)
+    if (Pass *P = (*I)->findAnalysisPass(AID, false))
+      return P;
 
   // Check other pass managers
-  for (SmallVector<PMDataManager *, 8>::iterator
+  for (SmallVectorImpl<PMDataManager *>::iterator
          I = IndirectPassManagers.begin(),
-         E = IndirectPassManagers.end(); P == NULL && I != E; ++I)
-    P = (*I)->findAnalysisPass(AID, false);
+         E = IndirectPassManagers.end(); I != E; ++I)
+    if (Pass *P = (*I)->findAnalysisPass(AID, false))
+      return P;
 
-  for (SmallVector<ImmutablePass *, 8>::iterator I = ImmutablePasses.begin(),
-         E = ImmutablePasses.end(); P == NULL && I != E; ++I) {
+  // Check the immutable passes. Iterate in reverse order so that we find
+  // the most recently registered passes first.
+  for (SmallVector<ImmutablePass *, 8>::reverse_iterator I =
+       ImmutablePasses.rbegin(), E = ImmutablePasses.rend(); I != E; ++I) {
     AnalysisID PI = (*I)->getPassID();
     if (PI == AID)
-      P = *I;
+      return *I;
 
     // If Pass not found then check the interfaces implemented by Immutable Pass
-    if (!P) {
-      const PassInfo *PassInf =
-        PassRegistry::getPassRegistry()->getPassInfo(PI);
-      const std::vector<const PassInfo*> &ImmPI =
-        PassInf->getInterfacesImplemented();
-      for (std::vector<const PassInfo*>::const_iterator II = ImmPI.begin(),
-           EE = ImmPI.end(); II != EE; ++II) {
-        if ((*II)->getTypeInfo() == AID)
-          P = *I;
-      }
+    const PassInfo *PassInf =
+      PassRegistry::getPassRegistry()->getPassInfo(PI);
+    const std::vector<const PassInfo*> &ImmPI =
+      PassInf->getInterfacesImplemented();
+    for (std::vector<const PassInfo*>::const_iterator II = ImmPI.begin(),
+         EE = ImmPI.end(); II != EE; ++II) {
+      if ((*II)->getTypeInfo() == AID)
+        return *I;
     }
   }
 
-  return P;
+  return 0;
 }
 
 // Print passes managed by this top level manager.
@@ -682,12 +682,12 @@ void PMTopLevelManager::dumpArguments() const {
 }
 
 void PMTopLevelManager::initializeAllAnalysisInfo() {
-  for (SmallVector<PMDataManager *, 8>::iterator I = PassManagers.begin(),
+  for (SmallVectorImpl<PMDataManager *>::iterator I = PassManagers.begin(),
          E = PassManagers.end(); I != E; ++I)
     (*I)->initializeAnalysisInfo();
 
   // Initailize other pass managers
-  for (SmallVector<PMDataManager *, 8>::iterator
+  for (SmallVectorImpl<PMDataManager *>::iterator
        I = IndirectPassManagers.begin(), E = IndirectPassManagers.end();
        I != E; ++I)
     (*I)->initializeAnalysisInfo();
@@ -708,11 +708,11 @@ void PMTopLevelManager::initializeAllAnalysisInfo() {
 
 /// Destructor
 PMTopLevelManager::~PMTopLevelManager() {
-  for (SmallVector<PMDataManager *, 8>::iterator I = PassManagers.begin(),
+  for (SmallVectorImpl<PMDataManager *>::iterator I = PassManagers.begin(),
          E = PassManagers.end(); I != E; ++I)
     delete *I;
 
-  for (SmallVector<ImmutablePass *, 8>::iterator
+  for (SmallVectorImpl<ImmutablePass *>::iterator
          I = ImmutablePasses.begin(), E = ImmutablePasses.end(); I != E; ++I)
     delete *I;
 
@@ -749,7 +749,7 @@ bool PMDataManager::preserveHigherLevelAnalysis(Pass *P) {
     return true;
 
   const AnalysisUsage::VectorType &PreservedSet = AnUsage->getPreservedSet();
-  for (SmallVector<Pass *, 8>::iterator I = HigherLevelAnalysis.begin(),
+  for (SmallVectorImpl<Pass *>::iterator I = HigherLevelAnalysis.begin(),
          E = HigherLevelAnalysis.end(); I  != E; ++I) {
     Pass *P1 = *I;
     if (P1->getAsImmutablePass() == 0 &&
@@ -849,7 +849,7 @@ void PMDataManager::removeDeadPasses(Pass *P, StringRef Msg,
     dbgs() << " Free these instances\n";
   }
 
-  for (SmallVector<Pass *, 12>::iterator I = DeadPasses.begin(),
+  for (SmallVectorImpl<Pass *>::iterator I = DeadPasses.begin(),
          E = DeadPasses.end(); I != E; ++I)
     freePass(*I, Msg, DBG_STR);
 }
@@ -910,7 +910,7 @@ void PMDataManager::add(Pass *P, bool ProcessAnalysis) {
 
   collectRequiredAnalysis(RequiredPasses,
                           ReqAnalysisNotAvailable, P);
-  for (SmallVector<Pass *, 8>::iterator I = RequiredPasses.begin(),
+  for (SmallVectorImpl<Pass *>::iterator I = RequiredPasses.begin(),
          E = RequiredPasses.end(); I != E; ++I) {
     Pass *PRequired = *I;
     unsigned RDepth = 0;
@@ -944,7 +944,7 @@ void PMDataManager::add(Pass *P, bool ProcessAnalysis) {
   }
 
   // Now, take care of required analyses that are not available.
-  for (SmallVector<AnalysisID, 8>::iterator
+  for (SmallVectorImpl<AnalysisID>::iterator
          I = ReqAnalysisNotAvailable.begin(),
          E = ReqAnalysisNotAvailable.end() ;I != E; ++I) {
     const PassInfo *PI = PassRegistry::getPassRegistry()->getPassInfo(*I);
@@ -965,8 +965,8 @@ void PMDataManager::add(Pass *P, bool ProcessAnalysis) {
 /// Populate RP with analysis pass that are required by
 /// pass P and are available. Populate RP_NotAvail with analysis
 /// pass that are required by pass P but are not available.
-void PMDataManager::collectRequiredAnalysis(SmallVector<Pass *, 8>&RP,
-                                       SmallVector<AnalysisID, 8> &RP_NotAvail,
+void PMDataManager::collectRequiredAnalysis(SmallVectorImpl<Pass *> &RP,
+                                       SmallVectorImpl<AnalysisID> &RP_NotAvail,
                                             Pass *P) {
   AnalysisUsage *AnUsage = TPM->findAnalysisUsage(P);
   const AnalysisUsage::VectorType &RequiredSet = AnUsage->getRequiredSet();
@@ -1038,7 +1038,7 @@ void PMDataManager::dumpLastUses(Pass *P, unsigned Offset) const{
 
   TPM->collectLastUses(LUses, P);
 
-  for (SmallVector<Pass *, 12>::iterator I = LUses.begin(),
+  for (SmallVectorImpl<Pass *>::iterator I = LUses.begin(),
          E = LUses.end(); I != E; ++I) {
     llvm::dbgs() << "--" << std::string(Offset*2, ' ');
     (*I)->dumpPassStructure(0);
@@ -1046,7 +1046,7 @@ void PMDataManager::dumpLastUses(Pass *P, unsigned Offset) const{
 }
 
 void PMDataManager::dumpPassArguments() const {
-  for (SmallVector<Pass *, 8>::const_iterator I = PassVector.begin(),
+  for (SmallVectorImpl<Pass *>::const_iterator I = PassVector.begin(),
         E = PassVector.end(); I != E; ++I) {
     if (PMDataManager *PMD = (*I)->getAsPMDataManager())
       PMD->dumpPassArguments();
@@ -1163,7 +1163,7 @@ Pass *PMDataManager::getOnTheFlyPass(Pass *P, AnalysisID PI, Function &F) {
 
 // Destructor
 PMDataManager::~PMDataManager() {
-  for (SmallVector<Pass *, 8>::iterator I = PassVector.begin(),
+  for (SmallVectorImpl<Pass *>::iterator I = PassVector.begin(),
          E = PassVector.end(); I != E; ++I)
     delete *I;
 }
@@ -1563,7 +1563,7 @@ void MPPassManager::addLowerLevelRequiredPass(Pass *P, Pass *RequiredPass) {
   FPP->add(RequiredPass);
 
   // Register P as the last user of RequiredPass.
-  SmallVector<Pass *, 12> LU;
+  SmallVector<Pass *, 1> LU;
   LU.push_back(RequiredPass);
   FPP->setLastUser(LU,  P);
 }

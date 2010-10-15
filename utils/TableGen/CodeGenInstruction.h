@@ -32,7 +32,7 @@ namespace llvm {
     /// AsmString - The format string used to emit a .s file for the
     /// instruction.
     std::string AsmString;
-    
+
     class ConstraintInfo {
       enum { None, EarlyClobber, Tied } Kind;
       unsigned OtherTiedOperand;
@@ -45,24 +45,24 @@ namespace llvm {
         I.OtherTiedOperand = 0;
         return I;
       }
-      
+
       static ConstraintInfo getTied(unsigned Op) {
         ConstraintInfo I;
         I.Kind = Tied;
         I.OtherTiedOperand = Op;
         return I;
       }
-      
+
       bool isNone() const { return Kind == None; }
       bool isEarlyClobber() const { return Kind == EarlyClobber; }
       bool isTied() const { return Kind == Tied; }
-      
+
       unsigned getTiedOperand() const {
         assert(isTied());
         return OtherTiedOperand;
       }
     };
-    
+
     /// OperandInfo - The information we keep track of for each operand in the
     /// operand list for a tablegen instruction.
     struct OperandInfo {
@@ -78,6 +78,10 @@ namespace llvm {
       /// the asmprinter.
       std::string PrinterMethodName;
 
+      /// EncoderMethodName - The method used to get the machine operand value
+      /// for binary encoding. "getMachineOpValue" by default.
+      std::string EncoderMethodName;
+
       /// MIOperandNo - Currently (this is meant to be phased out), some logical
       /// operands correspond to multiple MachineInstr operands.  In the X86
       /// target for example, one address operand is represented as 4
@@ -91,19 +95,20 @@ namespace llvm {
       /// the DisableEncoding list.  These should not be emitted by the code
       /// emitter.
       std::vector<bool> DoNotEncode;
-      
+
       /// MIOperandInfo - Default MI operand type. Note an operand may be made
       /// up of multiple MI operands.
       DagInit *MIOperandInfo;
-      
+
       /// Constraint info for this operand.  This operand can have pieces, so we
       /// track constraint info for each.
       std::vector<ConstraintInfo> Constraints;
 
-      OperandInfo(Record *R, const std::string &N, const std::string &PMN, 
-                  unsigned MION, unsigned MINO, DagInit *MIOI)
-        : Rec(R), Name(N), PrinterMethodName(PMN), MIOperandNo(MION),
-          MINumOperands(MINO), MIOperandInfo(MIOI) {}
+      OperandInfo(Record *R, const std::string &N, const std::string &PMN,
+                  const std::string &EMN, unsigned MION, unsigned MINO,
+                  DagInit *MIOI)
+        : Rec(R), Name(N), PrinterMethodName(PMN), EncoderMethodName(EMN),
+          MIOperandNo(MION), MINumOperands(MINO), MIOperandInfo(MIOI) {}
     };
 
     /// NumDefs - Number of def operands declared, this is the number of
@@ -144,7 +149,7 @@ namespace llvm {
     bool isAsCheapAsAMove;
     bool hasExtraSrcRegAllocReq;
     bool hasExtraDefRegAllocReq;
-    
+
     /// ParseOperandName - Parse an operand name like "$foo" or "$foo.bar",
     /// where $foo is a whole operand and $foo.bar refers to a suboperand.
     /// This throws an exception if the name is invalid.  If AllowWholeOp is
@@ -152,13 +157,13 @@ namespace llvm {
     /// not.
     std::pair<unsigned,unsigned> ParseOperandName(const std::string &Op,
                                                   bool AllowWholeOp = true);
-    
+
     /// getFlattenedOperandNumber - Flatten a operand/suboperand pair into a
     /// flat machineinstr operand #.
     unsigned getFlattenedOperandNumber(std::pair<unsigned,unsigned> Op) const {
       return OperandList[Op.first].MIOperandNo + Op.second;
     }
-    
+
     /// getSubOperandNumber - Unflatten a operand number into an
     /// operand/suboperand pair.
     std::pair<unsigned,unsigned> getSubOperandNumber(unsigned Op) const {
@@ -168,8 +173,8 @@ namespace llvm {
           return std::make_pair(i, Op-OperandList[i].MIOperandNo);
       }
     }
-    
-    
+
+
     /// isFlatOperandNotEmitted - Return true if the specified flat operand #
     /// should not be emitted with the code emitter.
     bool isFlatOperandNotEmitted(unsigned FlatOpNo) const {
@@ -185,11 +190,16 @@ namespace llvm {
     /// non-empty name.  If the instruction does not have an operand with the
     /// specified name, throw an exception.
     unsigned getOperandNamed(const std::string &Name) const;
-    
+
+    /// hasOperandNamed - Query whether the instruction has an operand of the
+    /// given name. If so, return true and set OpIdx to the index of the
+    /// operand. Otherwise, return false.
+    bool hasOperandNamed(const std::string &Name, unsigned &OpIdx) const;
+
     /// HasOneImplicitDefWithKnownVT - If the instruction has at least one
     /// implicit def and it has a known VT, return the VT, otherwise return
     /// MVT::Other.
-    MVT::SimpleValueType 
+    MVT::SimpleValueType
       HasOneImplicitDefWithKnownVT(const CodeGenTarget &TargetInfo) const;
   };
 }

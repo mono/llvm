@@ -41,7 +41,7 @@ namespace {
 
 char PartialInliner::ID = 0;
 INITIALIZE_PASS(PartialInliner, "partial-inliner",
-                "Partial Inliner", false, false);
+                "Partial Inliner", false, false)
 
 ModulePass* llvm::createPartialInliningPass() { return new PartialInliner(); }
 
@@ -67,7 +67,7 @@ Function* PartialInliner::unswitchFunction(Function* F) {
     return 0;
   
   // Clone the function, so that we can hack away on it.
-  ValueMap<const Value*, Value*> VMap;
+  ValueToValueMapTy VMap;
   Function* duplicateFunction = CloneFunction(F, VMap,
                                               /*ModuleLevelChanges=*/false);
   duplicateFunction->setLinkage(GlobalValue::InternalLinkage);

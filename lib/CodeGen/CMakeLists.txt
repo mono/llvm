@@ -4,6 +4,7 @@ add_llvm_library(LLVMCodeGen
   BranchFolding.cpp
   CalcSpillWeights.cpp
   CallingConvLower.cpp
+  CodeGen.cpp
   CodePlacementOpt.cpp
   CriticalAntiDepBreaker.cpp
   DeadMachineInstructionElim.cpp
@@ -22,6 +23,7 @@ add_llvm_library(LLVMCodeGen
   LiveIntervalAnalysis.cpp
   LiveStackAnalysis.cpp
   LiveVariables.cpp
+  LiveRangeEdit.cpp
   LocalStackSlotAllocation.cpp
   LowerSubregs.cpp
   MachineBasicBlock.cpp

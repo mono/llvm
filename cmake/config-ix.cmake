@@ -165,6 +165,8 @@ if( NOT WIN32 )
   check_cxx_compiler_flag("-fPIC" SUPPORTS_FPIC_FLAG)
 endif()
 
+check_cxx_compiler_flag("-Wno-variadic-macros" SUPPORTS_NO_VARIADIC_MACROS_FLAG)
+
 include(GetTargetTriple)
 get_target_triple(LLVM_HOSTTRIPLE)
 
@@ -195,8 +197,6 @@ elseif (LLVM_NATIVE_ARCH MATCHES "arm")
   set(LLVM_NATIVE_ARCH ARM)
 elseif (LLVM_NATIVE_ARCH MATCHES "mips")
   set(LLVM_NATIVE_ARCH Mips)
-elseif (LLVM_NATIVE_ARCH MATCHES "pic16")
-  set(LLVM_NATIVE_ARCH "PIC16")
 elseif (LLVM_NATIVE_ARCH MATCHES "xcore")
   set(LLVM_NATIVE_ARCH XCore)
 elseif (LLVM_NATIVE_ARCH MATCHES "msp430")

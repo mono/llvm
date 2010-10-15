@@ -79,6 +79,41 @@ public:
   virtual void EmitDwarfFileDirective(unsigned FileNo,StringRef Filename);
   virtual void EmitInstruction(const MCInst &Instruction);
   virtual void Finish();
+
+private:
+  void SetSection(StringRef Section,
+                  unsigned Characteristics,
+                  SectionKind Kind) {
+    SwitchSection(getContext().getCOFFSection(Section, Characteristics, Kind));
+  }
+
+  void SetSectionText() {
+    SetSection(".text",
+               COFF::IMAGE_SCN_CNT_CODE
+             | COFF::IMAGE_SCN_MEM_EXECUTE
+             | COFF::IMAGE_SCN_MEM_READ,
+               SectionKind::getText());
+    EmitCodeAlignment(4, 0);
+  }
+
+  void SetSectionData() {
+    SetSection(".data",
+               COFF::IMAGE_SCN_CNT_INITIALIZED_DATA
+             | COFF::IMAGE_SCN_MEM_READ
+             | COFF::IMAGE_SCN_MEM_WRITE,
+               SectionKind::getDataRel());
+    EmitCodeAlignment(4, 0);
+  }
+
+  void SetSectionBSS() {
+    SetSection(".bss",
+               COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA
+             | COFF::IMAGE_SCN_MEM_READ
+             | COFF::IMAGE_SCN_MEM_WRITE,
+               SectionKind::getBSS());
+    EmitCodeAlignment(4, 0);
+  }
+
 };
 } // end anonymous namespace.
 
@@ -128,6 +163,10 @@ void WinCOFFStreamer::AddCommonSymbol(MCSymbol *Symbol, uint64_t Size,
 // MCStreamer interface
 
 void WinCOFFStreamer::InitSections() {
+  SetSectionText();
+  SetSectionData();
+  SetSectionBSS();
+  SetSectionText();
 }
 
 void WinCOFFStreamer::EmitLabel(MCSymbol *Symbol) {
@@ -157,15 +196,53 @@ void WinCOFFStreamer::EmitAssemblerFlag(MCAssemblerFlag Flag) {
 }
 
 void WinCOFFStreamer::EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
-  // TODO: This is exactly the same as MachOStreamer. Consider merging into
-  // MCObjectStreamer.
-  getAssembler().getOrCreateSymbolData(*Symbol);
-  AddValueSymbols(Value);
-  Symbol->setVariableValue(Value);
+  assert((Symbol->isInSection()
+         ? Symbol->getSection().getVariant() == MCSection::SV_COFF
+         : true) && "Got non COFF section in the COFF backend!");
+  // FIXME: This is all very ugly and depressing. What needs to happen here
+  // depends on quite a few things that are all part of relaxation, which we
+  // don't really even do.
+
+  if (Value->getKind() != MCExpr::SymbolRef) {
+    // TODO: This is exactly the same as MachOStreamer. Consider merging into
+    // MCObjectStreamer.
+    getAssembler().getOrCreateSymbolData(*Symbol);
+    AddValueSymbols(Value);
+    Symbol->setVariableValue(Value);
+  } else {
+    // FIXME: This is a horrible way to do this :(. This should really be
+    // handled after we are done with the MC* objects and immediately before
+    // writing out the object file when we know exactly what the symbol should
+    // look like in the coff symbol table. I'm not doing that now because the
+    // COFF object writer doesn't have a clearly defined separation between MC
+    // data structures, the object writers data structures, and the raw, POD,
+    // data structures that get written to disk.
+
+    // Copy over the aliased data.
+    MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
+    const MCSymbolData &RealSD = getAssembler().getOrCreateSymbolData(
+      dyn_cast<const MCSymbolRefExpr>(Value)->getSymbol());
+
+    // FIXME: This is particularly nasty because it breaks as soon as any data
+    // members of MCSymbolData change.
+    SD.CommonAlign     = RealSD.CommonAlign;
+    SD.CommonSize      = RealSD.CommonSize;
+    SD.Flags           = RealSD.Flags;
+    SD.Fragment        = RealSD.Fragment;
+    SD.Index           = RealSD.Index;
+    SD.IsExternal      = RealSD.IsExternal;
+    SD.IsPrivateExtern = RealSD.IsPrivateExtern;
+    SD.Offset          = RealSD.Offset;
+    SD.SymbolSize      = RealSD.SymbolSize;
+  }
 }
 
 void WinCOFFStreamer::EmitSymbolAttribute(MCSymbol *Symbol,
                                           MCSymbolAttr Attribute) {
+  assert(Symbol && "Symbol must be non-null!");
+  assert((Symbol->isInSection()
+         ? Symbol->getSection().getVariant() == MCSection::SV_COFF
+         : true) && "Got non COFF section in the COFF backend!");
   switch (Attribute) {
   case MCSA_WeakReference:
     getAssembler().getOrCreateSymbolData(*Symbol).modifyFlags(
@@ -188,6 +265,9 @@ void WinCOFFStreamer::EmitSymbolDesc(MCSymbol *Symbol, unsigned DescValue) {
 }
 
 void WinCOFFStreamer::BeginCOFFSymbolDef(MCSymbol const *Symbol) {
+  assert((Symbol->isInSection()
+         ? Symbol->getSection().getVariant() == MCSection::SV_COFF
+         : true) && "Got non COFF section in the COFF backend!");
   assert(CurSymbol == NULL && "EndCOFFSymbolDef must be called between calls "
                               "to BeginCOFFSymbolDef!");
   CurSymbol = Symbol;
@@ -224,10 +304,16 @@ void WinCOFFStreamer::EmitELFSize(MCSymbol *Symbol, const MCExpr *Value) {
 
 void WinCOFFStreamer::EmitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                                        unsigned ByteAlignment) {
+  assert((Symbol->isInSection()
+         ? Symbol->getSection().getVariant() == MCSection::SV_COFF
+         : true) && "Got non COFF section in the COFF backend!");
   AddCommonSymbol(Symbol, Size, ByteAlignment, true);
 }
 
 void WinCOFFStreamer::EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size) {
+  assert((Symbol->isInSection()
+         ? Symbol->getSection().getVariant() == MCSection::SV_COFF
+         : true) && "Got non COFF section in the COFF backend!");
   AddCommonSymbol(Symbol, Size, 1, false);
 }
 

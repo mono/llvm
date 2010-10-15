@@ -50,8 +50,13 @@ namespace {
 }
 
 char LoopExtractor::ID = 0;
-INITIALIZE_PASS(LoopExtractor, "loop-extract",
-                "Extract loops into new functions", false, false);
+INITIALIZE_PASS_BEGIN(LoopExtractor, "loop-extract",
+                "Extract loops into new functions", false, false)
+INITIALIZE_PASS_DEPENDENCY(BreakCriticalEdges)
+INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
+INITIALIZE_PASS_DEPENDENCY(DominatorTree)
+INITIALIZE_PASS_END(LoopExtractor, "loop-extract",
+                "Extract loops into new functions", false, false)
 
 namespace {
   /// SingleLoopExtractor - For bugpoint.
@@ -63,7 +68,7 @@ namespace {
 
 char SingleLoopExtractor::ID = 0;
 INITIALIZE_PASS(SingleLoopExtractor, "loop-extract-single",
-                "Extract at most one loop into a new function", false, false);
+                "Extract at most one loop into a new function", false, false)
 
 // createLoopExtractorPass - This pass extracts all natural loops from the
 // program into a function if it can.
@@ -159,7 +164,7 @@ namespace {
 char BlockExtractorPass::ID = 0;
 INITIALIZE_PASS(BlockExtractorPass, "extract-blocks",
                 "Extract Basic Blocks From Module (for bugpoint use)",
-                false, false);
+                false, false)
 
 // createBlockExtractorPass - This pass extracts all blocks (except those
 // specified in the argument list) from the functions in the module.

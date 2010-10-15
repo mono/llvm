@@ -20,6 +20,7 @@ namespace llvm {
 
 class LiveInterval;
 class LiveIntervals;
+class LiveRangeEdit;
 class MachineInstr;
 class MachineLoop;
 class MachineLoopInfo;
@@ -229,7 +230,7 @@ public:
 /// - Mark the ranges where the new interval is used with useIntv* 
 /// - Mark the places where the interval is exited with exitIntv*.
 /// - Finish the current interval with closeIntv and repeat from 2.
-/// - Rewrite instructions with rewrite().
+/// - Rewrite instructions with finish().
 ///
 class SplitEditor {
   SplitAnalysis &sa_;
@@ -238,8 +239,8 @@ class SplitEditor {
   MachineRegisterInfo &mri_;
   const TargetInstrInfo &tii_;
 
-  /// curli_ - The immutable interval we are currently splitting.
-  const LiveInterval *const curli_;
+  /// edit_ - The current parent register and new intervals created.
+  LiveRangeEdit &edit_;
 
   /// dupli_ - Created as a copy of curli_, ranges are carved out as new
   /// intervals get added through openIntv / closeIntv. This is used to avoid
@@ -248,17 +249,6 @@ class SplitEditor {
 
   /// Currently open LiveInterval.
   LiveIntervalMap openli_;
-
-  /// createInterval - Create a new virtual register and LiveInterval with same
-  /// register class and spill slot as curli.
-  LiveInterval *createInterval();
-
-  /// All the new intervals created for this split are added to intervals_.
-  SmallVectorImpl<LiveInterval*> &intervals_;
-
-  /// The index into intervals_ of the first interval we added. There may be
-  /// others from before we got it.
-  unsigned firstInterval;
 
   /// intervalsLiveAt - Return true if any member of intervals_ is live at Idx.
   bool intervalsLiveAt(SlotIndex Idx) const;
@@ -271,11 +261,17 @@ class SplitEditor {
   /// truncating any overlap with intervals_.
   void addTruncSimpleRange(SlotIndex Start, SlotIndex End, VNInfo *VNI);
 
+  /// computeRemainder - Compute the dupli liveness as the complement of all the
+  /// new intervals.
+  void computeRemainder();
+
+  /// rewrite - Rewrite all uses of reg to use the new registers.
+  void rewrite(unsigned reg);
+
 public:
   /// Create a new SplitEditor for editing the LiveInterval analyzed by SA.
   /// Newly created intervals will be appended to newIntervals.
-  SplitEditor(SplitAnalysis &SA, LiveIntervals&, VirtRegMap&,
-              SmallVectorImpl<LiveInterval*> &newIntervals);
+  SplitEditor(SplitAnalysis &SA, LiveIntervals&, VirtRegMap&, LiveRangeEdit&);
 
   /// getAnalysis - Get the corresponding analysis.
   SplitAnalysis &getAnalysis() { return sa_; }
@@ -307,9 +303,9 @@ public:
   /// LiveInterval, and ranges can be trimmed.
   void closeIntv();
 
-  /// rewrite - after all the new live ranges have been created, rewrite
-  /// instructions using curli to use the new intervals.
-  void rewrite();
+  /// finish - after all the new live ranges have been created, compute the
+  /// remaining live range, and rewrite instructions to use the new registers.
+  void finish();
 
   // ===--- High level methods ---===
 

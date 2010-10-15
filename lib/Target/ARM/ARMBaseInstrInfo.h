@@ -160,6 +160,11 @@ namespace ARMII {
     //===------------------------------------------------------------------===//
     // Field shifts - such shifts are used to set field while generating
     // machine instructions.
+    //
+    // FIXME: This list will need adjusting/fixing as the MC code emitter
+    // takes shape and the ARMCodeEmitter.cpp bits go away.
+    ShiftTypeShift = 4,
+
     M_BitShift     = 5,
     ShiftImmShift  = 5,
     ShiftShift     = 7,
@@ -350,6 +355,22 @@ public:
                         SDNode *DefNode, unsigned DefIdx,
                         SDNode *UseNode, unsigned UseIdx) const;
 private:
+  int getVLDMDefCycle(const InstrItineraryData *ItinData,
+                      const TargetInstrDesc &DefTID,
+                      unsigned DefClass,
+                      unsigned DefIdx, unsigned DefAlign) const;
+  int getLDMDefCycle(const InstrItineraryData *ItinData,
+                     const TargetInstrDesc &DefTID,
+                     unsigned DefClass,
+                     unsigned DefIdx, unsigned DefAlign) const;
+  int getVSTMUseCycle(const InstrItineraryData *ItinData,
+                      const TargetInstrDesc &UseTID,
+                      unsigned UseClass,
+                      unsigned UseIdx, unsigned UseAlign) const;
+  int getSTMUseCycle(const InstrItineraryData *ItinData,
+                     const TargetInstrDesc &UseTID,
+                     unsigned UseClass,
+                     unsigned UseIdx, unsigned UseAlign) const;
   int getOperandLatency(const InstrItineraryData *ItinData,
                         const TargetInstrDesc &DefTID,
                         unsigned DefIdx, unsigned DefAlign,

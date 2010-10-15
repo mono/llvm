@@ -20,6 +20,11 @@ def GetLo32XForm : SDNodeXForm<imm, [{
   return getI32Imm((unsigned)N->getZExtValue());
 }]>;
 
+def GetLo8XForm : SDNodeXForm<imm, [{
+  // Transformation function: get the low 8 bits.
+  return getI8Imm((uint8_t)N->getZExtValue());
+}]>;
+
 
 //===----------------------------------------------------------------------===//
 // Random Pseudo Instructions.
@@ -77,6 +82,17 @@ def VASTART_SAVE_XMM_REGS : I<0, Pseudo,
                               [(X86vastart_save_xmm_regs GR8:$al,
                                                          imm:$regsavefi,
                                                          imm:$offset)]>;
+
+// The VAARG_64 pseudo-instruction takes the address of the va_list,
+// and places the address of the next argument into a register.
+let Defs = [EFLAGS] in
+def VAARG_64 : I<0, Pseudo,
+                 (outs GR64:$dst),
+                 (ins i8mem:$ap, i32imm:$size, i8imm:$mode, i32imm:$align),
+                 "#VAARG_64 $dst, $ap, $size, $mode, $align",
+                 [(set GR64:$dst,
+                    (X86vaarg64 addr:$ap, imm:$size, imm:$mode, imm:$align)),
+                  (implicit EFLAGS)]>;
 
 // Dynamic stack allocation yields _alloca call for Cygwin/Mingw targets.  Calls
 // to _alloca is needed to probe the stack when allocating more than 4k bytes in
@@ -998,6 +1014,80 @@ def : Pat<(i64 (zext def32:$src)),
           (SUBREG_TO_REG (i64 0), GR32:$src, sub_32bit)>;
 
 //===----------------------------------------------------------------------===//
+// Pattern match OR as ADD
+//===----------------------------------------------------------------------===//
+
+// If safe, we prefer to pattern match OR as ADD at isel time. ADD can be
+// 3-addressified into an LEA instruction to avoid copies.  However, we also
+// want to finally emit these instructions as an or at the end of the code
+// generator to make the generated code easier to read.  To do this, we select
+// into "disjoint bits" pseudo ops.
+
+// Treat an 'or' node is as an 'add' if the or'ed bits are known to be zero.
+def or_is_add : PatFrag<(ops node:$lhs, node:$rhs), (or node:$lhs, node:$rhs),[{
+  if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(N->getOperand(1)))
+    return CurDAG->MaskedValueIsZero(N->getOperand(0), CN->getAPIntValue());
+
+  unsigned BitWidth = N->getValueType(0).getScalarType().getSizeInBits();
+  APInt Mask = APInt::getAllOnesValue(BitWidth);
+  APInt KnownZero0, KnownOne0;
+  CurDAG->ComputeMaskedBits(N->getOperand(0), Mask, KnownZero0, KnownOne0, 0);
+  APInt KnownZero1, KnownOne1;
+  CurDAG->ComputeMaskedBits(N->getOperand(1), Mask, KnownZero1, KnownOne1, 0);
+  return (~KnownZero0 & ~KnownZero1) == 0;
+}]>;
+
+
+// (or x1, x2) -> (add x1, x2) if two operands are known not to share bits.
+let AddedComplexity = 5 in { // Try this before the selecting to OR
+
+let isCommutable = 1, isConvertibleToThreeAddress = 1,
+    Constraints = "$src1 = $dst", Defs = [EFLAGS] in {
+def ADD16rr_DB  : I<0, Pseudo, (outs GR16:$dst), (ins GR16:$src1, GR16:$src2),
+                    "", // orw/addw REG, REG
+                    [(set GR16:$dst, (or_is_add GR16:$src1, GR16:$src2))]>;
+def ADD32rr_DB  : I<0, Pseudo, (outs GR32:$dst), (ins GR32:$src1, GR32:$src2),
+                    "", // orl/addl REG, REG
+                    [(set GR32:$dst, (or_is_add GR32:$src1, GR32:$src2))]>;
+def ADD64rr_DB  : I<0, Pseudo, (outs GR64:$dst), (ins GR64:$src1, GR64:$src2),
+                    "", // orq/addq REG, REG
+                    [(set GR64:$dst, (or_is_add GR64:$src1, GR64:$src2))]>;
+
+// NOTE: These are order specific, we want the ri8 forms to be listed
+// first so that they are slightly preferred to the ri forms.
+
+def ADD16ri8_DB : I<0, Pseudo,
+                    (outs GR16:$dst), (ins GR16:$src1, i16i8imm:$src2),
+                    "", // orw/addw REG, imm8
+                    [(set GR16:$dst,(or_is_add GR16:$src1,i16immSExt8:$src2))]>;
+def ADD16ri_DB  : I<0, Pseudo, (outs GR16:$dst), (ins GR16:$src1, i16imm:$src2),
+                    "", // orw/addw REG, imm
+                    [(set GR16:$dst, (or_is_add GR16:$src1, imm:$src2))]>;
+
+def ADD32ri8_DB : I<0, Pseudo,
+                    (outs GR32:$dst), (ins GR32:$src1, i32i8imm:$src2),
+                    "", // orl/addl REG, imm8
+                    [(set GR32:$dst,(or_is_add GR32:$src1,i32immSExt8:$src2))]>;
+def ADD32ri_DB  : I<0, Pseudo, (outs GR32:$dst), (ins GR32:$src1, i32imm:$src2),
+                    "", // orl/addl REG, imm
+                    [(set GR32:$dst, (or_is_add GR32:$src1, imm:$src2))]>;
+
+
+def ADD64ri8_DB : I<0, Pseudo,
+                    (outs GR64:$dst), (ins GR64:$src1, i64i8imm:$src2),
+                    "", // orq/addq REG, imm8
+                    [(set GR64:$dst, (or_is_add GR64:$src1,
+                                                i64immSExt8:$src2))]>;
+def ADD64ri32_DB : I<0, Pseudo,
+                     (outs GR64:$dst), (ins GR64:$src1, i64i32imm:$src2),
+                      "", // orq/addq REG, imm
+                      [(set GR64:$dst, (or_is_add GR64:$src1,
+                                                  i64immSExt32:$src2))]>;
+}
+} // AddedComplexity
+
+
+//===----------------------------------------------------------------------===//
 // Some peepholes
 //===----------------------------------------------------------------------===//
 
@@ -1025,9 +1115,19 @@ def : Pat<(add GR64:$src1, 0x0000000080000000),
 def : Pat<(store (add (loadi64 addr:$dst), 0x00000000800000000), addr:$dst),
           (SUB64mi32 addr:$dst, 0xffffffff80000000)>;
 
-// Use a 32-bit and with implicit zero-extension instead of a 64-bit and if it
-// has an immediate with at least 32 bits of leading zeros, to avoid needing to
-// materialize that immediate in a register first.
+// To avoid needing to materialize an immediate in a register, use a 32-bit and
+// with implicit zero-extension instead of a 64-bit and if the immediate has at
+// least 32 bits of leading zeros. If in addition the last 32 bits can be
+// represented with a sign extension of a 8 bit constant, use that.
+
+def : Pat<(and GR64:$src, i64immZExt32SExt8:$imm),
+          (SUBREG_TO_REG
+            (i64 0),
+            (AND32ri8
+              (EXTRACT_SUBREG GR64:$src, sub_32bit),
+              (i32 (GetLo8XForm imm:$imm))),
+            sub_32bit)>;
+
 def : Pat<(and GR64:$src, i64immZExt32:$imm),
           (SUBREG_TO_REG
             (i64 0),
@@ -1309,27 +1409,8 @@ def : Pat<(i32 (anyext (i8 (X86setcc_c X86_COND_B, EFLAGS)))),
 def : Pat<(i32 (anyext (i16 (X86setcc_c X86_COND_B, EFLAGS)))),
           (SETB_C32r)>;
 
-// (or x1, x2) -> (add x1, x2) if two operands are known not to share bits.
-let AddedComplexity = 5 in { // Try this before the selecting to OR
-def : Pat<(or_is_add GR16:$src1, imm:$src2),
-          (ADD16ri GR16:$src1, imm:$src2)>;
-def : Pat<(or_is_add GR32:$src1, imm:$src2),
-          (ADD32ri GR32:$src1, imm:$src2)>;
-def : Pat<(or_is_add GR16:$src1, i16immSExt8:$src2),
-          (ADD16ri8 GR16:$src1, i16immSExt8:$src2)>;
-def : Pat<(or_is_add GR32:$src1, i32immSExt8:$src2),
-          (ADD32ri8 GR32:$src1, i32immSExt8:$src2)>;
-def : Pat<(or_is_add GR16:$src1, GR16:$src2),
-          (ADD16rr GR16:$src1, GR16:$src2)>;
-def : Pat<(or_is_add GR32:$src1, GR32:$src2),
-          (ADD32rr GR32:$src1, GR32:$src2)>;
-def : Pat<(or_is_add GR64:$src1, i64immSExt8:$src2),
-          (ADD64ri8 GR64:$src1, i64immSExt8:$src2)>;
-def : Pat<(or_is_add GR64:$src1, i64immSExt32:$src2),
-          (ADD64ri32 GR64:$src1, i64immSExt32:$src2)>;
-def : Pat<(or_is_add GR64:$src1, GR64:$src2),
-          (ADD64rr GR64:$src1, GR64:$src2)>;
-} // AddedComplexity
+
+
 
 //===----------------------------------------------------------------------===//
 // EFLAGS-defining Patterns

@@ -153,16 +153,21 @@ def pred : PredicateOperand<OtherVT, (ops i32imm, CCR),
 
 // Conditional code result for instructions whose 's' bit is set, e.g. subs.
 def cc_out : OptionalDefOperand<OtherVT, (ops CCR), (ops (i32 zero_reg))> {
+  string EncoderMethod = "getCCOutOpValue";
   let PrintMethod = "printSBitModifierOperand";
 }
 
 // Same as cc_out except it defaults to setting CPSR.
 def s_cc_out : OptionalDefOperand<OtherVT, (ops CCR), (ops (i32 CPSR))> {
+  string EncoderMethod = "getCCOutOpValue";
   let PrintMethod = "printSBitModifierOperand";
 }
 
 // ARM special operands for disassembly only.
 //
+def setend_op : Operand<i32> {
+  let PrintMethod = "printSetendOperand";
+}
 
 def cps_opt : Operand<i32> {
   let PrintMethod = "printCPSOptionOperand";
@@ -241,6 +246,8 @@ class I<dag oops, dag iops, AddrMode am, SizeFlagVal sz,
         string opc, string asm, string cstr,
         list<dag> pattern>
   : InstARM<am, sz, im, f, GenericDomain, cstr, itin> {
+  bits<4> p;
+  let Inst{31-28} = p;
   let OutOperandList = oops;
   let InOperandList = !con(iops, (ins pred:$p));
   let AsmString = !strconcat(opc, "${p}", asm);
@@ -270,9 +277,14 @@ class sI<dag oops, dag iops, AddrMode am, SizeFlagVal sz,
          string opc, string asm, string cstr,
          list<dag> pattern>
   : InstARM<am, sz, im, f, GenericDomain, cstr, itin> {
+  bits<4> p; // Predicate operand
+  bits<1> s; // condition-code set flag ('1' if the insn should set the flags)
+  let Inst{31-28} = p;
+  let Inst{20} = s;
+
   let OutOperandList = oops;
   let InOperandList = !con(iops, (ins pred:$p, cc_out:$s));
-  let AsmString = !strconcat(opc, "${p}${s}", asm);
+  let AsmString = !strconcat(opc, "${s}${p}", asm);
   let Pattern = pattern;
   list<Predicate> Predicates = [IsARM];
 }
@@ -924,7 +936,13 @@ class AExtI<bits<8> opcod, dag oops, dag iops, InstrItinClass itin,
             string opc, string asm, list<dag> pattern>
   : I<oops, iops, AddrModeNone, Size4Bytes, IndexModeNone, ExtFrm, itin,
       opc, asm, "", pattern> {
+  // All AExtI instructions have Rd and Rm register operands.
+  bits<4> Rd;
+  bits<4> Rm;
+  let Inst{15-12} = Rd;
+  let Inst{3-0}   = Rm;
   let Inst{7-4}   = 0b0111;
+  let Inst{9-8}   = 0b00;
   let Inst{27-20} = opcod;
 }
 
@@ -1134,7 +1152,7 @@ class Thumb2I<dag oops, dag iops, AddrMode am, SizeFlagVal sz,
 // Same as Thumb2I except it can optionally modify CPSR. Note it's modeled as an
 // input operand since by default it's a zero register. It will become an
 // implicit def once it's "flipped".
-// 
+//
 // FIXME: This uses unified syntax so {s} comes before {p}. We should make it
 // more consistent.
 class Thumb2sI<dag oops, dag iops, AddrMode am, SizeFlagVal sz,
@@ -1281,6 +1299,8 @@ class VFPI<dag oops, dag iops, AddrMode am, SizeFlagVal sz,
            IndexMode im, Format f, InstrItinClass itin,
            string opc, string asm, string cstr, list<dag> pattern>
   : InstARM<am, sz, im, f, VFPDomain, cstr, itin> {
+  bits<4> p;
+  let Inst{31-28} = p;
   let OutOperandList = oops;
   let InOperandList = !con(iops, (ins pred:$p));
   let AsmString = !strconcat(opc, "${p}", asm);
@@ -1314,7 +1334,8 @@ class ADI5<bits<4> opcod1, bits<2> opcod2, dag oops, dag iops,
   // TODO: Mark the instructions with the appropriate subtarget info.
   let Inst{27-24} = opcod1;
   let Inst{21-20} = opcod2;
-  let Inst{11-8}  = 0b1011;
+  let Inst{11-9}  = 0b101;
+  let Inst{8}     = 1;          // Double precision
 
   // 64-bit loads & stores operate on both NEON and VFP pipelines.
   let D = VFPNeonDomain;
@@ -1328,7 +1349,8 @@ class ASI5<bits<4> opcod1, bits<2> opcod2, dag oops, dag iops,
   // TODO: Mark the instructions with the appropriate subtarget info.
   let Inst{27-24} = opcod1;
   let Inst{21-20} = opcod2;
-  let Inst{11-8}  = 0b1010;
+  let Inst{11-9}  = 0b101;
+  let Inst{8}     = 0;          // Single precision
 }
 
 // VFP Load / store multiple pseudo instructions.
@@ -1349,7 +1371,8 @@ class AXDI4<dag oops, dag iops, IndexMode im, InstrItinClass itin,
           VFPLdStMulFrm, itin, asm, cstr, pattern> {
   // TODO: Mark the instructions with the appropriate subtarget info.
   let Inst{27-25} = 0b110;
-  let Inst{11-8}  = 0b1011;
+  let Inst{11-9}  = 0b101;
+  let Inst{8}     = 1;          // Double precision
 
   // 64-bit loads & stores operate on both NEON and VFP pipelines.
   let D = VFPNeonDomain;
@@ -1361,7 +1384,8 @@ class AXSI4<dag oops, dag iops, IndexMode im, InstrItinClass itin,
           VFPLdStMulFrm, itin, asm, cstr, pattern> {
   // TODO: Mark the instructions with the appropriate subtarget info.
   let Inst{27-25} = 0b110;
-  let Inst{11-8}  = 0b1010;
+  let Inst{11-9}  = 0b101;
+  let Inst{8}     = 0;          // Single precision
 }
 
 // Double precision, unary
@@ -1372,7 +1396,8 @@ class ADuI<bits<5> opcod1, bits<2> opcod2, bits<4> opcod3, bits<2> opcod4,
   let Inst{27-23} = opcod1;
   let Inst{21-20} = opcod2;
   let Inst{19-16} = opcod3;
-  let Inst{11-8}  = 0b1011;
+  let Inst{11-9}  = 0b101;
+  let Inst{8}     = 1;          // Double precision
   let Inst{7-6}   = opcod4;
   let Inst{4}     = opcod5;
 }
@@ -1384,7 +1409,8 @@ class ADbI<bits<5> opcod1, bits<2> opcod2, bit op6, bit op4, dag oops,
   : VFPAI<oops, iops, VFPBinaryFrm, itin, opc, asm, pattern> {
   let Inst{27-23} = opcod1;
   let Inst{21-20} = opcod2;
-  let Inst{11-8}  = 0b1011;
+  let Inst{11-9}  = 0b101;
+  let Inst{8}     = 1;          // Double precision
   let Inst{6}     = op6;
   let Inst{4}     = op4;
 }
@@ -1396,7 +1422,8 @@ class ADbI_vmlX<bits<5> opcod1, bits<2> opcod2, bit op6, bit op4, dag oops,
   : VFPAI<oops, iops, VFPBinaryFrm, itin, opc, asm, pattern> {
   let Inst{27-23} = opcod1;
   let Inst{21-20} = opcod2;
-  let Inst{11-8}  = 0b1011;
+  let Inst{11-9}  = 0b101;
+  let Inst{8}     = 1;          // Double precision
   let Inst{6}     = op6;
   let Inst{4}     = op4;
   list<Predicate> Predicates = [HasVFP2, UseVMLx];
@@ -1410,7 +1437,8 @@ class ASuI<bits<5> opcod1, bits<2> opcod2, bits<4> opcod3, bits<2> opcod4,
   let Inst{27-23} = opcod1;
   let Inst{21-20} = opcod2;
   let Inst{19-16} = opcod3;
-  let Inst{11-8}  = 0b1010;
+  let Inst{11-9}  = 0b101;
+  let Inst{8}     = 0;          // Single precision
   let Inst{7-6}   = opcod4;
   let Inst{4}     = opcod5;
 }
@@ -1431,7 +1459,8 @@ class ASbI<bits<5> opcod1, bits<2> opcod2, bit op6, bit op4, dag oops, dag iops,
   : VFPAI<oops, iops, VFPBinaryFrm, itin, opc, asm, pattern> {
   let Inst{27-23} = opcod1;
   let Inst{21-20} = opcod2;
-  let Inst{11-8}  = 0b1010;
+  let Inst{11-9}  = 0b101;
+  let Inst{8}     = 0;          // Single precision
   let Inst{6}     = op6;
   let Inst{4}     = op4;
 }

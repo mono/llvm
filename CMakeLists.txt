@@ -64,7 +64,6 @@ set(LLVM_ALL_TARGETS
   Mips
   MBlaze
   MSP430
-  PIC16
   PowerPC
   PTX
   Sparc
@@ -223,7 +222,7 @@ if( MSVC )
   add_llvm_definitions( -D_SCL_SECURE_NO_WARNINGS -DCRT_NONSTDC_NO_WARNINGS )
   add_llvm_definitions( -D_SCL_SECURE_NO_DEPRECATE )
   add_llvm_definitions( -wd4146 -wd4503 -wd4996 -wd4800 -wd4244 -wd4624 )
-  add_llvm_definitions( -wd4355 -wd4715 -wd4180 -wd4345 -wd4224 )
+  add_llvm_definitions( -wd4355 -wd4715 -wd4180 -wd4345 -wd4224 -wd4267 )
 
   # Suppress 'new behavior: elements of array 'array' will be default initialized'
   add_llvm_definitions( -wd4351 )
@@ -342,11 +341,6 @@ foreach(t ${LLVM_TARGETS_TO_BUILD})
   set(CURRENT_LLVM_TARGET)
 endforeach(t)
 
-# PIC16 contains an odd library:
-if( LLVM_TARGETS_TO_BUILD MATCHES ".*PIC16.*" )
-  add_subdirectory(lib/Target/PIC16/PIC16Passes)
-endif()
-
 # Produce llvm/Config/AsmPrinters.def
 configure_file(
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Config/AsmPrinters.def.in
@@ -395,6 +389,11 @@ if( LLVM_INCLUDE_TESTS )
   add_subdirectory(test)
   add_subdirectory(utils/unittest)
   add_subdirectory(unittests)
+  if (WIN32)
+    # This utility is used to prevent chrashing tests from calling Dr. Watson on
+    # Windows.
+    add_subdirectory(utils/KillTheDoctor)
+  endif()
 endif()
 
 add_subdirectory(cmake/modules)
@@ -422,3 +421,9 @@ install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/include/
   )
 
 # TODO: make and install documentation.
+
+set(CPACK_PACKAGE_VENDOR "LLVM")
+set(CPACK_PACKAGE_VERSION_MAJOR 2)
+set(CPACK_PACKAGE_VERSION_MINOR 9)
+add_version_info_from_vcs(CPACK_PACKAGE_VERSION_PATCH)
+include(CPack)

@@ -25,8 +25,12 @@
 using namespace llvm;
 
 char CalculateSpillWeights::ID = 0;
-INITIALIZE_PASS(CalculateSpillWeights, "calcspillweights",
-                "Calculate spill weights", false, false);
+INITIALIZE_PASS_BEGIN(CalculateSpillWeights, "calcspillweights",
+                "Calculate spill weights", false, false)
+INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
+INITIALIZE_PASS_END(CalculateSpillWeights, "calcspillweights",
+                "Calculate spill weights", false, false)
 
 void CalculateSpillWeights::getAnalysisUsage(AnalysisUsage &au) const {
   au.addRequired<LiveIntervals>();

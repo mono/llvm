@@ -19,6 +19,41 @@ namespace llvm {
 
 class PassRegistry;
 
+/// initializeCore - Initialize all passes linked into the 
+/// TransformUtils library.
+void initializeCore(PassRegistry&);
+
+/// initializeTransformUtils - Initialize all passes linked into the 
+/// TransformUtils library.
+void initializeTransformUtils(PassRegistry&);
+
+/// initializeScalarOpts - Initialize all passes linked into the 
+/// ScalarOpts library.
+void initializeScalarOpts(PassRegistry&);
+
+/// initializeInstCombine - Initialize all passes linked into the 
+/// ScalarOpts library.
+void initializeInstCombine(PassRegistry&);
+
+/// initializeIPO - Initialize all passes linked into the IPO library.
+void initializeIPO(PassRegistry&);
+
+/// initializeInstrumentation - Initialize all passes linked into the
+/// Instrumentation library.
+void initializeInstrumentation(PassRegistry&);
+
+/// initializeAnalysis - Initialize all passes linked into the Analysis library.
+void initializeAnalysis(PassRegistry&);
+
+/// initializeIPA - Initialize all passes linked into the IPA library.
+void initializeIPA(PassRegistry&);
+
+/// initializeCodeGen - Initialize all passes linked into the CodeGen library.
+void initializeCodeGen(PassRegistry&);
+
+/// initializeCodeGen - Initialize all passes linked into the CodeGen library.
+void initializeTarget(PassRegistry&);
+
 void initializeAAEvalPass(PassRegistry&);
 void initializeADCEPass(PassRegistry&);
 void initializeAliasAnalysisAnalysisGroup(PassRegistry&);
@@ -89,7 +124,6 @@ void initializeLoaderPassPass(PassRegistry&);
 void initializeLoopDeletionPass(PassRegistry&);
 void initializeLoopDependenceAnalysisPass(PassRegistry&);
 void initializeLoopExtractorPass(PassRegistry&);
-void initializeLoopIndexSplitPass(PassRegistry&);
 void initializeLoopInfoPass(PassRegistry&);
 void initializeLoopRotatePass(PassRegistry&);
 void initializeLoopSimplifyPass(PassRegistry&);

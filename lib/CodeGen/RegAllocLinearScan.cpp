@@ -370,8 +370,18 @@ namespace {
   char RALinScan::ID = 0;
 }
 
-INITIALIZE_PASS(RALinScan, "linearscan-regalloc",
-                "Linear Scan Register Allocator", false, false);
+INITIALIZE_PASS_BEGIN(RALinScan, "linearscan-regalloc",
+                "Linear Scan Register Allocator", false, false)
+INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
+INITIALIZE_PASS_DEPENDENCY(StrongPHIElimination)
+INITIALIZE_PASS_DEPENDENCY(CalculateSpillWeights)
+INITIALIZE_PASS_DEPENDENCY(PreAllocSplitting)
+INITIALIZE_PASS_DEPENDENCY(LiveStacks)
+INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
+INITIALIZE_PASS_DEPENDENCY(VirtRegMap)
+INITIALIZE_AG_DEPENDENCY(RegisterCoalescer)
+INITIALIZE_PASS_END(RALinScan, "linearscan-regalloc",
+                "Linear Scan Register Allocator", false, false)
 
 void RALinScan::ComputeRelatedRegClasses() {
   // First pass, add all reg classes to the union, and determine at least one

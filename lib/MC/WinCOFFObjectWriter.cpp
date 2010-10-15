@@ -359,6 +359,8 @@ object_t *WinCOFFObjectWriter::createCOFFEntity(llvm::StringRef Name,
 /// This function takes a section data object from the assembler
 /// and creates the associated COFF section staging object.
 void WinCOFFObjectWriter::DefineSection(MCSectionData const &SectionData) {
+  assert(SectionData.getSection().getVariant() == MCSection::SV_COFF
+    && "Got non COFF section in the COFF backend!");
   // FIXME: Not sure how to verify this (at least in a debug build).
   MCSectionCOFF const &Sec =
     static_cast<MCSectionCOFF const &>(SectionData.getSection());
@@ -639,6 +641,11 @@ void WinCOFFObjectWriter::RecordRelocation(const MCAssembler &Asm,
   COFFSymbol *coff_symbol = SymbolMap[&A_SD];
 
   if (Target.getSymB()) {
+    if (&Target.getSymA()->getSymbol().getSection()
+     != &Target.getSymB()->getSymbol().getSection()) {
+      llvm_unreachable("Symbol relative relocations are only allowed between "
+                       "symbols in the same section");
+    }
     const MCSymbol *B = &Target.getSymB()->getSymbol();
     MCSymbolData &B_SD = Asm.getSymbolData(*B);
 
@@ -701,7 +708,30 @@ bool WinCOFFObjectWriter::IsFixupFullyResolved(const MCAssembler &Asm,
                                                const MCValue Target,
                                                bool IsPCRel,
                                                const MCFragment *DF) const {
-  return false;
+  // If this is a PCrel relocation, find the section this fixup value is
+  // relative to.
+  const MCSection *BaseSection = 0;
+  if (IsPCRel) {
+    BaseSection = &DF->getParent()->getSection();
+    assert(BaseSection);
+  }
+
+  const MCSection *SectionA = 0;
+  const MCSymbol *SymbolA = 0;
+  if (const MCSymbolRefExpr *A = Target.getSymA()) {
+    SymbolA = &A->getSymbol();
+    SectionA = &SymbolA->getSection();
+  }
+
+  const MCSection *SectionB = 0;
+  if (const MCSymbolRefExpr *B = Target.getSymB()) {
+    SectionB = &B->getSymbol().getSection();
+  }
+
+  if (!BaseSection)
+    return SectionA == SectionB;
+
+  return !SectionB && BaseSection == SectionA;
 }
 
 void WinCOFFObjectWriter::WriteObject(MCAssembler &Asm,
@@ -771,7 +801,7 @@ void WinCOFFObjectWriter::WriteObject(MCAssembler &Asm,
     if (Sec->Number == -1)
       continue;
 
-    Sec->Header.SizeOfRawData = Layout.getSectionFileSize(i);
+    Sec->Header.SizeOfRawData = Layout.getSectionAddressSize(i);
 
     if (IsPhysicalSection(Sec)) {
       Sec->Header.PointerToRawData = offset;

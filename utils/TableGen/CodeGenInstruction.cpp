@@ -166,10 +166,14 @@ CodeGenInstruction::CodeGenInstruction(Record *R, const std::string &AsmStr)
 
     Record *Rec = Arg->getDef();
     std::string PrintMethod = "printOperand";
+    std::string EncoderMethod;
     unsigned NumOps = 1;
     DagInit *MIOpInfo = 0;
     if (Rec->isSubClassOf("Operand")) {
       PrintMethod = Rec->getValueAsString("PrintMethod");
+      // If there is an explicit encoder method, use it.
+      if (Rec->getValue("EncoderMethod"))
+        EncoderMethod = Rec->getValueAsString("EncoderMethod");
       MIOpInfo = Rec->getValueAsDag("MIOperandInfo");
 
       // Verify that MIOpInfo has an 'ops' root value.
@@ -204,7 +208,7 @@ CodeGenInstruction::CodeGenInstruction(Record *R, const std::string &AsmStr)
       throw "In instruction '" + R->getName() + "', operand #" + utostr(i) +
         " has the same name as a previous operand!";
 
-    OperandList.push_back(OperandInfo(Rec, ArgName, PrintMethod,
+    OperandList.push_back(OperandInfo(Rec, ArgName, PrintMethod, EncoderMethod,
                                       MIOperandNo, NumOps, MIOpInfo));
     MIOperandNo += NumOps;
   }
@@ -234,11 +238,24 @@ CodeGenInstruction::CodeGenInstruction(Record *R, const std::string &AsmStr)
 /// specified name, throw an exception.
 ///
 unsigned CodeGenInstruction::getOperandNamed(const std::string &Name) const {
-  assert(!Name.empty() && "Cannot search for operand with no name!");
-  for (unsigned i = 0, e = OperandList.size(); i != e; ++i)
-    if (OperandList[i].Name == Name) return i;
+  unsigned OpIdx;
+  if (hasOperandNamed(Name, OpIdx)) return OpIdx;
   throw "Instruction '" + TheDef->getName() +
         "' does not have an operand named '$" + Name + "'!";
+}
+
+/// hasOperandNamed - Query whether the instruction has an operand of the
+/// given name. If so, return true and set OpIdx to the index of the
+/// operand. Otherwise, return false.
+bool CodeGenInstruction::hasOperandNamed(const std::string &Name,
+                                         unsigned &OpIdx) const {
+  assert(!Name.empty() && "Cannot search for operand with no name!");
+  for (unsigned i = 0, e = OperandList.size(); i != e; ++i)
+    if (OperandList[i].Name == Name) {
+      OpIdx = i;
+      return true;
+    }
+  return false;
 }
 
 std::pair<unsigned,unsigned>
