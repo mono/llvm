@@ -135,15 +135,19 @@ namespace {
     /// Update the appropriate Phi nodes as we do so.
     void SplitExitEdges(Loop *L, const SmallVector<BasicBlock *, 8> &ExitBlocks);
 
-    bool UnswitchIfProfitable(Value *LoopCond, Constant *Val);
+    bool UnswitchIfProfitable(Value *LoopCond, Value *Val,
+                              CmpInst::Predicate Pred);
     void UnswitchTrivialCondition(Loop *L, Value *Cond, Constant *Val,
                                   BasicBlock *ExitBlock);
-    void UnswitchNontrivialCondition(Value *LIC, Constant *OnVal, Loop *L);
+    void UnswitchNontrivialCondition(Value *LIC, Value *OnVal,
+                                     CmpInst::Predicate Pred,
+                                     Loop *L);
 
-    void RewriteLoopBodyWithConditionConstant(Loop *L, Value *LIC,
-                                              Constant *Val, bool isEqual);
+    void RewriteLoopBodyWithConditionConstant(Loop *L, Value *LIC, Value *Val,
+                                              bool isEqual);
 
-    void EmitPreheaderBranchOnCondition(Value *LIC, Constant *Val,
+    void EmitPreheaderBranchOnCondition(Value *LIC, Value *Val,
+                                        CmpInst::Predicate Pred,
                                         BasicBlock *TrueDest, 
                                         BasicBlock *FalseDest,
                                         Instruction *InsertPt);
@@ -154,7 +158,6 @@ namespace {
     void RemoveLoopFromHierarchy(Loop *L);
     bool IsTrivialUnswitchCondition(Value *Cond, Constant **Val = 0,
                                     BasicBlock **LoopExit = 0);
-
   };
 }
 char LoopUnswitch::ID = 0;
@@ -203,6 +206,163 @@ static Value *FindLIVLoopCondition(Value *Cond, Loop *L, bool &Changed) {
   return 0;
 }
 
+//
+// Check whenever the loop L is a for style loop, and if it is, return its induction variable,
+// along with its range [Low, High).
+//
+static Value*
+GetForLoopInductionVariable(Loop *L, Value* &Low, Value* &High)
+{
+  assert (L->isLoopSimplifyForm());
+
+  SmallVector<BasicBlock*, 8> ExitBlocks;
+  L->getExitBlocks(ExitBlocks);
+
+  BasicBlock *H = L->getHeader();
+  BranchInst *LoopExitBr = dyn_cast<BranchInst>(H->getTerminator());
+
+  // Match a loop header of the form:
+  //    %11 = icmp slt i32 %indvar, %limit
+  //    br i1 %11, label %BBODY, label %BEXIT
+  if (!LoopExitBr ||
+      !LoopExitBr->isConditional() ||
+      std::find(ExitBlocks.begin(),ExitBlocks.end(),LoopExitBr->getSuccessor(1)) == ExitBlocks.end())
+    return NULL;
+
+  ICmpInst *LoopCond = dyn_cast<ICmpInst>(LoopExitBr->getCondition());
+  if (!LoopCond || LoopCond->getPredicate() != CmpInst::ICMP_SLT)
+    return NULL;
+
+  Value *Limit = LoopCond->getOperand(1);
+  if (!L->isLoopInvariant (Limit))
+    return NULL;
+
+  // Similar to Loop::getCanonicalInductionVariable ()
+  BasicBlock *Incoming = 0, *Backedge = 0;
+  typedef GraphTraits<Inverse<BasicBlock*> > InvBlockTraits;
+  InvBlockTraits::ChildIteratorType PI = InvBlockTraits::child_begin(H);
+  assert(PI != InvBlockTraits::child_end(H) &&
+         "Loop must have at least one backedge!");
+  Backedge = *PI++;
+  if (PI == InvBlockTraits::child_end(H)) return 0;  // dead loop
+  Incoming = *PI++;
+  if (PI != InvBlockTraits::child_end(H)) return 0;  // multiple backedges?
+
+  if (L->contains(Incoming)) {
+    if (L->contains(Backedge))
+      return 0;
+    std::swap(Incoming, Backedge);
+  } else if (!L->contains(Backedge))
+    return 0;
+
+  // Match phi i32 [ 0, %BBINCOMING ], [ %t44, %BB_BACKEDGE_BLOCK ]
+  Value *IndVar = LoopCond->getOperand(0);
+
+  PHINode *PN = dyn_cast<PHINode>(IndVar);
+  if (!PN || PN->getBasicBlockIndex(Incoming) == -1 || PN->getBasicBlockIndex(Backedge) == -1)
+    return NULL;
+
+  if (Value *StartI = PN->getIncomingValueForBlock(Incoming)) {
+    if (Instruction *Inc =
+        dyn_cast<Instruction>(PN->getIncomingValueForBlock(Backedge)))
+      if (Inc->getOpcode() == Instruction::Add &&
+          Inc->getOperand(0) == PN)
+        if (ConstantInt *CI = dyn_cast<ConstantInt>(Inc->getOperand(1)))
+          if (CI->equalsInt(1)) {
+            Low = StartI;
+            High = Limit;
+            return PN;
+          }
+  }
+
+  return NULL;
+}
+
+//
+// This is a mono specific optimization designed to hoist array bounds checks out
+// of loops.
+//
+// We are looking for a check inside the loop between the loop induction variable
+// and an invariant quantity, whose true or false branch ends in 'unreachable'.
+// Instead of hoisting this check, we hoist a more general loop invariant check which
+// guarantees that the check is true, i.e.
+// for (int i = 0; i < len; ++i)
+//    if (i >= foo) <unreachable>
+// ->
+// if (!(0 >= foo) && !(len - 1 >= foo))
+//   <loop without checks>
+// else
+//   <loop with checks>
+//
+// This optimization could be put in the ABCD pass, instead of the loop unswitch pass. Since
+// we don't have access to the relation graph built by ABCD, we only deal with common cases,
+// ie. for loops and bounds checks on the loop induction variable.
+//
+static bool
+FindPartiallyRedundantCheck(BranchInst *BI, Loop *L, 
+                            bool &Changed, Value* &Op1, Value* &Op2,
+                            CmpInst::Predicate &Pred)
+{
+  Value *Low = NULL, *High = NULL, *IndVar = NULL;
+
+  // Obtain the induction variable along with its bounds
+  // FIXME: Move this to our caller
+  IndVar = GetForLoopInductionVariable (L, Low, High);
+  if (!IndVar)
+    return false;
+
+  outs () << "INDVAR:" << *IndVar << "\n";
+  outs () << "Low:" << *Low << "\n";
+  outs () << "High:" << *High << "\n";
+
+  // We can't handle non 0 starting values yet
+  ConstantInt *CI = dyn_cast<ConstantInt>(Low);
+  if (!CI || !CI->isNullValue())
+    return false;
+
+  // Match icmp + cond br where one of the branches ends with a unreachable
+  if (!(BI->isConditional() && 
+        (isa<UnreachableInst>(BI->getSuccessor(0)->getTerminator()) ||
+         isa<UnreachableInst>(BI->getSuccessor(1)->getTerminator())) &&
+        isa<ICmpInst>(BI->getCondition())))
+    return false;
+
+  bool TrueLikely = isa<UnreachableInst>(BI->getSuccessor(1)->getTerminator());
+  ICmpInst *Cond = dyn_cast<ICmpInst>(BI->getCondition());
+  Value *CondOp1 = Cond->getOperand(0);
+  Value *CondOp2 = Cond->getOperand(1);
+
+  // FIXME: Relax some constraints
+  // FIXME: Add support for hoisting multiple checks
+  // FIXME: Don't touch the code, just add the conditions, leave the rest to ABCD ?
+
+  if (!TrueLikely)
+    return false;
+  if (!L->isLoopInvariant (CondOp1) || CondOp2 != IndVar)
+    return false;
+  if (Cond->getPredicate() != CmpInst::ICMP_UGT)
+    return false;
+
+  //
+  // We now have the following:
+  // %indvar = phi i64 [ %indvar.next, %BB1 ], [ 0, %BB0 ]
+  // %i = icmp ugt %invariant_var %indvar
+  // br i1 %i label OK, label UNLIKELY
+  //
+  // The indvar is guaranteed to be between [Low, High).
+  // Then the loop invariant condition is:
+  // %invariant_var ugt 0 && %invariant_var ugt %high - 1
+  // %high >= 0, so this can be simplified to:
+  // %invariant_var uge %limit (i.e. arr.length >= limit)
+  //
+
+  Changed = true;
+  Pred = CmpInst::ICMP_UGE;
+  Op1 = CondOp1;
+  Op2 = High;
+  return true;
+}
+
 bool LoopUnswitch::runOnLoop(Loop *L, LPPassManager &LPM_Ref) {
   LI = &getAnalysis<LoopInfo>();
   LPM = &LPM_Ref;
@@ -245,11 +405,25 @@ bool LoopUnswitch::processCurrentLoop() {
         Value *LoopCond = FindLIVLoopCondition(BI->getCondition(), 
                                                currentLoop, Changed);
         if (LoopCond && UnswitchIfProfitable(LoopCond, 
-                                             ConstantInt::getTrue(Context))) {
+                                             ConstantInt::getTrue(Context),
+                                             ICmpInst::ICMP_EQ)) {
           ++NumBranches;
           return true;
         }
-      }      
+      }
+
+      CmpInst::Predicate Pred;
+      Value *Op1 = NULL, *Op2 = NULL;
+
+      if (FindPartiallyRedundantCheck(BI, currentLoop,
+                                      Changed, Op1, Op2, Pred)) {
+        outs () << "HIT1!\n";
+        if (UnswitchIfProfitable(Op1, Op2, Pred)) {
+          outs () << "HIT2!\n";
+          ++NumBranches;
+          return true;
+        }
+      }
     } else if (SwitchInst *SI = dyn_cast<SwitchInst>(TI)) {
       Value *LoopCond = FindLIVLoopCondition(SI->getCondition(), 
                                              currentLoop, Changed);
@@ -261,7 +435,7 @@ bool LoopUnswitch::processCurrentLoop() {
         if (!UnswitchedVals.insert(UnswitchVal))
           continue;
 
-        if (UnswitchIfProfitable(LoopCond, UnswitchVal)) {
+        if (UnswitchIfProfitable(LoopCond, UnswitchVal, ICmpInst::ICMP_EQ)) {
           ++NumSwitches;
           return true;
         }
@@ -275,7 +449,8 @@ bool LoopUnswitch::processCurrentLoop() {
         Value *LoopCond = FindLIVLoopCondition(SI->getCondition(), 
                                                currentLoop, Changed);
         if (LoopCond && UnswitchIfProfitable(LoopCond, 
-                                             ConstantInt::getTrue(Context))) {
+                                             ConstantInt::getTrue(Context),
+                                             ICmpInst::ICMP_EQ)) {
           ++NumSelects;
           return true;
         }
@@ -404,9 +579,10 @@ bool LoopUnswitch::IsTrivialUnswitchCondition(Value *Cond, Constant **Val,
 }
 
 /// UnswitchIfProfitable - We have found that we can unswitch currentLoop when
-/// LoopCond == Val to simplify the loop.  If we decide that this is profitable,
+/// LoopCond <pred> Val to simplify the loop.  If we decide that this is profitable,
 /// unswitch the loop, reprocess the pieces, then return true.
-bool LoopUnswitch::UnswitchIfProfitable(Value *LoopCond, Constant *Val) {
+bool LoopUnswitch::UnswitchIfProfitable(Value *LoopCond, Value *Val,
+                                        CmpInst::Predicate Pred) {
 
   initLoopData();
 
@@ -418,7 +594,8 @@ bool LoopUnswitch::UnswitchIfProfitable(Value *LoopCond, Constant *Val) {
 
   Constant *CondVal = 0;
   BasicBlock *ExitBlock = 0;
-  if (IsTrivialUnswitchCondition(LoopCond, &CondVal, &ExitBlock)) {
+  if (Pred == ICmpInst::ICMP_EQ &&
+      IsTrivialUnswitchCondition(LoopCond, &CondVal, &ExitBlock)) {
     // If the condition is trivial, always unswitch. There is no code growth
     // for this case.
     UnswitchTrivialCondition(currentLoop, LoopCond, CondVal, ExitBlock);
@@ -453,7 +630,7 @@ bool LoopUnswitch::UnswitchIfProfitable(Value *LoopCond, Constant *Val) {
     return false;
   }
 
-  UnswitchNontrivialCondition(LoopCond, Val, currentLoop);
+  UnswitchNontrivialCondition(LoopCond, Val, Pred, currentLoop);
   return true;
 }
 
@@ -491,9 +668,10 @@ static Loop *CloneLoop(Loop *L, Loop *PL, ValueToValueMapTy &VM,
 }
 
 /// EmitPreheaderBranchOnCondition - Emit a conditional branch on two values
-/// if LIC == Val, branch to TrueDst, otherwise branch to FalseDest.  Insert the
+/// if LIC <pred> Val, branch to TrueDst, otherwise branch to FalseDest.  Insert the
 /// code immediately before InsertPt.
-void LoopUnswitch::EmitPreheaderBranchOnCondition(Value *LIC, Constant *Val,
+void LoopUnswitch::EmitPreheaderBranchOnCondition(Value *LIC, Value *Val,
+                                                  CmpInst::Predicate Pred,
                                                   BasicBlock *TrueDest,
                                                   BasicBlock *FalseDest,
                                                   Instruction *InsertPt) {
@@ -502,7 +680,7 @@ void LoopUnswitch::EmitPreheaderBranchOnCondition(Value *LIC, Constant *Val,
   Value *BranchVal = LIC;
   if (!isa<ConstantInt>(Val) ||
       Val->getType() != Type::getInt1Ty(LIC->getContext()))
-    BranchVal = new ICmpInst(InsertPt, ICmpInst::ICMP_EQ, LIC, Val, "tmp");
+    BranchVal = new ICmpInst(InsertPt, Pred, LIC, Val, "tmp");
   else if (Val != ConstantInt::getTrue(Val->getContext()))
     // We want to enter the new loop when the condition is true.
     std::swap(TrueDest, FalseDest);
@@ -547,7 +725,7 @@ void LoopUnswitch::UnswitchTrivialCondition(Loop *L, Value *Cond,
     
   // Okay, now we have a position to branch from and a position to branch to, 
   // insert the new conditional branch.
-  EmitPreheaderBranchOnCondition(Cond, Val, NewExit, NewPH, 
+  EmitPreheaderBranchOnCondition(Cond, Val, ICmpInst::ICMP_EQ, NewExit, NewPH, 
                                  loopPreheader->getTerminator());
   LPM->deleteSimpleAnalysisValue(loopPreheader->getTerminator(), L);
   loopPreheader->getTerminator()->eraseFromParent();
@@ -577,9 +755,10 @@ void LoopUnswitch::SplitExitEdges(Loop *L,
 }
 
 /// UnswitchNontrivialCondition - We determined that the loop is profitable 
-/// to unswitch when LIC equal Val.  Split it into loop versions and test the 
+/// to unswitch when LIC <pred> Val.  Split it into loop versions and test the 
 /// condition outside of either loop.  Return the loops created as Out1/Out2.
-void LoopUnswitch::UnswitchNontrivialCondition(Value *LIC, Constant *Val, 
+void LoopUnswitch::UnswitchNontrivialCondition(Value *LIC, Value *Val, 
+                                               CmpInst::Predicate Pred,
                                                Loop *L) {
   Function *F = loopHeader->getParent();
   DEBUG(dbgs() << "loop-unswitch: Unswitching loop %"
@@ -672,12 +851,39 @@ void LoopUnswitch::UnswitchNontrivialCondition(Value *LIC, Constant *Val,
          "Preheader splitting did not work correctly!");
 
   // Emit the new branch that selects between the two versions of this loop.
-  EmitPreheaderBranchOnCondition(LIC, Val, NewBlocks[0], LoopBlocks[0], OldBR);
+  EmitPreheaderBranchOnCondition(LIC, Val, Pred, NewBlocks[0], LoopBlocks[0], OldBR);
   LPM->deleteSimpleAnalysisValue(OldBR, L);
   OldBR->eraseFromParent();
 
   LoopProcessWorklist.push_back(NewLoop);
   redoLoop = true;
+
+  if (Pred != ICmpInst::ICMP_EQ) {
+    std::vector<User*> Users(LIC->use_begin(), LIC->use_end());
+
+    // FIXME: Move this to RewriteLoop
+    assert(Pred == ICmpInst::ICMP_UGE);
+
+    for (unsigned i = 0, e = Users.size(); i != e; ++i) {
+      Instruction *U = cast<Instruction>(Users[i]);
+      if (!NewLoop->contains(U))
+        continue;
+
+      ICmpInst *II = dyn_cast<ICmpInst>(U);
+
+      // FIXME: Use the induction variable found by FindPartiallyRedundantCheck
+      if (II && II->getOperand(0) == LIC && II->getOperand(1) == NewLoop->getCanonicalInductionVariable() && II->getPredicate() == CmpInst::ICMP_UGT) {
+        // We know LIC <uge> Val from the hoisted condition, 
+        // and Indvar <lt> Val from the loop condition
+        // -> LIC <ugt> Indvar
+        // -> the condition can be removed
+        Value *TrueVal = ConstantInt::get(Type::getInt1Ty(Val->getContext()), 1);
+        U->replaceAllUsesWith (TrueVal);
+      }
+    }
+    // FIXME:
+    return;
+  }
 
   // Keep a WeakVH holding onto LIC.  If the first call to RewriteLoopBody
   // deletes the instruction (for example by simplifying a PHI that feeds into
@@ -854,7 +1060,7 @@ void LoopUnswitch::RemoveLoopFromHierarchy(Loop *L) {
 // the value specified by Val in the specified loop, or we know it does NOT have
 // that value.  Rewrite any uses of LIC or of properties correlated to it.
 void LoopUnswitch::RewriteLoopBodyWithConditionConstant(Loop *L, Value *LIC,
-                                                        Constant *Val,
+                                                        Value *Val,
                                                         bool IsEqual) {
   assert(!isa<Constant>(LIC) && "Why are we unswitching on a constant?");
   
