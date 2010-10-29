@@ -675,7 +675,7 @@ bool LLParser::ParseAlias(const std::string &Name, LocTy NameLoc,
 
   // Insert into the module, we know its name won't collide now.
   M->getAliasList().push_back(GA);
-  assert(GA->getNameStr() == Name && "Should not be a name conflict!");
+  assert(GA->getName() == Name && "Should not be a name conflict!");
 
   return false;
 }
@@ -982,6 +982,7 @@ bool LLParser::ParseOptionalAttrs(unsigned &Attrs, unsigned AttrKind) {
     case lltok::kw_noredzone:       Attrs |= Attribute::NoRedZone; break;
     case lltok::kw_noimplicitfloat: Attrs |= Attribute::NoImplicitFloat; break;
     case lltok::kw_naked:           Attrs |= Attribute::Naked; break;
+    case lltok::kw_hotpatch:        Attrs |= Attribute::Hotpatch; break;
 
     case lltok::kw_alignstack: {
       unsigned Alignment;
@@ -1199,8 +1200,7 @@ bool LLParser::ParseOptionalCommaAlign(unsigned &Alignment,
     
     if (Lex.getKind() != lltok::kw_align)
       return Error(Lex.getLoc(), "expected metadata or 'align'");
-    
-    LocTy AlignLoc = Lex.getLoc();
+
     if (ParseOptionalAlignment(Alignment)) return true;
   }
 
@@ -1925,7 +1925,7 @@ bool LLParser::PerFunctionState::SetInstName(int NameID,
   // Set the name on the instruction.
   Inst->setName(NameStr);
 
-  if (Inst->getNameStr() != NameStr)
+  if (Inst->getName() != NameStr)
     return P.Error(NameLoc, "multiple definition of local value named '" +
                    NameStr + "'");
   return false;
@@ -2858,7 +2858,7 @@ bool LLParser::ParseFunctionHeader(Function *&Fn, bool isDefine) {
     // Set the name, if it conflicted, it will be auto-renamed.
     ArgIt->setName(ArgList[i].Name);
 
-    if (ArgIt->getNameStr() != ArgList[i].Name)
+    if (ArgIt->getName() != ArgList[i].Name)
       return Error(ArgList[i].Loc, "redefinition of argument '%" +
                    ArgList[i].Name + "'");
   }

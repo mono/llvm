@@ -71,8 +71,9 @@ namespace llvm {
       VMOVRRD,      // double to two gprs.
       VMOVDRR,      // Two gprs to double.
 
-      EH_SJLJ_SETJMP,    // SjLj exception handling setjmp.
-      EH_SJLJ_LONGJMP,   // SjLj exception handling longjmp.
+      EH_SJLJ_SETJMP,         // SjLj exception handling setjmp.
+      EH_SJLJ_LONGJMP,        // SjLj exception handling longjmp.
+      EH_SJLJ_DISPATCHSETUP,  // SjLj exception handling dispatch setup.
 
       TC_RETURN,    // Tail call return pseudo.
 
@@ -240,6 +241,12 @@ namespace llvm {
 
 
     ConstraintType getConstraintType(const std::string &Constraint) const;
+
+    /// Examine constraint string and operand type and determine a weight value.
+    /// The operand object must already have been set up with the operand type.
+    ConstraintWeight getSingleConstraintMatchWeight(
+      AsmOperandInfo &info, const char *constraint) const;
+
     std::pair<unsigned, const TargetRegisterClass*>
       getRegForInlineAsmConstraint(const std::string &Constraint,
                                    EVT VT) const;
@@ -332,6 +339,7 @@ namespace llvm {
                              ISD::ArgFlagsTy Flags) const;
     SDValue LowerEH_SJLJ_SETJMP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerEH_SJLJ_LONGJMP(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerEH_SJLJ_DISPATCHSETUP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG,
                                     const ARMSubtarget *Subtarget) const;
     SDValue LowerBlockAddress(SDValue Op, SelectionDAG &DAG) const;

@@ -285,16 +285,6 @@ bool SimpleRegisterCoalescing::HasOtherReachingDefs(LiveInterval &IntA,
   return false;
 }
 
-static void
-TransferImplicitOps(MachineInstr *MI, MachineInstr *NewMI) {
-  for (unsigned i = MI->getDesc().getNumOperands(), e = MI->getNumOperands();
-       i != e; ++i) {
-    MachineOperand &MO = MI->getOperand(i);
-    if (MO.isReg() && MO.isImplicit())
-      NewMI->addOperand(MO);
-  }
-}
-
 /// RemoveCopyByCommutingDef - We found a non-trivially-coalescable copy with
 /// IntA being the source and IntB being the dest, thus this defines a value
 /// number in IntB.  If the source value number (in IntA) is defined by a
@@ -680,7 +670,7 @@ bool SimpleRegisterCoalescing::ReMaterializeTrivialDef(LiveInterval &SrcInt,
       RemoveCopyFlag(MO.getReg(), CopyMI);
   }
 
-  TransferImplicitOps(CopyMI, NewMI);
+  NewMI->copyImplicitOps(CopyMI);
   li_->ReplaceMachineInstrInMaps(CopyMI, NewMI);
   CopyMI->eraseFromParent();
   ReMatCopies.insert(CopyMI);
@@ -1767,8 +1757,18 @@ bool SimpleRegisterCoalescing::runOnMachineFunction(MachineFunction &fn) {
         if (!MO.isReg() || !MO.isKill()) continue;
         unsigned reg = MO.getReg();
         if (!reg || !li_->hasInterval(reg)) continue;
-        if (!li_->getInterval(reg).killedAt(DefIdx))
+        if (!li_->getInterval(reg).killedAt(DefIdx)) {
           MO.setIsKill(false);
+          continue;
+        }
+        // When leaving a kill flag on a physreg, check if any subregs should
+        // remain alive.
+        if (!TargetRegisterInfo::isPhysicalRegister(reg))
+          continue;
+        for (const unsigned *SR = tri_->getSubRegisters(reg);
+             unsigned S = *SR; ++SR)
+          if (li_->hasInterval(S) && li_->getInterval(S).liveAt(DefIdx))
+            MI->addRegisterDefined(S, tri_);
       }
     }
   }

@@ -1,10 +1,10 @@
 //===- X86InstrInfo.td - Main X86 Instruction Definition ---*- tablegen -*-===//
-// 
+//
 //                     The LLVM Compiler Infrastructure
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-// 
+//
 //===----------------------------------------------------------------------===//
 //
 // This file describes the X86 instruction set, defining the instructions, and
@@ -46,7 +46,7 @@ def SDTX86SetCC_C : SDTypeProfile<1, 2,
                                   [SDTCisInt<0>,
                                    SDTCisVT<1, i8>, SDTCisVT<2, i32>]>;
 
-def SDTX86cas : SDTypeProfile<0, 3, [SDTCisPtrTy<0>, SDTCisInt<1>, 
+def SDTX86cas : SDTypeProfile<0, 3, [SDTCisPtrTy<0>, SDTCisInt<1>,
                                      SDTCisVT<2, i8>]>;
 def SDTX86cas8 : SDTypeProfile<0, 1, [SDTCisPtrTy<0>]>;
 
@@ -120,25 +120,25 @@ def X86cas8 : SDNode<"X86ISD::LCMPXCHG8_DAG", SDTX86cas8,
                         [SDNPHasChain, SDNPInFlag, SDNPOutFlag, SDNPMayStore,
                          SDNPMayLoad, SDNPMemOperand]>;
 def X86AtomAdd64 : SDNode<"X86ISD::ATOMADD64_DAG", SDTX86atomicBinary,
-                        [SDNPHasChain, SDNPMayStore, 
+                        [SDNPHasChain, SDNPMayStore,
                          SDNPMayLoad, SDNPMemOperand]>;
 def X86AtomSub64 : SDNode<"X86ISD::ATOMSUB64_DAG", SDTX86atomicBinary,
-                        [SDNPHasChain, SDNPMayStore, 
+                        [SDNPHasChain, SDNPMayStore,
                          SDNPMayLoad, SDNPMemOperand]>;
 def X86AtomOr64 : SDNode<"X86ISD::ATOMOR64_DAG", SDTX86atomicBinary,
-                        [SDNPHasChain, SDNPMayStore, 
+                        [SDNPHasChain, SDNPMayStore,
                          SDNPMayLoad, SDNPMemOperand]>;
 def X86AtomXor64 : SDNode<"X86ISD::ATOMXOR64_DAG", SDTX86atomicBinary,
-                        [SDNPHasChain, SDNPMayStore, 
+                        [SDNPHasChain, SDNPMayStore,
                          SDNPMayLoad, SDNPMemOperand]>;
 def X86AtomAnd64 : SDNode<"X86ISD::ATOMAND64_DAG", SDTX86atomicBinary,
-                        [SDNPHasChain, SDNPMayStore, 
+                        [SDNPHasChain, SDNPMayStore,
                          SDNPMayLoad, SDNPMemOperand]>;
 def X86AtomNand64 : SDNode<"X86ISD::ATOMNAND64_DAG", SDTX86atomicBinary,
-                        [SDNPHasChain, SDNPMayStore, 
+                        [SDNPHasChain, SDNPMayStore,
                          SDNPMayLoad, SDNPMemOperand]>;
 def X86AtomSwap64 : SDNode<"X86ISD::ATOMSWAP64_DAG", SDTX86atomicBinary,
-                        [SDNPHasChain, SDNPMayStore, 
+                        [SDNPHasChain, SDNPMayStore,
                          SDNPMayLoad, SDNPMemOperand]>;
 def X86retflag : SDNode<"X86ISD::RET_FLAG", SDTX86Ret,
                         [SDNPHasChain, SDNPOptInFlag, SDNPVariadic]>;
@@ -156,7 +156,7 @@ def X86callseq_start :
                         [SDNPHasChain, SDNPOutFlag]>;
 def X86callseq_end :
                  SDNode<"ISD::CALLSEQ_END",   SDT_X86CallSeqEnd,
-                        [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;       
+                        [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;
 
 def X86call    : SDNode<"X86ISD::CALL",     SDT_X86Call,
                         [SDNPHasChain, SDNPOutFlag, SDNPOptInFlag,
@@ -180,7 +180,7 @@ def X86tlsaddr : SDNode<"X86ISD::TLSADDR", SDT_X86TLSADDR,
 def X86ehret : SDNode<"X86ISD::EH_RETURN", SDT_X86EHRET,
                         [SDNPHasChain]>;
 
-def X86tcret : SDNode<"X86ISD::TC_RETURN", SDT_X86TCRET, 
+def X86tcret : SDNode<"X86ISD::TC_RETURN", SDT_X86TCRET,
                         [SDNPHasChain,  SDNPOptInFlag, SDNPVariadic]>;
 
 def X86add_flag  : SDNode<"X86ISD::ADD",  SDTBinaryArithWithFlags,
@@ -190,7 +190,7 @@ def X86smul_flag : SDNode<"X86ISD::SMUL", SDTBinaryArithWithFlags,
                           [SDNPCommutative]>;
 def X86umul_flag : SDNode<"X86ISD::UMUL", SDTUnaryArithWithFlags,
                           [SDNPCommutative]>;
-                          
+
 def X86inc_flag  : SDNode<"X86ISD::INC",  SDTUnaryArithWithFlags>;
 def X86dec_flag  : SDNode<"X86ISD::DEC",  SDTUnaryArithWithFlags>;
 def X86or_flag   : SDNode<"X86ISD::OR",   SDTBinaryArithWithFlags,
@@ -202,9 +202,9 @@ def X86and_flag  : SDNode<"X86ISD::AND",  SDTBinaryArithWithFlags,
 
 def X86mul_imm : SDNode<"X86ISD::MUL_IMM", SDTIntBinOp>;
 
-def X86MingwAlloca : SDNode<"X86ISD::MINGW_ALLOCA", SDTX86Void,
-                            [SDNPHasChain, SDNPInFlag, SDNPOutFlag]>;
-                            
+def X86WinAlloca : SDNode<"X86ISD::WIN_ALLOCA", SDTX86Void,
+                          [SDNPHasChain, SDNPInFlag, SDNPOutFlag]>;
+
 def X86TLSCall : SDNode<"X86ISD::TLSCALL", SDT_X86TLSCALL,
                         []>;
 
@@ -616,13 +616,13 @@ def PUSH16rmm: I<0xFF, MRM6m, (outs), (ins i16mem:$src), "push{w}\t$src",[]>,
 def PUSH32rmr: I<0xFF, MRM6r, (outs), (ins GR32:$reg), "push{l}\t$reg",[]>;
 def PUSH32rmm: I<0xFF, MRM6m, (outs), (ins i32mem:$src), "push{l}\t$src",[]>;
 
-def PUSHi8   : Ii8<0x6a, RawFrm, (outs), (ins i32i8imm:$imm), 
+def PUSHi8   : Ii8<0x6a, RawFrm, (outs), (ins i32i8imm:$imm),
                       "push{l}\t$imm", []>;
-def PUSHi16  : Ii16<0x68, RawFrm, (outs), (ins i16imm:$imm), 
+def PUSHi16  : Ii16<0x68, RawFrm, (outs), (ins i16imm:$imm),
                       "push{w}\t$imm", []>, OpSize;
-def PUSHi32  : Ii32<0x68, RawFrm, (outs), (ins i32imm:$imm), 
+def PUSHi32  : Ii32<0x68, RawFrm, (outs), (ins i32imm:$imm),
                       "push{l}\t$imm", []>;
-                      
+
 def PUSHF16  : I<0x9C, RawFrm, (outs), (ins), "pushf{w}", []>, OpSize;
 def PUSHF32  : I<0x9C, RawFrm, (outs), (ins), "pushf{l|d}", []>,
                Requires<[In32BitMode]>;
@@ -646,9 +646,9 @@ def PUSH64rmm: I<0xFF, MRM6m, (outs), (ins i64mem:$src), "push{q}\t$src", []>;
 }
 
 let Defs = [RSP], Uses = [RSP], neverHasSideEffects = 1, mayStore = 1 in {
-def PUSH64i8   : Ii8<0x6a, RawFrm, (outs), (ins i8imm:$imm), 
+def PUSH64i8   : Ii8<0x6a, RawFrm, (outs), (ins i8imm:$imm),
                      "push{q}\t$imm", []>;
-def PUSH64i16  : Ii16<0x68, RawFrm, (outs), (ins i16imm:$imm), 
+def PUSH64i16  : Ii16<0x68, RawFrm, (outs), (ins i16imm:$imm),
                       "push{q}\t$imm", []>;
 def PUSH64i32  : Ii32<0x68, RawFrm, (outs), (ins i64i32imm:$imm),
                       "push{q}\t$imm", []>;
@@ -677,11 +677,11 @@ def PUSHA32  : I<0x60, RawFrm, (outs), (ins), "pusha{l}", []>,
 let Constraints = "$src = $dst" in {    // GR32 = bswap GR32
 def BSWAP32r : I<0xC8, AddRegFrm,
                  (outs GR32:$dst), (ins GR32:$src),
-                 "bswap{l}\t$dst", 
+                 "bswap{l}\t$dst",
                  [(set GR32:$dst, (bswap GR32:$src))]>, TB;
-                   
+
 def BSWAP64r : RI<0xC8, AddRegFrm, (outs GR64:$dst), (ins GR64:$src),
-                  "bswap{q}\t$dst", 
+                  "bswap{q}\t$dst",
                   [(set GR64:$dst, (bswap GR64:$src))]>, TB;
 } // Constraints = "$src = $dst"
 
@@ -823,7 +823,7 @@ def MOV16ao16 : Ii32 <0xA3, RawFrm, (outs offset16:$dst), (ins),
 def MOV32ao32 : Ii32 <0xA3, RawFrm, (outs offset32:$dst), (ins),
                       "mov{l}\t{%eax, $dst|$dst, %eax}", []>,
                      Requires<[In32BitMode]>;
-                      
+
 // FIXME: These definitions are utterly broken
 // Just leave them commented out for now because they're useless outside
 // of the large code model, and most compilers won't generate the instructions
@@ -926,13 +926,13 @@ def BT64rr : RI<0xA3, MRMDestReg, (outs), (ins GR64:$src1, GR64:$src2),
 // only for now.
 
 def BT16mr : I<0xA3, MRMDestMem, (outs), (ins i16mem:$src1, GR16:$src2),
-               "bt{w}\t{$src2, $src1|$src1, $src2}", 
+               "bt{w}\t{$src2, $src1|$src1, $src2}",
 //               [(X86bt (loadi16 addr:$src1), GR16:$src2),
 //                (implicit EFLAGS)]
                []
                >, OpSize, TB, Requires<[FastBTMem]>;
 def BT32mr : I<0xA3, MRMDestMem, (outs), (ins i32mem:$src1, GR32:$src2),
-               "bt{l}\t{$src2, $src1|$src1, $src2}", 
+               "bt{l}\t{$src2, $src1|$src1, $src2}",
 //               [(X86bt (loadi32 addr:$src1), GR32:$src2),
 //                (implicit EFLAGS)]
                []
@@ -1058,20 +1058,20 @@ def BTS64mi8 : RIi8<0xBA, MRM5m, (outs), (ins i64mem:$src1, i64i8imm:$src2),
 // operand is referenced, the atomicity is ensured.
 let Constraints = "$val = $dst" in {
 def XCHG8rm  : I<0x86, MRMSrcMem, (outs GR8:$dst), (ins GR8:$val, i8mem:$ptr),
-               "xchg{b}\t{$val, $ptr|$ptr, $val}", 
+               "xchg{b}\t{$val, $ptr|$ptr, $val}",
                [(set GR8:$dst, (atomic_swap_8 addr:$ptr, GR8:$val))]>;
-def XCHG16rm : I<0x87, MRMSrcMem, (outs GR16:$dst), 
+def XCHG16rm : I<0x87, MRMSrcMem, (outs GR16:$dst),
                  (ins GR16:$val, i16mem:$ptr),
-               "xchg{w}\t{$val, $ptr|$ptr, $val}", 
-               [(set GR16:$dst, (atomic_swap_16 addr:$ptr, GR16:$val))]>, 
+               "xchg{w}\t{$val, $ptr|$ptr, $val}",
+               [(set GR16:$dst, (atomic_swap_16 addr:$ptr, GR16:$val))]>,
                 OpSize;
-def XCHG32rm : I<0x87, MRMSrcMem, (outs GR32:$dst), 
+def XCHG32rm : I<0x87, MRMSrcMem, (outs GR32:$dst),
                  (ins GR32:$val, i32mem:$ptr),
-               "xchg{l}\t{$val, $ptr|$ptr, $val}", 
+               "xchg{l}\t{$val, $ptr|$ptr, $val}",
                [(set GR32:$dst, (atomic_swap_32 addr:$ptr, GR32:$val))]>;
-def XCHG64rm : RI<0x87, MRMSrcMem, (outs GR64:$dst), 
+def XCHG64rm : RI<0x87, MRMSrcMem, (outs GR64:$dst),
                   (ins GR64:$val,i64mem:$ptr),
-                  "xchg{q}\t{$val, $ptr|$ptr, $val}", 
+                  "xchg{q}\t{$val, $ptr|$ptr, $val}",
                   [(set GR64:$dst, (atomic_swap_64 addr:$ptr, GR64:$val))]>;
 
 def XCHG8rr : I<0x86, MRMSrcReg, (outs GR8:$dst), (ins GR8:$val, GR8:$src),
@@ -1182,7 +1182,45 @@ def CLTS : I<0x06, RawFrm, (outs), (ins), "clts", []>, TB;
 // Table lookup instructions
 def XLAT : I<0xD7, RawFrm, (outs), (ins), "xlatb", []>;
 
+// ASCII Adjust After Addition
+// sets AL, AH and CF and AF of EFLAGS and uses AL and AF of EFLAGS
+def AAA : I<0x37, RawFrm, (outs), (ins), "aaa", []>, Requires<[In32BitMode]>;
 
+// ASCII Adjust AX Before Division
+// sets AL, AH and EFLAGS and uses AL and AH
+def AAD8i8 : Ii8<0xD5, RawFrm, (outs), (ins i8imm:$src),
+                 "aad\t$src", []>, Requires<[In32BitMode]>;
+
+// ASCII Adjust AX After Multiply
+// sets AL, AH and EFLAGS and uses AL
+def AAM8i8 : Ii8<0xD4, RawFrm, (outs), (ins i8imm:$src),
+                 "aam\t$src", []>, Requires<[In32BitMode]>;
+
+// ASCII Adjust AL After Subtraction - sets
+// sets AL, AH and CF and AF of EFLAGS and uses AL and AF of EFLAGS
+def AAS : I<0x3F, RawFrm, (outs), (ins), "aas", []>, Requires<[In32BitMode]>;
+
+// Decimal Adjust AL after Addition
+// sets AL, CF and AF of EFLAGS and uses AL, CF and AF of EFLAGS
+def DAA : I<0x27, RawFrm, (outs), (ins), "daa", []>, Requires<[In32BitMode]>;
+
+// Decimal Adjust AL after Subtraction
+// sets AL, CF and AF of EFLAGS and uses AL, CF and AF of EFLAGS
+def DAS : I<0x2F, RawFrm, (outs), (ins), "das", []>, Requires<[In32BitMode]>;
+
+// Check Array Index Against Bounds
+def BOUNDS16rm : I<0x62, MRMSrcMem, (outs GR16:$dst), (ins i16mem:$src),
+                   "bound\t{$src, $dst|$dst, $src}", []>, OpSize,
+                   Requires<[In32BitMode]>;
+def BOUNDS32rm : I<0x62, MRMSrcMem, (outs GR32:$dst), (ins i32mem:$src),
+                   "bound\t{$src, $dst|$dst, $src}", []>,
+                   Requires<[In32BitMode]>;
+
+// Adjust RPL Field of Segment Selector
+def ARPL16rr : I<0x63, MRMDestReg, (outs GR16:$src), (ins GR16:$dst),
+                 "arpl\t{$src, $dst|$dst, $src}", []>, Requires<[In32BitMode]>;
+def ARPL16mr : I<0x63, MRMSrcMem, (outs GR16:$src), (ins i16mem:$dst),
+                 "arpl\t{$src, $dst|$dst, $src}", []>, Requires<[In32BitMode]>;
 
 //===----------------------------------------------------------------------===//
 // Subsystems.

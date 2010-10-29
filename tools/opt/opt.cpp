@@ -20,6 +20,7 @@
 #include "llvm/Assembly/PrintModulePass.h"
 #include "llvm/Analysis/Verifier.h"
 #include "llvm/Analysis/LoopPass.h"
+#include "llvm/Analysis/RegionPass.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
@@ -267,6 +268,40 @@ struct LoopPassPrinter : public LoopPass {
 
 char LoopPassPrinter::ID = 0;
 
+struct RegionPassPrinter : public RegionPass {
+  static char ID;
+  const PassInfo *PassToPrint;
+  raw_ostream &Out;
+  std::string PassName;
+
+  RegionPassPrinter(const PassInfo *PI, raw_ostream &out) : RegionPass(ID),
+    PassToPrint(PI), Out(out) {
+    std::string PassToPrintName =  PassToPrint->getPassName();
+    PassName = "LoopPass Printer: " + PassToPrintName;
+  }
+
+  virtual bool runOnRegion(Region *R, RGPassManager &RGM) {
+    if (!Quiet) {
+      Out << "Printing analysis '" << PassToPrint->getPassName() << "' for "
+        << "region: '" << R->getNameStr() << "' in function '"
+        << R->getEntry()->getParent()->getNameStr() << "':\n";
+    }
+    // Get and print pass...
+   getAnalysisID<Pass>(PassToPrint->getTypeInfo()).print(Out,
+                       R->getEntry()->getParent()->getParent());
+    return false;
+  }
+
+  virtual const char *getPassName() const { return "'Pass' Printer"; }
+
+  virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+    AU.addRequiredID(PassToPrint->getTypeInfo());
+    AU.setPreservesAll();
+  }
+};
+
+char RegionPassPrinter::ID = 0;
+
 struct BasicBlockPassPrinter : public BasicBlockPass {
   const PassInfo *PassToPrint;
   raw_ostream &Out;
@@ -394,6 +429,18 @@ int main(int argc, char **argv) {
   llvm_shutdown_obj Y;  // Call llvm_shutdown() on exit.
   LLVMContext &Context = getGlobalContext();
   
+  // Initialize passes
+  PassRegistry &Registry = *PassRegistry::getPassRegistry();
+  initializeCore(Registry);
+  initializeScalarOpts(Registry);
+  initializeIPO(Registry);
+  initializeAnalysis(Registry);
+  initializeIPA(Registry);
+  initializeTransformUtils(Registry);
+  initializeInstCombine(Registry);
+  initializeInstrumentation(Registry);
+  initializeTarget(Registry);
+  
   cl::ParseCommandLineOptions(argc, argv,
     "llvm .bc -> .bc modular optimizer and analysis printer\n");
 
@@ -513,6 +560,9 @@ int main(int argc, char **argv) {
         switch (Kind) {
         case PT_BasicBlock:
           Passes.add(new BasicBlockPassPrinter(PassInf, Out->os()));
+          break;
+        case PT_Region:
+          Passes.add(new RegionPassPrinter(PassInf, Out->os()));
           break;
         case PT_Loop:
           Passes.add(new LoopPassPrinter(PassInf, Out->os()));

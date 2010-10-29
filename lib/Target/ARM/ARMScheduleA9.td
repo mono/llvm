@@ -574,7 +574,7 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1, [A9_DRegsVFP], 0, Required>,
                                InstrStage<9, [A9_DRegsN],   0, Reserved>,
                                InstrStage<1, [A9_NPipe]>],
-                              [8, 0, 1, 1]>,
+                              [8, 1, 1, 1]>,
   //
   // Double-precision FP MAC
   InstrItinData<IIC_fpMAC64 , [InstrStage<1,  [A9_Issue0, A9_Issue1], 0>,
@@ -582,7 +582,7 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1,  [A9_DRegsVFP], 0, Required>,
                                InstrStage<10, [A9_DRegsN],  0, Reserved>,
                                InstrStage<2,  [A9_NPipe]>],
-                              [9, 0, 1, 1]>,
+                              [9, 1, 1, 1]>,
   //
   // Single-precision FP DIV
   InstrItinData<IIC_fpDIV32 , [InstrStage<1,  [A9_Issue0, A9_Issue1], 0>,
@@ -641,7 +641,7 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1, [A9_DRegsVFP], 0, Required>,
                                InstrStage<2, [A9_DRegsN],   0, Reserved>,
                                InstrStage<1, [A9_NPipe]>],
-                              [1, 1]>,
+                              [2, 1]>,
   //
   // Double-precision to Integer Move
   InstrItinData<IIC_fpMOVDI,  [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
@@ -649,7 +649,7 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1, [A9_DRegsVFP], 0, Required>,
                                InstrStage<2, [A9_DRegsN],   0, Reserved>,
                                InstrStage<1, [A9_NPipe]>],
-                              [1, 1, 1]>,
+                              [2, 1, 1]>,
   //
   // Single-precision FP Load
   InstrItinData<IIC_fpLoad32, [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
@@ -1430,7 +1430,7 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1, [A9_DRegsN],   0, Required>,
                                InstrStage<3, [A9_DRegsVFP], 0, Reserved>,
                                InstrStage<1, [A9_NPipe]>],
-                              [2, 1]>,
+                              [1, 1]>,
   //
   // Integer to Double-precision Move
   InstrItinData<IIC_VMOVID ,  [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
@@ -1438,7 +1438,7 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1, [A9_DRegsN],   0, Required>,
                                InstrStage<3, [A9_DRegsVFP], 0, Reserved>,
                                InstrStage<1, [A9_NPipe]>],
-                              [2, 1, 1]>,
+                              [1, 1, 1]>,
   //
   // Single-precision to Integer Move
   InstrItinData<IIC_VMOVSI ,  [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,

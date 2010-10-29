@@ -30,6 +30,7 @@
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Analysis/DebugInfo.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
@@ -51,6 +52,10 @@ static cl::opt<bool> DisableDebugInfoPrinting("disable-debug-info-print",
 static cl::opt<bool> UnknownLocations("use-unknown-locations", cl::Hidden,
      cl::desc("Make an absense of debug location information explicit."),
      cl::init(false));
+
+#ifndef NDEBUG
+STATISTIC(BlocksWithoutLineNo, "Number of blocks without any line number");
+#endif
 
 namespace {
   const char *DWARFGroupName = "DWARF Emission";
@@ -563,8 +568,8 @@ void DwarfDebug::addSourceLine(DIE *Die, DIType Ty) {
   unsigned Line = Ty.getLineNumber();
   if (Line == 0 || !Ty.getContext().Verify())
     return;
-  unsigned FileID = GetOrCreateSourceID(Ty.getContext().getDirectory(),
-                                        Ty.getContext().getFilename());
+  unsigned FileID = GetOrCreateSourceID(Ty.getDirectory(),
+                                        Ty.getFilename());
   assert(FileID && "Invalid file id");
   addUInt(Die, dwarf::DW_AT_decl_file, 0, FileID);
   addUInt(Die, dwarf::DW_AT_decl_line, 0, Line);
@@ -2452,8 +2457,8 @@ const MCSymbol *DwarfDebug::getLabelAfterInsn(const MachineInstr *MI) {
   return I->second;
 }
 
-/// beginScope - Process beginning of a scope.
-void DwarfDebug::beginScope(const MachineInstr *MI) {
+/// beginInstruction - Process beginning of an instruction.
+void DwarfDebug::beginInstruction(const MachineInstr *MI) {
   if (InsnNeedsLabel.count(MI) == 0) {
     LabelsBeforeInsn[MI] = PrevLabel;
     return;
@@ -2487,8 +2492,8 @@ void DwarfDebug::beginScope(const MachineInstr *MI) {
   assert (0 && "Instruction is not processed!");
 }
 
-/// endScope - Process end of a scope.
-void DwarfDebug::endScope(const MachineInstr *MI) {
+/// endInstruction - Process end of an instruction.
+void DwarfDebug::endInstruction(const MachineInstr *MI) {
   if (InsnsEndScopeSet.count(MI) != 0) {
     // Emit a label if this instruction ends a scope.
     MCSymbol *Label = MMI->getContext().CreateTempSymbol();
@@ -2770,11 +2775,36 @@ static DebugLoc FindFirstDebugLoc(const MachineFunction *MF) {
   return DebugLoc();
 }
 
+#ifndef NDEBUG
+/// CheckLineNumbers - Count basicblocks whose instructions do not have any
+/// line number information.
+static void CheckLineNumbers(const MachineFunction *MF) {
+  for (MachineFunction::const_iterator I = MF->begin(), E = MF->end();
+       I != E; ++I) {
+    bool FoundLineNo = false;
+    for (MachineBasicBlock::const_iterator II = I->begin(), IE = I->end();
+         II != IE; ++II) {
+      const MachineInstr *MI = II;
+      if (!MI->getDebugLoc().isUnknown()) {
+        FoundLineNo = true;
+        break;
+      }
+    }
+    if (!FoundLineNo && I->size())
+      ++BlocksWithoutLineNo;      
+  }
+}
+#endif
+
 /// beginFunction - Gather pre-function debug information.  Assumes being
 /// emitted immediately after the function entry point.
 void DwarfDebug::beginFunction(const MachineFunction *MF) {
   if (!MMI->hasDebugInfo()) return;
   if (!extractScopeInformation()) return;
+
+#ifndef NDEBUG
+  CheckLineNumbers(MF);
+#endif
 
   FunctionBeginSym = Asm->GetTempSymbol("func_begin",
                                         Asm->getFunctionNumber());
@@ -2994,6 +3024,10 @@ MCSymbol *DwarfDebug::recordSourceLine(unsigned Line, unsigned Col,
       DICompileUnit CU(S);
       Dir = CU.getDirectory();
       Fn = CU.getFilename();
+    } else if (Scope.isFile()) {
+      DIFile F(S);
+      Dir = F.getDirectory();
+      Fn = F.getFilename();
     } else if (Scope.isSubprogram()) {
       DISubprogram SP(S);
       Dir = SP.getDirectory();

@@ -102,13 +102,13 @@ void MachineOperand::setReg(unsigned Reg) {
     if (MachineBasicBlock *MBB = MI->getParent())
       if (MachineFunction *MF = MBB->getParent()) {
         RemoveRegOperandFromRegInfo();
-        Contents.Reg.RegNo = Reg;
+        SmallContents.RegNo = Reg;
         AddRegOperandToRegInfo(&MF->getRegInfo());
         return;
       }
         
   // Otherwise, just change the register, no problem.  :)
-  Contents.Reg.RegNo = Reg;
+  SmallContents.RegNo = Reg;
 }
 
 void MachineOperand::substVirtReg(unsigned Reg, unsigned SubIdx,
@@ -159,7 +159,7 @@ void MachineOperand::ChangeToRegister(unsigned Reg, bool isDef, bool isImp,
   } else {
     // Otherwise, change this to a register and set the reg#.
     OpKind = MO_Register;
-    Contents.Reg.RegNo = Reg;
+    SmallContents.RegNo = Reg;
 
     // If this operand is embedded in a function, add the operand to the
     // register's use/def list.
@@ -367,9 +367,11 @@ MachinePointerInfo MachinePointerInfo::getStack(int64_t Offset) {
 }
 
 MachineMemOperand::MachineMemOperand(MachinePointerInfo ptrinfo, unsigned f,
-                                     uint64_t s, unsigned int a)
+                                     uint64_t s, unsigned int a,
+                                     const MDNode *TBAAInfo)
   : PtrInfo(ptrinfo), Size(s),
-    Flags((f & ((1 << MOMaxBits) - 1)) | ((Log2_32(a) + 1) << MOMaxBits)) {
+    Flags((f & ((1 << MOMaxBits) - 1)) | ((Log2_32(a) + 1) << MOMaxBits)),
+    TBAAInfo(TBAAInfo) {
   assert((PtrInfo.V == 0 || isa<PointerType>(PtrInfo.V->getType())) &&
          "invalid pointer value");
   assert(getBaseAlignment() == a && "Alignment is not a power of 2!");
@@ -441,6 +443,16 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const MachineMemOperand &MMO) {
   if (MMO.getBaseAlignment() != MMO.getAlignment() ||
       MMO.getBaseAlignment() != MMO.getSize())
     OS << "(align=" << MMO.getAlignment() << ")";
+
+  // Print TBAA info.
+  if (const MDNode *TBAAInfo = MMO.getTBAAInfo()) {
+    OS << "(tbaa=";
+    if (TBAAInfo->getNumOperands() > 0)
+      WriteAsOperand(OS, TBAAInfo->getOperand(0), /*PrintType=*/false);
+    else
+      OS << "<unknown>";
+    OS << ")";
+  }
 
   return OS;
 }
@@ -1198,7 +1210,9 @@ bool MachineInstr::isInvariantLoad(AliasAnalysis *AA) const {
         if (PSV->isConstant(MFI))
           continue;
       // If we have an AliasAnalysis, ask it whether the memory is constant.
-      if (AA && AA->pointsToConstantMemory(V))
+      if (AA && AA->pointsToConstantMemory(
+                      AliasAnalysis::Location(V, (*I)->getSize(),
+                                              (*I)->getTBAAInfo())))
         continue;
     }
 
@@ -1237,6 +1251,17 @@ bool MachineInstr::allDefsAreDead() const {
       return false;
   }
   return true;
+}
+
+/// copyImplicitOps - Copy implicit register operands from specified
+/// instruction to this instruction.
+void MachineInstr::copyImplicitOps(const MachineInstr *MI) {
+  for (unsigned i = MI->getDesc().getNumOperands(), e = MI->getNumOperands();
+       i != e; ++i) {
+    const MachineOperand &MO = MI->getOperand(i);
+    if (MO.isReg() && MO.isImplicit())
+      addOperand(MO);
+  }
 }
 
 void MachineInstr::dump() const {

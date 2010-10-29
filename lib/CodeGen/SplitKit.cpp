@@ -18,6 +18,7 @@
 #include "VirtRegMap.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -79,6 +80,15 @@ void SplitAnalysis::analyzeUses() {
                << usingLoops_.size()  << " loops.\n");
 }
 
+void SplitAnalysis::print(const BlockPtrSet &B, raw_ostream &OS) const {
+  for (BlockPtrSet::const_iterator I = B.begin(), E = B.end(); I != E; ++I) {
+    unsigned count = usingBlocks_.lookup(*I);
+    OS << " BB#" << (*I)->getNumber();
+    if (count)
+      OS << '(' << count << ')';
+  }
+}
+
 // Get three sets of basic blocks surrounding a loop: Blocks inside the loop,
 // predecessor blocks, and exit blocks.
 void SplitAnalysis::getLoopBlocks(const MachineLoop *Loop, LoopBlocks &Blocks) {
@@ -105,6 +115,15 @@ void SplitAnalysis::getLoopBlocks(const MachineLoop *Loop, LoopBlocks &Blocks) {
   }
 }
 
+void SplitAnalysis::print(const LoopBlocks &B, raw_ostream &OS) const {
+  OS << "Loop:";
+  print(B.Loop, OS);
+  OS << ", preds:";
+  print(B.Preds, OS);
+  OS << ", exits:";
+  print(B.Exits, OS);
+}
+
 /// analyzeLoopPeripheralUse - Return an enum describing how curli_ is used in
 /// and around the Loop.
 SplitAnalysis::LoopPeripheralUse SplitAnalysis::
@@ -124,43 +143,72 @@ analyzeLoopPeripheralUse(const SplitAnalysis::LoopBlocks &Blocks) {
     if (Blocks.Loop.count(MBB))
       continue;
     // It must be an unrelated block.
+    DEBUG(dbgs() << ", outside: BB#" << MBB->getNumber());
     return OutsideLoop;
   }
   return use;
 }
 
 /// getCriticalExits - It may be necessary to partially break critical edges
-/// leaving the loop if an exit block has phi uses of curli. Collect the exit
-/// blocks that need special treatment into CriticalExits.
+/// leaving the loop if an exit block has predecessors from outside the loop
+/// periphery.
 void SplitAnalysis::getCriticalExits(const SplitAnalysis::LoopBlocks &Blocks,
                                      BlockPtrSet &CriticalExits) {
   CriticalExits.clear();
 
-  // A critical exit block contains a phi def of curli, and has a predecessor
-  // that is not in the loop nor a loop predecessor.
-  // For such an exit block, the edges carrying the new variable must be moved
-  // to a new pre-exit block.
+  // A critical exit block has curli live-in, and has a predecessor that is not
+  // in the loop nor a loop predecessor. For such an exit block, the edges
+  // carrying the new variable must be moved to a new pre-exit block.
   for (BlockPtrSet::iterator I = Blocks.Exits.begin(), E = Blocks.Exits.end();
        I != E; ++I) {
-    const MachineBasicBlock *Succ = *I;
-    SlotIndex SuccIdx = lis_.getMBBStartIdx(Succ);
-    VNInfo *SuccVNI = curli_->getVNInfoAt(SuccIdx);
+    const MachineBasicBlock *Exit = *I;
+    // A single-predecessor exit block is definitely not a critical edge.
+    if (Exit->pred_size() == 1)
+      continue;
     // This exit may not have curli live in at all. No need to split.
-    if (!SuccVNI)
+    if (!lis_.isLiveInToMBB(*curli_, Exit))
       continue;
-    // If this is not a PHI def, it is either using a value from before the
-    // loop, or a value defined inside the loop. Both are safe.
-    if (!SuccVNI->isPHIDef() || SuccVNI->def.getBaseIndex() != SuccIdx)
-      continue;
-    // This exit block does have a PHI. Does it also have a predecessor that is
-    // not a loop block or loop predecessor?
-    for (MachineBasicBlock::const_pred_iterator PI = Succ->pred_begin(),
-         PE = Succ->pred_end(); PI != PE; ++PI) {
+    // Does this exit block have a predecessor that is not a loop block or loop
+    // predecessor?
+    for (MachineBasicBlock::const_pred_iterator PI = Exit->pred_begin(),
+         PE = Exit->pred_end(); PI != PE; ++PI) {
       const MachineBasicBlock *Pred = *PI;
       if (Blocks.Loop.count(Pred) || Blocks.Preds.count(Pred))
         continue;
       // This is a critical exit block, and we need to split the exit edge.
-      CriticalExits.insert(Succ);
+      CriticalExits.insert(Exit);
+      break;
+    }
+  }
+}
+
+void SplitAnalysis::getCriticalPreds(const SplitAnalysis::LoopBlocks &Blocks,
+                                     BlockPtrSet &CriticalPreds) {
+  CriticalPreds.clear();
+
+  // A critical predecessor block has curli live-out, and has a successor that
+  // has curli live-in and is not in the loop nor a loop exit block. For such a
+  // predecessor block, we must carry the value in both the 'inside' and
+  // 'outside' registers.
+  for (BlockPtrSet::iterator I = Blocks.Preds.begin(), E = Blocks.Preds.end();
+       I != E; ++I) {
+    const MachineBasicBlock *Pred = *I;
+    // Definitely not a critical edge.
+    if (Pred->succ_size() == 1)
+      continue;
+    // This block may not have curli live out at all if there is a PHI.
+    if (!lis_.isLiveOutOfMBB(*curli_, Pred))
+      continue;
+    // Does this block have a successor outside the loop?
+    for (MachineBasicBlock::const_pred_iterator SI = Pred->succ_begin(),
+         SE = Pred->succ_end(); SI != SE; ++SI) {
+      const MachineBasicBlock *Succ = *SI;
+      if (Blocks.Loop.count(Succ) || Blocks.Exits.count(Succ))
+        continue;
+      if (!lis_.isLiveInToMBB(*curli_, Succ))
+        continue;
+      // This is a critical predecessor block.
+      CriticalPreds.insert(Pred);
       break;
     }
   }
@@ -223,6 +271,7 @@ const MachineLoop *SplitAnalysis::getBestSplitLoop() {
        E = usingLoops_.end(); I != E; ++I) {
     const MachineLoop *Loop = I->first;
     getLoopBlocks(Loop, Blocks);
+    DEBUG({ dbgs() << "  "; print(Blocks, dbgs()); });
 
     switch(analyzeLoopPeripheralUse(Blocks)) {
     case OutsideLoop:
@@ -235,19 +284,18 @@ const MachineLoop *SplitAnalysis::getBestSplitLoop() {
       // forever.
       // For safety, stick to splitting live ranges with uses outside the
       // periphery.
-      DEBUG(dbgs() << "  multiple peripheral uses in " << *Loop);
+      DEBUG(dbgs() << ": multiple peripheral uses\n");
       break;
     case ContainedInLoop:
-      DEBUG(dbgs() << "  contained in " << *Loop);
+      DEBUG(dbgs() << ": fully contained\n");
       continue;
     case SinglePeripheral:
-      DEBUG(dbgs() << "  single peripheral use in " << *Loop);
+      DEBUG(dbgs() << ": single peripheral use\n");
       continue;
     }
     // Will it be possible to split around this loop?
     getCriticalExits(Blocks, CriticalExits);
-    DEBUG(dbgs() << "  " << CriticalExits.size() << " critical exits from "
-                 << *Loop);
+    DEBUG(dbgs() << ": " << CriticalExits.size() << " critical exits\n");
     if (!canSplitCriticalExits(Blocks, CriticalExits))
       continue;
     // This is a possible split.
@@ -274,34 +322,6 @@ const MachineLoop *SplitAnalysis::getBestSplitLoop() {
   return Best;
 }
 
-/// getMultiUseBlocks - if curli has more than one use in a basic block, it
-/// may be an advantage to split curli for the duration of the block.
-bool SplitAnalysis::getMultiUseBlocks(BlockPtrSet &Blocks) {
-  // If curli is local to one block, there is no point to splitting it.
-  if (usingBlocks_.size() <= 1)
-    return false;
-  // Add blocks with multiple uses.
-  for (BlockCountMap::iterator I = usingBlocks_.begin(), E = usingBlocks_.end();
-       I != E; ++I)
-    switch (I->second) {
-    case 0:
-    case 1:
-      continue;
-    case 2: {
-      // It doesn't pay to split a 2-instr block if it redefines curli.
-      VNInfo *VN1 = curli_->getVNInfoAt(lis_.getMBBStartIdx(I->first));
-      VNInfo *VN2 =
-        curli_->getVNInfoAt(lis_.getMBBEndIdx(I->first).getPrevIndex());
-      // live-in and live-out with a different value.
-      if (VN1 && VN2 && VN1 != VN2)
-        continue;
-    } // Fall through.
-    default:
-      Blocks.insert(I->first);
-    }
-  return !Blocks.empty();
-}
-
 //===----------------------------------------------------------------------===//
 //                               LiveIntervalMap
 //===----------------------------------------------------------------------===//
@@ -316,6 +336,7 @@ makeVV(const VNInfo *a, VNInfo *b) {
 void LiveIntervalMap::reset(LiveInterval *li) {
   li_ = li;
   valueMap_.clear();
+  liveOutCache_.clear();
 }
 
 bool LiveIntervalMap::isComplexMapped(const VNInfo *ParentVNI) const {
@@ -333,6 +354,10 @@ VNInfo *LiveIntervalMap::defValue(const VNInfo *ParentVNI, SlotIndex Idx) {
 
   // Create a new value.
   VNInfo *VNI = li_->getNextValue(Idx, 0, lis_.getVNInfoAllocator());
+
+  // Preserve the PHIDef bit.
+  if (ParentVNI->isPHIDef() && Idx == ParentVNI->def)
+    VNI->setIsPHIDef(true);
 
   // Use insert for lookup, so we can add missing values with a second lookup.
   std::pair<ValueMap::iterator,bool> InsP =
@@ -384,112 +409,185 @@ VNInfo *LiveIntervalMap::mapValue(const VNInfo *ParentVNI, SlotIndex Idx,
 
   // Now for the fun part. We know that ParentVNI potentially has multiple defs,
   // and we may need to create even more phi-defs to preserve VNInfo SSA form.
-  // Perform a depth-first search for predecessor blocks where we know the
-  // dominating VNInfo. Insert phi-def VNInfos along the path back to IdxMBB.
+  // Perform a search for all predecessor blocks where we know the dominating
+  // VNInfo. Insert phi-def VNInfos along the path back to IdxMBB.
+  DEBUG(dbgs() << "\n  Reaching defs for BB#" << IdxMBB->getNumber()
+               << " at " << Idx << " in " << *li_ << '\n');
 
-  // Track MBBs where we have created or learned the dominating value.
-  // This may change during the DFS as we create new phi-defs.
-  typedef DenseMap<MachineBasicBlock*, VNInfo*> MBBValueMap;
-  MBBValueMap DomValue;
-  typedef SplitAnalysis::BlockPtrSet BlockPtrSet;
-  BlockPtrSet Visited;
+  // Blocks where li_ should be live-in.
+  SmallVector<MachineDomTreeNode*, 16> LiveIn;
+  LiveIn.push_back(mdt_[IdxMBB]);
 
-  // Iterate over IdxMBB predecessors in a depth-first order.
-  // Skip begin() since that is always IdxMBB.
-  for (idf_ext_iterator<MachineBasicBlock*, BlockPtrSet>
-         IDFI = llvm::next(idf_ext_begin(IdxMBB, Visited)),
-         IDFE = idf_ext_end(IdxMBB, Visited); IDFI != IDFE;) {
-    MachineBasicBlock *MBB = *IDFI;
-    SlotIndex End = lis_.getMBBEndIdx(MBB).getPrevSlot();
+  // Using liveOutCache_ as a visited set, perform a BFS for all reaching defs.
+  for (unsigned i = 0; i != LiveIn.size(); ++i) {
+    MachineBasicBlock *MBB = LiveIn[i]->getBlock();
+    for (MachineBasicBlock::pred_iterator PI = MBB->pred_begin(),
+           PE = MBB->pred_end(); PI != PE; ++PI) {
+       MachineBasicBlock *Pred = *PI;
+       // Is this a known live-out block?
+       std::pair<LiveOutMap::iterator,bool> LOIP =
+         liveOutCache_.insert(std::make_pair(Pred, LiveOutPair()));
+       // Yes, we have been here before.
+       if (!LOIP.second) {
+         DEBUG(if (VNInfo *VNI = LOIP.first->second.first)
+                 dbgs() << "    known valno #" << VNI->id
+                        << " at BB#" << Pred->getNumber() << '\n');
+         continue;
+       }
 
-    // We are operating on the restricted CFG where ParentVNI is live.
-    if (parentli_.getVNInfoAt(End) != ParentVNI) {
-      IDFI.skipChildren();
-      continue;
+       // Does Pred provide a live-out value?
+       SlotIndex Last = lis_.getMBBEndIdx(Pred).getPrevSlot();
+       if (VNInfo *VNI = extendTo(Pred, Last)) {
+         MachineBasicBlock *DefMBB = lis_.getMBBFromIndex(VNI->def);
+         DEBUG(dbgs() << "    found valno #" << VNI->id
+                      << " from BB#" << DefMBB->getNumber()
+                      << " at BB#" << Pred->getNumber() << '\n');
+         LiveOutPair &LOP = LOIP.first->second;
+         LOP.first = VNI;
+         LOP.second = mdt_[DefMBB];
+         continue;
+       }
+       // No, we need a live-in value for Pred as well
+       if (Pred != IdxMBB)
+         LiveIn.push_back(mdt_[Pred]);
     }
+  }
 
-    // Do we have a dominating value in this block?
-    VNInfo *VNI = extendTo(MBB, End);
-    if (!VNI) {
-      ++IDFI;
-      continue;
-    }
+  // We may need to add phi-def values to preserve the SSA form.
+  // This is essentially the same iterative algorithm that SSAUpdater uses,
+  // except we already have a dominator tree, so we don't have to recompute it.
+  VNInfo *IdxVNI = 0;
+  unsigned Changes;
+  do {
+    Changes = 0;
+    DEBUG(dbgs() << "  Iterating over " << LiveIn.size() << " blocks.\n");
+    // Propagate live-out values down the dominator tree, inserting phi-defs when
+    // necessary. Since LiveIn was created by a BFS, going backwards makes it more
+    // likely for us to visit immediate dominators before their children.
+    for (unsigned i = LiveIn.size(); i; --i) {
+      MachineDomTreeNode *Node = LiveIn[i-1];
+      MachineBasicBlock *MBB = Node->getBlock();
+      MachineDomTreeNode *IDom = Node->getIDom();
+      LiveOutPair IDomValue;
+      // We need a live-in value to a block with no immediate dominator?
+      // This is probably an unreachable block that has survived somehow.
+      bool needPHI = !IDom;
 
-    // Yes, VNI dominates MBB. Make sure we visit MBB again from other paths.
-    Visited.erase(MBB);
+      // Get the IDom live-out value.
+      if (!needPHI) {
+        LiveOutMap::iterator I = liveOutCache_.find(IDom->getBlock());
+        if (I != liveOutCache_.end())
+          IDomValue = I->second;
+        else
+          // If IDom is outside our set of live-out blocks, there must be new
+          // defs, and we need a phi-def here.
+          needPHI = true;
+      }
 
-    // Track the path back to IdxMBB, creating phi-defs
-    // as needed along the way.
-    for (unsigned PI = IDFI.getPathLength()-1; PI != 0; --PI) {
-      // Start from MBB's immediate successor. End at IdxMBB.
-      MachineBasicBlock *Succ = IDFI.getPath(PI-1);
-      std::pair<MBBValueMap::iterator, bool> InsP =
-        DomValue.insert(MBBValueMap::value_type(Succ, VNI));
+      // IDom dominates all of our predecessors, but it may not be the immediate
+      // dominator. Check if any of them have live-out values that are properly
+      // dominated by IDom. If so, we need a phi-def here.
+      if (!needPHI) {
+        for (MachineBasicBlock::pred_iterator PI = MBB->pred_begin(),
+               PE = MBB->pred_end(); PI != PE; ++PI) {
+          LiveOutPair Value = liveOutCache_[*PI];
+          if (!Value.first || Value.first == IDomValue.first)
+            continue;
+          // This predecessor is carrying something other than IDomValue.
+          // It could be because IDomValue hasn't propagated yet, or it could be
+          // because MBB is in the dominance frontier of that value.
+          if (mdt_.dominates(IDom, Value.second)) {
+            needPHI = true;
+            break;
+          }
+        }
+      }
 
-      // This is the first time we backtrack to Succ.
-      if (InsP.second)
-        continue;
-
-      // We reached Succ again with the same VNI. Nothing is going to change.
-      VNInfo *OVNI = InsP.first->second;
-      if (OVNI == VNI)
-        break;
-
-      // Succ already has a phi-def. No need to continue.
-      SlotIndex Start = lis_.getMBBStartIdx(Succ);
-      if (OVNI->def == Start)
-        break;
-
-      // We have a collision between the old and new VNI at Succ. That means
-      // neither dominates and we need a new phi-def.
-      VNI = li_->getNextValue(Start, 0, lis_.getVNInfoAllocator());
-      VNI->setIsPHIDef(true);
-      InsP.first->second = VNI;
-
-      // Replace OVNI with VNI in the remaining path.
-      for (; PI > 1 ; --PI) {
-        MBBValueMap::iterator I = DomValue.find(IDFI.getPath(PI-2));
-        if (I == DomValue.end() || I->second != OVNI)
-          break;
-        I->second = VNI;
+      // Create a phi-def if required.
+      if (needPHI) {
+        ++Changes;
+        SlotIndex Start = lis_.getMBBStartIdx(MBB);
+        VNInfo *VNI = li_->getNextValue(Start, 0, lis_.getVNInfoAllocator());
+        VNI->setIsPHIDef(true);
+        DEBUG(dbgs() << "    - BB#" << MBB->getNumber()
+                     << " phi-def #" << VNI->id << " at " << Start << '\n');
+        // We no longer need li_ to be live-in.
+        LiveIn.erase(LiveIn.begin()+(i-1));
+        // Blocks in LiveIn are either IdxMBB, or have a value live-through.
+        if (MBB == IdxMBB)
+          IdxVNI = VNI;
+        // Check if we need to update live-out info.
+        LiveOutMap::iterator I = liveOutCache_.find(MBB);
+        if (I == liveOutCache_.end() || I->second.second == Node) {
+          // We already have a live-out defined in MBB, so this must be IdxMBB.
+          assert(MBB == IdxMBB && "Adding phi-def to known live-out");
+          li_->addRange(LiveRange(Start, Idx.getNextSlot(), VNI));
+        } else {
+          // This phi-def is also live-out, so color the whole block.
+          li_->addRange(LiveRange(Start, lis_.getMBBEndIdx(MBB), VNI));
+          I->second = LiveOutPair(VNI, Node);
+        }
+      } else if (IDomValue.first) {
+        // No phi-def here. Remember incoming value for IdxMBB.
+        if (MBB == IdxMBB)
+          IdxVNI = IDomValue.first;
+        // Propagate IDomValue if needed:
+        // MBB is live-out and doesn't define its own value.
+        LiveOutMap::iterator I = liveOutCache_.find(MBB);
+        if (I != liveOutCache_.end() && I->second.second != Node &&
+            I->second.first != IDomValue.first) {
+          ++Changes;
+          I->second = IDomValue;
+          DEBUG(dbgs() << "    - BB#" << MBB->getNumber()
+                       << " idom valno #" << IDomValue.first->id
+                       << " from BB#" << IDom->getBlock()->getNumber() << '\n');
+        }
       }
     }
-
-    // No need to search the children, we found a dominating value.
-    IDFI.skipChildren();
-  }
-
-  // The search should at least find a dominating value for IdxMBB.
-  assert(!DomValue.empty() && "Couldn't find a reaching definition");
-
-  // Since we went through the trouble of a full DFS visiting all reaching defs,
-  // the values in DomValue are now accurate. No more phi-defs are needed for
-  // these blocks, so we can color the live ranges.
-  // This makes the next mapValue call much faster.
-  VNInfo *IdxVNI = 0;
-  for (MBBValueMap::iterator I = DomValue.begin(), E = DomValue.end(); I != E;
-       ++I) {
-     MachineBasicBlock *MBB = I->first;
-     VNInfo *VNI = I->second;
-     SlotIndex Start = lis_.getMBBStartIdx(MBB);
-     if (MBB == IdxMBB) {
-       // Don't add full liveness to IdxMBB, stop at Idx.
-       if (Start != Idx)
-         li_->addRange(LiveRange(Start, Idx.getNextSlot(), VNI));
-       // The caller had better add some liveness to IdxVNI, or it leaks.
-       IdxVNI = VNI;
-     } else
-      li_->addRange(LiveRange(Start, lis_.getMBBEndIdx(MBB), VNI));
-  }
+    DEBUG(dbgs() << "  - made " << Changes << " changes.\n");
+  } while (Changes);
 
   assert(IdxVNI && "Didn't find value for Idx");
+
+#ifndef NDEBUG
+  // Check the liveOutCache_ invariants.
+  for (LiveOutMap::iterator I = liveOutCache_.begin(), E = liveOutCache_.end();
+         I != E; ++I) {
+    assert(I->first && "Null MBB entry in cache");
+    assert(I->second.first && "Null VNInfo in cache");
+    assert(I->second.second && "Null DomTreeNode in cache");
+    if (I->second.second->getBlock() == I->first)
+      continue;
+    for (MachineBasicBlock::pred_iterator PI = I->first->pred_begin(),
+           PE = I->first->pred_end(); PI != PE; ++PI)
+      assert(liveOutCache_.lookup(*PI) == I->second && "Bad invariant");
+  }
+#endif
+
+  // Since we went through the trouble of a full BFS visiting all reaching defs,
+  // the values in LiveIn are now accurate. No more phi-defs are needed
+  // for these blocks, so we can color the live ranges.
+  // This makes the next mapValue call much faster.
+  for (unsigned i = 0, e = LiveIn.size(); i != e; ++i) {
+    MachineBasicBlock *MBB = LiveIn[i]->getBlock();
+    SlotIndex Start = lis_.getMBBStartIdx(MBB);
+    if (MBB == IdxMBB) {
+      li_->addRange(LiveRange(Start, Idx.getNextSlot(), IdxVNI));
+      continue;
+    }
+    // Anything in LiveIn other than IdxMBB is live-through.
+    VNInfo *VNI = liveOutCache_.lookup(MBB).first;
+    assert(VNI && "Missing block value");
+    li_->addRange(LiveRange(Start, lis_.getMBBEndIdx(MBB), VNI));
+  }
+
   return IdxVNI;
 }
 
 // extendTo - Find the last li_ value defined in MBB at or before Idx. The
 // parentli_ is assumed to be live at Idx. Extend the live range to Idx.
 // Return the found VNInfo, or NULL.
-VNInfo *LiveIntervalMap::extendTo(MachineBasicBlock *MBB, SlotIndex Idx) {
+VNInfo *LiveIntervalMap::extendTo(const MachineBasicBlock *MBB, SlotIndex Idx) {
   assert(li_ && "call reset first");
   LiveInterval::iterator I = std::upper_bound(li_->begin(), li_->end(), Idx);
   if (I == li_->begin())
@@ -580,14 +678,17 @@ VNInfo *LiveIntervalMap::defByCopyFrom(unsigned Reg,
 //===----------------------------------------------------------------------===//
 
 /// Create a new SplitEditor for editing the LiveInterval analyzed by SA.
-SplitEditor::SplitEditor(SplitAnalysis &sa, LiveIntervals &lis, VirtRegMap &vrm,
+SplitEditor::SplitEditor(SplitAnalysis &sa,
+                         LiveIntervals &lis,
+                         VirtRegMap &vrm,
+                         MachineDominatorTree &mdt,
                          LiveRangeEdit &edit)
   : sa_(sa), lis_(lis), vrm_(vrm),
     mri_(vrm.getMachineFunction().getRegInfo()),
     tii_(*vrm.getMachineFunction().getTarget().getInstrInfo()),
     edit_(edit),
-    dupli_(lis_, edit.getParent()),
-    openli_(lis_, edit.getParent())
+    dupli_(lis_, mdt, edit.getParent()),
+    openli_(lis_, mdt, edit.getParent())
 {
 }
 
@@ -740,10 +841,10 @@ void SplitEditor::rewrite(unsigned reg) {
         break;
       }
     }
+    DEBUG(dbgs() << "  rewr BB#" << MI->getParent()->getNumber() << '\t'<< Idx);
     assert(LI && "No register was live at use");
     MO.setReg(LI->reg);
-    DEBUG(dbgs() << "  rewrite BB#" << MI->getParent()->getNumber() << '\t'
-                 << Idx << '\t' << *MI);
+    DEBUG(dbgs() << '\t' << *MI);
   }
 }
 
@@ -755,6 +856,8 @@ SplitEditor::addTruncSimpleRange(SlotIndex Start, SlotIndex End, VNInfo *VNI) {
   SmallVector<IIPair, 8> Iters;
   for (LiveRangeEdit::iterator LI = edit_.begin(), LE = edit_.end(); LI != LE;
        ++LI) {
+    if (*LI == dupli_.getLI())
+      continue;
     LiveInterval::const_iterator I = (*LI)->find(Start);
     LiveInterval::const_iterator E = (*LI)->end();
     if (I != E)
@@ -810,6 +913,9 @@ void SplitEditor::computeRemainder() {
   for (LiveInterval::const_vni_iterator I = parent.vni_begin(),
        E = parent.vni_end(); I != E; ++I) {
     const VNInfo *VNI = *I;
+    // Don't transfer unused values to the new intervals.
+    if (VNI->isUnused())
+      continue;
     // Original def is contained in the split intervals.
     if (intervalsLiveAt(VNI->def)) {
       // Did this value escape?
@@ -836,6 +942,16 @@ void SplitEditor::computeRemainder() {
       dupli_.addSimpleRange(LR.start, LR.end, LR.valno);
     }
   }
+
+  // Extend dupli_ to be live out of any critical loop predecessors.
+  // This means we have multiple registers live out of those blocks.
+  // The alternative would be to split the critical edges.
+  if (criticalPreds_.empty())
+    return;
+  for (SplitAnalysis::BlockPtrSet::iterator I = criticalPreds_.begin(),
+       E = criticalPreds_.end(); I != E; ++I)
+     dupli_.extendTo(*I, lis_.getMBBEndIdx(*I).getPrevSlot());
+   criticalPreds_.clear();
 }
 
 void SplitEditor::finish() {
@@ -846,27 +962,29 @@ void SplitEditor::finish() {
   computeRemainder();
 
   // Get rid of unused values and set phi-kill flags.
-  dupli_.getLI()->RenumberValues(lis_);
-
-  // Now check if dupli was separated into multiple connected components.
-  ConnectedVNInfoEqClasses ConEQ(lis_);
-  if (unsigned NumComp = ConEQ.Classify(dupli_.getLI())) {
-    DEBUG(dbgs() << "  Remainder has " << NumComp << " connected components: "
-                 << *dupli_.getLI() << '\n');
-    // Did the remainder break up? Create intervals for all the components.
-    if (NumComp > 1) {
-      SmallVector<LiveInterval*, 8> dups;
-      dups.push_back(dupli_.getLI());
-      for (unsigned i = 1; i != NumComp; ++i)
-        dups.push_back(&edit_.create(mri_, lis_, vrm_));
-      ConEQ.Distribute(&dups[0]);
-      // Rewrite uses to the new regs.
-      rewrite(dupli_.getLI()->reg);
-    }
-  }
+  for (LiveRangeEdit::iterator I = edit_.begin(), E = edit_.end(); I != E; ++I)
+    (*I)->RenumberValues(lis_);
 
   // Rewrite instructions.
   rewrite(edit_.getReg());
+
+  // Now check if any registers were separated into multiple components.
+  ConnectedVNInfoEqClasses ConEQ(lis_);
+  for (unsigned i = 0, e = edit_.size(); i != e; ++i) {
+    // Don't use iterators, they are invalidated by create() below.
+    LiveInterval *li = edit_.get(i);
+    unsigned NumComp = ConEQ.Classify(li);
+    if (NumComp <= 1)
+      continue;
+    DEBUG(dbgs() << "  " << NumComp << " components: " << *li << '\n');
+    SmallVector<LiveInterval*, 8> dups;
+    dups.push_back(li);
+    for (unsigned i = 1; i != NumComp; ++i)
+      dups.push_back(&edit_.create(mri_, lis_, vrm_));
+    ConEQ.Distribute(&dups[0]);
+    // Rewrite uses to the new regs.
+    rewrite(li->reg);
+  }
 
   // Calculate spill weight and allocation hints for new intervals.
   VirtRegAuxInfo vrai(vrm_.getMachineFunction(), lis_, sa_.loops_);
@@ -889,25 +1007,16 @@ void SplitEditor::splitAroundLoop(const MachineLoop *Loop) {
   sa_.getLoopBlocks(Loop, Blocks);
 
   DEBUG({
-    dbgs() << "  splitAroundLoop";
-    for (SplitAnalysis::BlockPtrSet::iterator I = Blocks.Loop.begin(),
-         E = Blocks.Loop.end(); I != E; ++I)
-      dbgs() << " BB#" << (*I)->getNumber();
-    dbgs() << ", preds:";
-    for (SplitAnalysis::BlockPtrSet::iterator I = Blocks.Preds.begin(),
-         E = Blocks.Preds.end(); I != E; ++I)
-      dbgs() << " BB#" << (*I)->getNumber();
-    dbgs() << ", exits:";
-    for (SplitAnalysis::BlockPtrSet::iterator I = Blocks.Exits.begin(),
-         E = Blocks.Exits.end(); I != E; ++I)
-      dbgs() << " BB#" << (*I)->getNumber();
-    dbgs() << '\n';
+    dbgs() << "  splitAround"; sa_.print(Blocks, dbgs()); dbgs() << '\n';
   });
 
   // Break critical edges as needed.
   SplitAnalysis::BlockPtrSet CriticalExits;
   sa_.getCriticalExits(Blocks, CriticalExits);
   assert(CriticalExits.empty() && "Cannot break critical exits yet");
+
+  // Get critical predecessors so computeRemainder can deal with them.
+  sa_.getCriticalPreds(Blocks, criticalPreds_);
 
   // Create new live interval for the loop.
   openIntv();
@@ -940,6 +1049,35 @@ void SplitEditor::splitAroundLoop(const MachineLoop *Loop) {
 //===----------------------------------------------------------------------===//
 //                            Single Block Splitting
 //===----------------------------------------------------------------------===//
+
+/// getMultiUseBlocks - if curli has more than one use in a basic block, it
+/// may be an advantage to split curli for the duration of the block.
+bool SplitAnalysis::getMultiUseBlocks(BlockPtrSet &Blocks) {
+  // If curli is local to one block, there is no point to splitting it.
+  if (usingBlocks_.size() <= 1)
+    return false;
+  // Add blocks with multiple uses.
+  for (BlockCountMap::iterator I = usingBlocks_.begin(), E = usingBlocks_.end();
+       I != E; ++I)
+    switch (I->second) {
+    case 0:
+    case 1:
+      continue;
+    case 2: {
+      // When there are only two uses and curli is both live in and live out,
+      // we don't really win anything by isolating the block since we would be
+      // inserting two copies.
+      // The remaing register would still have two uses in the block. (Unless it
+      // separates into disconnected components).
+      if (lis_.isLiveInToMBB(*curli_, I->first) &&
+          lis_.isLiveOutOfMBB(*curli_, I->first))
+        continue;
+    } // Fall through.
+    default:
+      Blocks.insert(I->first);
+    }
+  return !Blocks.empty();
+}
 
 /// splitSingleBlocks - Split curli into a separate live interval inside each
 /// basic block in Blocks.

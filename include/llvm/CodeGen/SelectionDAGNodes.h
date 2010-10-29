@@ -902,6 +902,9 @@ public:
   const Value *getSrcValue() const { return MMO->getValue(); }
   int64_t getSrcValueOffset() const { return MMO->getOffset(); }
 
+  /// Returns the TBAAInfo that describes the dereference.
+  const MDNode *getTBAAInfo() const { return MMO->getTBAAInfo(); }
+
   /// getMemoryVT - Return the type of the in-memory value.
   EVT getMemoryVT() const { return MemoryVT; }
 
@@ -933,6 +936,7 @@ public:
     // with either an intrinsic or a target opcode.
     return N->getOpcode() == ISD::LOAD                ||
            N->getOpcode() == ISD::STORE               ||
+           N->getOpcode() == ISD::PREFETCH            ||
            N->getOpcode() == ISD::ATOMIC_CMP_SWAP     ||
            N->getOpcode() == ISD::ATOMIC_SWAP         ||
            N->getOpcode() == ISD::ATOMIC_LOAD_ADD     ||
@@ -1008,8 +1012,8 @@ public:
 
 /// MemIntrinsicSDNode - This SDNode is used for target intrinsics that touch
 /// memory and need an associated MachineMemOperand. Its opcode may be
-/// INTRINSIC_VOID, INTRINSIC_W_CHAIN, or a target-specific opcode with a
-/// value not less than FIRST_TARGET_MEMORY_OPCODE.
+/// INTRINSIC_VOID, INTRINSIC_W_CHAIN, PREFETCH, or a target-specific opcode
+/// with a value not less than FIRST_TARGET_MEMORY_OPCODE.
 class MemIntrinsicSDNode : public MemSDNode {
 public:
   MemIntrinsicSDNode(unsigned Opc, DebugLoc dl, SDVTList VTs,
@@ -1025,6 +1029,7 @@ public:
     // early a node with a target opcode can be of this class
     return N->getOpcode() == ISD::INTRINSIC_W_CHAIN ||
            N->getOpcode() == ISD::INTRINSIC_VOID ||
+           N->getOpcode() == ISD::PREFETCH ||
            N->isTargetMemoryOpcode();
   }
 };

@@ -575,15 +575,18 @@ static int ARMFlagFromOpName(LiteralConstantEmitter *type,
   IMM("msr_mask");
   IMM("neg_zero");
   IMM("imm0_31");
+  IMM("imm0_31_m1");
   IMM("nModImm");
   IMM("imm0_4095");
   IMM("jt2block_operand");
   IMM("t_imm_s4");
   IMM("pclabel");
   IMM("shift_imm");
+  IMM("neon_vcvt_imm32");
 
   MISC("brtarget", "kOperandTypeARMBranchTarget");                // ?
   MISC("so_reg", "kOperandTypeARMSoReg");                         // R, R, I
+  MISC("shift_so_reg", "kOperandTypeARMSoReg");                   // R, R, I
   MISC("t2_so_reg", "kOperandTypeThumb2SoReg");                   // R, I
   MISC("so_imm", "kOperandTypeARMSoImm");                         // I
   MISC("rot_imm", "kOperandTypeARMRotImm");                       // I
@@ -591,6 +594,8 @@ static int ARMFlagFromOpName(LiteralConstantEmitter *type,
   MISC("so_imm2part", "kOperandTypeARMSoImm2Part");               // I
   MISC("pred", "kOperandTypeARMPredicate");                       // I, R
   MISC("it_pred", "kOperandTypeARMPredicate");                    // I
+  MISC("addrmode_imm12", "kOperandTypeAddrModeImm12");            // R, I
+  MISC("ldst_so_reg", "kOperandTypeLdStSOReg");                   // R, R, I
   MISC("addrmode2", "kOperandTypeARMAddrMode2");                  // R, R, I
   MISC("am2offset", "kOperandTypeARMAddrMode2Offset");            // R, I
   MISC("addrmode3", "kOperandTypeARMAddrMode3");                  // R, R, I
@@ -806,6 +811,8 @@ static void emitCommonEnums(raw_ostream &o, unsigned int &i) {
   operandTypes.addEntry("kOperandTypeARMRotImm");
   operandTypes.addEntry("kOperandTypeARMSoImm2Part");
   operandTypes.addEntry("kOperandTypeARMPredicate");
+  operandTypes.addEntry("kOperandTypeAddrModeImm12");
+  operandTypes.addEntry("kOperandTypeLdStSOReg");
   operandTypes.addEntry("kOperandTypeARMAddrMode2");
   operandTypes.addEntry("kOperandTypeARMAddrMode2Offset");
   operandTypes.addEntry("kOperandTypeARMAddrMode3");

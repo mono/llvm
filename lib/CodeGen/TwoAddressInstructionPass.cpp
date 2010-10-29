@@ -138,7 +138,9 @@ namespace {
 
   public:
     static char ID; // Pass identification, replacement for typeid
-    TwoAddressInstructionPass() : MachineFunctionPass(ID) {}
+    TwoAddressInstructionPass() : MachineFunctionPass(ID) {
+      initializeTwoAddressInstructionPassPass(*PassRegistry::getPassRegistry());
+    }
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesCFG();
@@ -1349,7 +1351,6 @@ TwoAddressInstructionPass::CoalesceExtSubRegs(SmallVector<unsigned,4> &Srcs,
       continue;
 
     // Insert a copy to replace the original.
-    MachineBasicBlock::iterator InsertLoc = SomeMI;
     MachineInstr *CopyMI = BuildMI(*SomeMI->getParent(), SomeMI,
                                    SomeMI->getDebugLoc(),
                                    TII->get(TargetOpcode::COPY))

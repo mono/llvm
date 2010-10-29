@@ -59,13 +59,6 @@ EnableARMTailCalls("arm-tail-calls", cl::Hidden,
   cl::desc("Generate tail calls (TEMPORARY OPTION)."),
   cl::init(false));
 
-// This option should go away when Machine LICM is smart enough to hoist a
-// reg-to-reg VDUP.
-static cl::opt<bool>
-EnableARMVDUPsplat("arm-vdup-splat", cl::Hidden,
-  cl::desc("Generate VDUP for integer constant splats (TEMPORARY OPTION)."),
-  cl::init(false));
-
 static cl::opt<bool>
 EnableARMLongCalls("arm-long-calls", cl::Hidden,
   cl::desc("Generate calls via indirect call instructions"),
@@ -467,6 +460,7 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
     setTargetDAGCombine(ISD::ANY_EXTEND);
     setTargetDAGCombine(ISD::SELECT_CC);
     setTargetDAGCombine(ISD::BUILD_VECTOR);
+    setTargetDAGCombine(ISD::VECTOR_SHUFFLE);
   }
 
   computeRegisterProperties();
@@ -624,6 +618,7 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   if (Subtarget->isTargetDarwin()) {
     setOperationAction(ISD::EH_SJLJ_SETJMP, MVT::i32, Custom);
     setOperationAction(ISD::EH_SJLJ_LONGJMP, MVT::Other, Custom);
+    setOperationAction(ISD::EH_SJLJ_DISPATCHSETUP, MVT::Other, Custom);
   }
 
   setOperationAction(ISD::SETCC,     MVT::i32, Expand);
@@ -767,6 +762,7 @@ const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
 
   case ARMISD::EH_SJLJ_SETJMP: return "ARMISD::EH_SJLJ_SETJMP";
   case ARMISD::EH_SJLJ_LONGJMP:return "ARMISD::EH_SJLJ_LONGJMP";
+  case ARMISD::EH_SJLJ_DISPATCHSETUP:return "ARMISD::EH_SJLJ_DISPATCHSETUP";
 
   case ARMISD::TC_RETURN:     return "ARMISD::TC_RETURN";
 
@@ -864,6 +860,8 @@ Sched::Preference ARMTargetLowering::getSchedulingPreference(SDNode *N) const {
 
   for (unsigned i = 0; i != NumVals; ++i) {
     EVT VT = N->getValueType(i);
+    if (VT == MVT::Flag || VT == MVT::Other)
+      continue;
     if (VT.isFloatingPoint() || VT.isVector())
       return Sched::Latency;
   }
@@ -875,11 +873,13 @@ Sched::Preference ARMTargetLowering::getSchedulingPreference(SDNode *N) const {
   // is not available.
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
   const TargetInstrDesc &TID = TII->get(N->getMachineOpcode());
-  if (TID.mayLoad())
+
+  if (TID.getNumDefs() == 0)
+    return Sched::RegPressure;
+  if (!Itins->isEmpty() &&
+      Itins->getOperandCycle(TID.getSchedClass(), 0) > 2)
     return Sched::Latency;
 
-  if (!Itins->isEmpty() && Itins->getStageLatency(TID.getSchedClass()) > 2)
-    return Sched::Latency;
   return Sched::RegPressure;
 }
 
@@ -965,21 +965,27 @@ CCAssignFn *ARMTargetLowering::CCAssignFnForNode(CallingConv::ID CC,
   switch (CC) {
   default:
     llvm_unreachable("Unsupported calling convention");
-  case CallingConv::C:
   case CallingConv::Fast:
+    if (Subtarget->hasVFP2() && !isVarArg) {
+      if (!Subtarget->isAAPCS_ABI())
+        return (Return ? RetFastCC_ARM_APCS : FastCC_ARM_APCS);
+      // For AAPCS ABI targets, just use VFP variant of the calling convention.
+      return (Return ? RetCC_ARM_AAPCS_VFP : CC_ARM_AAPCS_VFP);
+    }
+    // Fallthrough
+  case CallingConv::C: {
     // Use target triple & subtarget features to do actual dispatch.
-    if (Subtarget->isAAPCS_ABI()) {
-      if (Subtarget->hasVFP2() &&
-          FloatABIType == FloatABI::Hard && !isVarArg)
-        return (Return ? RetCC_ARM_AAPCS_VFP: CC_ARM_AAPCS_VFP);
-      else
-        return (Return ? RetCC_ARM_AAPCS: CC_ARM_AAPCS);
-    } else
-        return (Return ? RetCC_ARM_APCS: CC_ARM_APCS);
+    if (!Subtarget->isAAPCS_ABI())
+      return (Return ? RetCC_ARM_APCS : CC_ARM_APCS);
+    else if (Subtarget->hasVFP2() &&
+             FloatABIType == FloatABI::Hard && !isVarArg)
+      return (Return ? RetCC_ARM_AAPCS_VFP : CC_ARM_AAPCS_VFP);
+    return (Return ? RetCC_ARM_AAPCS : CC_ARM_AAPCS);
+  }
   case CallingConv::ARM_AAPCS_VFP:
-    return (Return ? RetCC_ARM_AAPCS_VFP: CC_ARM_AAPCS_VFP);
+    return (Return ? RetCC_ARM_AAPCS_VFP : CC_ARM_AAPCS_VFP);
   case CallingConv::ARM_AAPCS:
-    return (Return ? RetCC_ARM_AAPCS: CC_ARM_AAPCS);
+    return (Return ? RetCC_ARM_AAPCS : CC_ARM_AAPCS);
   case CallingConv::ARM_APCS:
     return (Return ? RetCC_ARM_APCS: CC_ARM_APCS);
   case CallingConv::Mono1:
@@ -1965,6 +1971,14 @@ SDValue ARMTargetLowering::LowerGLOBAL_OFFSET_TABLE(SDValue Op,
 }
 
 SDValue
+ARMTargetLowering::LowerEH_SJLJ_DISPATCHSETUP(SDValue Op, SelectionDAG &DAG)
+  const {
+  DebugLoc dl = Op.getDebugLoc();
+  return DAG.getNode(ARMISD::EH_SJLJ_DISPATCHSETUP, dl, MVT::Other,
+                     Op.getOperand(0), Op.getOperand(1));
+}
+
+SDValue
 ARMTargetLowering::LowerEH_SJLJ_SETJMP(SDValue Op, SelectionDAG &DAG) const {
   DebugLoc dl = Op.getDebugLoc();
   SDValue Val = DAG.getConstant(0, MVT::i32);
@@ -2227,7 +2241,7 @@ ARMTargetLowering::LowerFormalArguments(SDValue Chain,
       AFI->setVarArgsFrameIndex(
         MFI->CreateFixedObject(VARegSaveSize,
                                ArgOffset + VARegSaveSize - VARegSize,
-                               true));
+                               false));
       SDValue FIN = DAG.getFrameIndex(AFI->getVarArgsFrameIndex(),
                                       getPointerTy());
 
@@ -3452,26 +3466,25 @@ static SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG,
 
   unsigned EltSize = VT.getVectorElementType().getSizeInBits();
 
-  if (EnableARMVDUPsplat) {
-    // Use VDUP for non-constant splats.  For f32 constant splats, reduce to
-    // i32 and try again.
-    if (usesOnlyOneValue && EltSize <= 32) {
-      if (!isConstant)
-        return DAG.getNode(ARMISD::VDUP, dl, VT, Value);
-      if (VT.getVectorElementType().isFloatingPoint()) {
-        SmallVector<SDValue, 8> Ops;
-        for (unsigned i = 0; i < NumElts; ++i)
-          Ops.push_back(DAG.getNode(ISD::BIT_CONVERT, dl, MVT::i32,
-                                    Op.getOperand(i)));
-        SDValue Val = DAG.getNode(ISD::BUILD_VECTOR, dl, MVT::v4i32, &Ops[0],
-                                  NumElts);
-        return DAG.getNode(ISD::BIT_CONVERT, dl, VT,
-                           LowerBUILD_VECTOR(Val, DAG, ST));
-      }
-      SDValue Val = IsSingleInstrConstant(Value, DAG, ST, dl);
+  // Use VDUP for non-constant splats.  For f32 constant splats, reduce to
+  // i32 and try again.
+  if (usesOnlyOneValue && EltSize <= 32) {
+    if (!isConstant)
+      return DAG.getNode(ARMISD::VDUP, dl, VT, Value);
+    if (VT.getVectorElementType().isFloatingPoint()) {
+      SmallVector<SDValue, 8> Ops;
+      for (unsigned i = 0; i < NumElts; ++i)
+        Ops.push_back(DAG.getNode(ISD::BIT_CONVERT, dl, MVT::i32,
+                                  Op.getOperand(i)));
+      SDValue Val = DAG.getNode(ISD::BUILD_VECTOR, dl, MVT::v4i32, &Ops[0],
+                                NumElts);
+      Val = LowerBUILD_VECTOR(Val, DAG, ST);
       if (Val.getNode())
-        return DAG.getNode(ARMISD::VDUP, dl, VT, Val);
+        return DAG.getNode(ISD::BIT_CONVERT, dl, VT, Val);
     }
+    SDValue Val = IsSingleInstrConstant(Value, DAG, ST, dl);
+    if (Val.getNode())
+      return DAG.getNode(ARMISD::VDUP, dl, VT, Val);
   }
 
   // If all elements are constants and the case above didn't get hit, fall back
@@ -3479,12 +3492,6 @@ static SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG,
   // pool.
   if (isConstant)
     return SDValue();
-
-  if (!EnableARMVDUPsplat) {
-    // Use VDUP for non-constant splats.
-    if (usesOnlyOneValue && EltSize <= 32)
-      return DAG.getNode(ARMISD::VDUP, dl, VT, Value);
-  }
 
   // Vectors with 32- or 64-bit elements can be built by directly assigning
   // the subregisters.  Lower it to an ARMISD::BUILD_VECTOR so the operands
@@ -3838,6 +3845,7 @@ SDValue ARMTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::GLOBAL_OFFSET_TABLE: return LowerGLOBAL_OFFSET_TABLE(Op, DAG);
   case ISD::EH_SJLJ_SETJMP: return LowerEH_SJLJ_SETJMP(Op, DAG);
   case ISD::EH_SJLJ_LONGJMP: return LowerEH_SJLJ_LONGJMP(Op, DAG);
+  case ISD::EH_SJLJ_DISPATCHSETUP: return LowerEH_SJLJ_DISPATCHSETUP(Op, DAG);
   case ISD::INTRINSIC_WO_CHAIN: return LowerINTRINSIC_WO_CHAIN(Op, DAG,
                                                                Subtarget);
   case ISD::BIT_CONVERT:   return ExpandBIT_CONVERT(Op.getNode(), DAG);
@@ -4538,6 +4546,59 @@ static SDValue PerformBUILD_VECTORCombine(SDNode *N, SelectionDAG &DAG) {
   return SDValue();
 }
 
+/// PerformVECTOR_SHUFFLECombine - Target-specific dag combine xforms for
+/// ISD::VECTOR_SHUFFLE.
+static SDValue PerformVECTOR_SHUFFLECombine(SDNode *N, SelectionDAG &DAG) {
+  // The LLVM shufflevector instruction does not require the shuffle mask
+  // length to match the operand vector length, but ISD::VECTOR_SHUFFLE does
+  // have that requirement.  When translating to ISD::VECTOR_SHUFFLE, if the
+  // operands do not match the mask length, they are extended by concatenating
+  // them with undef vectors.  That is probably the right thing for other
+  // targets, but for NEON it is better to concatenate two double-register
+  // size vector operands into a single quad-register size vector.  Do that
+  // transformation here:
+  //   shuffle(concat(v1, undef), concat(v2, undef)) ->
+  //   shuffle(concat(v1, v2), undef)
+  SDValue Op0 = N->getOperand(0);
+  SDValue Op1 = N->getOperand(1);
+  if (Op0.getOpcode() != ISD::CONCAT_VECTORS ||
+      Op1.getOpcode() != ISD::CONCAT_VECTORS ||
+      Op0.getNumOperands() != 2 ||
+      Op1.getNumOperands() != 2)
+    return SDValue();
+  SDValue Concat0Op1 = Op0.getOperand(1);
+  SDValue Concat1Op1 = Op1.getOperand(1);
+  if (Concat0Op1.getOpcode() != ISD::UNDEF ||
+      Concat1Op1.getOpcode() != ISD::UNDEF)
+    return SDValue();
+  // Skip the transformation if any of the types are illegal.
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+  EVT VT = N->getValueType(0);
+  if (!TLI.isTypeLegal(VT) ||
+      !TLI.isTypeLegal(Concat0Op1.getValueType()) ||
+      !TLI.isTypeLegal(Concat1Op1.getValueType()))
+    return SDValue();
+
+  SDValue NewConcat = DAG.getNode(ISD::CONCAT_VECTORS, N->getDebugLoc(), VT,
+                                  Op0.getOperand(0), Op1.getOperand(0));
+  // Translate the shuffle mask.
+  SmallVector<int, 16> NewMask;
+  unsigned NumElts = VT.getVectorNumElements();
+  unsigned HalfElts = NumElts/2;
+  ShuffleVectorSDNode *SVN = cast<ShuffleVectorSDNode>(N);
+  for (unsigned n = 0; n < NumElts; ++n) {
+    int MaskElt = SVN->getMaskElt(n);
+    int NewElt = -1;
+    if (MaskElt < (int)HalfElts)
+      NewElt = MaskElt;
+    else if (MaskElt >= (int)NumElts && MaskElt < (int)(NumElts + HalfElts))
+      NewElt = HalfElts + MaskElt - NumElts;
+    NewMask.push_back(NewElt);
+  }
+  return DAG.getVectorShuffle(VT, N->getDebugLoc(), NewConcat,
+                              DAG.getUNDEF(VT), NewMask.data());
+}
+
 /// PerformVDUPLANECombine - Target-specific dag combine xforms for
 /// ARMISD::VDUPLANE.
 static SDValue PerformVDUPLANECombine(SDNode *N, SelectionDAG &DAG) {
@@ -4946,6 +5007,7 @@ SDValue ARMTargetLowering::PerformDAGCombine(SDNode *N,
   case ARMISD::VMOVRRD: return PerformVMOVRRDCombine(N, DCI);
   case ARMISD::VMOVDRR: return PerformVMOVDRRCombine(N, DCI.DAG);
   case ISD::BUILD_VECTOR: return PerformBUILD_VECTORCombine(N, DCI.DAG);
+  case ISD::VECTOR_SHUFFLE: return PerformVECTOR_SHUFFLECombine(N, DCI.DAG);
   case ARMISD::VDUPLANE: return PerformVDUPLANECombine(N, DCI.DAG);
   case ISD::INTRINSIC_WO_CHAIN: return PerformIntrinsicCombine(N, DCI.DAG);
   case ISD::SHL:
@@ -5391,6 +5453,40 @@ ARMTargetLowering::getConstraintType(const std::string &Constraint) const {
     }
   }
   return TargetLowering::getConstraintType(Constraint);
+}
+
+/// Examine constraint type and operand type and determine a weight value.
+/// This object must already have been set up with the operand type
+/// and the current alternative constraint selected.
+TargetLowering::ConstraintWeight
+ARMTargetLowering::getSingleConstraintMatchWeight(
+    AsmOperandInfo &info, const char *constraint) const {
+  ConstraintWeight weight = CW_Invalid;
+  Value *CallOperandVal = info.CallOperandVal;
+    // If we don't have a value, we can't do a match,
+    // but allow it at the lowest weight.
+  if (CallOperandVal == NULL)
+    return CW_Default;
+  const Type *type = CallOperandVal->getType();
+  // Look at the constraint type.
+  switch (*constraint) {
+  default:
+    weight = TargetLowering::getSingleConstraintMatchWeight(info, constraint);
+    break;
+  case 'l':
+    if (type->isIntegerTy()) {
+      if (Subtarget->isThumb())
+        weight = CW_SpecificReg;
+      else
+        weight = CW_Register;
+    }
+    break;
+  case 'w':
+    if (type->isFloatingPointTy())
+      weight = CW_Register;
+    break;
+  }
+  return weight;
 }
 
 std::pair<unsigned, const TargetRegisterClass*>

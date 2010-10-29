@@ -43,7 +43,7 @@ protected:
 public:
   explicit AllocaInst(const Type *Ty, Value *ArraySize = 0,
                       const Twine &Name = "", Instruction *InsertBefore = 0);
-  AllocaInst(const Type *Ty, Value *ArraySize, 
+  AllocaInst(const Type *Ty, Value *ArraySize,
              const Twine &Name, BasicBlock *InsertAtEnd);
 
   AllocaInst(const Type *Ty, const Twine &Name, Instruction *InsertBefore = 0);
@@ -166,8 +166,8 @@ public:
   unsigned getPointerAddressSpace() const {
     return cast<PointerType>(getPointerOperand()->getType())->getAddressSpace();
   }
-  
-  
+
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const LoadInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -237,7 +237,7 @@ public:
 
   Value *getValueOperand() { return getOperand(0); }
   const Value *getValueOperand() const { return getOperand(0); }
-  
+
   Value *getPointerOperand() { return getOperand(1); }
   const Value *getPointerOperand() const { return getOperand(1); }
   static unsigned getPointerOperandIndex() { return 1U; }
@@ -245,7 +245,7 @@ public:
   unsigned getPointerAddressSpace() const {
     return cast<PointerType>(getPointerOperand()->getType())->getAddressSpace();
   }
-  
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const StoreInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -289,8 +289,10 @@ class GetElementPtrInst : public Instruction {
             const Twine &NameStr);
   void init(Value *Ptr, Value *Idx, const Twine &NameStr);
 
-  template<typename InputIterator>
-  void init(Value *Ptr, InputIterator IdxBegin, InputIterator IdxEnd,
+  template<typename RandomAccessIterator>
+  void init(Value *Ptr,
+            RandomAccessIterator IdxBegin,
+            RandomAccessIterator IdxEnd,
             const Twine &NameStr,
             // This argument ensures that we have an iterator we can
             // do arithmetic on in constant time
@@ -313,10 +315,10 @@ class GetElementPtrInst : public Instruction {
   /// Null is returned if the indices are invalid for the specified
   /// pointer type.
   ///
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static const Type *getIndexedType(const Type *Ptr,
-                                    InputIterator IdxBegin,
-                                    InputIterator IdxEnd,
+                                    RandomAccessIterator IdxBegin,
+                                    RandomAccessIterator IdxEnd,
                                     // This argument ensures that we
                                     // have an iterator we can do
                                     // arithmetic on in constant time
@@ -331,18 +333,19 @@ class GetElementPtrInst : public Instruction {
   }
 
   /// Constructors - Create a getelementptr instruction with a base pointer an
-  /// list of indices.  The first ctor can optionally insert before an existing
+  /// list of indices. The first ctor can optionally insert before an existing
   /// instruction, the second appends the new instruction to the specified
   /// BasicBlock.
-  template<typename InputIterator>
-  inline GetElementPtrInst(Value *Ptr, InputIterator IdxBegin,
-                           InputIterator IdxEnd,
+  template<typename RandomAccessIterator>
+  inline GetElementPtrInst(Value *Ptr, RandomAccessIterator IdxBegin,
+                           RandomAccessIterator IdxEnd,
                            unsigned Values,
                            const Twine &NameStr,
                            Instruction *InsertBefore);
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   inline GetElementPtrInst(Value *Ptr,
-                           InputIterator IdxBegin, InputIterator IdxEnd,
+                           RandomAccessIterator IdxBegin,
+                           RandomAccessIterator IdxEnd,
                            unsigned Values,
                            const Twine &NameStr, BasicBlock *InsertAtEnd);
 
@@ -355,23 +358,24 @@ class GetElementPtrInst : public Instruction {
 protected:
   virtual GetElementPtrInst *clone_impl() const;
 public:
-  template<typename InputIterator>
-  static GetElementPtrInst *Create(Value *Ptr, InputIterator IdxBegin,
-                                   InputIterator IdxEnd,
+  template<typename RandomAccessIterator>
+  static GetElementPtrInst *Create(Value *Ptr, RandomAccessIterator IdxBegin,
+                                   RandomAccessIterator IdxEnd,
                                    const Twine &NameStr = "",
                                    Instruction *InsertBefore = 0) {
-    typename std::iterator_traits<InputIterator>::difference_type Values =
-      1 + std::distance(IdxBegin, IdxEnd);
+    typename std::iterator_traits<RandomAccessIterator>::difference_type
+      Values = 1 + std::distance(IdxBegin, IdxEnd);
     return new(Values)
       GetElementPtrInst(Ptr, IdxBegin, IdxEnd, Values, NameStr, InsertBefore);
   }
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static GetElementPtrInst *Create(Value *Ptr,
-                                   InputIterator IdxBegin, InputIterator IdxEnd,
+                                   RandomAccessIterator IdxBegin,
+                                   RandomAccessIterator IdxEnd,
                                    const Twine &NameStr,
                                    BasicBlock *InsertAtEnd) {
-    typename std::iterator_traits<InputIterator>::difference_type Values =
-      1 + std::distance(IdxBegin, IdxEnd);
+    typename std::iterator_traits<RandomAccessIterator>::difference_type
+      Values = 1 + std::distance(IdxBegin, IdxEnd);
     return new(Values)
       GetElementPtrInst(Ptr, IdxBegin, IdxEnd, Values, NameStr, InsertAtEnd);
   }
@@ -391,9 +395,10 @@ public:
 
   /// Create an "inbounds" getelementptr. See the documentation for the
   /// "inbounds" flag in LangRef.html for details.
-  template<typename InputIterator>
-  static GetElementPtrInst *CreateInBounds(Value *Ptr, InputIterator IdxBegin,
-                                           InputIterator IdxEnd,
+  template<typename RandomAccessIterator>
+  static GetElementPtrInst *CreateInBounds(Value *Ptr,
+                                           RandomAccessIterator IdxBegin,
+                                           RandomAccessIterator IdxEnd,
                                            const Twine &NameStr = "",
                                            Instruction *InsertBefore = 0) {
     GetElementPtrInst *GEP = Create(Ptr, IdxBegin, IdxEnd,
@@ -401,10 +406,10 @@ public:
     GEP->setIsInBounds(true);
     return GEP;
   }
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static GetElementPtrInst *CreateInBounds(Value *Ptr,
-                                           InputIterator IdxBegin,
-                                           InputIterator IdxEnd,
+                                           RandomAccessIterator IdxBegin,
+                                           RandomAccessIterator IdxEnd,
                                            const Twine &NameStr,
                                            BasicBlock *InsertAtEnd) {
     GetElementPtrInst *GEP = Create(Ptr, IdxBegin, IdxEnd,
@@ -441,12 +446,12 @@ public:
   /// Null is returned if the indices are invalid for the specified
   /// pointer type.
   ///
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static const Type *getIndexedType(const Type *Ptr,
-                                    InputIterator IdxBegin,
-                                    InputIterator IdxEnd) {
+                                    RandomAccessIterator IdxBegin,
+                                    RandomAccessIterator IdxEnd) {
     return getIndexedType(Ptr, IdxBegin, IdxEnd,
-                          typename std::iterator_traits<InputIterator>::
+                          typename std::iterator_traits<RandomAccessIterator>::
                           iterator_category());
   }
 
@@ -472,7 +477,7 @@ public:
   static unsigned getPointerOperandIndex() {
     return 0U;                      // get index for modifying correct operand
   }
-  
+
   unsigned getPointerAddressSpace() const {
     return cast<PointerType>(getType())->getAddressSpace();
   }
@@ -523,10 +528,10 @@ template <>
 struct OperandTraits<GetElementPtrInst> : public VariadicOperandTraits<1> {
 };
 
-template<typename InputIterator>
+template<typename RandomAccessIterator>
 GetElementPtrInst::GetElementPtrInst(Value *Ptr,
-                                     InputIterator IdxBegin,
-                                     InputIterator IdxEnd,
+                                     RandomAccessIterator IdxBegin,
+                                     RandomAccessIterator IdxEnd,
                                      unsigned Values,
                                      const Twine &NameStr,
                                      Instruction *InsertBefore)
@@ -539,12 +544,13 @@ GetElementPtrInst::GetElementPtrInst(Value *Ptr,
                 OperandTraits<GetElementPtrInst>::op_end(this) - Values,
                 Values, InsertBefore) {
   init(Ptr, IdxBegin, IdxEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
-template<typename InputIterator>
+template<typename RandomAccessIterator>
 GetElementPtrInst::GetElementPtrInst(Value *Ptr,
-                                     InputIterator IdxBegin,
-                                     InputIterator IdxEnd,
+                                     RandomAccessIterator IdxBegin,
+                                     RandomAccessIterator IdxEnd,
                                      unsigned Values,
                                      const Twine &NameStr,
                                      BasicBlock *InsertAtEnd)
@@ -557,7 +563,8 @@ GetElementPtrInst::GetElementPtrInst(Value *Ptr,
                 OperandTraits<GetElementPtrInst>::op_end(this) - Values,
                 Values, InsertAtEnd) {
   init(Ptr, IdxBegin, IdxEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
 
 
@@ -575,7 +582,7 @@ DEFINE_TRANSPARENT_OPERAND_ACCESSORS(GetElementPtrInst, Value)
 class ICmpInst: public CmpInst {
 protected:
   /// @brief Clone an indentical ICmpInst
-  virtual ICmpInst *clone_impl() const;  
+  virtual ICmpInst *clone_impl() const;
 public:
   /// @brief Constructor with insert-before-instruction semantics.
   ICmpInst(
@@ -746,7 +753,7 @@ public:
     assert(getOperand(0)->getType()->isFPOrFPVectorTy() &&
            "Invalid operand types for FCmp instruction");
   }
-  
+
   /// @brief Constructor with insert-at-end semantics.
   FCmpInst(
     BasicBlock &InsertAtEnd, ///< Block to insert into.
@@ -838,8 +845,10 @@ class CallInst : public Instruction {
   void init(Value *Func, Value *Actual);
   void init(Value *Func);
 
-  template<typename InputIterator>
-  void init(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
+  template<typename RandomAccessIterator>
+  void init(Value *Func,
+            RandomAccessIterator ArgBegin,
+            RandomAccessIterator ArgEnd,
             const Twine &NameStr,
             // This argument ensures that we have an iterator we can
             // do arithmetic on in constant time
@@ -851,24 +860,26 @@ class CallInst : public Instruction {
     setName(NameStr);
   }
 
-  /// Construct a CallInst given a range of arguments.  InputIterator
+  /// Construct a CallInst given a range of arguments. RandomAccessIterator
   /// must be a random-access iterator pointing to contiguous storage
-  /// (e.g. a std::vector<>::iterator).  Checks are made for
+  /// (e.g. a std::vector<>::iterator). Checks are made for
   /// random-accessness but not for contiguous storage as that would
   /// incur runtime overhead.
   /// @brief Construct a CallInst from a range of arguments
-  template<typename InputIterator>
-  CallInst(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
+  template<typename RandomAccessIterator>
+  CallInst(Value *Func,
+           RandomAccessIterator ArgBegin, RandomAccessIterator ArgEnd,
            const Twine &NameStr, Instruction *InsertBefore);
 
-  /// Construct a CallInst given a range of arguments.  InputIterator
+  /// Construct a CallInst given a range of arguments.  RandomAccessIterator
   /// must be a random-access iterator pointing to contiguous storage
   /// (e.g. a std::vector<>::iterator).  Checks are made for
   /// random-accessness but not for contiguous storage as that would
   /// incur runtime overhead.
   /// @brief Construct a CallInst from a range of arguments
-  template<typename InputIterator>
-  inline CallInst(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
+  template<typename RandomAccessIterator>
+  inline CallInst(Value *Func,
+                  RandomAccessIterator ArgBegin, RandomAccessIterator ArgEnd,
                   const Twine &NameStr, BasicBlock *InsertAtEnd);
 
   CallInst(Value *F, Value *Actual, const Twine &NameStr,
@@ -881,17 +892,19 @@ class CallInst : public Instruction {
 protected:
   virtual CallInst *clone_impl() const;
 public:
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static CallInst *Create(Value *Func,
-                          InputIterator ArgBegin, InputIterator ArgEnd,
+                          RandomAccessIterator ArgBegin,
+                          RandomAccessIterator ArgEnd,
                           const Twine &NameStr = "",
                           Instruction *InsertBefore = 0) {
     return new(unsigned(ArgEnd - ArgBegin + 1))
       CallInst(Func, ArgBegin, ArgEnd, NameStr, InsertBefore);
   }
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static CallInst *Create(Value *Func,
-                          InputIterator ArgBegin, InputIterator ArgEnd,
+                          RandomAccessIterator ArgBegin,
+                          RandomAccessIterator ArgEnd,
                           const Twine &NameStr, BasicBlock *InsertAtEnd) {
     return new(unsigned(ArgEnd - ArgBegin + 1))
       CallInst(Func, ArgBegin, ArgEnd, NameStr, InsertAtEnd);
@@ -984,7 +997,7 @@ public:
   unsigned getParamAlignment(unsigned i) const {
     return AttributeList.getParamAlignment(i);
   }
-  
+
   /// @brief Return true if the call should not be inlined.
   bool isNoInline() const { return paramHasAttr(~0, Attribute::NoInline); }
   void setIsNoInline(bool Value = true) {
@@ -1052,7 +1065,7 @@ public:
   void setCalledFunction(Value* Fn) {
     Op<-1>() = Fn;
   }
-  
+
   /// isInlineAsm - Check if this call is an inline asm statement.
   bool isInlineAsm() const {
     return isa<InlineAsm>(Op<-1>());
@@ -1078,8 +1091,9 @@ template <>
 struct OperandTraits<CallInst> : public VariadicOperandTraits<1> {
 };
 
-template<typename InputIterator>
-CallInst::CallInst(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
+template<typename RandomAccessIterator>
+CallInst::CallInst(Value *Func,
+                   RandomAccessIterator ArgBegin, RandomAccessIterator ArgEnd,
                    const Twine &NameStr, BasicBlock *InsertAtEnd)
   : Instruction(cast<FunctionType>(cast<PointerType>(Func->getType())
                                    ->getElementType())->getReturnType(),
@@ -1087,11 +1101,13 @@ CallInst::CallInst(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
                 OperandTraits<CallInst>::op_end(this) - (ArgEnd - ArgBegin + 1),
                 unsigned(ArgEnd - ArgBegin + 1), InsertAtEnd) {
   init(Func, ArgBegin, ArgEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
 
-template<typename InputIterator>
-CallInst::CallInst(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
+template<typename RandomAccessIterator>
+CallInst::CallInst(Value *Func,
+                   RandomAccessIterator ArgBegin, RandomAccessIterator ArgEnd,
                    const Twine &NameStr, Instruction *InsertBefore)
   : Instruction(cast<FunctionType>(cast<PointerType>(Func->getType())
                                    ->getElementType())->getReturnType(),
@@ -1099,7 +1115,8 @@ CallInst::CallInst(Value *Func, InputIterator ArgBegin, InputIterator ArgEnd,
                 OperandTraits<CallInst>::op_end(this) - (ArgEnd - ArgBegin + 1),
                 unsigned(ArgEnd - ArgBegin + 1), InsertBefore) {
   init(Func, ArgBegin, ArgEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
 
 
@@ -1156,7 +1173,7 @@ public:
   Value *getCondition() { return Op<0>(); }
   Value *getTrueValue() { return Op<1>(); }
   Value *getFalseValue() { return Op<2>(); }
-  
+
   /// areInvalidOperands - Return a string if the specified operands are invalid
   /// for a select operation, otherwise return null.
   static const char *areInvalidOperands(Value *Cond, Value *True, Value *False);
@@ -1256,12 +1273,12 @@ public:
   Value *getIndexOperand() { return Op<1>(); }
   const Value *getVectorOperand() const { return Op<0>(); }
   const Value *getIndexOperand() const { return Op<1>(); }
-  
+
   const VectorType *getVectorOperandType() const {
     return reinterpret_cast<const VectorType*>(getVectorOperand()->getType());
   }
-  
-  
+
+
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 
@@ -1411,8 +1428,9 @@ class ExtractValueInst : public UnaryInstruction {
             const Twine &NameStr);
   void init(unsigned Idx, const Twine &NameStr);
 
-  template<typename InputIterator>
-  void init(InputIterator IdxBegin, InputIterator IdxEnd,
+  template<typename RandomAccessIterator>
+  void init(RandomAccessIterator IdxBegin,
+            RandomAccessIterator IdxEnd,
             const Twine &NameStr,
             // This argument ensures that we have an iterator we can
             // do arithmetic on in constant time
@@ -1439,10 +1457,10 @@ class ExtractValueInst : public UnaryInstruction {
   static const Type *getIndexedType(const Type *Agg,
                                     const unsigned *Idx, unsigned NumIdx);
 
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static const Type *getIndexedType(const Type *Ptr,
-                                    InputIterator IdxBegin,
-                                    InputIterator IdxEnd,
+                                    RandomAccessIterator IdxBegin,
+                                    RandomAccessIterator IdxEnd,
                                     // This argument ensures that we
                                     // have an iterator we can do
                                     // arithmetic on in constant time
@@ -1460,14 +1478,16 @@ class ExtractValueInst : public UnaryInstruction {
   /// value and a list of indices.  The first ctor can optionally insert before
   /// an existing instruction, the second appends the new instruction to the
   /// specified BasicBlock.
-  template<typename InputIterator>
-  inline ExtractValueInst(Value *Agg, InputIterator IdxBegin,
-                          InputIterator IdxEnd,
+  template<typename RandomAccessIterator>
+  inline ExtractValueInst(Value *Agg,
+                          RandomAccessIterator IdxBegin,
+                          RandomAccessIterator IdxEnd,
                           const Twine &NameStr,
                           Instruction *InsertBefore);
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   inline ExtractValueInst(Value *Agg,
-                          InputIterator IdxBegin, InputIterator IdxEnd,
+                          RandomAccessIterator IdxBegin,
+                          RandomAccessIterator IdxEnd,
                           const Twine &NameStr, BasicBlock *InsertAtEnd);
 
   // allocate space for exactly one operand
@@ -1478,17 +1498,19 @@ protected:
   virtual ExtractValueInst *clone_impl() const;
 
 public:
-  template<typename InputIterator>
-  static ExtractValueInst *Create(Value *Agg, InputIterator IdxBegin,
-                                  InputIterator IdxEnd,
+  template<typename RandomAccessIterator>
+  static ExtractValueInst *Create(Value *Agg,
+                                  RandomAccessIterator IdxBegin,
+                                  RandomAccessIterator IdxEnd,
                                   const Twine &NameStr = "",
                                   Instruction *InsertBefore = 0) {
     return new
       ExtractValueInst(Agg, IdxBegin, IdxEnd, NameStr, InsertBefore);
   }
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static ExtractValueInst *Create(Value *Agg,
-                                  InputIterator IdxBegin, InputIterator IdxEnd,
+                                  RandomAccessIterator IdxBegin,
+                                  RandomAccessIterator IdxEnd,
                                   const Twine &NameStr,
                                   BasicBlock *InsertAtEnd) {
     return new ExtractValueInst(Agg, IdxBegin, IdxEnd, NameStr, InsertAtEnd);
@@ -1516,12 +1538,12 @@ public:
   /// Null is returned if the indices are invalid for the specified
   /// pointer type.
   ///
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static const Type *getIndexedType(const Type *Ptr,
-                                    InputIterator IdxBegin,
-                                    InputIterator IdxEnd) {
+                                    RandomAccessIterator IdxBegin,
+                                    RandomAccessIterator IdxEnd) {
     return getIndexedType(Ptr, IdxBegin, IdxEnd,
-                          typename std::iterator_traits<InputIterator>::
+                          typename std::iterator_traits<RandomAccessIterator>::
                           iterator_category());
   }
   static const Type *getIndexedType(const Type *Ptr, unsigned Idx);
@@ -1558,29 +1580,31 @@ public:
   }
 };
 
-template<typename InputIterator>
+template<typename RandomAccessIterator>
 ExtractValueInst::ExtractValueInst(Value *Agg,
-                                   InputIterator IdxBegin,
-                                   InputIterator IdxEnd,
+                                   RandomAccessIterator IdxBegin,
+                                   RandomAccessIterator IdxEnd,
                                    const Twine &NameStr,
                                    Instruction *InsertBefore)
   : UnaryInstruction(checkType(getIndexedType(Agg->getType(),
                                               IdxBegin, IdxEnd)),
                      ExtractValue, Agg, InsertBefore) {
   init(IdxBegin, IdxEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
-template<typename InputIterator>
+template<typename RandomAccessIterator>
 ExtractValueInst::ExtractValueInst(Value *Agg,
-                                   InputIterator IdxBegin,
-                                   InputIterator IdxEnd,
+                                   RandomAccessIterator IdxBegin,
+                                   RandomAccessIterator IdxEnd,
                                    const Twine &NameStr,
                                    BasicBlock *InsertAtEnd)
   : UnaryInstruction(checkType(getIndexedType(Agg->getType(),
                                               IdxBegin, IdxEnd)),
                      ExtractValue, Agg, InsertAtEnd) {
   init(IdxBegin, IdxEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
 
 
@@ -1600,9 +1624,9 @@ class InsertValueInst : public Instruction {
             const Twine &NameStr);
   void init(Value *Agg, Value *Val, unsigned Idx, const Twine &NameStr);
 
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   void init(Value *Agg, Value *Val,
-            InputIterator IdxBegin, InputIterator IdxEnd,
+            RandomAccessIterator IdxBegin, RandomAccessIterator IdxEnd,
             const Twine &NameStr,
             // This argument ensures that we have an iterator we can
             // do arithmetic on in constant time
@@ -1624,14 +1648,16 @@ class InsertValueInst : public Instruction {
   /// value, a value to insert, and a list of indices.  The first ctor can
   /// optionally insert before an existing instruction, the second appends
   /// the new instruction to the specified BasicBlock.
-  template<typename InputIterator>
-  inline InsertValueInst(Value *Agg, Value *Val, InputIterator IdxBegin,
-                         InputIterator IdxEnd,
+  template<typename RandomAccessIterator>
+  inline InsertValueInst(Value *Agg, Value *Val,
+                         RandomAccessIterator IdxBegin,
+                         RandomAccessIterator IdxEnd,
                          const Twine &NameStr,
                          Instruction *InsertBefore);
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   inline InsertValueInst(Value *Agg, Value *Val,
-                         InputIterator IdxBegin, InputIterator IdxEnd,
+                         RandomAccessIterator IdxBegin,
+                         RandomAccessIterator IdxEnd,
                          const Twine &NameStr, BasicBlock *InsertAtEnd);
 
   /// Constructors - These two constructors are convenience methods because one
@@ -1649,17 +1675,19 @@ public:
     return User::operator new(s, 2);
   }
 
-  template<typename InputIterator>
-  static InsertValueInst *Create(Value *Agg, Value *Val, InputIterator IdxBegin,
-                                 InputIterator IdxEnd,
+  template<typename RandomAccessIterator>
+  static InsertValueInst *Create(Value *Agg, Value *Val,
+                                 RandomAccessIterator IdxBegin,
+                                 RandomAccessIterator IdxEnd,
                                  const Twine &NameStr = "",
                                  Instruction *InsertBefore = 0) {
     return new InsertValueInst(Agg, Val, IdxBegin, IdxEnd,
                                NameStr, InsertBefore);
   }
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static InsertValueInst *Create(Value *Agg, Value *Val,
-                                 InputIterator IdxBegin, InputIterator IdxEnd,
+                                 RandomAccessIterator IdxBegin,
+                                 RandomAccessIterator IdxEnd,
                                  const Twine &NameStr,
                                  BasicBlock *InsertAtEnd) {
     return new InsertValueInst(Agg, Val, IdxBegin, IdxEnd,
@@ -1729,31 +1757,33 @@ template <>
 struct OperandTraits<InsertValueInst> : public FixedNumOperandTraits<2> {
 };
 
-template<typename InputIterator>
+template<typename RandomAccessIterator>
 InsertValueInst::InsertValueInst(Value *Agg,
                                  Value *Val,
-                                 InputIterator IdxBegin,
-                                 InputIterator IdxEnd,
+                                 RandomAccessIterator IdxBegin,
+                                 RandomAccessIterator IdxEnd,
                                  const Twine &NameStr,
                                  Instruction *InsertBefore)
   : Instruction(Agg->getType(), InsertValue,
                 OperandTraits<InsertValueInst>::op_begin(this),
                 2, InsertBefore) {
   init(Agg, Val, IdxBegin, IdxEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
-template<typename InputIterator>
+template<typename RandomAccessIterator>
 InsertValueInst::InsertValueInst(Value *Agg,
                                  Value *Val,
-                                 InputIterator IdxBegin,
-                                 InputIterator IdxEnd,
+                                 RandomAccessIterator IdxBegin,
+                                 RandomAccessIterator IdxEnd,
                                  const Twine &NameStr,
                                  BasicBlock *InsertAtEnd)
   : Instruction(Agg->getType(), InsertValue,
                 OperandTraits<InsertValueInst>::op_begin(this),
                 2, InsertAtEnd) {
   init(Agg, Val, IdxBegin, IdxEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(InsertValueInst, Value)
@@ -1839,7 +1869,7 @@ public:
   BasicBlock *getIncomingBlock(unsigned i) const {
     return cast<BasicBlock>(getOperand(i*2+1));
   }
-  
+
   /// getIncomingBlock - Return incoming basic block corresponding
   /// to an operand of the PHI.
   ///
@@ -1847,7 +1877,7 @@ public:
     assert(this == U.getUser() && "Iterator doesn't point to PHI's Uses?");
     return cast<BasicBlock>((&U + 1)->get());
   }
-  
+
   /// getIncomingBlock - Return incoming basic block corresponding
   /// to value use iterator.
   ///
@@ -1855,8 +1885,8 @@ public:
   BasicBlock *getIncomingBlock(value_use_iterator<U> I) const {
     return getIncomingBlock(I.getUse());
   }
-  
-  
+
+
   void setIncomingBlock(unsigned i, BasicBlock *BB) {
     setOperand(i*2+1, (Value*)BB);
   }
@@ -2300,7 +2330,7 @@ class IndirectBrInst : public TerminatorInst {
   /// here to make memory allocation more efficient.  This constructor can also
   /// autoinsert before another instruction.
   IndirectBrInst(Value *Address, unsigned NumDests, Instruction *InsertBefore);
-  
+
   /// IndirectBrInst ctor - Create a new indirectbr instruction, specifying an
   /// Address to jump to.  The number of expected destinations can be specified
   /// here to make memory allocation more efficient.  This constructor also
@@ -2318,32 +2348,32 @@ public:
     return new IndirectBrInst(Address, NumDests, InsertAtEnd);
   }
   ~IndirectBrInst();
-  
+
   /// Provide fast operand accessors.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
-  
+
   // Accessor Methods for IndirectBrInst instruction.
   Value *getAddress() { return getOperand(0); }
   const Value *getAddress() const { return getOperand(0); }
   void setAddress(Value *V) { setOperand(0, V); }
-  
-  
+
+
   /// getNumDestinations - return the number of possible destinations in this
   /// indirectbr instruction.
   unsigned getNumDestinations() const { return getNumOperands()-1; }
-  
+
   /// getDestination - Return the specified destination.
   BasicBlock *getDestination(unsigned i) { return getSuccessor(i); }
   const BasicBlock *getDestination(unsigned i) const { return getSuccessor(i); }
-  
+
   /// addDestination - Add a destination.
   ///
   void addDestination(BasicBlock *Dest);
-  
+
   /// removeDestination - This method removes the specified successor from the
   /// indirectbr instruction.
   void removeDestination(unsigned i);
-  
+
   unsigned getNumSuccessors() const { return getNumOperands()-1; }
   BasicBlock *getSuccessor(unsigned i) const {
     return cast<BasicBlock>(getOperand(i+1));
@@ -2351,7 +2381,7 @@ public:
   void setSuccessor(unsigned i, BasicBlock *NewSucc) {
     setOperand(i+1, (Value*)NewSucc);
   }
-  
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const IndirectBrInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -2371,8 +2401,8 @@ struct OperandTraits<IndirectBrInst> : public HungoffOperandTraits<1> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(IndirectBrInst, Value)
-  
-  
+
+
 //===----------------------------------------------------------------------===//
 //                               InvokeInst Class
 //===----------------------------------------------------------------------===//
@@ -2386,9 +2416,9 @@ class InvokeInst : public TerminatorInst {
   void init(Value *Fn, BasicBlock *IfNormal, BasicBlock *IfException,
             Value* const *Args, unsigned NumArgs);
 
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   void init(Value *Func, BasicBlock *IfNormal, BasicBlock *IfException,
-            InputIterator ArgBegin, InputIterator ArgEnd,
+            RandomAccessIterator ArgBegin, RandomAccessIterator ArgEnd,
             const Twine &NameStr,
             // This argument ensures that we have an iterator we can
             // do arithmetic on in constant time
@@ -2401,47 +2431,49 @@ class InvokeInst : public TerminatorInst {
   }
 
   /// Construct an InvokeInst given a range of arguments.
-  /// InputIterator must be a random-access iterator pointing to
+  /// RandomAccessIterator must be a random-access iterator pointing to
   /// contiguous storage (e.g. a std::vector<>::iterator).  Checks are
   /// made for random-accessness but not for contiguous storage as
   /// that would incur runtime overhead.
   ///
   /// @brief Construct an InvokeInst from a range of arguments
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   inline InvokeInst(Value *Func, BasicBlock *IfNormal, BasicBlock *IfException,
-                    InputIterator ArgBegin, InputIterator ArgEnd,
+                    RandomAccessIterator ArgBegin, RandomAccessIterator ArgEnd,
                     unsigned Values,
                     const Twine &NameStr, Instruction *InsertBefore);
 
   /// Construct an InvokeInst given a range of arguments.
-  /// InputIterator must be a random-access iterator pointing to
+  /// RandomAccessIterator must be a random-access iterator pointing to
   /// contiguous storage (e.g. a std::vector<>::iterator).  Checks are
   /// made for random-accessness but not for contiguous storage as
   /// that would incur runtime overhead.
   ///
   /// @brief Construct an InvokeInst from a range of arguments
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   inline InvokeInst(Value *Func, BasicBlock *IfNormal, BasicBlock *IfException,
-                    InputIterator ArgBegin, InputIterator ArgEnd,
+                    RandomAccessIterator ArgBegin, RandomAccessIterator ArgEnd,
                     unsigned Values,
                     const Twine &NameStr, BasicBlock *InsertAtEnd);
 protected:
   virtual InvokeInst *clone_impl() const;
 public:
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static InvokeInst *Create(Value *Func,
                             BasicBlock *IfNormal, BasicBlock *IfException,
-                            InputIterator ArgBegin, InputIterator ArgEnd,
+                            RandomAccessIterator ArgBegin,
+                            RandomAccessIterator ArgEnd,
                             const Twine &NameStr = "",
                             Instruction *InsertBefore = 0) {
     unsigned Values(ArgEnd - ArgBegin + 3);
     return new(Values) InvokeInst(Func, IfNormal, IfException, ArgBegin, ArgEnd,
                                   Values, NameStr, InsertBefore);
   }
-  template<typename InputIterator>
+  template<typename RandomAccessIterator>
   static InvokeInst *Create(Value *Func,
                             BasicBlock *IfNormal, BasicBlock *IfException,
-                            InputIterator ArgBegin, InputIterator ArgEnd,
+                            RandomAccessIterator ArgBegin,
+                            RandomAccessIterator ArgEnd,
                             const Twine &NameStr,
                             BasicBlock *InsertAtEnd) {
     unsigned Values(ArgEnd - ArgBegin + 3);
@@ -2611,10 +2643,11 @@ template <>
 struct OperandTraits<InvokeInst> : public VariadicOperandTraits<3> {
 };
 
-template<typename InputIterator>
+template<typename RandomAccessIterator>
 InvokeInst::InvokeInst(Value *Func,
                        BasicBlock *IfNormal, BasicBlock *IfException,
-                       InputIterator ArgBegin, InputIterator ArgEnd,
+                       RandomAccessIterator ArgBegin,
+                       RandomAccessIterator ArgEnd,
                        unsigned Values,
                        const Twine &NameStr, Instruction *InsertBefore)
   : TerminatorInst(cast<FunctionType>(cast<PointerType>(Func->getType())
@@ -2623,12 +2656,14 @@ InvokeInst::InvokeInst(Value *Func,
                    OperandTraits<InvokeInst>::op_end(this) - Values,
                    Values, InsertBefore) {
   init(Func, IfNormal, IfException, ArgBegin, ArgEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
-template<typename InputIterator>
+template<typename RandomAccessIterator>
 InvokeInst::InvokeInst(Value *Func,
                        BasicBlock *IfNormal, BasicBlock *IfException,
-                       InputIterator ArgBegin, InputIterator ArgEnd,
+                       RandomAccessIterator ArgBegin,
+                       RandomAccessIterator ArgEnd,
                        unsigned Values,
                        const Twine &NameStr, BasicBlock *InsertAtEnd)
   : TerminatorInst(cast<FunctionType>(cast<PointerType>(Func->getType())
@@ -2637,7 +2672,8 @@ InvokeInst::InvokeInst(Value *Func,
                    OperandTraits<InvokeInst>::op_end(this) - Values,
                    Values, InsertAtEnd) {
   init(Func, IfNormal, IfException, ArgBegin, ArgEnd, NameStr,
-       typename std::iterator_traits<InputIterator>::iterator_category());
+       typename std::iterator_traits<RandomAccessIterator>
+       ::iterator_category());
 }
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(InvokeInst, Value)

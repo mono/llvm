@@ -53,6 +53,7 @@ namespace {
   struct SROA : public FunctionPass {
     static char ID; // Pass identification, replacement for typeid
     explicit SROA(signed T = -1) : FunctionPass(ID) {
+      initializeSROAPass(*PassRegistry::getPassRegistry());
       if (T == -1)
         SRThreshold = 128;
       else
@@ -1446,7 +1447,7 @@ void SROA::RewriteMemIntrinUserOfAlloca(MemIntrinsic *MI, Instruction *Inst,
         Type *NewOtherPTy = PointerType::get(PTy->getElementType(),
                                              OtherPTy->getAddressSpace());
         OtherElt = new BitCastInst(OtherElt, NewOtherPTy,
-                                   OtherElt->getNameStr(), MI);
+                                   OtherElt->getName(), MI);
       }
     }
     

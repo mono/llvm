@@ -20,6 +20,7 @@
 #include "llvm/Function.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/CallingConv.h"
+#include "llvm/Type.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -2642,11 +2643,16 @@ static SDValue LowerSIGN_EXTEND(SDValue Op, SelectionDAG &DAG)
                  DAG.getNode(SPUISD::PREFSLOT2VEC, dl, mvt, Op0, Op0),
                  DAG.getConstant(31, MVT::i32));
 
+  // reinterpret as a i128 (SHUFB requires it). This gets lowered away.
+  SDValue extended = SDValue(DAG.getMachineNode(TargetOpcode::COPY_TO_REGCLASS, 
+                                        dl, Op0VT, Op0,
+                                        DAG.getTargetConstant(
+                                                  SPU::GPRCRegClass.getID(), 
+                                                  MVT::i32)), 0);
   // Shuffle bytes - Copy the sign bits into the upper 64 bits
   // and the input value into the lower 64 bits.
   SDValue extShuffle = DAG.getNode(SPUISD::SHUFB, dl, mvt,
-      DAG.getNode(ISD::ANY_EXTEND, dl, MVT::i128, Op0), sraVal, shufMask);
-
+        extended, sraVal, shufMask);
   return DAG.getNode(ISD::BIT_CONVERT, dl, MVT::i128, extShuffle);
 }
 
@@ -2982,6 +2988,38 @@ SPUTargetLowering::getConstraintType(const std::string &ConstraintLetter) const 
     }
   }
   return TargetLowering::getConstraintType(ConstraintLetter);
+}
+
+/// Examine constraint type and operand type and determine a weight value.
+/// This object must already have been set up with the operand type
+/// and the current alternative constraint selected.
+TargetLowering::ConstraintWeight
+SPUTargetLowering::getSingleConstraintMatchWeight(
+    AsmOperandInfo &info, const char *constraint) const {
+  ConstraintWeight weight = CW_Invalid;
+  Value *CallOperandVal = info.CallOperandVal;
+    // If we don't have a value, we can't do a match,
+    // but allow it at the lowest weight.
+  if (CallOperandVal == NULL)
+    return CW_Default;
+  // Look at the constraint type.
+  switch (*constraint) {
+  default:
+    weight = TargetLowering::getSingleConstraintMatchWeight(info, constraint);
+    break;
+    //FIXME: Seems like the supported constraint letters were just copied
+    // from PPC, as the following doesn't correspond to the GCC docs.
+    // I'm leaving it so until someone adds the corresponding lowering support.
+  case 'b':
+  case 'r':
+  case 'f':
+  case 'd':
+  case 'v':
+  case 'y':
+    weight = CW_Register;
+    break;
+  }
+  return weight;
 }
 
 std::pair<unsigned, const TargetRegisterClass*>

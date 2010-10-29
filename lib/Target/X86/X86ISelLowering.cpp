@@ -101,9 +101,11 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setLibcallName(RTLIB::SDIV_I64, "_alldiv");
     setLibcallName(RTLIB::UDIV_I64, "_aulldiv");
     setLibcallName(RTLIB::FPTOUINT_F64_I64, "_ftol2");
+    setLibcallName(RTLIB::FPTOUINT_F32_I64, "_ftol2");
     setLibcallCallingConv(RTLIB::SDIV_I64, CallingConv::X86_StdCall);
     setLibcallCallingConv(RTLIB::UDIV_I64, CallingConv::X86_StdCall);
-    setLibcallCallingConv(RTLIB::FPTOUINT_F64_I64, CallingConv::X86_StdCall);
+    setLibcallCallingConv(RTLIB::FPTOUINT_F64_I64, CallingConv::C);
+    setLibcallCallingConv(RTLIB::FPTOUINT_F32_I64, CallingConv::C);
   }
 
   if (Subtarget->isTargetDarwin()) {
@@ -422,7 +424,7 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   setOperationAction(ISD::STACKRESTORE,       MVT::Other, Expand);
   if (Subtarget->is64Bit())
     setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i64, Expand);
-  if (Subtarget->isTargetCygMing())
+  if (Subtarget->isTargetCygMing() || Subtarget->isTargetWindows())
     setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Custom);
   else
     setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
@@ -621,7 +623,7 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   // FIXME: In order to prevent SSE instructions being expanded to MMX ones
   // with -msoft-float, disable use of MMX as well.
   if (!UseSoftFloat && !DisableMMX && Subtarget->hasMMX()) {
-    addRegisterClass(MVT::x86mmx, X86::VR64RegisterClass, false);
+    addRegisterClass(MVT::x86mmx, X86::VR64RegisterClass);
     // No operations on x86mmx supported, everything uses intrinsics.
   }
 
@@ -2544,6 +2546,11 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
       }
     }
   }
+
+  // An stdcall caller is expected to clean up its arguments; the callee
+  // isn't going to do that.   PR 8461.
+  if (!CCMatch && CallerCC==CallingConv::X86_StdCall)
+    return false;
 
   return true;
 }
@@ -7496,8 +7503,8 @@ SDValue X86TargetLowering::LowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
 SDValue
 X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
                                            SelectionDAG &DAG) const {
-  assert(Subtarget->isTargetCygMing() &&
-         "This should be used only on Cygwin/Mingw targets");
+  assert((Subtarget->isTargetCygMing() || Subtarget->isTargetWindows()) &&
+         "This should be used only on Windows targets");
   DebugLoc dl = Op.getDebugLoc();
 
   // Get the inputs.
@@ -7514,7 +7521,7 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
 
   SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Flag);
 
-  Chain = DAG.getNode(X86ISD::MINGW_ALLOCA, dl, NodeTys, Chain, Flag);
+  Chain = DAG.getNode(X86ISD::WIN_ALLOCA, dl, NodeTys, Chain, Flag);
   Flag = Chain.getValue(1);
 
   Chain = DAG.getCopyFromReg(Chain, dl, X86StackPtr, SPTy).getValue(1);
@@ -7617,7 +7624,7 @@ SDValue X86TargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) const {
 
   if (ArgMode == 2) {
     // Sanity Check: Make sure using fp_offset makes sense.
-    assert(!UseSoftFloat && 
+    assert(!UseSoftFloat &&
            !(DAG.getMachineFunction()
                 .getFunction()->hasFnAttr(Attribute::NoImplicitFloat)) &&
            Subtarget->hasSSE1());
@@ -8924,7 +8931,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::PUNPCKHQDQ:         return "X86ISD::PUNPCKHQDQ";
   case X86ISD::VASTART_SAVE_XMM_REGS: return "X86ISD::VASTART_SAVE_XMM_REGS";
   case X86ISD::VAARG_64:           return "X86ISD::VAARG_64";
-  case X86ISD::MINGW_ALLOCA:       return "X86ISD::MINGW_ALLOCA";
+  case X86ISD::WIN_ALLOCA:         return "X86ISD::WIN_ALLOCA";
   }
 }
 
@@ -9887,7 +9894,7 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
 }
 
 MachineBasicBlock *
-X86TargetLowering::EmitLoweredMingwAlloca(MachineInstr *MI,
+X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
                                           MachineBasicBlock *BB) const {
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
   DebugLoc DL = MI->getDebugLoc();
@@ -9897,8 +9904,11 @@ X86TargetLowering::EmitLoweredMingwAlloca(MachineInstr *MI,
   // FIXME: The code should be tweaked as soon as we'll try to do codegen for
   // mingw-w64.
 
+  const char *StackProbeSymbol =
+      Subtarget->isTargetWindows() ? "_chkstk" : "_alloca";
+
   BuildMI(*BB, MI, DL, TII->get(X86::CALLpcrel32))
-    .addExternalSymbol("_alloca")
+    .addExternalSymbol(StackProbeSymbol)
     .addReg(X86::EAX, RegState::Implicit)
     .addReg(X86::ESP, RegState::Implicit)
     .addReg(X86::EAX, RegState::Define | RegState::Implicit)
@@ -9965,8 +9975,8 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
                                                MachineBasicBlock *BB) const {
   switch (MI->getOpcode()) {
   default: assert(false && "Unexpected instr type to insert");
-  case X86::MINGW_ALLOCA:
-    return EmitLoweredMingwAlloca(MI, BB);
+  case X86::WIN_ALLOCA:
+    return EmitLoweredWinAlloca(MI, BB);
   case X86::TLSCall_32:
   case X86::TLSCall_64:
     return EmitLoweredTLSCall(MI, BB);
@@ -11433,7 +11443,7 @@ static bool LowerToBSwap(CallInst *CI) {
 
 bool X86TargetLowering::ExpandInlineAsm(CallInst *CI) const {
   InlineAsm *IA = cast<InlineAsm>(CI->getCalledValue());
-  std::vector<InlineAsm::ConstraintInfo> Constraints = IA->ParseConstraints();
+  InlineAsm::ConstraintInfoVector Constraints = IA->ParseConstraints();
 
   std::string AsmStr = IA->getAsmString();
 
@@ -11513,18 +11523,32 @@ X86TargetLowering::ConstraintType
 X86TargetLowering::getConstraintType(const std::string &Constraint) const {
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
-    case 'A':
-      return C_Register;
-    case 'f':
-    case 'r':
     case 'R':
-    case 'l':
     case 'q':
     case 'Q':
-    case 'x':
+    case 'f':
+    case 't':
+    case 'u':
     case 'y':
+    case 'x':
     case 'Y':
       return C_RegisterClass;
+    case 'a':
+    case 'b':
+    case 'c':
+    case 'd':
+    case 'S':
+    case 'D':
+    case 'A':
+      return C_Register;
+    case 'I':
+    case 'J':
+    case 'K':
+    case 'L':
+    case 'M':
+    case 'N':
+    case 'G':
+    case 'C':
     case 'e':
     case 'Z':
       return C_Other;
@@ -11535,30 +11559,106 @@ X86TargetLowering::getConstraintType(const std::string &Constraint) const {
   return TargetLowering::getConstraintType(Constraint);
 }
 
-/// Examine constraint type and operand type and determine a weight value,
-/// where: -1 = invalid match, and 0 = so-so match to 3 = good match.
+/// Examine constraint type and operand type and determine a weight value.
 /// This object must already have been set up with the operand type
 /// and the current alternative constraint selected.
-int X86TargetLowering::getSingleConstraintMatchWeight(
+TargetLowering::ConstraintWeight
+  X86TargetLowering::getSingleConstraintMatchWeight(
     AsmOperandInfo &info, const char *constraint) const {
-  int weight = -1;
+  ConstraintWeight weight = CW_Invalid;
   Value *CallOperandVal = info.CallOperandVal;
     // If we don't have a value, we can't do a match,
     // but allow it at the lowest weight.
   if (CallOperandVal == NULL)
-    return 0;
+    return CW_Default;
+  const Type *type = CallOperandVal->getType();
   // Look at the constraint type.
   switch (*constraint) {
   default:
-    return TargetLowering::getSingleConstraintMatchWeight(info, constraint);
+    weight = TargetLowering::getSingleConstraintMatchWeight(info, constraint);
+  case 'R':
+  case 'q':
+  case 'Q':
+  case 'a':
+  case 'b':
+  case 'c':
+  case 'd':
+  case 'S':
+  case 'D':
+  case 'A':
+    if (CallOperandVal->getType()->isIntegerTy())
+      weight = CW_SpecificReg;
+    break;
+  case 'f':
+  case 't':
+  case 'u':
+      if (type->isFloatingPointTy())
+        weight = CW_SpecificReg;
+      break;
+  case 'y':
+      if (type->isX86_MMXTy() && !DisableMMX && Subtarget->hasMMX())
+        weight = CW_SpecificReg;
+      break;
+  case 'x':
+  case 'Y':
+    if ((type->getPrimitiveSizeInBits() == 128) && Subtarget->hasSSE1())
+      weight = CW_Register;
     break;
   case 'I':
     if (ConstantInt *C = dyn_cast<ConstantInt>(info.CallOperandVal)) {
       if (C->getZExtValue() <= 31)
-        weight = 3;
+        weight = CW_Constant;
     }
     break;
-  // etc.
+  case 'J':
+    if (ConstantInt *C = dyn_cast<ConstantInt>(CallOperandVal)) {
+      if (C->getZExtValue() <= 63)
+        weight = CW_Constant;
+    }
+    break;
+  case 'K':
+    if (ConstantInt *C = dyn_cast<ConstantInt>(CallOperandVal)) {
+      if ((C->getSExtValue() >= -0x80) && (C->getSExtValue() <= 0x7f))
+        weight = CW_Constant;
+    }
+    break;
+  case 'L':
+    if (ConstantInt *C = dyn_cast<ConstantInt>(CallOperandVal)) {
+      if ((C->getZExtValue() == 0xff) || (C->getZExtValue() == 0xffff))
+        weight = CW_Constant;
+    }
+    break;
+  case 'M':
+    if (ConstantInt *C = dyn_cast<ConstantInt>(CallOperandVal)) {
+      if (C->getZExtValue() <= 3)
+        weight = CW_Constant;
+    }
+    break;
+  case 'N':
+    if (ConstantInt *C = dyn_cast<ConstantInt>(CallOperandVal)) {
+      if (C->getZExtValue() <= 0xff)
+        weight = CW_Constant;
+    }
+    break;
+  case 'G':
+  case 'C':
+    if (dyn_cast<ConstantFP>(CallOperandVal)) {
+      weight = CW_Constant;
+    }
+    break;
+  case 'e':
+    if (ConstantInt *C = dyn_cast<ConstantInt>(CallOperandVal)) {
+      if ((C->getSExtValue() >= -0x80000000LL) &&
+          (C->getSExtValue() <= 0x7fffffffLL))
+        weight = CW_Constant;
+    }
+    break;
+  case 'Z':
+    if (ConstantInt *C = dyn_cast<ConstantInt>(CallOperandVal)) {
+      if (C->getZExtValue() <= 0xffffffff)
+        weight = CW_Constant;
+    }
+    break;
   }
   return weight;
 }

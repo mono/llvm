@@ -144,7 +144,7 @@ ARMBaseInstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
     if (isLoad)
       MemMI = BuildMI(MF, MI->getDebugLoc(),
                       get(MemOpc), MI->getOperand(0).getReg())
-        .addReg(WBReg).addReg(0).addImm(0).addImm(Pred);
+        .addReg(WBReg).addImm(0).addImm(Pred);
     else
       MemMI = BuildMI(MF, MI->getDebugLoc(),
                       get(MemOpc)).addReg(MI->getOperand(1).getReg())
@@ -155,7 +155,7 @@ ARMBaseInstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
     if (isLoad)
       MemMI = BuildMI(MF, MI->getDebugLoc(),
                       get(MemOpc), MI->getOperand(0).getReg())
-        .addReg(BaseReg).addReg(0).addImm(0).addImm(Pred);
+        .addReg(BaseReg).addImm(0).addImm(Pred);
     else
       MemMI = BuildMI(MF, MI->getDebugLoc(),
                       get(MemOpc)).addReg(MI->getOperand(1).getReg())
@@ -490,7 +490,7 @@ bool ARMBaseInstrInfo::isPredicable(MachineInstr *MI) const {
 }
 
 /// FIXME: Works around a gcc miscompilation with -fstrict-aliasing.
-DISABLE_INLINE
+LLVM_ATTRIBUTE_NOINLINE
 static unsigned getNumJTEntries(const std::vector<MachineJumpTableEntry> &JT,
                                 unsigned JTI);
 static unsigned getNumJTEntries(const std::vector<MachineJumpTableEntry> &JT,
@@ -676,9 +676,9 @@ storeRegToStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
 
   switch (RC->getID()) {
   case ARM::GPRRegClassID:
-    AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::STR))
+    AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::STRi12))
                    .addReg(SrcReg, getKillRegState(isKill))
-                   .addFrameIndex(FI).addReg(0).addImm(0).addMemOperand(MMO));
+                   .addFrameIndex(FI).addImm(0).addMemOperand(MMO));
     break;
   case ARM::SPRRegClassID:
     AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VSTRS))
@@ -755,7 +755,7 @@ ARMBaseInstrInfo::isStoreToStackSlot(const MachineInstr *MI,
                                      int &FrameIndex) const {
   switch (MI->getOpcode()) {
   default: break;
-  case ARM::STR:
+  case ARM::STRrs:
   case ARM::t2STRs: // FIXME: don't use t2STRs to access frame.
     if (MI->getOperand(1).isFI() &&
         MI->getOperand(2).isReg() &&
@@ -766,6 +766,7 @@ ARMBaseInstrInfo::isStoreToStackSlot(const MachineInstr *MI,
       return MI->getOperand(0).getReg();
     }
     break;
+  case ARM::STRi12:
   case ARM::t2STRi12:
   case ARM::tSpill:
   case ARM::VSTRD:
@@ -823,8 +824,8 @@ loadRegFromStackSlot(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
 
   switch (RC->getID()) {
   case ARM::GPRRegClassID:
-    AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::LDR), DestReg)
-                   .addFrameIndex(FI).addReg(0).addImm(0).addMemOperand(MMO));
+    AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::LDRi12), DestReg)
+                   .addFrameIndex(FI).addImm(0).addMemOperand(MMO));
     break;
   case ARM::SPRRegClassID:
     AddDefaultPred(BuildMI(MBB, I, DL, get(ARM::VLDRS), DestReg)
@@ -894,7 +895,7 @@ ARMBaseInstrInfo::isLoadFromStackSlot(const MachineInstr *MI,
                                       int &FrameIndex) const {
   switch (MI->getOpcode()) {
   default: break;
-  case ARM::LDR:
+  case ARM::LDRrs:
   case ARM::t2LDRs:  // FIXME: don't use t2LDRs to access frame.
     if (MI->getOperand(1).isFI() &&
         MI->getOperand(2).isReg() &&
@@ -905,6 +906,7 @@ ARMBaseInstrInfo::isLoadFromStackSlot(const MachineInstr *MI,
       return MI->getOperand(0).getReg();
     }
     break;
+  case ARM::LDRi12:
   case ARM::t2LDRi12:
   case ARM::tRestore:
   case ARM::VLDRD:
@@ -1078,8 +1080,8 @@ bool ARMBaseInstrInfo::areLoadsFromSameBasePtr(SDNode *Load1, SDNode *Load2,
   switch (Load1->getMachineOpcode()) {
   default:
     return false;
-  case ARM::LDR:
-  case ARM::LDRB:
+  case ARM::LDRi12:
+  case ARM::LDRBi12:
   case ARM::LDRD:
   case ARM::LDRH:
   case ARM::LDRSB:
@@ -1097,8 +1099,8 @@ bool ARMBaseInstrInfo::areLoadsFromSameBasePtr(SDNode *Load1, SDNode *Load2,
   switch (Load2->getMachineOpcode()) {
   default:
     return false;
-  case ARM::LDR:
-  case ARM::LDRB:
+  case ARM::LDRi12:
+  case ARM::LDRBi12:
   case ARM::LDRD:
   case ARM::LDRH:
   case ARM::LDRSB:
@@ -1362,6 +1364,12 @@ bool llvm::rewriteARMFrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
     unsigned NumBits = 0;
     unsigned Scale = 1;
     switch (AddrMode) {
+    case ARMII::AddrMode_i12: {
+      ImmIdx = FrameRegIdx + 1;
+      InstrOffs = MI.getOperand(ImmIdx).getImm();
+      NumBits = 12;
+      break;
+    }
     case ARMII::AddrMode2: {
       ImmIdx = FrameRegIdx+2;
       InstrOffs = ARM_AM::getAM2Offset(MI.getOperand(ImmIdx).getImm());
@@ -1412,8 +1420,15 @@ bool llvm::rewriteARMFrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
       if ((unsigned)Offset <= Mask * Scale) {
         // Replace the FrameIndex with sp
         MI.getOperand(FrameRegIdx).ChangeToRegister(FrameReg, false);
-        if (isSub)
-          ImmedOffset |= 1 << NumBits;
+        // FIXME: When addrmode2 goes away, this will simplify (like the
+        // T2 version), as the LDR.i12 versions don't need the encoding
+        // tricks for the offset value.
+        if (isSub) {
+          if (AddrMode == ARMII::AddrMode_i12)
+            ImmedOffset = -ImmedOffset;
+          else
+            ImmedOffset |= 1 << NumBits;
+        }
         ImmOp.ChangeToImmediate(ImmedOffset);
         Offset = 0;
         return true;
@@ -1421,8 +1436,12 @@ bool llvm::rewriteARMFrameIndex(MachineInstr &MI, unsigned FrameRegIdx,
 
       // Otherwise, it didn't fit. Pull in what we can to simplify the immed.
       ImmedOffset = ImmedOffset & Mask;
-      if (isSub)
-        ImmedOffset |= 1 << NumBits;
+      if (isSub) {
+        if (AddrMode == ARMII::AddrMode_i12)
+          ImmedOffset = -ImmedOffset;
+        else
+          ImmedOffset |= 1 << NumBits;
+      }
       ImmOp.ChangeToImmediate(ImmedOffset);
       Offset &= ~(Mask*Scale);
     }
@@ -1490,13 +1509,13 @@ static bool isSuitableForMask(MachineInstr *&MI, unsigned SrcReg,
 /// iterator *only* if a transformation took place.
 bool ARMBaseInstrInfo::
 OptimizeCompareInstr(MachineInstr *CmpInstr, unsigned SrcReg, int CmpMask,
-                     int CmpValue, MachineBasicBlock::iterator &MII) const {
+                     int CmpValue, const MachineRegisterInfo *MRI,
+                     MachineBasicBlock::iterator &MII) const {
   if (CmpValue != 0)
     return false;
 
-  MachineRegisterInfo &MRI = CmpInstr->getParent()->getParent()->getRegInfo();
-  MachineRegisterInfo::def_iterator DI = MRI.def_begin(SrcReg);
-  if (llvm::next(DI) != MRI.def_end())
+  MachineRegisterInfo::def_iterator DI = MRI->def_begin(SrcReg);
+  if (llvm::next(DI) != MRI->def_end())
     // Only support one definition.
     return false;
 
@@ -1506,8 +1525,8 @@ OptimizeCompareInstr(MachineInstr *CmpInstr, unsigned SrcReg, int CmpMask,
   if (CmpMask != ~0) {
     if (!isSuitableForMask(MI, SrcReg, CmpMask, false)) {
       MI = 0;
-      for (MachineRegisterInfo::use_iterator UI = MRI.use_begin(SrcReg),
-           UE = MRI.use_end(); UI != UE; ++UI) {
+      for (MachineRegisterInfo::use_iterator UI = MRI->use_begin(SrcReg),
+           UE = MRI->use_end(); UI != UE; ++UI) {
         if (UI->getParent() != CmpInstr->getParent()) continue;
         MachineInstr *PotentialAND = &*UI;
         if (!isSuitableForMask(PotentialAND, SrcReg, CmpMask, true))
@@ -1804,8 +1823,8 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
   // This may be a def / use of a variable_ops instruction, the operand
   // latency might be determinable dynamically. Let the target try to
   // figure it out.
-  bool LdmBypass = false;
   int DefCycle = -1;
+  bool LdmBypass = false;
   switch (DefTID.getOpcode()) {
   default:
     DefCycle = ItinData->getOperandCycle(DefClass, DefIdx);
@@ -1892,13 +1911,49 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
   if (!ItinData || ItinData->isEmpty())
     return DefTID.mayLoad() ? 3 : 1;
 
+
   const TargetInstrDesc &UseTID = UseMI->getDesc();
+  const MachineOperand &DefMO = DefMI->getOperand(DefIdx);
+  if (DefMO.getReg() == ARM::CPSR && UseTID.isBranch())
+    // CPSR set and branch can be paired in the same cycle.
+    return 0;
+
   unsigned DefAlign = DefMI->hasOneMemOperand()
     ? (*DefMI->memoperands_begin())->getAlignment() : 0;
   unsigned UseAlign = UseMI->hasOneMemOperand()
     ? (*UseMI->memoperands_begin())->getAlignment() : 0;
-  return getOperandLatency(ItinData, DefTID, DefIdx, DefAlign,
-                           UseTID, UseIdx, UseAlign);
+  int Latency = getOperandLatency(ItinData, DefTID, DefIdx, DefAlign,
+                                  UseTID, UseIdx, UseAlign);
+
+  if (Latency > 1 &&
+      (Subtarget.isCortexA8() || Subtarget.isCortexA9())) {
+    // FIXME: Shifter op hack: no shift (i.e. [r +/- r]) or [r + r << 2]
+    // variants are one cycle cheaper.
+    switch (DefTID.getOpcode()) {
+    default: break;
+    case ARM::LDRrs:
+    case ARM::LDRBrs: {
+      unsigned ShOpVal = DefMI->getOperand(3).getImm();
+      unsigned ShImm = ARM_AM::getAM2Offset(ShOpVal);
+      if (ShImm == 0 ||
+          (ShImm == 2 && ARM_AM::getAM2ShiftOpc(ShOpVal) == ARM_AM::lsl))
+        --Latency;
+      break;
+    }
+    case ARM::t2LDRs:
+    case ARM::t2LDRBs:
+    case ARM::t2LDRHs:
+    case ARM::t2LDRSHs: {
+      // Thumb2 mode: lsl only.
+      unsigned ShAmt = DefMI->getOperand(3).getImm();
+      if (ShAmt == 0 || ShAmt == 2)
+        --Latency;
+      break;
+    }
+    }
+  }
+
+  return Latency;
 }
 
 int
@@ -1912,8 +1967,13 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
   if (!ItinData || ItinData->isEmpty())
     return DefTID.mayLoad() ? 3 : 1;
 
-  if (!UseNode->isMachineOpcode())
-    return ItinData->getOperandCycle(DefTID.getSchedClass(), DefIdx);
+  if (!UseNode->isMachineOpcode()) {
+    int Latency = ItinData->getOperandCycle(DefTID.getSchedClass(), DefIdx);
+    if (Subtarget.isCortexA9())
+      return Latency <= 2 ? 1 : Latency - 1;
+    else
+      return Latency <= 3 ? 1 : Latency - 2;
+  }
 
   const TargetInstrDesc &UseTID = get(UseNode->getMachineOpcode());
   const MachineSDNode *DefMN = dyn_cast<MachineSDNode>(DefNode);
@@ -1922,6 +1982,73 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
   const MachineSDNode *UseMN = dyn_cast<MachineSDNode>(UseNode);
   unsigned UseAlign = !UseMN->memoperands_empty()
     ? (*UseMN->memoperands_begin())->getAlignment() : 0;
-  return getOperandLatency(ItinData, DefTID, DefIdx, DefAlign,
-                           UseTID, UseIdx, UseAlign);
+  int Latency = getOperandLatency(ItinData, DefTID, DefIdx, DefAlign,
+                                  UseTID, UseIdx, UseAlign);
+
+  if (Latency > 1 &&
+      (Subtarget.isCortexA8() || Subtarget.isCortexA9())) {
+    // FIXME: Shifter op hack: no shift (i.e. [r +/- r]) or [r + r << 2]
+    // variants are one cycle cheaper.
+    switch (DefTID.getOpcode()) {
+    default: break;
+    case ARM::LDRrs:
+    case ARM::LDRBrs: {
+      unsigned ShOpVal =
+        cast<ConstantSDNode>(DefNode->getOperand(2))->getZExtValue();
+      unsigned ShImm = ARM_AM::getAM2Offset(ShOpVal);
+      if (ShImm == 0 ||
+          (ShImm == 2 && ARM_AM::getAM2ShiftOpc(ShOpVal) == ARM_AM::lsl))
+        --Latency;
+      break;
+    }
+    case ARM::t2LDRs:
+    case ARM::t2LDRBs:
+    case ARM::t2LDRHs:
+    case ARM::t2LDRSHs: {
+      // Thumb2 mode: lsl only.
+      unsigned ShAmt =
+        cast<ConstantSDNode>(DefNode->getOperand(2))->getZExtValue();
+      if (ShAmt == 0 || ShAmt == 2)
+        --Latency;
+      break;
+    }
+    }
+  }
+
+  return Latency;
+}
+
+bool ARMBaseInstrInfo::
+hasHighOperandLatency(const InstrItineraryData *ItinData,
+                      const MachineRegisterInfo *MRI,
+                      const MachineInstr *DefMI, unsigned DefIdx,
+                      const MachineInstr *UseMI, unsigned UseIdx) const {
+  unsigned DDomain = DefMI->getDesc().TSFlags & ARMII::DomainMask;
+  unsigned UDomain = UseMI->getDesc().TSFlags & ARMII::DomainMask;
+  if (Subtarget.isCortexA8() &&
+      (DDomain == ARMII::DomainVFP || UDomain == ARMII::DomainVFP))
+    // CortexA8 VFP instructions are not pipelined.
+    return true;
+
+  // Hoist VFP / NEON instructions with 4 or higher latency.
+  int Latency = getOperandLatency(ItinData, DefMI, DefIdx, UseMI, UseIdx);
+  if (Latency <= 3)
+    return false;
+  return DDomain == ARMII::DomainVFP || DDomain == ARMII::DomainNEON ||
+         UDomain == ARMII::DomainVFP || UDomain == ARMII::DomainNEON;
+}
+
+bool ARMBaseInstrInfo::
+hasLowDefLatency(const InstrItineraryData *ItinData,
+                 const MachineInstr *DefMI, unsigned DefIdx) const {
+  if (!ItinData || ItinData->isEmpty())
+    return false;
+
+  unsigned DDomain = DefMI->getDesc().TSFlags & ARMII::DomainMask;
+  if (DDomain == ARMII::DomainGeneral) {
+    unsigned DefClass = DefMI->getDesc().getSchedClass();
+    int DefCycle = ItinData->getOperandCycle(DefClass, DefIdx);
+    return (DefCycle != -1 && DefCycle <= 2);
+  }
+  return false;
 }

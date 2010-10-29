@@ -662,8 +662,9 @@ ARMBaseRegisterInfo::estimateRSStackSizeLimit(MachineFunction &MF) const {
           if (hasFP(MF) && AFI->hasStackFrame())
             Limit = std::min(Limit, (1U << 8) - 1);
           break;
+        case ARMII::AddrMode4:
         case ARMII::AddrMode6:
-          // Addressing mode 6 (load/store) instructions can't encode an
+          // Addressing modes 4 & 6 (load/store) instructions can't encode an
           // immediate offset for stack references.
           return 0;
         default:
@@ -827,7 +828,7 @@ ARMBaseRegisterInfo::processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
     }
 
     // If stack and double are 8-byte aligned and we are spilling an odd number
-    // of GPRs. Spill one extra callee save GPR so we won't have to pad between
+    // of GPRs, spill one extra callee save GPR so we won't have to pad between
     // the integer and double callee save areas.
     unsigned TargetAlign = MF.getTarget().getFrameInfo()->getStackAlignment();
     if (TargetAlign == 8 && (NumGPRSpills & 1)) {
@@ -953,8 +954,16 @@ ARMBaseRegisterInfo::ResolveFrameIndexReference(const MachineFunction &MF,
       return FPOffset;
     } else if (MFI->hasVarSizedObjects()) {
       assert(hasBasePointer(MF) && "missing base pointer!");
-      // Use the base register since we have it.
-      FrameReg = BasePtr;
+      // Try to use the frame pointer if we can, else use the base pointer
+      // since it's available. This is handy for the emergency spill slot, in
+      // particular.
+      if (AFI->isThumb2Function()) {
+        if (FPOffset >= -255 && FPOffset < 0) {
+          FrameReg = getFrameRegister(MF);
+          return FPOffset;
+        }
+      } else
+        FrameReg = BasePtr;
     } else if (AFI->isThumb2Function()) {
       // In Thumb2 mode, the negative offset is very limited. Try to avoid
       // out of range references.
@@ -1193,7 +1202,7 @@ emitLoadConstPool(MachineBasicBlock &MBB,
   BuildMI(MBB, MBBI, dl, TII.get(ARM::LDRcp))
     .addReg(DestReg, getDefRegState(true), SubIdx)
     .addConstantPoolIndex(Idx)
-    .addReg(0).addImm(0).addImm(Pred).addReg(PredReg);
+    .addImm(0).addImm(Pred).addReg(PredReg);
 }
 
 bool ARMBaseRegisterInfo::
@@ -1355,8 +1364,7 @@ getFrameIndexInstrOffset(const MachineInstr *MI, int Idx) const {
   switch (AddrMode) {
   case ARMII::AddrModeT2_i8:
   case ARMII::AddrModeT2_i12:
-    // i8 supports only negative, and i12 supports only positive, so
-    // based on Offset sign, consider the appropriate instruction
+  case ARMII::AddrMode_i12:
     InstrOffs = MI->getOperand(Idx+1).getImm();
     Scale = 1;
     break;
@@ -1418,8 +1426,8 @@ needsFrameBaseReg(MachineInstr *MI, int64_t Offset) const {
   // return false for everything else.
   unsigned Opc = MI->getOpcode();
   switch (Opc) {
-  case ARM::LDR: case ARM::LDRH: case ARM::LDRB:
-  case ARM::STR: case ARM::STRH: case ARM::STRB:
+  case ARM::LDRi12: case ARM::LDRH: case ARM::LDRBi12:
+  case ARM::STRi12: case ARM::STRH: case ARM::STRBi12:
   case ARM::t2LDRi12: case ARM::t2LDRi8:
   case ARM::t2STRi12: case ARM::t2STRi8:
   case ARM::VLDRS: case ARM::VLDRD:
@@ -1562,6 +1570,7 @@ bool ARMBaseRegisterInfo::isFrameOffsetLegal(const MachineInstr *MI,
     NumBits = 8;
     Scale = 4;
     break;
+  case ARMII::AddrMode_i12:
   case ARMII::AddrMode2:
     NumBits = 12;
     break;
@@ -1719,7 +1728,7 @@ emitPrologue(MachineFunction &MF) const {
 
   // Determine the sizes of each callee-save spill areas and record which frame
   // belongs to which callee-save spill areas.
-  unsigned GPRCSSize = 0/*, GPRCS2Size = 0*/, DPRCSSize = 0;
+  unsigned GPRCSSize = 0, DPRCSSize = 0;
   int FramePtrSpillFI = 0;
 
   std::vector<MachineMove> &Moves = MMI.getFrameMoves();
@@ -1765,7 +1774,7 @@ emitPrologue(MachineFunction &MF) const {
   // Build the new SUBri to adjust SP for integer callee-save spill area.
   emitSPUpdate(isARM, MBB, MBBI, dl, TII, -GPRCSSize);
   CfaOffset += GPRCSSize;
-  movePastCSLoadStoreOps(MBB, MBBI, ARM::STR, ARM::t2STRi12, 1, STI);
+  movePastCSLoadStoreOps(MBB, MBBI, ARM::STRi12, ARM::t2STRi12, 1, STI);
 
   if (NeedsFrameMoves) {
     // CFA = sp + offset
@@ -1903,7 +1912,7 @@ static bool isCSRestore(MachineInstr *MI,
                         const ARMBaseInstrInfo &TII,
                         const unsigned *CSRegs) {
   return ((MI->getOpcode() == (int)ARM::VLDRD ||
-           MI->getOpcode() == (int)ARM::LDR ||
+           MI->getOpcode() == (int)ARM::LDRi12 ||
            MI->getOpcode() == (int)ARM::t2LDRi12) &&
           MI->getOperand(1).isFI() &&
           isCalleeSavedRegister(MI->getOperand(0).getReg(), CSRegs));
@@ -1971,7 +1980,7 @@ emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const {
     emitSPUpdate(isARM, MBB, MBBI, dl, TII, AFI->getDPRCalleeSavedAreaSize());
 
     // Move SP to SP upon entry to the function.
-    movePastCSLoadStoreOps(MBB, MBBI, ARM::LDR, ARM::t2LDRi12, 1, STI);
+    movePastCSLoadStoreOps(MBB, MBBI, ARM::LDRi12, ARM::t2LDRi12, 1, STI);
     emitSPUpdate(isARM, MBB, MBBI, dl, TII, AFI->getGPRCalleeSavedAreaSize());
   }
 

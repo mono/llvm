@@ -64,6 +64,18 @@ Path::operator=(StringRef that) {
   return *this;
 }
 
+// push_back 0 on create, and pop_back on delete.
+struct ScopedNullTerminator {
+  std::string &str;
+  ScopedNullTerminator(std::string &s) : str(s) { str.push_back(0); }
+  ~ScopedNullTerminator() {
+    // str.pop_back(); But wait, C++03 doesn't have this...
+    assert(!str.empty() && str[str.size() - 1] == 0
+      && "Null char not present!");
+    str.resize(str.size() - 1);
+  }
+};
+
 bool
 Path::isValid() const {
   if (path.empty())
@@ -72,6 +84,8 @@ Path::isValid() const {
   // If there is a colon, it must be the second character, preceded by a letter
   // and followed by something.
   size_t len = path.size();
+  // This code assumes that path is null terminated, so make sure it is.
+  ScopedNullTerminator snt(path);
   size_t pos = path.rfind(':',len);
   size_t rootslash = 0;
   if (pos != std::string::npos) {

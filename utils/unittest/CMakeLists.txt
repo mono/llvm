@@ -24,6 +24,9 @@ if(SUPPORTS_NO_VARIADIC_MACROS_FLAG)
   add_definitions("-Wno-variadic-macros")
 endif()
 
+set(LLVM_REQUIRES_RTTI 1)
+add_definitions( -DGTEST_HAS_RTTI=0 )
+
 add_llvm_library(gtest
   googletest/gtest.cc
   googletest/gtest-death-test.cc

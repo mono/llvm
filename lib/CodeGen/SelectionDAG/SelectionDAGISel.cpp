@@ -53,7 +53,16 @@
 using namespace llvm;
 
 STATISTIC(NumFastIselFailures, "Number of instructions fast isel failed on");
+STATISTIC(NumFastIselBlocks, "Number of blocks selected entirely by fast isel");
+STATISTIC(NumDAGBlocks, "Number of blocks selected using DAG");
 STATISTIC(NumDAGIselRetries,"Number of times dag isel has to try another path");
+
+#ifndef NDEBUG
+STATISTIC(NumBBWithOutOfOrderLineInfo, 
+          "Number of blocks with out of order line number info");
+STATISTIC(NumMBBWithOutOfOrderLineInfo, 
+          "Number of machine blocks with out of order line number info");
+#endif
 
 static cl::opt<bool>
 EnableFastISelVerbose("fast-isel-verbose", cl::Hidden,
@@ -177,8 +186,10 @@ SelectionDAGISel::SelectionDAGISel(const TargetMachine &tm, CodeGenOpt::Level OL
   SDB(new SelectionDAGBuilder(*CurDAG, *FuncInfo, OL)),
   GFI(),
   OptLevel(OL),
-  DAGSize(0)
-{}
+  DAGSize(0) {
+    initializeGCModuleInfoPass(*PassRegistry::getPassRegistry());
+    initializeAliasAnalysisAnalysisGroup(*PassRegistry::getPassRegistry());
+  }
 
 SelectionDAGISel::~SelectionDAGISel() {
   delete SDB;
@@ -385,6 +396,7 @@ SelectionDAGISel::SelectBasicBlock(BasicBlock::const_iterator Begin,
 
   // Final step, emit the lowered DAG as machine code.
   CodeGenAndEmitDAG();
+  return;
 }
 
 void SelectionDAGISel::ComputeLiveOutVRegInfo() {
@@ -724,8 +736,47 @@ bool SelectionDAGISel::TryToFoldFastISelLoad(const LoadInst *LI,
   return FastIS->TryToFoldLoad(&*RI, RI.getOperandNo(), LI);
 }
 
-  
+#ifndef NDEBUG
+/// CheckLineNumbers - Check if basic block instructions follow source order
+/// or not.
+static void CheckLineNumbers(const BasicBlock *BB) {
+  unsigned Line = 0;
+  unsigned Col = 0;
+  for (BasicBlock::const_iterator BI = BB->begin(),
+         BE = BB->end(); BI != BE; ++BI) {
+    const DebugLoc DL = BI->getDebugLoc();
+    if (DL.isUnknown()) continue;
+    unsigned L = DL.getLine();
+    unsigned C = DL.getCol();
+    if (L < Line || (L == Line && C < Col)) {
+      ++NumBBWithOutOfOrderLineInfo;
+      return;
+    }
+    Line = L;
+    Col = C;
+  }
+}  
 
+/// CheckLineNumbers - Check if machine basic block instructions follow source 
+/// order or not.
+static void CheckLineNumbers(const MachineBasicBlock *MBB) {
+  unsigned Line = 0;
+  unsigned Col = 0;
+  for (MachineBasicBlock::const_iterator MBI = MBB->begin(),
+         MBE = MBB->end(); MBI != MBE; ++MBI) {
+    const DebugLoc DL = MBI->getDebugLoc();
+    if (DL.isUnknown()) continue;
+    unsigned L = DL.getLine();
+    unsigned C = DL.getCol();
+    if (L < Line || (L == Line && C < Col)) {
+      ++NumMBBWithOutOfOrderLineInfo;
+      return;
+    }
+    Line = L;
+    Col = C;
+  }
+}  
+#endif
 
 void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   // Initialize the Fast-ISel state, if needed.
@@ -736,6 +787,9 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   // Iterate over all basic blocks in the function.
   for (Function::const_iterator I = Fn.begin(), E = Fn.end(); I != E; ++I) {
     const BasicBlock *LLVMBB = &*I;
+#ifndef NDEBUG
+    CheckLineNumbers(LLVMBB);
+#endif
     FuncInfo->MBB = FuncInfo->MBBMap[LLVMBB];
     FuncInfo->InsertPt = FuncInfo->MBB->getFirstNonPHI();
 
@@ -850,6 +904,11 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
       FastIS->recomputeInsertPt();
     }
 
+    if (Begin != BI)
+      ++NumDAGBlocks;
+    else
+      ++NumFastIselBlocks;
+
     // Run SelectionDAG instruction selection on the remainder of the block
     // not handled by FastISel. If FastISel is not run, this is the entire
     // block.
@@ -861,6 +920,11 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   }
 
   delete FastIS;
+#ifndef NDEBUG
+  for (MachineFunction::const_iterator MBI = MF->begin(), MBE = MF->end();
+       MBI != MBE; ++MBI)
+    CheckLineNumbers(MBI);
+#endif
 }
 
 void
@@ -1366,7 +1430,7 @@ SDNode *SelectionDAGISel::Select_UNDEF(SDNode *N) {
 }
 
 /// GetVBR - decode a vbr encoding whose top bit is set.
-ALWAYS_INLINE static uint64_t
+LLVM_ATTRIBUTE_ALWAYS_INLINE static uint64_t
 GetVBR(uint64_t Val, const unsigned char *MatcherTable, unsigned &Idx) {
   assert(Val >= 128 && "Not a VBR");
   Val &= 127;  // Remove first vbr bit.
@@ -1692,7 +1756,7 @@ MorphNode(SDNode *Node, unsigned TargetOpc, SDVTList VTList,
 }
 
 /// CheckPatternPredicate - Implements OP_CheckPatternPredicate.
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckSame(const unsigned char *MatcherTable, unsigned &MatcherIndex,
           SDValue N,
           const SmallVectorImpl<std::pair<SDValue, SDNode*> > &RecordedNodes) {
@@ -1703,20 +1767,20 @@ CheckSame(const unsigned char *MatcherTable, unsigned &MatcherIndex,
 }
   
 /// CheckPatternPredicate - Implements OP_CheckPatternPredicate.
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckPatternPredicate(const unsigned char *MatcherTable, unsigned &MatcherIndex,
                       SelectionDAGISel &SDISel) {
   return SDISel.CheckPatternPredicate(MatcherTable[MatcherIndex++]);
 }
 
 /// CheckNodePredicate - Implements OP_CheckNodePredicate.
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckNodePredicate(const unsigned char *MatcherTable, unsigned &MatcherIndex,
                    SelectionDAGISel &SDISel, SDNode *N) {
   return SDISel.CheckNodePredicate(N, MatcherTable[MatcherIndex++]);
 }
 
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckOpcode(const unsigned char *MatcherTable, unsigned &MatcherIndex,
             SDNode *N) {
   uint16_t Opc = MatcherTable[MatcherIndex++];
@@ -1724,7 +1788,7 @@ CheckOpcode(const unsigned char *MatcherTable, unsigned &MatcherIndex,
   return N->getOpcode() == Opc;
 }
 
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckType(const unsigned char *MatcherTable, unsigned &MatcherIndex,
           SDValue N, const TargetLowering &TLI) {
   MVT::SimpleValueType VT = (MVT::SimpleValueType)MatcherTable[MatcherIndex++];
@@ -1734,7 +1798,7 @@ CheckType(const unsigned char *MatcherTable, unsigned &MatcherIndex,
   return VT == MVT::iPTR && N.getValueType() == TLI.getPointerTy();
 }
 
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckChildType(const unsigned char *MatcherTable, unsigned &MatcherIndex,
                SDValue N, const TargetLowering &TLI,
                unsigned ChildNo) {
@@ -1744,14 +1808,14 @@ CheckChildType(const unsigned char *MatcherTable, unsigned &MatcherIndex,
 }
 
 
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckCondCode(const unsigned char *MatcherTable, unsigned &MatcherIndex,
               SDValue N) {
   return cast<CondCodeSDNode>(N)->get() ==
       (ISD::CondCode)MatcherTable[MatcherIndex++];
 }
 
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckValueType(const unsigned char *MatcherTable, unsigned &MatcherIndex,
                SDValue N, const TargetLowering &TLI) {
   MVT::SimpleValueType VT = (MVT::SimpleValueType)MatcherTable[MatcherIndex++];
@@ -1762,7 +1826,7 @@ CheckValueType(const unsigned char *MatcherTable, unsigned &MatcherIndex,
   return VT == MVT::iPTR && cast<VTSDNode>(N)->getVT() == TLI.getPointerTy();
 }
 
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckInteger(const unsigned char *MatcherTable, unsigned &MatcherIndex,
              SDValue N) {
   int64_t Val = MatcherTable[MatcherIndex++];
@@ -1773,7 +1837,7 @@ CheckInteger(const unsigned char *MatcherTable, unsigned &MatcherIndex,
   return C != 0 && C->getSExtValue() == Val;
 }
 
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckAndImm(const unsigned char *MatcherTable, unsigned &MatcherIndex,
             SDValue N, SelectionDAGISel &SDISel) {
   int64_t Val = MatcherTable[MatcherIndex++];
@@ -1786,7 +1850,7 @@ CheckAndImm(const unsigned char *MatcherTable, unsigned &MatcherIndex,
   return C != 0 && SDISel.CheckAndMask(N.getOperand(0), C, Val);
 }
 
-ALWAYS_INLINE static bool
+LLVM_ATTRIBUTE_ALWAYS_INLINE static bool
 CheckOrImm(const unsigned char *MatcherTable, unsigned &MatcherIndex,
            SDValue N, SelectionDAGISel &SDISel) {
   int64_t Val = MatcherTable[MatcherIndex++];

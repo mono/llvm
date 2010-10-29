@@ -1,4 +1,4 @@
-##===- lib/Target/MBlaze/AsmPrinter/Makefile ---------------*- Makefile -*-===##
+##===- lib/Target/MBlaze/Disassembler/Makefile -------------*- Makefile -*-===##
 #
 #                     The LLVM Compiler Infrastructure
 #
@@ -8,10 +8,9 @@
 ##===----------------------------------------------------------------------===##
 
 LEVEL = ../../../..
-LIBRARYNAME = LLVMMBlazeAsmPrinter
+LIBRARYNAME = LLVMMBlazeDisassembler
 
-# Hack: we need to include 'main' MBlaze target directory to grab
-# private headers
+# Hack: we need to include 'main' MBlaze target directory to grab headers
 CPP.Flags += -I$(PROJ_OBJ_DIR)/.. -I$(PROJ_SRC_DIR)/..
 
 include $(LEVEL)/Makefile.common

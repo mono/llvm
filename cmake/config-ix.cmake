@@ -3,6 +3,7 @@ include(CheckLibraryExists)
 include(CheckSymbolExists)
 include(CheckFunctionExists)
 include(CheckCXXSourceCompiles)
+include(TestBigEndian)
 
 if( UNIX AND NOT BEOS )
   # Used by check_symbol_exists:

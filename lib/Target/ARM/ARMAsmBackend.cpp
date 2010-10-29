@@ -14,10 +14,12 @@
 #include "llvm/MC/ELFObjectWriter.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCObjectFormat.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MachObjectWriter.h"
+#include "llvm/Support/ELF.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegistry.h"
@@ -53,12 +55,11 @@ void ARMAsmBackend::RelaxInstruction(const MCInst &Inst, MCInst &Res) const {
 }
 
 bool ARMAsmBackend::WriteNopData(uint64_t Count, MCObjectWriter *OW) const {
-  assert(0 && "ARMAsmBackend::WriteNopData() unimplemented");
   if ((Count % 4) != 0) {
     // Fixme: % 2 for Thumb?
     return false;
   }
-  return false;
+  return true;
 }
 } // end anonymous namespace
 
@@ -66,12 +67,17 @@ namespace {
 // FIXME: This should be in a separate file.
 // ELF is an ELF of course...
 class ELFARMAsmBackend : public ARMAsmBackend {
+  MCELFObjectFormat Format;
+
 public:
   Triple::OSType OSType;
   ELFARMAsmBackend(const Target &T, Triple::OSType _OSType)
     : ARMAsmBackend(T), OSType(_OSType) {
-    HasAbsolutizedSet = true;
     HasScatteredSymbols = true;
+  }
+
+  virtual const MCObjectFormat &getObjectFormat() const {
+    return Format;
   }
 
   void ApplyFixup(const MCFixup &Fixup, MCDataFragment &DF,
@@ -84,7 +90,7 @@ public:
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
     return new ELFObjectWriter(OS, /*Is64Bit=*/false,
-                               OSType,
+                               OSType, ELF::EM_ARM,
                                /*IsLittleEndian=*/true,
                                /*HasRelocationAddend=*/false);
   }
@@ -98,12 +104,17 @@ void ELFARMAsmBackend::ApplyFixup(const MCFixup &Fixup, MCDataFragment &DF,
 
 // FIXME: This should be in a separate file.
 class DarwinARMAsmBackend : public ARMAsmBackend {
+  MCMachOObjectFormat Format;
+
 public:
   DarwinARMAsmBackend(const Target &T)
     : ARMAsmBackend(T) {
-    HasAbsolutizedSet = true;
     HasScatteredSymbols = true;
     assert(0 && "DarwinARMAsmBackend::DarwinARMAsmBackend() unimplemented");
+  }
+
+  virtual const MCObjectFormat &getObjectFormat() const {
+    return Format;
   }
 
   void ApplyFixup(const MCFixup &Fixup, MCDataFragment &DF,

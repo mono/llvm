@@ -43,6 +43,8 @@ private:
 protected:
   explicit MCExpr(ExprKind _Kind) : Kind(_Kind) {}
 
+  bool EvaluateAsRelocatableImpl(MCValue &Res, const MCAsmLayout *Layout,
+                                 bool InSet) const;
 public:
   /// @name Accessors
   /// @{
@@ -132,9 +134,13 @@ public:
     VK_GOTTPOFF,
     VK_INDNTPOFF,
     VK_NTPOFF,
+    VK_GOTNTPOFF,
     VK_PLT,
     VK_TLSGD,
+    VK_TLSLD,
+    VK_TLSLDM,
     VK_TPOFF,
+    VK_DTPOFF,
     VK_ARM_HI16, // The R_ARM_MOVT_ABS relocation (:upper16: in the asm file)
     VK_ARM_LO16, // The R_ARM_MOVW_ABS_NC relocation (:lower16: in the asm file)
     VK_ARM_PLT,  // ARM-style PLT symbol references. i.e., (PLT) instead of @PLT

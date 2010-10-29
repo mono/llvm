@@ -32,10 +32,12 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCSectionMachO.h"
+#include "llvm/MC/MCObjectStreamer.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/Mangler.h"
@@ -63,6 +65,86 @@ namespace llvm {
 }
 
 namespace {
+
+  // Per section and per symbol attributes are not supported.
+  // To implement them we would need the ability to delay this emission
+  // until the assembly file is fully parsed/generated as only then do we
+  // know the symbol and section numbers.
+  class AttributeEmitter {
+  public:
+    virtual void MaybeSwitchVendor(StringRef Vendor) = 0;
+    virtual void EmitAttribute(unsigned Attribute, unsigned Value) = 0;
+    virtual void Finish() = 0;
+    virtual ~AttributeEmitter() {}
+  };
+
+  class AsmAttributeEmitter : public AttributeEmitter {
+    MCStreamer &Streamer;
+
+  public:
+    AsmAttributeEmitter(MCStreamer &Streamer_) : Streamer(Streamer_) {}
+    void MaybeSwitchVendor(StringRef Vendor) { }
+
+    void EmitAttribute(unsigned Attribute, unsigned Value) {
+      Streamer.EmitRawText("\t.eabi_attribute " +
+                           Twine(Attribute) + ", " + Twine(Value));
+    }
+
+    void Finish() { }
+  };
+
+  class ObjectAttributeEmitter : public AttributeEmitter {
+    MCObjectStreamer &Streamer;
+    StringRef CurrentVendor;
+    SmallString<64> Contents;
+
+  public:
+    ObjectAttributeEmitter(MCObjectStreamer &Streamer_) :
+      Streamer(Streamer_), CurrentVendor("") { }
+
+    void MaybeSwitchVendor(StringRef Vendor) {
+      assert(!Vendor.empty() && "Vendor cannot be empty.");
+
+      if (CurrentVendor.empty())
+        CurrentVendor = Vendor;
+      else if (CurrentVendor == Vendor)
+        return;
+      else
+        Finish();
+
+      CurrentVendor = Vendor;
+
+      assert(Contents.size() == 0);
+    }
+
+    void EmitAttribute(unsigned Attribute, unsigned Value) {
+      // FIXME: should be ULEB
+      Contents += Attribute;
+      Contents += Value;
+    }
+
+    void Finish() {
+      const size_t ContentsSize = Contents.size();
+
+      // Vendor size + Vendor name + '\0'
+      const size_t VendorHeaderSize = 4 + CurrentVendor.size() + 1;
+
+      // Tag + Tag Size
+      const size_t TagHeaderSize = 1 + 4;
+
+      Streamer.EmitIntValue(VendorHeaderSize + TagHeaderSize + ContentsSize, 4);
+      Streamer.EmitBytes(CurrentVendor, 0);
+      Streamer.EmitIntValue(0, 1); // '\0'
+
+      Streamer.EmitIntValue(ARMBuildAttrs::File, 1);
+      Streamer.EmitIntValue(TagHeaderSize + ContentsSize, 4);
+
+      Streamer.EmitBytes(Contents, 0);
+
+      Contents.clear();
+    }
+  };
+
   class ARMAsmPrinter : public AsmPrinter {
 
     /// Subtarget - Keep a pointer to the ARMSubtarget around so that we can
@@ -110,8 +192,6 @@ namespace {
   private:
     // Helpers for EmitStartOfAsmFile() and EmitEndOfAsmFile()
     void emitAttributes();
-    void emitTextAttribute(ARMBuildAttrs::SpecialAttr attr, StringRef v);
-    void emitAttribute(ARMBuildAttrs::AttrType attr, int v);
 
     // Helper for ELF .o only
     void emitARMAttributeSection();
@@ -523,34 +603,58 @@ void ARMAsmPrinter::emitAttributes() {
 
   emitARMAttributeSection();
 
+  AttributeEmitter *AttrEmitter;
+  if (OutStreamer.hasRawTextSupport())
+    AttrEmitter = new AsmAttributeEmitter(OutStreamer);
+  else {
+    MCObjectStreamer &O = static_cast<MCObjectStreamer&>(OutStreamer);
+    AttrEmitter = new ObjectAttributeEmitter(O);
+  }
+
+  AttrEmitter->MaybeSwitchVendor("aeabi");
+
   std::string CPUString = Subtarget->getCPUString();
-  emitTextAttribute(ARMBuildAttrs::SEL_CPU, CPUString);
+  if (OutStreamer.hasRawTextSupport()) {
+    if (CPUString != "generic")
+      OutStreamer.EmitRawText(StringRef("\t.cpu ") + CPUString);
+  } else {
+    assert(CPUString == "generic" && "Unsupported .cpu attribute for ELF/.o");
+    // FIXME: Why these defaults?
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::CPU_arch, ARMBuildAttrs::v4T);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ARM_ISA_use, 1);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::THUMB_ISA_use, 1);
+  }
 
   // FIXME: Emit FPU type
   if (Subtarget->hasVFP2())
-    emitAttribute(ARMBuildAttrs::VFP_arch, 2);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::VFP_arch, 2);
 
   // Signal various FP modes.
   if (!UnsafeFPMath) {
-    emitAttribute(ARMBuildAttrs::ABI_FP_denormal, 1);
-    emitAttribute(ARMBuildAttrs::ABI_FP_exceptions, 1);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_denormal, 1);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_exceptions, 1);
   }
 
   if (NoInfsFPMath && NoNaNsFPMath)
-    emitAttribute(ARMBuildAttrs::ABI_FP_number_model, 1);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_number_model, 1);
   else
-    emitAttribute(ARMBuildAttrs::ABI_FP_number_model, 3);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_number_model, 3);
 
   // 8-bytes alignment stuff.
-  emitAttribute(ARMBuildAttrs::ABI_align8_needed, 1);
-  emitAttribute(ARMBuildAttrs::ABI_align8_preserved, 1);
+  AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_align8_needed, 1);
+  AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_align8_preserved, 1);
 
   // Hard float.  Use both S and D registers and conform to AAPCS-VFP.
   if (Subtarget->isAAPCS_ABI() && FloatABIType == FloatABI::Hard) {
-    emitAttribute(ARMBuildAttrs::ABI_HardFP_use, 3);
-    emitAttribute(ARMBuildAttrs::ABI_VFP_args, 1);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_HardFP_use, 3);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_VFP_args, 1);
   }
   // FIXME: Should we signal R9 usage?
+
+  AttrEmitter->EmitAttribute(ARMBuildAttrs::DIV_use, 1);
+
+  AttrEmitter->Finish();
+  delete AttrEmitter;
 }
 
 void ARMAsmPrinter::emitARMAttributeSection() {
@@ -570,32 +674,9 @@ void ARMAsmPrinter::emitARMAttributeSection() {
     (getObjFileLowering());
 
   OutStreamer.SwitchSection(TLOFELF.getAttributesSection());
-  // Fixme: Still more to do here.
-}
 
-void ARMAsmPrinter::emitAttribute(ARMBuildAttrs::AttrType attr, int v) {
-  if (OutStreamer.hasRawTextSupport()) {
-    OutStreamer.EmitRawText("\t.eabi_attribute " +
-                            Twine(attr) + ", " + Twine(v));
-
-  } else {
-    assert(0 && "ELF .ARM.attributes unimplemented");
-  }
-}
-
-void ARMAsmPrinter::emitTextAttribute(ARMBuildAttrs::SpecialAttr attr,
-                                      StringRef val) {
-  switch (attr) {
-  default: assert(0 && "Unimplemented ARMBuildAttrs::SpecialAttr"); break;
-  case ARMBuildAttrs::SEL_CPU:
-    if (OutStreamer.hasRawTextSupport()) {
-      if (val != "generic") {
-        OutStreamer.EmitRawText("\t.cpu " + val);
-      }
-    } else {
-      // FIXME: ELF
-    }
-  }
+  // Format version
+  OutStreamer.EmitIntValue(0x41, 1);
 }
 
 //===----------------------------------------------------------------------===//
@@ -810,11 +891,11 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     switch (MI->getOpcode()) {
     default:
       llvm_unreachable("Unexpected opcode!");
-    case ARM::PICSTR:   Opcode = ARM::STR; break;
-    case ARM::PICSTRB:  Opcode = ARM::STRB; break;
+    case ARM::PICSTR:   Opcode = ARM::STRrs; break;
+    case ARM::PICSTRB:  Opcode = ARM::STRBrs; break;
     case ARM::PICSTRH:  Opcode = ARM::STRH; break;
-    case ARM::PICLDR:   Opcode = ARM::LDR; break;
-    case ARM::PICLDRB:  Opcode = ARM::LDRB; break;
+    case ARM::PICLDR:   Opcode = ARM::LDRrs; break;
+    case ARM::PICLDRB:  Opcode = ARM::LDRBrs; break;
     case ARM::PICLDRH:  Opcode = ARM::LDRH; break;
     case ARM::PICLDRSB: Opcode = ARM::LDRSB; break;
     case ARM::PICLDRSH: Opcode = ARM::LDRSH; break;
@@ -887,61 +968,6 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
       TmpInst.addOperand(MCOperand::CreateReg(0));          // cc_out
       OutStreamer.EmitInstruction(TmpInst);
     }
-    return;
-  }
-  case ARM::MOVi32imm: {
-    // FIXME: We'd like to remove the asm string in the .td file, but the
-    // This is a hack that lowers as a two instruction sequence.
-    unsigned DstReg = MI->getOperand(0).getReg();
-    const MachineOperand &MO = MI->getOperand(1);
-    MCOperand V1, V2;
-    if (MO.isImm()) {
-      unsigned ImmVal = (unsigned)MI->getOperand(1).getImm();
-      V1 = MCOperand::CreateImm(ImmVal & 65535);
-      V2 = MCOperand::CreateImm(ImmVal >> 16);
-    } else if (MO.isGlobal()) {
-      MCSymbol *Symbol = MCInstLowering.GetGlobalAddressSymbol(MO.getGlobal());
-      const MCSymbolRefExpr *SymRef1 =
-        MCSymbolRefExpr::Create(Symbol,
-                                MCSymbolRefExpr::VK_ARM_LO16, OutContext);
-      const MCSymbolRefExpr *SymRef2 =
-        MCSymbolRefExpr::Create(Symbol,
-                                MCSymbolRefExpr::VK_ARM_HI16, OutContext);
-      V1 = MCOperand::CreateExpr(SymRef1);
-      V2 = MCOperand::CreateExpr(SymRef2);
-    } else {
-      // FIXME: External symbol?
-      MI->dump();
-      llvm_unreachable("cannot handle this operand");
-    }
-
-    {
-      MCInst TmpInst;
-      TmpInst.setOpcode(ARM::MOVi16);
-      TmpInst.addOperand(MCOperand::CreateReg(DstReg));         // dstreg
-      TmpInst.addOperand(V1); // lower16(imm)
-
-      // Predicate.
-      TmpInst.addOperand(MCOperand::CreateImm(MI->getOperand(2).getImm()));
-      TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(3).getReg()));
-
-      OutStreamer.EmitInstruction(TmpInst);
-    }
-
-    {
-      MCInst TmpInst;
-      TmpInst.setOpcode(ARM::MOVTi16);
-      TmpInst.addOperand(MCOperand::CreateReg(DstReg));         // dstreg
-      TmpInst.addOperand(MCOperand::CreateReg(DstReg));         // srcreg
-      TmpInst.addOperand(V2);   // upper16(imm)
-
-      // Predicate.
-      TmpInst.addOperand(MCOperand::CreateImm(MI->getOperand(2).getImm()));
-      TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(3).getReg()));
-
-      OutStreamer.EmitInstruction(TmpInst);
-    }
-
     return;
   }
   case ARM::t2TBB:
@@ -1101,10 +1127,9 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     {
       MCInst TmpInst;
-      TmpInst.setOpcode(ARM::STR);
+      TmpInst.setOpcode(ARM::STRi12);
       TmpInst.addOperand(MCOperand::CreateReg(ValReg));
       TmpInst.addOperand(MCOperand::CreateReg(SrcReg));
-      TmpInst.addOperand(MCOperand::CreateReg(0));
       TmpInst.addOperand(MCOperand::CreateImm(4));
       // Predicate.
       TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
@@ -1160,10 +1185,9 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     unsigned ScratchReg = MI->getOperand(1).getReg();
     {
       MCInst TmpInst;
-      TmpInst.setOpcode(ARM::LDR);
+      TmpInst.setOpcode(ARM::LDRi12);
       TmpInst.addOperand(MCOperand::CreateReg(ARM::SP));
       TmpInst.addOperand(MCOperand::CreateReg(SrcReg));
-      TmpInst.addOperand(MCOperand::CreateReg(0));
       TmpInst.addOperand(MCOperand::CreateImm(8));
       // Predicate.
       TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
@@ -1172,10 +1196,9 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     {
       MCInst TmpInst;
-      TmpInst.setOpcode(ARM::LDR);
+      TmpInst.setOpcode(ARM::LDRi12);
       TmpInst.addOperand(MCOperand::CreateReg(ScratchReg));
       TmpInst.addOperand(MCOperand::CreateReg(SrcReg));
-      TmpInst.addOperand(MCOperand::CreateReg(0));
       TmpInst.addOperand(MCOperand::CreateImm(4));
       // Predicate.
       TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
@@ -1184,10 +1207,9 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     {
       MCInst TmpInst;
-      TmpInst.setOpcode(ARM::LDR);
+      TmpInst.setOpcode(ARM::LDRi12);
       TmpInst.addOperand(MCOperand::CreateReg(ARM::R7));
       TmpInst.addOperand(MCOperand::CreateReg(SrcReg));
-      TmpInst.addOperand(MCOperand::CreateReg(0));
       TmpInst.addOperand(MCOperand::CreateImm(0));
       // Predicate.
       TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));

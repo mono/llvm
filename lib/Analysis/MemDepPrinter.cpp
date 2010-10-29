@@ -31,7 +31,9 @@ namespace {
     DepSetMap Deps;
 
     static char ID; // Pass identifcation, replacement for typeid
-    MemDepPrinter() : FunctionPass(ID) {}
+    MemDepPrinter() : FunctionPass(ID) {
+      initializeMemDepPrinterPass(*PassRegistry::getPassRegistry());
+    }
 
     virtual bool runOnFunction(Function &F);
 
@@ -148,7 +150,10 @@ void MemDepPrinter::print(raw_ostream &OS, const Module *M) const {
         WriteAsOperand(OS, DepBB, /*PrintType=*/false, M);
       }
       OS << " from: ";
-      DepInst->print(OS);
+      if (DepInst == Inst)
+        OS << "<unspecified>";
+      else
+        DepInst->print(OS);
       OS << "\n";
     }
 

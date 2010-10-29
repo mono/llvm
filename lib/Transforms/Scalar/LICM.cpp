@@ -36,6 +36,7 @@
 #include "llvm/DerivedTypes.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/Instructions.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AliasSetTracker.h"
 #include "llvm/Analysis/ConstantFolding.h"
@@ -66,7 +67,9 @@ DisablePromotion("disable-licm-promotion", cl::Hidden,
 namespace {
   struct LICM : public LoopPass {
     static char ID; // Pass identification, replacement for typeid
-    LICM() : LoopPass(ID) {}
+    LICM() : LoopPass(ID) {
+      initializeLICMPass(*PassRegistry::getPassRegistry());
+    }
 
     virtual bool runOnLoop(Loop *L, LPPassManager &LPM);
 
@@ -187,9 +190,10 @@ namespace {
     /// pointerInvalidatedByLoop - Return true if the body of this loop may
     /// store into the memory location pointed to by V.
     ///
-    bool pointerInvalidatedByLoop(Value *V, unsigned Size) {
+    bool pointerInvalidatedByLoop(Value *V, uint64_t Size,
+                                  const MDNode *TBAAInfo) {
       // Check to see if any of the basic blocks in CurLoop invalidate *V.
-      return CurAST->getAliasSetForPointer(V, Size).isMod();
+      return CurAST->getAliasSetForPointer(V, Size, TBAAInfo).isMod();
     }
 
     bool canSinkOrHoistInst(Instruction &I);
@@ -203,7 +207,6 @@ char LICM::ID = 0;
 INITIALIZE_PASS_BEGIN(LICM, "licm", "Loop Invariant Code Motion", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTree)
 INITIALIZE_PASS_DEPENDENCY(LoopInfo)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_END(LICM, "licm", "Loop Invariant Code Motion", false, false)
@@ -406,10 +409,11 @@ bool LICM::canSinkOrHoistInst(Instruction &I) {
       return true;
 
     // Don't hoist loads which have may-aliased stores in loop.
-    unsigned Size = 0;
+    uint64_t Size = 0;
     if (LI->getType()->isSized())
       Size = AA->getTypeStoreSize(LI->getType());
-    return !pointerInvalidatedByLoop(LI->getOperand(0), Size);
+    return !pointerInvalidatedByLoop(LI->getOperand(0), Size,
+                                     LI->getMetadata(LLVMContext::MD_tbaa));
   } else if (CallInst *CI = dyn_cast<CallInst>(&I)) {
     // Handle obvious cases efficiently.
     AliasAnalysis::ModRefBehavior Behavior = AA->getModRefBehavior(CI);

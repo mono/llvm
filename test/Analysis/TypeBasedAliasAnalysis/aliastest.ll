@@ -1,4 +1,6 @@
-; RUN: opt < %s -tbaa -gvn -S | FileCheck %s
+; RUN: opt < %s -enable-tbaa -tbaa -basicaa -gvn -S | FileCheck %s
+
+; Test that basic alias queries work.
 
 ; CHECK: @test0_yes
 ; CHECK: add i8 %x, %x
@@ -19,6 +21,8 @@ define i8 @test0_no(i8* %a, i8* %b) nounwind {
   %z = add i8 %x, %y
   ret i8 %z
 }
+
+; Test that basic invariant-memory queries work.
 
 ; CHECK: @test1_yes
 ; CHECK: add i8 %x, %x

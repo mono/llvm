@@ -40,6 +40,7 @@ static ManagedStatic<sys::SmartMutex<true> > Lock;
 // PassRegistryImpl
 //
 
+namespace {
 struct PassRegistryImpl {
   /// PassInfoMap - Keep track of the PassInfo object for each registered pass.
   typedef DenseMap<const void*, const PassInfo*> MapType;
@@ -54,8 +55,10 @@ struct PassRegistryImpl {
   };
   DenseMap<const PassInfo*, AnalysisGroupInfo> AnalysisGroupInfoMap;
   
+  std::vector<const PassInfo*> ToFree;
   std::vector<PassRegistrationListener*> Listeners;
 };
+} // end anonymous namespace
 
 void *PassRegistry::getImpl() const {
   if (!pImpl)
@@ -70,6 +73,11 @@ void *PassRegistry::getImpl() const {
 PassRegistry::~PassRegistry() {
   sys::SmartScopedLock<true> Guard(*Lock);
   PassRegistryImpl *Impl = static_cast<PassRegistryImpl*>(pImpl);
+  
+  for (std::vector<const PassInfo*>::iterator I = Impl->ToFree.begin(),
+       E = Impl->ToFree.end(); I != E; ++I)
+    delete *I;
+  
   delete Impl;
   pImpl = 0;
 }
@@ -93,7 +101,7 @@ const PassInfo *PassRegistry::getPassInfo(StringRef Arg) const {
 // Pass Registration mechanism
 //
 
-void PassRegistry::registerPass(const PassInfo &PI) {
+void PassRegistry::registerPass(const PassInfo &PI, bool ShouldFree) {
   sys::SmartScopedLock<true> Guard(*Lock);
   PassRegistryImpl *Impl = static_cast<PassRegistryImpl*>(getImpl());
   bool Inserted =
@@ -105,6 +113,8 @@ void PassRegistry::registerPass(const PassInfo &PI) {
   for (std::vector<PassRegistrationListener*>::iterator
        I = Impl->Listeners.begin(), E = Impl->Listeners.end(); I != E; ++I)
     (*I)->passRegistered(&PI);
+  
+  if (ShouldFree) Impl->ToFree.push_back(&PI);
 }
 
 void PassRegistry::unregisterPass(const PassInfo &PI) {
@@ -132,7 +142,8 @@ void PassRegistry::enumerateWith(PassRegistrationListener *L) {
 void PassRegistry::registerAnalysisGroup(const void *InterfaceID, 
                                          const void *PassID,
                                          PassInfo& Registeree,
-                                         bool isDefault) {
+                                         bool isDefault,
+                                         bool ShouldFree) {
   PassInfo *InterfaceInfo =  const_cast<PassInfo*>(getPassInfo(InterfaceID));
   if (InterfaceInfo == 0) {
     // First reference to Interface, register it now.
@@ -167,6 +178,9 @@ void PassRegistry::registerAnalysisGroup(const void *InterfaceID,
       InterfaceInfo->setNormalCtor(ImplementationInfo->getNormalCtor());
     }
   }
+  
+  PassRegistryImpl *Impl = static_cast<PassRegistryImpl*>(getImpl());
+  if (ShouldFree) Impl->ToFree.push_back(&Registeree);
 }
 
 void PassRegistry::addRegistrationListener(PassRegistrationListener *L) {

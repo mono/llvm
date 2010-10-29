@@ -22,7 +22,13 @@
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
+#define GET_INSTRUCTION_NAME
 #include "ARMGenAsmWriter.inc"
+
+StringRef ARMInstPrinter::getOpcodeName(unsigned Opcode) const {
+  return getInstructionName(Opcode);
+}
+
 
 void ARMInstPrinter::printInst(const MCInst *MI, raw_ostream &O) {
   // Check for MOVs and print canonical forms, instead.
@@ -600,16 +606,26 @@ void ARMInstPrinter::printT2SOOperand(const MCInst *MI, unsigned OpNum,
     O << " #" << ARM_AM::getSORegOffset(MO2.getImm());
 }
 
-void ARMInstPrinter::printT2AddrModeImm12Operand(const MCInst *MI,
-                                                 unsigned OpNum,
-                                                 raw_ostream &O) {
+void ARMInstPrinter::printAddrModeImm12Operand(const MCInst *MI, unsigned OpNum,
+                                               raw_ostream &O) {
   const MCOperand &MO1 = MI->getOperand(OpNum);
   const MCOperand &MO2 = MI->getOperand(OpNum+1);
 
+  if (!MO1.isReg()) {   // FIXME: This is for CP entries, but isn't right.
+    printOperand(MI, OpNum, O);
+    return;
+  }
+
   O << "[" << getRegisterName(MO1.getReg());
 
-  unsigned OffImm = MO2.getImm();
-  if (OffImm)  // Don't print +0.
+  int32_t OffImm = (int32_t)MO2.getImm();
+  bool isSub = OffImm < 0;
+  // Special value for #-0. All others are normal.
+  if (OffImm == INT32_MIN)
+    OffImm = 0;
+  if (isSub)
+    O << ", #-" << -OffImm;
+  else if (OffImm > 0)
     O << ", #" << OffImm;
   O << "]";
 }

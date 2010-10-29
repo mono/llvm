@@ -12,6 +12,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCParser/MCAsmLexer.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
@@ -50,6 +51,8 @@ public:
     AddDirectiveHandler<&ELFAsmParser::ParseDirectiveSize>(".size");
     AddDirectiveHandler<&ELFAsmParser::ParseDirectivePrevious>(".previous");
     AddDirectiveHandler<&ELFAsmParser::ParseDirectiveType>(".type");
+    AddDirectiveHandler<&ELFAsmParser::ParseDirectiveIdent>(".ident");
+    AddDirectiveHandler<&ELFAsmParser::ParseDirectiveSymver>(".symver");
   }
 
   // FIXME: Part of this logic is duplicated in the MCELFStreamer. What is
@@ -114,6 +117,8 @@ public:
   bool ParseDirectiveSize(StringRef, SMLoc);
   bool ParseDirectivePrevious(StringRef, SMLoc);
   bool ParseDirectiveType(StringRef, SMLoc);
+  bool ParseDirectiveIdent(StringRef, SMLoc);
+  bool ParseDirectiveSymver(StringRef, SMLoc);
 
 private:
   bool ParseSectionName(StringRef &SectionName);
@@ -193,7 +198,7 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
   if (ParseSectionName(SectionName))
     return TokError("expected identifier in directive");
 
-  std::string FlagsStr;
+  StringRef FlagsStr;
   StringRef TypeName;
   int64_t Size = 0;
   if (getLexer().is(AsmToken::Comma)) {
@@ -211,21 +216,47 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
     else
       TypeStartToken = AsmToken::At;
 
-    if (getLexer().is(AsmToken::Comma)) {
-      Lex();
-      if (getLexer().is(TypeStartToken)) {
-        Lex();
-        if (getParser().ParseIdentifier(TypeName))
-          return TokError("expected identifier in directive");
+    bool Mergeable = FlagsStr.find('M') != StringRef::npos;
+    bool Group = FlagsStr.find('G') != StringRef::npos;
 
+    if (getLexer().isNot(AsmToken::Comma)) {
+      if (Mergeable)
+        return TokError("Mergeable section must specify the type");
+      if (Group)
+        return TokError("Group section must specify the type");
+    } else {
+      Lex();
+      if (getLexer().isNot(TypeStartToken))
+        return TokError("expected the type");
+
+      Lex();
+      if (getParser().ParseIdentifier(TypeName))
+        return TokError("expected identifier in directive");
+
+      if (Mergeable) {
+        if (getLexer().isNot(AsmToken::Comma))
+          return TokError("expected the entry size");
+        Lex();
+        if (getParser().ParseAbsoluteExpression(Size))
+          return true;
+        if (Size <= 0)
+          return TokError("entry size must be positive");
+      }
+
+      if (Group) {
+        if (getLexer().isNot(AsmToken::Comma))
+          return TokError("expected group name");
+        Lex();
+        StringRef GroupName;
+        if (getParser().ParseIdentifier(GroupName))
+          return true;
         if (getLexer().is(AsmToken::Comma)) {
           Lex();
-
-          if (getParser().ParseAbsoluteExpression(Size))
+          StringRef Linkage;
+          if (getParser().ParseIdentifier(Linkage))
             return true;
-
-          if (Size <= 0)
-            return TokError("section size must be positive");
+          if (Linkage != "comdat" && Linkage != ".gnu.linkonce")
+            return TokError("Linkage must be 'comdat' or '.gnu.linkonce'");
         }
       }
     }
@@ -235,6 +266,15 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
     return TokError("unexpected token in directive");
 
   unsigned Flags = 0;
+  unsigned Type = MCSectionELF::SHT_NULL;
+
+  // Set the defaults first.
+  if (SectionName == ".fini" || SectionName == ".init") {
+    Type = MCSectionELF::SHT_PROGBITS;
+    Flags |= MCSectionELF::SHF_ALLOC;
+    Flags |= MCSectionELF::SHF_EXECINSTR;
+  }
+
   for (unsigned i = 0; i < FlagsStr.size(); i++) {
     switch (FlagsStr[i]) {
     case 'a':
@@ -261,12 +301,13 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
     case 'd':
       Flags |= MCSectionELF::XCORE_SHF_DP_SECTION;
       break;
+    case 'G':
+      break;
     default:
       return TokError("unknown flag");
     }
   }
 
-  unsigned Type = MCSectionELF::SHT_NULL;
   if (!TypeName.empty()) {
     if (TypeName == "init_array")
       Type = MCSectionELF::SHT_INIT_ARRAY;
@@ -342,6 +383,63 @@ bool ELFAsmParser::ParseDirectiveType(StringRef, SMLoc) {
 
   getStreamer().EmitSymbolAttribute(Sym, Attr);
 
+  return false;
+}
+
+/// ParseDirectiveIdent
+///  ::= .ident string
+bool ELFAsmParser::ParseDirectiveIdent(StringRef, SMLoc) {
+  if (getLexer().isNot(AsmToken::String))
+    return TokError("unexpected token in '.ident' directive");
+
+  StringRef Data = getTok().getIdentifier();
+
+  Lex();
+
+  const MCSection *OldSection = getStreamer().getCurrentSection();
+  const MCSection *Comment =
+    getContext().getELFSection(".comment", MCSectionELF::SHT_PROGBITS,
+                               MCSectionELF::SHF_MERGE |
+                               MCSectionELF::SHF_STRINGS,
+                               SectionKind::getReadOnly(),
+                               false, 1);
+
+  static bool First = true;
+
+  getStreamer().SwitchSection(Comment);
+  if (First)
+    getStreamer().EmitIntValue(0, 1);
+  First = false;
+  getStreamer().EmitBytes(Data, 0);
+  getStreamer().EmitIntValue(0, 1);
+  getStreamer().SwitchSection(OldSection);
+  return false;
+}
+
+/// ParseDirectiveSymver
+///  ::= .symver foo, bar2@zed
+bool ELFAsmParser::ParseDirectiveSymver(StringRef, SMLoc) {
+  StringRef Name;
+  if (getParser().ParseIdentifier(Name))
+    return TokError("expected identifier in directive");
+
+  if (getLexer().isNot(AsmToken::Comma))
+    return TokError("expected a comma");
+
+  Lex();
+
+  StringRef AliasName;
+  if (getParser().ParseIdentifier(AliasName))
+    return TokError("expected identifier in directive");
+
+  if (AliasName.find('@') == StringRef::npos)
+    return TokError("expected a '@' in the name");
+
+  MCSymbol *Alias = getContext().GetOrCreateSymbol(AliasName);
+  MCSymbol *Sym = getContext().GetOrCreateSymbol(Name);
+  const MCExpr *Value = MCSymbolRefExpr::Create(Sym, getContext());
+
+  getStreamer().EmitAssignment(Alias, Value);
   return false;
 }
 

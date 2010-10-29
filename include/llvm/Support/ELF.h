@@ -126,21 +126,22 @@ enum {
 
 // Machine architectures
 enum {
-  EM_NONE = 0,  // No machine
-  EM_M32 = 1,   // AT&T WE 32100
-  EM_SPARC = 2, // SPARC
-  EM_386 = 3,   // Intel 386
-  EM_68K = 4,   // Motorola 68000
-  EM_88K = 5,   // Motorola 88000
-  EM_486 = 6,   // Intel 486 (deprecated)
-  EM_860 = 7,   // Intel 80860
-  EM_MIPS = 8,     // MIPS R3000
-  EM_PPC = 20,     // PowerPC
-  EM_PPC64 = 21,   // PowerPC64
-  EM_ARM = 40,     // ARM
-  EM_ALPHA = 41,   // DEC Alpha
-  EM_SPARCV9 = 43, // SPARC V9
-  EM_X86_64 = 62   // AMD64
+  EM_NONE = 0,      // No machine
+  EM_M32 = 1,       // AT&T WE 32100
+  EM_SPARC = 2,     // SPARC
+  EM_386 = 3,       // Intel 386
+  EM_68K = 4,       // Motorola 68000
+  EM_88K = 5,       // Motorola 88000
+  EM_486 = 6,       // Intel 486 (deprecated)
+  EM_860 = 7,       // Intel 80860
+  EM_MIPS = 8,      // MIPS R3000
+  EM_PPC = 20,      // PowerPC
+  EM_PPC64 = 21,    // PowerPC64
+  EM_ARM = 40,      // ARM
+  EM_ALPHA = 41,    // DEC Alpha
+  EM_SPARCV9 = 43,  // SPARC V9
+  EM_X86_64 = 62,   // AMD64
+  EM_MBLAZE = 47787 // Xilinx MicroBlaze
 };
 
 // Object file classes.
@@ -231,10 +232,35 @@ enum {
   R_386_GOTOFF        = 9,
   R_386_GOTPC         = 10,
   R_386_32PLT         = 11,
+  R_386_TLS_TPOFF     = 14,
+  R_386_TLS_IE        = 15,
+  R_386_TLS_GOTIE     = 16,
+  R_386_TLS_LE        = 17,
+  R_386_TLS_GD        = 18,
+  R_386_TLS_LDM       = 19,
   R_386_16            = 20,
   R_386_PC16          = 21,
   R_386_8             = 22,
-  R_386_PC8           = 23
+  R_386_PC8           = 23,
+  R_386_TLS_GD_32     = 24,
+  R_386_TLS_GD_PUSH   = 25,
+  R_386_TLS_GD_CALL   = 26,
+  R_386_TLS_GD_POP    = 27,
+  R_386_TLS_LDM_32    = 28,
+  R_386_TLS_LDM_PUSH  = 29,
+  R_386_TLS_LDM_CALL  = 30,
+  R_386_TLS_LDM_POP   = 31,
+  R_386_TLS_LDO_32    = 32,
+  R_386_TLS_IE_32     = 33,
+  R_386_TLS_LE_32     = 34,
+  R_386_TLS_DTPMOD32  = 35,
+  R_386_TLS_DTPOFF32  = 36,
+  R_386_TLS_TPOFF32   = 37,
+  R_386_TLS_GOTDESC   = 39,
+  R_386_TLS_DESC_CALL = 40,
+  R_386_TLS_DESC      = 41,
+  R_386_IRELATIVE     = 42,
+  R_386_NUM           = 43
 };
 
 // Section header.
@@ -298,6 +324,16 @@ enum {
   SHT_LOOS          = 0x60000000, // Lowest operating system-specific type.
   SHT_HIOS          = 0x6fffffff, // Highest operating system-specific type.
   SHT_LOPROC        = 0x70000000, // Lowest processor architecture-specific type.
+  // Fixme: All this is duplicated in MCSectionELF. Why??
+  // Exception Index table
+  SHT_ARM_EXIDX           = 0x70000001U,
+  // BPABI DLL dynamic linking pre-emption map
+  SHT_ARM_PREEMPTMAP      = 0x70000002U,
+  //  Object file compatibility attributes
+  SHT_ARM_ATTRIBUTES      = 0x70000003U,
+  SHT_ARM_DEBUGOVERLAY    = 0x70000004U,
+  SHT_ARM_OVERLAYSECTION  = 0x70000005U,
+
   SHT_HIPROC        = 0x7fffffff, // Highest processor architecture-specific type.
   SHT_LOUSER        = 0x80000000, // Lowest type reserved for applications.
   SHT_HIUSER        = 0xffffffff  // Highest type reserved for applications.

@@ -1011,6 +1011,17 @@ API changes are:</p>
   LLVM.  The Triple::normalize utility method has been added to help front-ends
   deal with funky triples.
 </li>
+<li>
+  The signature of the <tt>GCMetadataPrinter::finishAssembly</tt> virtual
+  function changed: the <tt>raw_ostream</tt> and <tt>MCAsmInfo</tt> arguments
+  were dropped.  GC plugins which compute stack maps must be updated to avoid
+  having the old definition overload the new signature.
+</li>
+<li>
+  The signature of <tt>MemoryBuffer::getMemBuffer</tt> changed.  Unfortunately
+  calls intended for the old version still compile, but will not work correctly,
+  leading to a confusing error about an invalid header in the bitcode.
+</li>
   
 <li>
   Some APIs were renamed:

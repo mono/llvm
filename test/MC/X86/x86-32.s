@@ -590,3 +590,203 @@ pshufw $14, %mm4, %mm0
 // PR8288
 pshufw $90, %mm4, %mm0
 
+// rdar://8416805
+// CHECK: aaa
+// CHECK:  encoding: [0x37]
+        	aaa
+
+// CHECK: aad	$1
+// CHECK:  encoding: [0xd5,0x01]
+        	aad	$1
+
+// CHECK: aad	$10
+// CHECK:  encoding: [0xd5,0x0a]
+        	aad	$0xA
+
+// CHECK: aad	$10
+// CHECK:  encoding: [0xd5,0x0a]
+        	aad
+
+// CHECK: aam	$2
+// CHECK:  encoding: [0xd4,0x02]
+        	aam	$2
+
+// CHECK: aam	$10
+// CHECK:  encoding: [0xd4,0x0a]
+        	aam	$0xA
+
+// CHECK: aam	$10
+// CHECK:  encoding: [0xd4,0x0a]
+        	aam
+
+// CHECK: aas
+// CHECK:  encoding: [0x3f]
+        	aas
+
+// CHECK: daa
+// CHECK:  encoding: [0x27]
+        	daa
+
+// CHECK: das
+// CHECK:  encoding: [0x2f]
+        	das
+
+// CHECK: retw	$31438
+// CHECK:  encoding: [0x66,0xc2,0xce,0x7a]
+        	retw	$0x7ace
+
+// CHECK: lretw	$31438
+// CHECK:  encoding: [0x66,0xca,0xce,0x7a]
+        	lretw	$0x7ace
+
+// CHECK: bound	2(%eax), %bx
+// CHECK:  encoding: [0x66,0x62,0x58,0x02]
+        	bound	2(%eax),%bx
+
+// CHECK: bound	4(%ebx), %ecx
+// CHECK:  encoding: [0x62,0x4b,0x04]
+        	bound	4(%ebx),%ecx
+
+// CHECK: arpl	%bx, %bx
+// CHECK:  encoding: [0x63,0xdb]
+        	arpl	%bx,%bx
+
+// CHECK: arpl	%bx, 6(%ecx)
+// CHECK:  encoding: [0x63,0x59,0x06]
+        	arpl	%bx,6(%ecx)
+
+// CHECK: lgdtw	4(%eax)
+// CHECK:  encoding: [0x66,0x0f,0x01,0x50,0x04]
+        	lgdtw	4(%eax)
+
+// CHECK: lgdt	4(%eax)
+// CHECK:  encoding: [0x0f,0x01,0x50,0x04]
+        	lgdt	4(%eax)
+
+// CHECK: lgdt	4(%eax)
+// CHECK:  encoding: [0x0f,0x01,0x50,0x04]
+        	lgdtl	4(%eax)
+
+// CHECK: lidtw	4(%eax)
+// CHECK:  encoding: [0x66,0x0f,0x01,0x58,0x04]
+        	lidtw	4(%eax)
+
+// CHECK: lidt	4(%eax)
+// CHECK:  encoding: [0x0f,0x01,0x58,0x04]
+        	lidt	4(%eax)
+
+// CHECK: lidt	4(%eax)
+// CHECK:  encoding: [0x0f,0x01,0x58,0x04]
+        	lidtl	4(%eax)
+
+// CHECK: sgdtw	4(%eax)
+// CHECK:  encoding: [0x66,0x0f,0x01,0x40,0x04]
+        	sgdtw	4(%eax)
+
+// CHECK: sgdt	4(%eax)
+// CHECK:  encoding: [0x0f,0x01,0x40,0x04]
+        	sgdt	4(%eax)
+
+// CHECK: sgdt	4(%eax)
+// CHECK:  encoding: [0x0f,0x01,0x40,0x04]
+        	sgdtl	4(%eax)
+
+// CHECK: sidtw	4(%eax)
+// CHECK:  encoding: [0x66,0x0f,0x01,0x48,0x04]
+        	sidtw	4(%eax)
+
+// CHECK: sidt	4(%eax)
+// CHECK:  encoding: [0x0f,0x01,0x48,0x04]
+        	sidt	4(%eax)
+
+// CHECK: sidt	4(%eax)
+// CHECK:  encoding: [0x0f,0x01,0x48,0x04]
+        	sidtl	4(%eax)
+
+// CHECK: fcomip	%st(2), %st(0)
+// CHECK:  encoding: [0xdf,0xf2]
+        	fcompi	%st(2),%st
+
+// CHECK: fcomip	%st(2), %st(0)
+// CHECK:  encoding: [0xdf,0xf2]
+        	fcompi	%st(2)
+
+// CHECK: fcomip	%st(1), %st(0)
+// CHECK:  encoding: [0xdf,0xf1]
+        	fcompi
+
+// CHECK: fucomip	%st(2), %st(0)
+// CHECK:  encoding: [0xdf,0xea]
+        	fucompi	%st(2),%st
+
+// CHECK: fucomip	%st(2), %st(0)
+// CHECK:  encoding: [0xdf,0xea]
+        	fucompi	%st(2)
+
+// CHECK: fucomip	%st(1), %st(0)
+// CHECK:  encoding: [0xdf,0xe9]
+        	fucompi
+
+// CHECK: fldcw	32493
+// CHECK:  encoding: [0xd9,0x2d,0xed,0x7e,0x00,0x00]
+        	fldcww	0x7eed
+
+// CHECK: fldcw	32493
+// CHECK:  encoding: [0xd9,0x2d,0xed,0x7e,0x00,0x00]
+        	fldcw	0x7eed
+
+// CHECK: fnstcw	32493
+// CHECK:  encoding: [0xd9,0x3d,0xed,0x7e,0x00,0x00]
+        	fnstcww	0x7eed
+
+// CHECK: fnstcw	32493
+// CHECK:  encoding: [0xd9,0x3d,0xed,0x7e,0x00,0x00]
+        	fnstcw	0x7eed
+
+// CHECK: wait
+// CHECK:  encoding: [0x9b]
+        	fstcww	0x7eed
+
+// CHECK: wait
+// CHECK:  encoding: [0x9b]
+        	fstcw	0x7eed
+
+// CHECK: fnstsw	32493
+// CHECK:  encoding: [0xdd,0x3d,0xed,0x7e,0x00,0x00]
+        	fnstsww	0x7eed
+
+// CHECK: fnstsw	32493
+// CHECK:  encoding: [0xdd,0x3d,0xed,0x7e,0x00,0x00]
+        	fnstsw	0x7eed
+
+// CHECK: wait
+// CHECK:  encoding: [0x9b]
+        	fstsww	0x7eed
+
+// CHECK: wait
+// CHECK:  encoding: [0x9b]
+        	fstsw	0x7eed
+
+// CHECK: verr	32493
+// CHECK:  encoding: [0x0f,0x00,0x25,0xed,0x7e,0x00,0x00]
+        	verrw	0x7eed
+
+// CHECK: verr	32493
+// CHECK:  encoding: [0x0f,0x00,0x25,0xed,0x7e,0x00,0x00]
+        	verr	0x7eed
+
+// CHECK: wait
+// CHECK:  encoding: [0x9b]
+        	fclex
+
+// CHECK: fnclex
+// CHECK:  encoding: [0xdb,0xe2]
+        	fnclex
+
+// CHECK: ud2
+// CHECK:  encoding: [0x0f,0x0b]
+        	ud2a
+
+// CHECK: ud2b
+// CHECK:  encoding: [0x0f,0xb9]
+        	ud2b

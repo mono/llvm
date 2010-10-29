@@ -33,13 +33,13 @@ unsigned ARMInstrInfo::getUnindexedOpcode(unsigned Opc) const {
   default: break;
   case ARM::LDR_PRE:
   case ARM::LDR_POST:
-    return ARM::LDR;
+    return ARM::LDRi12;
   case ARM::LDRH_PRE:
   case ARM::LDRH_POST:
     return ARM::LDRH;
   case ARM::LDRB_PRE:
   case ARM::LDRB_POST:
-    return ARM::LDRB;
+    return ARM::LDRBi12;
   case ARM::LDRSH_PRE:
   case ARM::LDRSH_POST:
     return ARM::LDRSH;
@@ -48,13 +48,13 @@ unsigned ARMInstrInfo::getUnindexedOpcode(unsigned Opc) const {
     return ARM::LDRSB;
   case ARM::STR_PRE:
   case ARM::STR_POST:
-    return ARM::STR;
+    return ARM::STRi12;
   case ARM::STRH_PRE:
   case ARM::STRH_POST:
     return ARM::STRH;
   case ARM::STRB_PRE:
   case ARM::STRB_POST:
-    return ARM::STRB;
+    return ARM::STRBi12;
   }
 
   return 0;

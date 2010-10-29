@@ -15,10 +15,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// Note: as a short term hack, the old Unix-specific code and platform-
-// independent code co-exist via conditional compilation until it is verified
-// that the new code works correctly on Unix.
-
 #include "BugDriver.h"
 #include "llvm/Module.h"
 #include "llvm/PassManager.h"
@@ -147,11 +143,18 @@ bool BugDriver::runPasses(Module *Program,
     InFile.os().clear_error();
     return 1;
   }
+
+  sys::Path tool = FindExecutable("opt", getToolName(), (void*)"opt");
+  if (tool.empty()) {
+    errs() << "Cannot find `opt' in executable directory!\n";
+    return 1;
+  }
+
+  // Ok, everything that could go wrong before running opt is done.
   InFile.keep();
 
   // setup the child process' arguments
   SmallVector<const char*, 8> Args;
-  sys::Path tool = FindExecutable("opt", getToolName(), (void*)"opt");
   std::string Opt = tool.str();
   if (UseValgrind) {
     Args.push_back("valgrind");

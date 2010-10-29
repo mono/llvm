@@ -36,7 +36,7 @@
 using namespace llvm;
 
 // Register the AliasAnalysis interface, providing a nice name to refer to.
-INITIALIZE_ANALYSIS_GROUP(AliasAnalysis, "Alias Analysis", BasicAliasAnalysis)
+INITIALIZE_ANALYSIS_GROUP(AliasAnalysis, "Alias Analysis", NoAA)
 char AliasAnalysis::ID = 0;
 
 //===----------------------------------------------------------------------===//
@@ -67,8 +67,7 @@ void AliasAnalysis::copyValue(Value *From, Value *To) {
 AliasAnalysis::ModRefResult
 AliasAnalysis::getModRefInfo(ImmutableCallSite CS,
                              const Location &Loc) {
-  // Don't assert AA because BasicAA calls us in order to make use of the
-  // logic here.
+  assert(AA && "AA didn't call InitializeAliasAnalysis in its run method!");
 
   ModRefBehavior MRB = getModRefBehavior(CS);
   if (MRB == DoesNotAccessMemory)
@@ -95,7 +94,7 @@ AliasAnalysis::getModRefInfo(ImmutableCallSite CS,
   if ((Mask & Mod) && pointsToConstantMemory(Loc))
     Mask = ModRefResult(Mask & ~Mod);
 
-  // If this is BasicAA, don't forward.
+  // If this is the end of the chain, don't forward.
   if (!AA) return Mask;
 
   // Otherwise, fall back to the next AA in the chain. But we can merge
@@ -105,8 +104,7 @@ AliasAnalysis::getModRefInfo(ImmutableCallSite CS,
 
 AliasAnalysis::ModRefResult
 AliasAnalysis::getModRefInfo(ImmutableCallSite CS1, ImmutableCallSite CS2) {
-  // Don't assert AA because BasicAA calls us in order to make use of the
-  // logic here.
+  assert(AA && "AA didn't call InitializeAliasAnalysis in its run method!");
 
   // If CS1 or CS2 are readnone, they don't interact.
   ModRefBehavior CS1B = getModRefBehavior(CS1);
@@ -154,7 +152,7 @@ AliasAnalysis::getModRefInfo(ImmutableCallSite CS1, ImmutableCallSite CS2) {
       return R;
   }
 
-  // If this is BasicAA, don't forward.
+  // If this is the end of the chain, don't forward.
   if (!AA) return Mask;
 
   // Otherwise, fall back to the next AA in the chain. But we can merge
@@ -164,8 +162,7 @@ AliasAnalysis::getModRefInfo(ImmutableCallSite CS1, ImmutableCallSite CS2) {
 
 AliasAnalysis::ModRefBehavior
 AliasAnalysis::getModRefBehavior(ImmutableCallSite CS) {
-  // Don't assert AA because BasicAA calls us in order to make use of the
-  // logic here.
+  assert(AA && "AA didn't call InitializeAliasAnalysis in its run method!");
 
   ModRefBehavior Min = UnknownModRefBehavior;
 
@@ -174,7 +171,7 @@ AliasAnalysis::getModRefBehavior(ImmutableCallSite CS) {
   if (const Function *F = CS.getCalledFunction())
     Min = getModRefBehavior(F);
 
-  // If this is BasicAA, don't forward.
+  // If this is the end of the chain, don't forward.
   if (!AA) return Min;
 
   // Otherwise, fall back to the next AA in the chain. But we can merge
@@ -283,8 +280,8 @@ void AliasAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {
 /// getTypeStoreSize - Return the TargetData store size for the given type,
 /// if known, or a conservative value otherwise.
 ///
-unsigned AliasAnalysis::getTypeStoreSize(const Type *Ty) {
-  return TD ? TD->getTypeStoreSize(Ty) : ~0u;
+uint64_t AliasAnalysis::getTypeStoreSize(const Type *Ty) {
+  return TD ? TD->getTypeStoreSize(Ty) : UnknownSize;
 }
 
 /// canBasicBlockModify - Return true if it is possible for execution of the
@@ -342,9 +339,3 @@ bool llvm::isIdentifiedObject(const Value *V) {
     return A->hasNoAliasAttr() || A->hasByValAttr();
   return false;
 }
-
-// Because of the way .a files work, we must force the BasicAA implementation to
-// be pulled in if the AliasAnalysis classes are pulled in.  Otherwise we run
-// the risk of AliasAnalysis being used, but the default implementation not
-// being linked into the tool that uses it.
-DEFINING_FILE_FOR(AliasAnalysis)

@@ -50,6 +50,7 @@ namespace ARMII {
     AddrModeT2_so   = 13,
     AddrModeT2_pc   = 14, // +/- i12 for pc relative data
     AddrModeT2_i8s4 = 15, // i8 * 4
+    AddrMode_i12    = 16,
 
     // Size* - Flags to keep track of the size of an instruction.
     SizeShift     = 5,
@@ -328,7 +329,7 @@ public:
                                          unsigned NumInstrs,
                                          float Probability,
                                          float Confidence) const {
-    return NumInstrs && NumInstrs == 1;
+    return NumInstrs == 1;
   }
 
   /// AnalyzeCompare - For a comparison instruction, return the source register
@@ -341,6 +342,7 @@ public:
   /// that we can remove a "comparison with zero".
   virtual bool OptimizeCompareInstr(MachineInstr *CmpInstr, unsigned SrcReg,
                                     int CmpMask, int CmpValue,
+                                    const MachineRegisterInfo *MRI,
                                     MachineBasicBlock::iterator &MII) const;
 
   virtual unsigned getNumMicroOps(const MachineInstr *MI,
@@ -376,6 +378,13 @@ private:
                         unsigned DefIdx, unsigned DefAlign,
                         const TargetInstrDesc &UseTID,
                         unsigned UseIdx, unsigned UseAlign) const;
+
+  bool hasHighOperandLatency(const InstrItineraryData *ItinData,
+                             const MachineRegisterInfo *MRI,
+                             const MachineInstr *DefMI, unsigned DefIdx,
+                             const MachineInstr *UseMI, unsigned UseIdx) const;
+  bool hasLowDefLatency(const InstrItineraryData *ItinData,
+                        const MachineInstr *DefMI, unsigned DefIdx) const;
 };
 
 static inline
@@ -441,6 +450,12 @@ void emitT2RegPlusImmediate(MachineBasicBlock &MBB,
                             unsigned DestReg, unsigned BaseReg, int NumBytes,
                             ARMCC::CondCodes Pred, unsigned PredReg,
                             const ARMBaseInstrInfo &TII);
+void emitThumbRegPlusImmediate(MachineBasicBlock &MBB,
+                               MachineBasicBlock::iterator &MBBI,
+                               unsigned DestReg, unsigned BaseReg,
+                               int NumBytes, const TargetInstrInfo &TII,
+                               const ARMBaseRegisterInfo& MRI,
+                               DebugLoc dl);
 
 
 /// rewriteARMFrameIndex / rewriteT2FrameIndex -

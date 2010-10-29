@@ -196,7 +196,7 @@ Program::Execute(const Path &path, const char **args, const char **envp,
           *redirects[1] != *redirects[2]) {
         // Just redirect stderr
         if (RedirectIO_PS(redirects[2], 2, ErrMsg, FileActions)) return false;
-      } else {       
+      } else {
         // If stdout and stderr should go to the same place, redirect stderr
         // to the FD already open for stdout.
         if (int Err = posix_spawn_file_actions_adddup2(&FileActions, 1, 2))
@@ -217,22 +217,16 @@ Program::Execute(const Path &path, const char **args, const char **envp,
     pid_t PID = 0;
     int Err = posix_spawn(&PID, path.c_str(), &FileActions, /*attrp*/0,
                           const_cast<char **>(args), const_cast<char **>(envp));
-                          
+
     posix_spawn_file_actions_destroy(&FileActions);
 
     if (Err)
      return !MakeErrMsg(ErrMsg, "posix_spawn failed", Err);
-      
+
     Data_ = reinterpret_cast<void*>(PID);
     return true;
   }
 #endif
-  
-  if (!path.canExecute()) {
-    if (ErrMsg)
-      *ErrMsg = path.str() + " is not executable";
-    return false;
-  }
 
   // Create a child process.
   int child = fork();
@@ -297,7 +291,8 @@ Program::Execute(const Path &path, const char **args, const char **envp,
 }
 
 int
-Program::Wait(unsigned secondsToWait,
+Program::Wait(const sys::Path &path,
+              unsigned secondsToWait,
               std::string* ErrMsg)
 {
 #ifdef HAVE_SYS_WAIT_H
@@ -350,22 +345,45 @@ Program::Wait(unsigned secondsToWait,
     sigaction(SIGALRM, &Old, 0);
   }
 
-  // Return the proper exit status. 0=success, >0 is programs' exit status,
-  // <0 means a signal was returned, -9999999 means the program dumped core.
+  // Return the proper exit status. Detect error conditions
+  // so we can return -1 for them and set ErrMsg informatively.
   int result = 0;
-  if (WIFEXITED(status))
+  if (WIFEXITED(status)) {
     result = WEXITSTATUS(status);
-  else if (WIFSIGNALED(status))
-    result = 0 - WTERMSIG(status);
-#ifdef WCOREDUMP
-  else if (WCOREDUMP(status))
-    result |= 0x01000000;
+#ifdef HAVE_POSIX_SPAWN
+    // The posix_spawn child process returns 127 on any kind of error.
+    // Following the POSIX convention for command-line tools (which posix_spawn
+    // itself apparently does not), check to see if the failure was due to some
+    // reason other than the file not existing, and return 126 in this case.
+    if (result == 127 && path.exists())
+      result = 126;
 #endif
+    if (result == 127) {
+      if (ErrMsg)
+        *ErrMsg = llvm::sys::StrError(ENOENT);
+      return -1;
+    }
+    if (result == 126) {
+      if (ErrMsg)
+        *ErrMsg = "Program could not be executed";
+      return -1;
+    }
+  } else if (WIFSIGNALED(status)) {
+    if (ErrMsg) {
+      *ErrMsg = strsignal(WTERMSIG(status));
+#ifdef WCOREDUMP
+      if (WCOREDUMP(status))
+        *ErrMsg += " (core dumped)";
+#endif
+    }
+    return -1;
+  }
   return result;
 #else
-  return -99;
+  if (ErrMsg)
+    *ErrMsg = "Program::Wait is not implemented on this platform yet!";
+  return -1;
 #endif
-
 }
 
 bool

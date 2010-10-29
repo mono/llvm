@@ -1,4 +1,4 @@
-//===- BasicAliasAnalysis.cpp - Local Alias Analysis Impl -----------------===//
+//===- BasicAliasAnalysis.cpp - Stateless Alias Analysis Impl -------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,9 +7,9 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file defines the default implementation of the Alias Analysis interface
-// that simply implements a few identities (two different globals cannot alias,
-// etc), but otherwise does no analysis.
+// This file defines the primary stateless implementation of the
+// Alias Analysis interface that implements identities (two different
+// globals cannot alias, etc), but does no stateful analysis.
 //
 //===----------------------------------------------------------------------===//
 
@@ -98,7 +98,7 @@ static bool isEscapeSource(const Value *V) {
 
 /// isObjectSmallerThan - Return true if we can prove that the object specified
 /// by V is smaller than Size.
-static bool isObjectSmallerThan(const Value *V, unsigned Size,
+static bool isObjectSmallerThan(const Value *V, uint64_t Size,
                                 const TargetData &TD) {
   const Type *AccessTy;
   if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(V)) {
@@ -127,72 +127,6 @@ static bool isObjectSmallerThan(const Value *V, unsigned Size,
     return TD.getTypeAllocSize(AccessTy) < Size;
   return false;
 }
-
-//===----------------------------------------------------------------------===//
-// NoAA Pass
-//===----------------------------------------------------------------------===//
-
-namespace {
-  /// NoAA - This class implements the -no-aa pass, which always returns "I
-  /// don't know" for alias queries.  NoAA is unlike other alias analysis
-  /// implementations, in that it does not chain to a previous analysis.  As
-  /// such it doesn't follow many of the rules that other alias analyses must.
-  ///
-  struct NoAA : public ImmutablePass, public AliasAnalysis {
-    static char ID; // Class identification, replacement for typeinfo
-    NoAA() : ImmutablePass(ID) {}
-    explicit NoAA(char &PID) : ImmutablePass(PID) { }
-
-    virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-    }
-
-    virtual void initializePass() {
-      TD = getAnalysisIfAvailable<TargetData>();
-    }
-
-    virtual AliasResult alias(const Location &LocA, const Location &LocB) {
-      return MayAlias;
-    }
-
-    virtual ModRefBehavior getModRefBehavior(ImmutableCallSite CS) {
-      return UnknownModRefBehavior;
-    }
-    virtual ModRefBehavior getModRefBehavior(const Function *F) {
-      return UnknownModRefBehavior;
-    }
-
-    virtual bool pointsToConstantMemory(const Location &Loc) { return false; }
-    virtual ModRefResult getModRefInfo(ImmutableCallSite CS,
-                                       const Location &Loc) {
-      return ModRef;
-    }
-    virtual ModRefResult getModRefInfo(ImmutableCallSite CS1,
-                                       ImmutableCallSite CS2) {
-      return ModRef;
-    }
-
-    virtual void deleteValue(Value *V) {}
-    virtual void copyValue(Value *From, Value *To) {}
-    
-    /// getAdjustedAnalysisPointer - This method is used when a pass implements
-    /// an analysis interface through multiple inheritance.  If needed, it
-    /// should override this to adjust the this pointer as needed for the
-    /// specified pass info.
-    virtual void *getAdjustedAnalysisPointer(const void *ID) {
-      if (ID == &AliasAnalysis::ID)
-        return (AliasAnalysis*)this;
-      return this;
-    }
-  };
-}  // End of anonymous namespace
-
-// Register this pass...
-char NoAA::ID = 0;
-INITIALIZE_AG_PASS(NoAA, AliasAnalysis, "no-aa",
-                   "No Alias Analysis (always returns 'may' alias)",
-                   true, true, false)
-
-ImmutablePass *llvm::createNoAAPass() { return new NoAA(); }
 
 //===----------------------------------------------------------------------===//
 // GetElementPtr Instruction Decomposition and Analysis
@@ -485,19 +419,28 @@ static bool notDifferentParent(const Value *O1, const Value *O2) {
 #endif
 
 namespace {
-  /// BasicAliasAnalysis - This is the default alias analysis implementation.
-  /// Because it doesn't chain to a previous alias analysis (like -no-aa), it
-  /// derives from the NoAA class.
-  struct BasicAliasAnalysis : public NoAA {
+  /// BasicAliasAnalysis - This is the primary alias analysis implementation.
+  struct BasicAliasAnalysis : public ImmutablePass, public AliasAnalysis {
     static char ID; // Class identification, replacement for typeinfo
-    BasicAliasAnalysis() : NoAA(ID) {}
+    BasicAliasAnalysis() : ImmutablePass(ID) {
+      initializeBasicAliasAnalysisPass(*PassRegistry::getPassRegistry());
+    }
+
+    virtual void initializePass() {
+      InitializeAliasAnalysis(this);
+    }
+
+    virtual void getAnalysisUsage(AnalysisUsage &AU) const {
+      AU.addRequired<AliasAnalysis>();
+    }
 
     virtual AliasResult alias(const Location &LocA,
                               const Location &LocB) {
       assert(Visited.empty() && "Visited must be cleared after use!");
       assert(notDifferentParent(LocA.Ptr, LocB.Ptr) &&
              "BasicAliasAnalysis doesn't support interprocedural queries.");
-      AliasResult Alias = aliasCheck(LocA.Ptr, LocA.Size, LocB.Ptr, LocB.Size);
+      AliasResult Alias = aliasCheck(LocA.Ptr, LocA.Size, LocA.TBAATag,
+                                     LocB.Ptr, LocB.Size, LocB.TBAATag);
       Visited.clear();
       return Alias;
     }
@@ -539,29 +482,36 @@ namespace {
 
     // aliasGEP - Provide a bunch of ad-hoc rules to disambiguate a GEP
     // instruction against another.
-    AliasResult aliasGEP(const GEPOperator *V1, unsigned V1Size,
-                         const Value *V2, unsigned V2Size,
+    AliasResult aliasGEP(const GEPOperator *V1, uint64_t V1Size,
+                         const Value *V2, uint64_t V2Size,
+                         const MDNode *V2TBAAInfo,
                          const Value *UnderlyingV1, const Value *UnderlyingV2);
 
     // aliasPHI - Provide a bunch of ad-hoc rules to disambiguate a PHI
     // instruction against another.
-    AliasResult aliasPHI(const PHINode *PN, unsigned PNSize,
-                         const Value *V2, unsigned V2Size);
+    AliasResult aliasPHI(const PHINode *PN, uint64_t PNSize,
+                         const MDNode *PNTBAAInfo,
+                         const Value *V2, uint64_t V2Size,
+                         const MDNode *V2TBAAInfo);
 
     /// aliasSelect - Disambiguate a Select instruction against another value.
-    AliasResult aliasSelect(const SelectInst *SI, unsigned SISize,
-                            const Value *V2, unsigned V2Size);
+    AliasResult aliasSelect(const SelectInst *SI, uint64_t SISize,
+                            const MDNode *SITBAAInfo,
+                            const Value *V2, uint64_t V2Size,
+                            const MDNode *V2TBAAInfo);
 
-    AliasResult aliasCheck(const Value *V1, unsigned V1Size,
-                           const Value *V2, unsigned V2Size);
+    AliasResult aliasCheck(const Value *V1, uint64_t V1Size,
+                           const MDNode *V1TBAATag,
+                           const Value *V2, uint64_t V2Size,
+                           const MDNode *V2TBAATag);
   };
 }  // End of anonymous namespace
 
 // Register this pass...
 char BasicAliasAnalysis::ID = 0;
 INITIALIZE_AG_PASS(BasicAliasAnalysis, AliasAnalysis, "basicaa",
-                   "Basic Alias Analysis (default AA impl)",
-                   false, true, true)
+                   "Basic Alias Analysis (stateless AA impl)",
+                   false, true, false)
 
 ImmutablePass *llvm::createBasicAliasAnalysisPass() {
   return new BasicAliasAnalysis();
@@ -578,7 +528,7 @@ bool BasicAliasAnalysis::pointsToConstantMemory(const Location &Loc) {
     // GV may even be a declaration, not a definition.
     return GV->isConstant();
 
-  return NoAA::pointsToConstantMemory(Loc);
+  return AliasAnalysis::pointsToConstantMemory(Loc);
 }
 
 /// getModRefBehavior - Return the behavior when calling the given call site.
@@ -611,7 +561,7 @@ BasicAliasAnalysis::getModRefBehavior(const Function *F) {
   if (unsigned id = F->getIntrinsicID())
     return getIntrinsicModRefBehavior(id);
 
-  return NoAA::getModRefBehavior(F);
+  return AliasAnalysis::getModRefBehavior(F);
 }
 
 /// getModRefInfo - Check to see if the specified callsite can clobber the
@@ -671,7 +621,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
     default: break;
     case Intrinsic::memcpy:
     case Intrinsic::memmove: {
-      unsigned Len = UnknownSize;
+      uint64_t Len = UnknownSize;
       if (ConstantInt *LenCI = dyn_cast<ConstantInt>(II->getArgOperand(2)))
         Len = LenCI->getZExtValue();
       Value *Dest = II->getArgOperand(0);
@@ -687,7 +637,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
       // Since memset is 'accesses arguments' only, the AliasAnalysis base class
       // will handle it for the variable length case.
       if (ConstantInt *LenCI = dyn_cast<ConstantInt>(II->getArgOperand(2))) {
-        unsigned Len = LenCI->getZExtValue();
+        uint64_t Len = LenCI->getZExtValue();
         Value *Dest = II->getArgOperand(0);
         if (isNoAlias(Location(Dest, Len), Loc))
           return NoModRef;
@@ -707,7 +657,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
     case Intrinsic::atomic_load_umin:
       if (TD) {
         Value *Op1 = II->getArgOperand(0);
-        unsigned Op1Size = TD->getTypeStoreSize(Op1->getType());
+        uint64_t Op1Size = TD->getTypeStoreSize(Op1->getType());
         MDNode *Tag = II->getMetadata(LLVMContext::MD_tbaa);
         if (isNoAlias(Location(Op1, Op1Size, Tag), Loc))
           return NoModRef;
@@ -716,7 +666,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
     case Intrinsic::lifetime_start:
     case Intrinsic::lifetime_end:
     case Intrinsic::invariant_start: {
-      unsigned PtrSize =
+      uint64_t PtrSize =
         cast<ConstantInt>(II->getArgOperand(0))->getZExtValue();
       if (isNoAlias(Location(II->getArgOperand(1),
                              PtrSize,
@@ -726,7 +676,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
       break;
     }
     case Intrinsic::invariant_end: {
-      unsigned PtrSize =
+      uint64_t PtrSize =
         cast<ConstantInt>(II->getArgOperand(1))->getZExtValue();
       if (isNoAlias(Location(II->getArgOperand(2),
                              PtrSize,
@@ -747,8 +697,9 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
 /// UnderlyingV2 is the same for V2.
 ///
 AliasAnalysis::AliasResult
-BasicAliasAnalysis::aliasGEP(const GEPOperator *GEP1, unsigned V1Size,
-                             const Value *V2, unsigned V2Size,
+BasicAliasAnalysis::aliasGEP(const GEPOperator *GEP1, uint64_t V1Size,
+                             const Value *V2, uint64_t V2Size,
+                             const MDNode *V2TBAAInfo,
                              const Value *UnderlyingV1,
                              const Value *UnderlyingV2) {
   // If this GEP has been visited before, we're on a use-def cycle.
@@ -765,8 +716,8 @@ BasicAliasAnalysis::aliasGEP(const GEPOperator *GEP1, unsigned V1Size,
   // out if the indexes to the GEP tell us anything about the derived pointer.
   if (const GEPOperator *GEP2 = dyn_cast<GEPOperator>(V2)) {
     // Do the base pointers alias?
-    AliasResult BaseAlias = aliasCheck(UnderlyingV1, UnknownSize,
-                                       UnderlyingV2, UnknownSize);
+    AliasResult BaseAlias = aliasCheck(UnderlyingV1, UnknownSize, 0,
+                                       UnderlyingV2, UnknownSize, 0);
     
     // If we get a No or May, then return it immediately, no amount of analysis
     // will improve this situation.
@@ -806,7 +757,8 @@ BasicAliasAnalysis::aliasGEP(const GEPOperator *GEP1, unsigned V1Size,
     if (V1Size == UnknownSize && V2Size == UnknownSize)
       return MayAlias;
 
-    AliasResult R = aliasCheck(UnderlyingV1, UnknownSize, V2, V2Size);
+    AliasResult R = aliasCheck(UnderlyingV1, UnknownSize, 0,
+                               V2, V2Size, V2TBAAInfo);
     if (R != MustAlias)
       // If V2 may alias GEP base pointer, conservatively returns MayAlias.
       // If V2 is known not to alias GEP base pointer, then the two values
@@ -856,8 +808,10 @@ BasicAliasAnalysis::aliasGEP(const GEPOperator *GEP1, unsigned V1Size,
   // If our known offset is bigger than the access size, we know we don't have
   // an alias.
   if (GEP1BaseOffset) {
-    if (GEP1BaseOffset >= (int64_t)V2Size ||
-        GEP1BaseOffset <= -(int64_t)V1Size)
+    if (GEP1BaseOffset >= 0 ?
+        (V2Size != UnknownSize && (uint64_t)GEP1BaseOffset >= V2Size) :
+        (V1Size != UnknownSize && -(uint64_t)GEP1BaseOffset >= V1Size &&
+         GEP1BaseOffset != INT64_MIN))
       return NoAlias;
   }
   
@@ -867,8 +821,10 @@ BasicAliasAnalysis::aliasGEP(const GEPOperator *GEP1, unsigned V1Size,
 /// aliasSelect - Provide a bunch of ad-hoc rules to disambiguate a Select
 /// instruction against another.
 AliasAnalysis::AliasResult
-BasicAliasAnalysis::aliasSelect(const SelectInst *SI, unsigned SISize,
-                                const Value *V2, unsigned V2Size) {
+BasicAliasAnalysis::aliasSelect(const SelectInst *SI, uint64_t SISize,
+                                const MDNode *SITBAAInfo,
+                                const Value *V2, uint64_t V2Size,
+                                const MDNode *V2TBAAInfo) {
   // If this select has been visited before, we're on a use-def cycle.
   // Such cycles are only valid when PHI nodes are involved or in unreachable
   // code. The visitPHI function catches cycles containing PHIs, but there
@@ -881,13 +837,13 @@ BasicAliasAnalysis::aliasSelect(const SelectInst *SI, unsigned SISize,
   if (const SelectInst *SI2 = dyn_cast<SelectInst>(V2))
     if (SI->getCondition() == SI2->getCondition()) {
       AliasResult Alias =
-        aliasCheck(SI->getTrueValue(), SISize,
-                   SI2->getTrueValue(), V2Size);
+        aliasCheck(SI->getTrueValue(), SISize, SITBAAInfo,
+                   SI2->getTrueValue(), V2Size, V2TBAAInfo);
       if (Alias == MayAlias)
         return MayAlias;
       AliasResult ThisAlias =
-        aliasCheck(SI->getFalseValue(), SISize,
-                   SI2->getFalseValue(), V2Size);
+        aliasCheck(SI->getFalseValue(), SISize, SITBAAInfo,
+                   SI2->getFalseValue(), V2Size, V2TBAAInfo);
       if (ThisAlias != Alias)
         return MayAlias;
       return Alias;
@@ -896,7 +852,7 @@ BasicAliasAnalysis::aliasSelect(const SelectInst *SI, unsigned SISize,
   // If both arms of the Select node NoAlias or MustAlias V2, then returns
   // NoAlias / MustAlias. Otherwise, returns MayAlias.
   AliasResult Alias =
-    aliasCheck(V2, V2Size, SI->getTrueValue(), SISize);
+    aliasCheck(V2, V2Size, V2TBAAInfo, SI->getTrueValue(), SISize, SITBAAInfo);
   if (Alias == MayAlias)
     return MayAlias;
 
@@ -906,7 +862,7 @@ BasicAliasAnalysis::aliasSelect(const SelectInst *SI, unsigned SISize,
   Visited.erase(V2);
 
   AliasResult ThisAlias =
-    aliasCheck(V2, V2Size, SI->getFalseValue(), SISize);
+    aliasCheck(V2, V2Size, V2TBAAInfo, SI->getFalseValue(), SISize, SITBAAInfo);
   if (ThisAlias != Alias)
     return MayAlias;
   return Alias;
@@ -915,8 +871,10 @@ BasicAliasAnalysis::aliasSelect(const SelectInst *SI, unsigned SISize,
 // aliasPHI - Provide a bunch of ad-hoc rules to disambiguate a PHI instruction
 // against another.
 AliasAnalysis::AliasResult
-BasicAliasAnalysis::aliasPHI(const PHINode *PN, unsigned PNSize,
-                             const Value *V2, unsigned V2Size) {
+BasicAliasAnalysis::aliasPHI(const PHINode *PN, uint64_t PNSize,
+                             const MDNode *PNTBAAInfo,
+                             const Value *V2, uint64_t V2Size,
+                             const MDNode *V2TBAAInfo) {
   // The PHI node has already been visited, avoid recursion any further.
   if (!Visited.insert(PN))
     return MayAlias;
@@ -927,16 +885,16 @@ BasicAliasAnalysis::aliasPHI(const PHINode *PN, unsigned PNSize,
   if (const PHINode *PN2 = dyn_cast<PHINode>(V2))
     if (PN2->getParent() == PN->getParent()) {
       AliasResult Alias =
-        aliasCheck(PN->getIncomingValue(0), PNSize,
+        aliasCheck(PN->getIncomingValue(0), PNSize, PNTBAAInfo,
                    PN2->getIncomingValueForBlock(PN->getIncomingBlock(0)),
-                   V2Size);
+                   V2Size, V2TBAAInfo);
       if (Alias == MayAlias)
         return MayAlias;
       for (unsigned i = 1, e = PN->getNumIncomingValues(); i != e; ++i) {
         AliasResult ThisAlias =
-          aliasCheck(PN->getIncomingValue(i), PNSize,
+          aliasCheck(PN->getIncomingValue(i), PNSize, PNTBAAInfo,
                      PN2->getIncomingValueForBlock(PN->getIncomingBlock(i)),
-                     V2Size);
+                     V2Size, V2TBAAInfo);
         if (ThisAlias != Alias)
           return MayAlias;
       }
@@ -957,7 +915,8 @@ BasicAliasAnalysis::aliasPHI(const PHINode *PN, unsigned PNSize,
       V1Srcs.push_back(PV1);
   }
 
-  AliasResult Alias = aliasCheck(V2, V2Size, V1Srcs[0], PNSize);
+  AliasResult Alias = aliasCheck(V2, V2Size, V2TBAAInfo,
+                                 V1Srcs[0], PNSize, PNTBAAInfo);
   // Early exit if the check of the first PHI source against V2 is MayAlias.
   // Other results are not possible.
   if (Alias == MayAlias)
@@ -973,7 +932,8 @@ BasicAliasAnalysis::aliasPHI(const PHINode *PN, unsigned PNSize,
     // don't need to assume that V2 is being visited recursively.
     Visited.erase(V2);
 
-    AliasResult ThisAlias = aliasCheck(V2, V2Size, V, PNSize);
+    AliasResult ThisAlias = aliasCheck(V2, V2Size, V2TBAAInfo,
+                                       V, PNSize, PNTBAAInfo);
     if (ThisAlias != Alias || ThisAlias == MayAlias)
       return MayAlias;
   }
@@ -985,8 +945,10 @@ BasicAliasAnalysis::aliasPHI(const PHINode *PN, unsigned PNSize,
 // such as array references.
 //
 AliasAnalysis::AliasResult
-BasicAliasAnalysis::aliasCheck(const Value *V1, unsigned V1Size,
-                               const Value *V2, unsigned V2Size) {
+BasicAliasAnalysis::aliasCheck(const Value *V1, uint64_t V1Size,
+                               const MDNode *V1TBAAInfo,
+                               const Value *V2, uint64_t V2Size,
+                               const MDNode *V2TBAAInfo) {
   // If either of the memory references is empty, it doesn't matter what the
   // pointer values are.
   if (V1Size == 0 || V2Size == 0)
@@ -1065,25 +1027,31 @@ BasicAliasAnalysis::aliasCheck(const Value *V1, unsigned V1Size,
     std::swap(V1Size, V2Size);
     std::swap(O1, O2);
   }
-  if (const GEPOperator *GV1 = dyn_cast<GEPOperator>(V1))
-    return aliasGEP(GV1, V1Size, V2, V2Size, O1, O2);
+  if (const GEPOperator *GV1 = dyn_cast<GEPOperator>(V1)) {
+    AliasResult Result = aliasGEP(GV1, V1Size, V2, V2Size, V2TBAAInfo, O1, O2);
+    if (Result != MayAlias) return Result;
+  }
 
   if (isa<PHINode>(V2) && !isa<PHINode>(V1)) {
     std::swap(V1, V2);
     std::swap(V1Size, V2Size);
   }
-  if (const PHINode *PN = dyn_cast<PHINode>(V1))
-    return aliasPHI(PN, V1Size, V2, V2Size);
+  if (const PHINode *PN = dyn_cast<PHINode>(V1)) {
+    AliasResult Result = aliasPHI(PN, V1Size, V1TBAAInfo,
+                                  V2, V2Size, V2TBAAInfo);
+    if (Result != MayAlias) return Result;
+  }
 
   if (isa<SelectInst>(V2) && !isa<SelectInst>(V1)) {
     std::swap(V1, V2);
     std::swap(V1Size, V2Size);
   }
-  if (const SelectInst *S1 = dyn_cast<SelectInst>(V1))
-    return aliasSelect(S1, V1Size, V2, V2Size);
+  if (const SelectInst *S1 = dyn_cast<SelectInst>(V1)) {
+    AliasResult Result = aliasSelect(S1, V1Size, V1TBAAInfo,
+                                     V2, V2Size, V2TBAAInfo);
+    if (Result != MayAlias) return Result;
+  }
 
-  return NoAA::alias(Location(V1, V1Size), Location(V2, V2Size));
+  return AliasAnalysis::alias(Location(V1, V1Size, V1TBAAInfo),
+                              Location(V2, V2Size, V2TBAAInfo));
 }
-
-// Make sure that anything that uses AliasAnalysis pulls in this file.
-DEFINING_FILE_FOR(BasicAliasAnalysis)

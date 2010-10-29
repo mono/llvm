@@ -21,8 +21,10 @@ let Defs = [RAX, RCX, RDX] in
 
 // CPU flow control instructions
 
-let isTerminator = 1, isBarrier = 1, hasCtrlDep = 1 in
+let isTerminator = 1, isBarrier = 1, hasCtrlDep = 1 in {
   def TRAP    : I<0x0B, RawFrm, (outs), (ins), "ud2", [(trap)]>, TB;
+  def UD2B    : I<0xB9, RawFrm, (outs), (ins), "ud2b", []>, TB;
+}
 
 def HLT : I<0xF4, RawFrm, (outs), (ins), "hlt", []>;
 def RSM : I<0xAA, RawFrm, (outs), (ins), "rsm", []>, TB;
@@ -321,8 +323,12 @@ def VERWm : I<0x00, MRM5m, (outs), (ins i16mem:$seg),
 //===----------------------------------------------------------------------===//
 // Descriptor-table support instructions
 
+def SGDT16m : I<0x01, MRM0m, (outs opaque48mem:$dst), (ins),
+              "sgdtw\t$dst", []>, TB, OpSize, Requires<[In32BitMode]>;
 def SGDTm : I<0x01, MRM0m, (outs opaque48mem:$dst), (ins),
               "sgdt\t$dst", []>, TB;
+def SIDT16m : I<0x01, MRM1m, (outs opaque48mem:$dst), (ins),
+              "sidtw\t$dst", []>, TB, OpSize, Requires<[In32BitMode]>;
 def SIDTm : I<0x01, MRM1m, (outs opaque48mem:$dst), (ins),
               "sidt\t$dst", []>, TB;
 def SLDT16r : I<0x00, MRM0r, (outs GR16:$dst), (ins),
@@ -339,8 +345,12 @@ def SLDT64r : RI<0x00, MRM0r, (outs GR64:$dst), (ins),
 def SLDT64m : RI<0x00, MRM0m, (outs i16mem:$dst), (ins),
                  "sldt{q}\t$dst", []>, TB;
 
+def LGDT16m : I<0x01, MRM2m, (outs), (ins opaque48mem:$src),
+              "lgdtw\t$src", []>, TB, OpSize, Requires<[In32BitMode]>;
 def LGDTm : I<0x01, MRM2m, (outs), (ins opaque48mem:$src),
               "lgdt\t$src", []>, TB;
+def LIDT16m : I<0x01, MRM3m, (outs), (ins opaque48mem:$src),
+              "lidtw\t$src", []>, TB, OpSize, Requires<[In32BitMode]>;
 def LIDTm : I<0x01, MRM3m, (outs), (ins opaque48mem:$src),
               "lidt\t$src", []>, TB;
 def LLDT16r : I<0x00, MRM2r, (outs), (ins GR16:$src),

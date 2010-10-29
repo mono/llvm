@@ -20,11 +20,6 @@
 #include "llvm/Support/CommandLine.h"
 using namespace llvm;
 
-/// LLVMCHack - This is a temporary hack that changes how "(foo [1, 2, 3])"
-/// parses.
-/// FIXME: REMOVE THIS.
-static cl::opt<bool> LLVMCHack("llvmc-temp-hack", cl::ReallyHidden);
-
 //===----------------------------------------------------------------------===//
 // Support Code for the Semantic Actions.
 //===----------------------------------------------------------------------===//
@@ -314,7 +309,7 @@ static std::string GetNewAnonymousName() {
 std::string TGParser::ParseObjectName() {
   if (Lex.getCode() != tgtok::Id)
     return GetNewAnonymousName();
-  
+
   std::string Ret = Lex.getCurStrVal();
   Lex.Lex();
   return Ret;
@@ -823,7 +818,7 @@ Init *TGParser::ParseOperation(Record *CurRec) {
       Type = new StringRecTy();
       break;
     }
-    
+
     if (Lex.getCode() != tgtok::l_paren) {
       TokError("expected '(' after binary operator");
       return 0;
@@ -831,7 +826,7 @@ Init *TGParser::ParseOperation(Record *CurRec) {
     Lex.Lex();  // eat the '('
 
     SmallVector<Init*, 2> InitList;
-    
+
     InitList.push_back(ParseValue(CurRec));
     if (InitList.back() == 0) return 0;
 
@@ -858,11 +853,11 @@ Init *TGParser::ParseOperation(Record *CurRec) {
         InitList.back() = RHS;
       }
     }
-    
+
     if (InitList.size() == 2)
       return (new BinOpInit(Code, InitList[0], InitList[1], Type))
         ->Fold(CurRec, CurMultiClass);
-    
+
     Error(OpLoc, "expected two operands to operator");
     return 0;
   }
@@ -1219,18 +1214,7 @@ Init *TGParser::ParseSimpleValue(Record *CurRec, RecTy *ItemType) {
       return 0;
     }
 
-    Init *Operator;
-    /// LLVMC Requires an old grammar and I don't know how to update it, placate
-    /// it in the short term by changing the grammar specifically for llvmc.
-    /// FIXME: REMOVE THIS.
-    if (!LLVMCHack)
-      Operator = ParseValue(CurRec);
-    else {
-      if (Lex.getCode() == tgtok::Id)
-        Operator = ParseIDValue(CurRec);
-      else
-        Operator = ParseOperation(CurRec);
-    }
+    Init *Operator = ParseValue(CurRec);
     if (Operator == 0) return 0;
 
     // If the operator name is present, parse it.
@@ -1907,7 +1891,7 @@ bool TGParser::ParseDefm(MultiClass *CurMultiClass) {
     DefmPrefix = Lex.getCurStrVal();
     Lex.Lex();  // Eat the defm prefix.
   }
-  
+
   SMLoc DefmPrefixLoc = Lex.getLoc();
   if (Lex.getCode() != tgtok::colon)
     return TokError("expected ':' after defm identifier");

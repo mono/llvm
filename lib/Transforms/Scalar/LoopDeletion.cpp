@@ -28,7 +28,9 @@ namespace {
   class LoopDeletion : public LoopPass {
   public:
     static char ID; // Pass ID, replacement for typeid
-    LoopDeletion() : LoopPass(ID) {}
+    LoopDeletion() : LoopPass(ID) {
+      initializeLoopDeletionPass(*PassRegistry::getPassRegistry());
+    }
     
     // Possibly eliminate loop L if it is dead.
     bool runOnLoop(Loop* L, LPPassManager& LPM);
@@ -62,7 +64,6 @@ INITIALIZE_PASS_DEPENDENCY(LoopInfo)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_DEPENDENCY(LCSSA)
-INITIALIZE_PASS_DEPENDENCY(DominanceFrontier)
 INITIALIZE_PASS_END(LoopDeletion, "loop-deletion",
                 "Delete dead loops", false, false)
 

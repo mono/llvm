@@ -10,9 +10,13 @@ function(add_llvm_unittest test_name)
     set(EXCLUDE_FROM_ALL ON)
   endif()
   add_llvm_executable(${test_name}Tests ${ARGN})
+  add_dependencies(UnitTests ${test_name}Tests)
 endfunction()
 
+add_custom_target(UnitTests)
+
 include_directories(${LLVM_MAIN_SRC_DIR}/utils/unittest/googletest/include)
+add_definitions(-DGTEST_HAS_RTTI=0)
 
 set(LLVM_LINK_COMPONENTS
   jit
@@ -90,12 +94,13 @@ add_llvm_unittest(Support
   Support/Casting.cpp
   Support/CommandLineTest.cpp
   Support/ConstantRangeTest.cpp
+  Support/EndianTest.cpp
   Support/LeakDetectorTest.cpp
   Support/MathExtrasTest.cpp
   Support/raw_ostream_test.cpp
   Support/RegexTest.cpp
-  Support/System.cpp
   Support/SwapByteOrderTest.cpp
+  Support/System.cpp
   Support/TypeBuilderTest.cpp
   Support/ValueHandleTest.cpp
   )

@@ -43,7 +43,9 @@ namespace {
   class LoopUnroll : public LoopPass {
   public:
     static char ID; // Pass ID, replacement for typeid
-    LoopUnroll() : LoopPass(ID) {}
+    LoopUnroll() : LoopPass(ID) {
+      initializeLoopUnrollPass(*PassRegistry::getPassRegistry());
+    }
 
     /// A magic value for use with the Threshold parameter to indicate
     /// that the loop unroll should be performed regardless of how much
@@ -83,8 +85,6 @@ INITIALIZE_PASS_BEGIN(LoopUnroll, "loop-unroll", "Unroll loops", false, false)
 INITIALIZE_PASS_DEPENDENCY(LoopInfo)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_DEPENDENCY(LCSSA)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
-INITIALIZE_PASS_DEPENDENCY(DominatorTree)
 INITIALIZE_PASS_END(LoopUnroll, "loop-unroll", "Unroll loops", false, false)
 
 Pass *llvm::createLoopUnrollPass() { return new LoopUnroll(); }

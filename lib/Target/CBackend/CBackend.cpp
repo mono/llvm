@@ -77,7 +77,9 @@ namespace {
   public:
     static char ID;
     CBackendNameAllUsedStructsAndMergeFunctions()
-      : ModulePass(ID) {}
+        : ModulePass(ID) {
+          initializeFindUsedTypesPass(*PassRegistry::getPassRegistry());
+        }
     void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.addRequired<FindUsedTypes>();
     }
@@ -117,6 +119,7 @@ namespace {
       : FunctionPass(ID), Out(o), IL(0), Mang(0), LI(0),
         TheModule(0), TAsm(0), TCtx(0), TD(0), OpaqueCounter(0),
         NextAnonValueNumber(0) {
+      initializeLoopInfoPass(*PassRegistry::getPassRegistry());
       FPCounter = 0;
     }
 
@@ -3190,7 +3193,7 @@ static std::string gccifyAsm(std::string asmstr) {
 //      handle communitivity
 void CWriter::visitInlineAsm(CallInst &CI) {
   InlineAsm* as = cast<InlineAsm>(CI.getCalledValue());
-  std::vector<InlineAsm::ConstraintInfo> Constraints = as->ParseConstraints();
+  InlineAsm::ConstraintInfoVector Constraints = as->ParseConstraints();
 
   std::vector<std::pair<Value*, int> > ResultVals;
   if (CI.getType() == Type::getVoidTy(CI.getContext()))
@@ -3210,7 +3213,7 @@ void CWriter::visitInlineAsm(CallInst &CI) {
   bool IsFirst = true;
 
   // Convert over all the output constraints.
-  for (std::vector<InlineAsm::ConstraintInfo>::iterator I = Constraints.begin(),
+  for (InlineAsm::ConstraintInfoVector::iterator I = Constraints.begin(),
        E = Constraints.end(); I != E; ++I) {
 
     if (I->Type != InlineAsm::isOutput) {
@@ -3252,7 +3255,7 @@ void CWriter::visitInlineAsm(CallInst &CI) {
   Out << "\n        :";
   IsFirst = true;
   ValueCount = 0;
-  for (std::vector<InlineAsm::ConstraintInfo>::iterator I = Constraints.begin(),
+  for (InlineAsm::ConstraintInfoVector::iterator I = Constraints.begin(),
        E = Constraints.end(); I != E; ++I) {
     if (I->Type != InlineAsm::isInput) {
       ++ValueCount;
@@ -3281,7 +3284,7 @@ void CWriter::visitInlineAsm(CallInst &CI) {
 
   // Convert over the clobber constraints.
   IsFirst = true;
-  for (std::vector<InlineAsm::ConstraintInfo>::iterator I = Constraints.begin(),
+  for (InlineAsm::ConstraintInfoVector::iterator I = Constraints.begin(),
        E = Constraints.end(); I != E; ++I) {
     if (I->Type != InlineAsm::isClobber)
       continue;  // Ignore non-input constraints.

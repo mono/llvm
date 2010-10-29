@@ -198,8 +198,10 @@ MachineFunction::DeleteMachineBasicBlock(MachineBasicBlock *MBB) {
 
 MachineMemOperand *
 MachineFunction::getMachineMemOperand(MachinePointerInfo PtrInfo, unsigned f,
-                                      uint64_t s, unsigned base_alignment) {
-  return new (Allocator) MachineMemOperand(PtrInfo, f, s, base_alignment);
+                                      uint64_t s, unsigned base_alignment,
+                                      const MDNode *TBAAInfo) {
+  return new (Allocator) MachineMemOperand(PtrInfo, f, s, base_alignment,
+                                           TBAAInfo);
 }
 
 MachineMemOperand *
@@ -208,7 +210,8 @@ MachineFunction::getMachineMemOperand(const MachineMemOperand *MMO,
   return new (Allocator)
              MachineMemOperand(MachinePointerInfo(MMO->getValue(),
                                                   MMO->getOffset()+Offset),
-                               MMO->getFlags(), Size, MMO->getBaseAlignment());
+                               MMO->getFlags(), Size,
+                               MMO->getBaseAlignment(), 0);
 }
 
 MachineInstr::mmo_iterator
@@ -238,7 +241,8 @@ MachineFunction::extractLoadMemRefs(MachineInstr::mmo_iterator Begin,
         MachineMemOperand *JustLoad =
           getMachineMemOperand((*I)->getPointerInfo(),
                                (*I)->getFlags() & ~MachineMemOperand::MOStore,
-                               (*I)->getSize(), (*I)->getBaseAlignment());
+                               (*I)->getSize(), (*I)->getBaseAlignment(),
+                               (*I)->getTBAAInfo());
         Result[Index] = JustLoad;
       }
       ++Index;
@@ -269,7 +273,8 @@ MachineFunction::extractStoreMemRefs(MachineInstr::mmo_iterator Begin,
         MachineMemOperand *JustStore =
           getMachineMemOperand((*I)->getPointerInfo(),
                                (*I)->getFlags() & ~MachineMemOperand::MOLoad,
-                               (*I)->getSize(), (*I)->getBaseAlignment());
+                               (*I)->getSize(), (*I)->getBaseAlignment(),
+                               (*I)->getTBAAInfo());
         Result[Index] = JustStore;
       }
       ++Index;
@@ -282,7 +287,7 @@ void MachineFunction::dump() const {
   print(dbgs());
 }
 
-void MachineFunction::print(raw_ostream &OS) const {
+void MachineFunction::print(raw_ostream &OS, SlotIndexes *Indexes) const {
   OS << "# Machine code for function " << Fn->getName() << ":\n";
 
   // Print Frame Information
@@ -331,7 +336,7 @@ void MachineFunction::print(raw_ostream &OS) const {
   
   for (const_iterator BB = begin(), E = end(); BB != E; ++BB) {
     OS << '\n';
-    BB->print(OS);
+    BB->print(OS, Indexes);
   }
 
   OS << "\n# End machine code for function " << Fn->getName() << ".\n\n";

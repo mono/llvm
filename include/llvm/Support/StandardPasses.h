@@ -69,9 +69,18 @@ namespace llvm {
 
   // Implementations
 
+  static inline void createStandardAliasAnalysisPasses(PassManagerBase *PM) {
+    // Add TypeBasedAliasAnalysis before BasicAliasAnalysis so that
+    // BasicAliasAnalysis wins if they disagree. This is intended to help
+    // support "obvious" type-punning idioms.
+    PM->add(createTypeBasedAliasAnalysisPass());
+    PM->add(createBasicAliasAnalysisPass());
+  }
+
   static inline void createStandardFunctionPasses(PassManagerBase *PM,
                                                   unsigned OptimizationLevel) {
     if (OptimizationLevel > 0) {
+      createStandardAliasAnalysisPasses(PM);
       PM->add(createCFGSimplificationPass());
       if (OptimizationLevel == 1)
         PM->add(createPromoteMemoryToRegisterPass());
@@ -91,6 +100,8 @@ namespace llvm {
                                                 bool SimplifyLibCalls,
                                                 bool HaveExceptions,
                                                 Pass *InliningPass) {
+    createStandardAliasAnalysisPasses(PM);
+
     if (OptimizationLevel == 0) {
       if (InliningPass)
         PM->add(InliningPass);
@@ -177,6 +188,9 @@ namespace llvm {
                                              bool Internalize,
                                              bool RunInliner,
                                              bool VerifyEach) {
+    // Provide AliasAnalysis services for optimizations.
+    createStandardAliasAnalysisPasses(PM);
+
     // Now that composite has been compiled, scan through the module, looking
     // for a main function.  If main is defined, mark all other functions
     // internal.

@@ -26,27 +26,35 @@
 #endif
 
 #if (__GNUC__ >= 4 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 1))
-#define ATTRIBUTE_USED __attribute__((__used__))
+#define LLVM_ATTRIBUTE_USED __attribute__((__used__))
 #else
-#define ATTRIBUTE_USED
+#define LLVM_ATTRIBUTE_USED
 #endif
 
+// Some compilers warn about unused functions. When a function is sometimes
+// used or not depending on build settings (e.g. a function only called from
+// within "assert"), this attribute can be used to suppress such warnings.
+//
+// However, it shouldn't be used for unused *variables*, as those have a much
+// more portable solution:
+//   (void)unused_var_name;
+// Prefer cast-to-void wherever it is sufficient.
 #if (__GNUC__ >= 4 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 1))
-#define ATTRIBUTE_UNUSED __attribute__((__unused__))
+#define LLVM_ATTRIBUTE_UNUSED __attribute__((__unused__))
 #else
-#define ATTRIBUTE_UNUSED
+#define LLVM_ATTRIBUTE_UNUSED
 #endif
 
 #ifdef __GNUC__ // aka 'ATTRIBUTE_CONST' but following LLVM Conventions.
-#define ATTRIBUTE_READNONE __attribute__((__const__))
+#define LLVM_ATTRIBUTE_READNONE __attribute__((__const__))
 #else
-#define ATTRIBUTE_READNONE
+#define LLVM_ATTRIBUTE_READNONE
 #endif
 
 #ifdef __GNUC__  // aka 'ATTRIBUTE_PURE' but following LLVM Conventions.
-#define ATTRIBUTE_READONLY __attribute__((__pure__))
+#define LLVM_ATTRIBUTE_READONLY __attribute__((__pure__))
 #else
-#define ATTRIBUTE_READONLY
+#define LLVM_ATTRIBUTE_READONLY
 #endif
 
 #if (__GNUC__ >= 4)
@@ -68,35 +76,35 @@
 #define TEMPLATE_INSTANTIATION(X)
 #endif
 
-// DISABLE_INLINE - On compilers where we have a directive to do so, mark a
-// method "not for inlining".
+// LLVM_ATTRIBUTE_NOINLINE - On compilers where we have a directive to do so,
+// mark a method "not for inlining".
 #if (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 4))
-#define DISABLE_INLINE __attribute__((noinline))
+#define LLVM_ATTRIBUTE_NOINLINE __attribute__((noinline))
 #elif defined(_MSC_VER)
-#define DISABLE_INLINE __declspec(noinline)
+#define LLVM_ATTRIBUTE_NOINLINE __declspec(noinline)
 #else
-#define DISABLE_INLINE
+#define LLVM_ATTRIBUTE_NOINLINE
 #endif
 
-// ALWAYS_INLINE - On compilers where we have a directive to do so, mark a
-// method "always inline" because it is performance sensitive.
-// GCC 3.4 supported this but is buggy in various cases and produces
-// unimplemented errors, just use it in GCC 4.0 and later.
+// LLVM_ATTRIBUTE_ALWAYS_INLINE - On compilers where we have a directive to do
+// so, mark a method "always inline" because it is performance sensitive. GCC
+// 3.4 supported this but is buggy in various cases and produces unimplemented
+// errors, just use it in GCC 4.0 and later.
 #if __GNUC__ > 3
-#define ALWAYS_INLINE __attribute__((always_inline))
+#define LLVM_ATTRIBUTE_ALWAYS_INLINE __attribute__((always_inline))
 #elif defined(_MSC_VER)
-#define ALWAYS_INLINE __forceinline
+#define LLVM_ATTRIBUTE_ALWAYS_INLINE __forceinline
 #else
-#define ALWAYS_INLINE
+#define LLVM_ATTRIBUTE_ALWAYS_INLINE
 #endif
 
 
 #ifdef __GNUC__
-#define NORETURN __attribute__((noreturn))
+#define LLVM_ATTRIBUTE_NORETURN __attribute__((noreturn))
 #elif defined(_MSC_VER)
-#define NORETURN __declspec(noreturn)
+#define LLVM_ATTRIBUTE_NORETURN __declspec(noreturn)
 #else
-#define NORETURN
+#define LLVM_ATTRIBUTE_NORETURN
 #endif
 
 #endif

@@ -31,6 +31,7 @@ add_llvm_library(LLVMAnalysis
   MemoryBuiltins.cpp
   MemoryDependenceAnalysis.cpp
   ModuleDebugInfoPrinter.cpp
+  NoAliasAnalysis.cpp
   PHITransAddr.cpp
   PostDominators.cpp
   ProfileEstimatorPass.cpp
@@ -39,6 +40,7 @@ add_llvm_library(LLVMAnalysis
   ProfileInfoLoaderPass.cpp
   ProfileVerifierPass.cpp
   RegionInfo.cpp
+  RegionPass.cpp
   RegionPrinter.cpp
   ScalarEvolution.cpp
   ScalarEvolutionAliasAnalysis.cpp

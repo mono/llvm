@@ -140,8 +140,6 @@ namespace {
 
     void emitVFPLoadStoreMultipleInstruction(const MachineInstr &MI);
 
-    void emitMiscInstruction(const MachineInstr &MI);
-
     void emitNEONLaneInstruction(const MachineInstr &MI);
     void emitNEONDupInstruction(const MachineInstr &MI);
     void emitNEON1RegModImmInstruction(const MachineInstr &MI);
@@ -172,6 +170,32 @@ namespace {
       const { return 0; }
     unsigned getRotImmOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
+    unsigned getImmMinusOneOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
+    unsigned getBitfieldInvertedMaskOpValue(const MachineInstr &MI,
+                                            unsigned Op) const { return 0; }
+    unsigned getAddrModeImm12OpValue(const MachineInstr &MI, unsigned Op)
+      const {
+        // {17-13} = reg
+        // {12}    = (U)nsigned (add == '1', sub == '0')
+        // {11-0}  = imm12
+        const MachineOperand &MO  = MI.getOperand(Op);
+        const MachineOperand &MO1 = MI.getOperand(Op + 1);
+        if (!MO.isReg()) {
+          emitConstPoolAddress(MO.getIndex(), ARM::reloc_arm_cp_entry);
+          return 0;
+        }
+        unsigned Reg = getARMRegisterNumbering(MO.getReg());
+        int32_t Imm12 = MO1.getImm();
+        uint32_t Binary;
+        Binary = Imm12 & 0xfff;
+        if (Imm12 >= 0)
+          Binary |= (1 << 12);
+        Binary |= (Reg << 13);
+        return Binary;
+      }
+    unsigned getNEONVcvtImm32(const MachineInstr &MI, unsigned Op) const {
+       return 0; }
 
     /// getMovi32Value - Return binary encoding of operand for movw/movt. If the
     /// machine operand requires relocation, record the relocation and return
@@ -435,9 +459,7 @@ void ARMCodeEmitter::emitInstruction(const MachineInstr &MI) {
   case ARMII::VFPLdStMulFrm:
     emitVFPLoadStoreMultipleInstruction(MI);
     break;
-  case ARMII::VFPMiscFrm:
-    emitMiscInstruction(MI);
-    break;
+
   // NEON instructions.
   case ARMII::NGetLnFrm:
   case ARMII::NSetLnFrm:
@@ -505,7 +527,7 @@ void ARMCodeEmitter::emitConstPoolInstruction(const MachineInstr &MI) {
       emitGlobalAddress(GV, ARM::reloc_arm_absolute, isa<Function>(GV), false);
       emitWordLE(0);
     } else if (const ConstantInt *CI = dyn_cast<ConstantInt>(CV)) {
-      uint32_t Val = *(uint32_t*)CI->getValue().getRawData();
+      uint32_t Val = uint32_t(*CI->getValue().getRawData());
       emitWordLE(Val);
     } else if (const ConstantFP *CFP = dyn_cast<ConstantFP>(CV)) {
       if (CFP->getType()->isFloatTy())
@@ -944,6 +966,13 @@ void ARMCodeEmitter::emitLoadStoreInstruction(const MachineInstr &MI,
   // Part of binary is determined by TableGn.
   unsigned Binary = getBinaryCodeForInstr(MI);
 
+  // If this is an LDRi12, STRi12 or LDRcp, nothing more needs be done.
+  if (MI.getOpcode() == ARM::LDRi12 || MI.getOpcode() == ARM::LDRcp ||
+      MI.getOpcode() == ARM::STRi12) {
+    emitWordLE(Binary);
+    return;
+  }
+
   // Set the conditional execution predicate
   Binary |= II->getPredicate(&MI) << ARMII::CondShift;
 
@@ -990,7 +1019,7 @@ void ARMCodeEmitter::emitLoadStoreInstruction(const MachineInstr &MI,
     return;
   }
 
-  // Set bit I(25), because this is not in immediate enconding.
+  // Set bit I(25), because this is not in immediate encoding.
   Binary |= 1 << ARMII::I_BitShift;
   assert(TargetRegisterInfo::isPhysicalRegister(MO2.getReg()));
   // Set bit[3:0] to the corresponding Rm register
@@ -1583,46 +1612,6 @@ ARMCodeEmitter::emitVFPLoadStoreMultipleInstruction(const MachineInstr &MI) {
     Binary |= NumRegs * 2;
   else
     Binary |= NumRegs;
-
-  emitWordLE(Binary);
-}
-
-void ARMCodeEmitter::emitMiscInstruction(const MachineInstr &MI) {
-  unsigned Opcode = MI.getDesc().Opcode;
-  // Part of binary is determined by TableGn.
-  unsigned Binary = getBinaryCodeForInstr(MI);
-
-  // Set the conditional execution predicate
-  Binary |= II->getPredicate(&MI) << ARMII::CondShift;
-
-  switch (Opcode) {
-  default:
-    llvm_unreachable("ARMCodeEmitter::emitMiscInstruction");
-
-  case ARM::FCONSTD:
-  case ARM::FCONSTS: {
-    // Encode Dd / Sd.
-    Binary |= encodeVFPRd(MI, 0);
-
-    // Encode imm., Table A7-18 VFP modified immediate constants
-    const MachineOperand &MO1 = MI.getOperand(1);
-    unsigned Imm = static_cast<unsigned>(MO1.getFPImm()->getValueAPF()
-                      .bitcastToAPInt().getHiBits(32).getLimitedValue());
-    unsigned ModifiedImm;
-
-    if(Opcode == ARM::FCONSTS)
-      ModifiedImm = (Imm & 0x80000000) >> 24 | // a
-                    (Imm & 0x03F80000) >> 19;  // bcdefgh
-    else // Opcode == ARM::FCONSTD
-      ModifiedImm = (Imm & 0x80000000) >> 24 | // a
-                    (Imm & 0x007F0000) >> 16;  // bcdefgh
-
-    // Insts{19-16} = abcd, Insts{3-0} = efgh
-    Binary |= ((ModifiedImm & 0xF0) >> 4) << 16;
-    Binary |= (ModifiedImm & 0xF);
-    break;
-  }
-  }
 
   emitWordLE(Binary);
 }
