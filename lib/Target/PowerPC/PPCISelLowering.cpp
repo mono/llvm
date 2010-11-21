@@ -38,17 +38,17 @@
 #include "llvm/DerivedTypes.h"
 using namespace llvm;
 
-static bool CC_PPC_SVR4_Custom_Dummy(unsigned &ValNo, EVT &ValVT, EVT &LocVT,
+static bool CC_PPC_SVR4_Custom_Dummy(unsigned &ValNo, MVT &ValVT, MVT &LocVT,
                                      CCValAssign::LocInfo &LocInfo,
                                      ISD::ArgFlagsTy &ArgFlags,
                                      CCState &State);
-static bool CC_PPC_SVR4_Custom_AlignArgRegs(unsigned &ValNo, EVT &ValVT,
-                                            EVT &LocVT,
+static bool CC_PPC_SVR4_Custom_AlignArgRegs(unsigned &ValNo, MVT &ValVT,
+                                            MVT &LocVT,
                                             CCValAssign::LocInfo &LocInfo,
                                             ISD::ArgFlagsTy &ArgFlags,
                                             CCState &State);
-static bool CC_PPC_SVR4_Custom_AlignFPArgRegs(unsigned &ValNo, EVT &ValVT,
-                                              EVT &LocVT,
+static bool CC_PPC_SVR4_Custom_AlignFPArgRegs(unsigned &ValNo, MVT &ValVT,
+                                              MVT &LocVT,
                                               CCValAssign::LocInfo &LocInfo,
                                               ISD::ArgFlagsTy &ArgFlags,
                                               CCState &State);
@@ -1098,78 +1098,80 @@ bool PPCTargetLowering::getPreIndexedAddressParts(SDNode *N, SDValue &Base,
 //  LowerOperation implementation
 //===----------------------------------------------------------------------===//
 
+/// GetLabelAccessInfo - Return true if we should reference labels using a
+/// PICBase, set the HiOpFlags and LoOpFlags to the target MO flags.
+static bool GetLabelAccessInfo(const TargetMachine &TM, unsigned &HiOpFlags,
+                               unsigned &LoOpFlags, const GlobalValue *GV = 0) {
+  HiOpFlags = PPCII::MO_HA16;
+  LoOpFlags = PPCII::MO_LO16;
+  
+  // Don't use the pic base if not in PIC relocation model.  Or if we are on a
+  // non-darwin platform.  We don't support PIC on other platforms yet.
+  bool isPIC = TM.getRelocationModel() == Reloc::PIC_ && 
+               TM.getSubtarget<PPCSubtarget>().isDarwin();
+  if (isPIC) {
+    HiOpFlags |= PPCII::MO_PIC_FLAG;
+    LoOpFlags |= PPCII::MO_PIC_FLAG;
+  }
+
+  // If this is a reference to a global value that requires a non-lazy-ptr, make
+  // sure that instruction lowering adds it.
+  if (GV && TM.getSubtarget<PPCSubtarget>().hasLazyResolverStub(GV, TM)) {
+    HiOpFlags |= PPCII::MO_NLP_FLAG;
+    LoOpFlags |= PPCII::MO_NLP_FLAG;
+    
+    if (GV->hasHiddenVisibility()) {
+      HiOpFlags |= PPCII::MO_NLP_HIDDEN_FLAG;
+      LoOpFlags |= PPCII::MO_NLP_HIDDEN_FLAG;
+    }
+  }
+  
+  return isPIC;
+}
+
+static SDValue LowerLabelRef(SDValue HiPart, SDValue LoPart, bool isPIC,
+                             SelectionDAG &DAG) {
+  EVT PtrVT = HiPart.getValueType();
+  SDValue Zero = DAG.getConstant(0, PtrVT);
+  DebugLoc DL = HiPart.getDebugLoc();
+
+  SDValue Hi = DAG.getNode(PPCISD::Hi, DL, PtrVT, HiPart, Zero);
+  SDValue Lo = DAG.getNode(PPCISD::Lo, DL, PtrVT, LoPart, Zero);
+  
+  // With PIC, the first instruction is actually "GR+hi(&G)".
+  if (isPIC)
+    Hi = DAG.getNode(ISD::ADD, DL, PtrVT,
+                     DAG.getNode(PPCISD::GlobalBaseReg, DL, PtrVT), Hi);
+  
+  // Generate non-pic code that has direct accesses to the constant pool.
+  // The address of the global is just (hi(&g)+lo(&g)).
+  return DAG.getNode(ISD::ADD, DL, PtrVT, Hi, Lo);
+}
+
 SDValue PPCTargetLowering::LowerConstantPool(SDValue Op,
                                              SelectionDAG &DAG) const {
   EVT PtrVT = Op.getValueType();
   ConstantPoolSDNode *CP = cast<ConstantPoolSDNode>(Op);
   const Constant *C = CP->getConstVal();
-  SDValue CPI = DAG.getTargetConstantPool(C, PtrVT, CP->getAlignment());
-  SDValue Zero = DAG.getConstant(0, PtrVT);
-  // FIXME there isn't really any debug info here
-  DebugLoc dl = Op.getDebugLoc();
 
-  const TargetMachine &TM = DAG.getTarget();
-
-  SDValue Hi = DAG.getNode(PPCISD::Hi, dl, PtrVT, CPI, Zero);
-  SDValue Lo = DAG.getNode(PPCISD::Lo, dl, PtrVT, CPI, Zero);
-
-  // If this is a non-darwin platform, we don't support non-static relo models
-  // yet.
-  if (TM.getRelocationModel() == Reloc::Static ||
-      !TM.getSubtarget<PPCSubtarget>().isDarwin()) {
-    // Generate non-pic code that has direct accesses to the constant pool.
-    // The address of the global is just (hi(&g)+lo(&g)).
-    return DAG.getNode(ISD::ADD, dl, PtrVT, Hi, Lo);
-  }
-
-  if (TM.getRelocationModel() == Reloc::PIC_) {
-    // With PIC, the first instruction is actually "GR+hi(&G)".
-    Hi = DAG.getNode(ISD::ADD, dl, PtrVT,
-                     DAG.getNode(PPCISD::GlobalBaseReg,
-                                 DebugLoc(), PtrVT), Hi);
-  }
-
-  Lo = DAG.getNode(ISD::ADD, dl, PtrVT, Hi, Lo);
-  return Lo;
+  unsigned MOHiFlag, MOLoFlag;
+  bool isPIC = GetLabelAccessInfo(DAG.getTarget(), MOHiFlag, MOLoFlag);
+  SDValue CPIHi =
+    DAG.getTargetConstantPool(C, PtrVT, CP->getAlignment(), 0, MOHiFlag);
+  SDValue CPILo =
+    DAG.getTargetConstantPool(C, PtrVT, CP->getAlignment(), 0, MOLoFlag);
+  return LowerLabelRef(CPIHi, CPILo, isPIC, DAG);
 }
 
 SDValue PPCTargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
   EVT PtrVT = Op.getValueType();
   JumpTableSDNode *JT = cast<JumpTableSDNode>(Op);
-  SDValue JTI = DAG.getTargetJumpTable(JT->getIndex(), PtrVT);
-  SDValue Zero = DAG.getConstant(0, PtrVT);
-  // FIXME there isn't really any debug loc here
-  DebugLoc dl = Op.getDebugLoc();
-
-  const TargetMachine &TM = DAG.getTarget();
-
-  SDValue Hi = DAG.getNode(PPCISD::Hi, dl, PtrVT, JTI, Zero);
-  SDValue Lo = DAG.getNode(PPCISD::Lo, dl, PtrVT, JTI, Zero);
-
-  // If this is a non-darwin platform, we don't support non-static relo models
-  // yet.
-  if (TM.getRelocationModel() == Reloc::Static ||
-      !TM.getSubtarget<PPCSubtarget>().isDarwin()) {
-    // Generate non-pic code that has direct accesses to the constant pool.
-    // The address of the global is just (hi(&g)+lo(&g)).
-    return DAG.getNode(ISD::ADD, dl, PtrVT, Hi, Lo);
-  }
-
-  if (TM.getRelocationModel() == Reloc::PIC_) {
-    // With PIC, the first instruction is actually "GR+hi(&G)".
-    Hi = DAG.getNode(ISD::ADD, dl, PtrVT,
-                     DAG.getNode(PPCISD::GlobalBaseReg,
-                                 DebugLoc(), PtrVT), Hi);
-  }
-
-  Lo = DAG.getNode(ISD::ADD, dl, PtrVT, Hi, Lo);
-  return Lo;
-}
-
-SDValue PPCTargetLowering::LowerGlobalTLSAddress(SDValue Op,
-                                                 SelectionDAG &DAG) const {
-  llvm_unreachable("TLS not implemented for PPC.");
-  return SDValue(); // Not reached
+  
+  unsigned MOHiFlag, MOLoFlag;
+  bool isPIC = GetLabelAccessInfo(DAG.getTarget(), MOHiFlag, MOLoFlag);
+  SDValue JTIHi = DAG.getTargetJumpTable(JT->getIndex(), PtrVT, MOHiFlag);
+  SDValue JTILo = DAG.getTargetJumpTable(JT->getIndex(), PtrVT, MOLoFlag);
+  return LowerLabelRef(JTIHi, JTILo, isPIC, DAG);
 }
 
 SDValue PPCTargetLowering::LowerBlockAddress(SDValue Op,
@@ -1178,78 +1180,45 @@ SDValue PPCTargetLowering::LowerBlockAddress(SDValue Op,
   DebugLoc DL = Op.getDebugLoc();
 
   const BlockAddress *BA = cast<BlockAddressSDNode>(Op)->getBlockAddress();
-  SDValue TgtBA = DAG.getBlockAddress(BA, PtrVT, /*isTarget=*/true);
-  SDValue Zero = DAG.getConstant(0, PtrVT);
-  SDValue Hi = DAG.getNode(PPCISD::Hi, DL, PtrVT, TgtBA, Zero);
-  SDValue Lo = DAG.getNode(PPCISD::Lo, DL, PtrVT, TgtBA, Zero);
-
-  // If this is a non-darwin platform, we don't support non-static relo models
-  // yet.
-  const TargetMachine &TM = DAG.getTarget();
-  if (TM.getRelocationModel() == Reloc::Static ||
-      !TM.getSubtarget<PPCSubtarget>().isDarwin()) {
-    // Generate non-pic code that has direct accesses to globals.
-    // The address of the global is just (hi(&g)+lo(&g)).
-    return DAG.getNode(ISD::ADD, DL, PtrVT, Hi, Lo);
-  }
-
-  if (TM.getRelocationModel() == Reloc::PIC_) {
-    // With PIC, the first instruction is actually "GR+hi(&G)".
-    Hi = DAG.getNode(ISD::ADD, DL, PtrVT,
-                     DAG.getNode(PPCISD::GlobalBaseReg,
-                                 DebugLoc(), PtrVT), Hi);
-  }
-
-  return DAG.getNode(ISD::ADD, DL, PtrVT, Hi, Lo);
+  
+  unsigned MOHiFlag, MOLoFlag;
+  bool isPIC = GetLabelAccessInfo(DAG.getTarget(), MOHiFlag, MOLoFlag);
+  SDValue TgtBAHi = DAG.getBlockAddress(BA, PtrVT, /*isTarget=*/true, MOHiFlag);
+  SDValue TgtBALo = DAG.getBlockAddress(BA, PtrVT, /*isTarget=*/true, MOLoFlag);
+  return LowerLabelRef(TgtBAHi, TgtBALo, isPIC, DAG);
 }
 
 SDValue PPCTargetLowering::LowerGlobalAddress(SDValue Op,
                                               SelectionDAG &DAG) const {
   EVT PtrVT = Op.getValueType();
   GlobalAddressSDNode *GSDN = cast<GlobalAddressSDNode>(Op);
-  // FIXME there isn't really any debug info here
-  DebugLoc dl = GSDN->getDebugLoc();
+  DebugLoc DL = GSDN->getDebugLoc();
   const GlobalValue *GV = GSDN->getGlobal();
-  SDValue GA = DAG.getTargetGlobalAddress(GV, dl, PtrVT, GSDN->getOffset());
-  SDValue Zero = DAG.getConstant(0, PtrVT);
-
-  const TargetMachine &TM = DAG.getTarget();
 
   // 64-bit SVR4 ABI code is always position-independent.
   // The actual address of the GlobalValue is stored in the TOC.
   if (PPCSubTarget.isSVR4ABI() && PPCSubTarget.isPPC64()) {
-    return DAG.getNode(PPCISD::TOC_ENTRY, dl, MVT::i64, GA,
+    SDValue GA = DAG.getTargetGlobalAddress(GV, DL, PtrVT, GSDN->getOffset());
+    return DAG.getNode(PPCISD::TOC_ENTRY, DL, MVT::i64, GA,
                        DAG.getRegister(PPC::X2, MVT::i64));
   }
 
-  SDValue Hi = DAG.getNode(PPCISD::Hi, dl, PtrVT, GA, Zero);
-  SDValue Lo = DAG.getNode(PPCISD::Lo, dl, PtrVT, GA, Zero);
+  unsigned MOHiFlag, MOLoFlag;
+  bool isPIC = GetLabelAccessInfo(DAG.getTarget(), MOHiFlag, MOLoFlag, GV);
 
-  // If this is a non-darwin platform, we don't support non-static relo models
-  // yet.
-  if (TM.getRelocationModel() == Reloc::Static ||
-      !TM.getSubtarget<PPCSubtarget>().isDarwin()) {
-    // Generate non-pic code that has direct accesses to globals.
-    // The address of the global is just (hi(&g)+lo(&g)).
-    return DAG.getNode(ISD::ADD, dl, PtrVT, Hi, Lo);
-  }
+  SDValue GAHi =
+    DAG.getTargetGlobalAddress(GV, DL, PtrVT, GSDN->getOffset(), MOHiFlag);
+  SDValue GALo =
+    DAG.getTargetGlobalAddress(GV, DL, PtrVT, GSDN->getOffset(), MOLoFlag);
+  
+  SDValue Ptr = LowerLabelRef(GAHi, GALo, isPIC, DAG);
 
-  if (TM.getRelocationModel() == Reloc::PIC_) {
-    // With PIC, the first instruction is actually "GR+hi(&G)".
-    Hi = DAG.getNode(ISD::ADD, dl, PtrVT,
-                     DAG.getNode(PPCISD::GlobalBaseReg,
-                                 DebugLoc(), PtrVT), Hi);
-  }
-
-  Lo = DAG.getNode(ISD::ADD, dl, PtrVT, Hi, Lo);
-
-  if (!TM.getSubtarget<PPCSubtarget>().hasLazyResolverStub(GV, TM))
-    return Lo;
-
-  // If the global is weak or external, we have to go through the lazy
-  // resolution stub.
-  return DAG.getLoad(PtrVT, dl, DAG.getEntryNode(), Lo, MachinePointerInfo(),
-                     false, false, 0);
+  // If the global reference is actually to a non-lazy-pointer, we have to do an
+  // extra load to get the address of the global.
+  if (MOHiFlag & PPCII::MO_NLP_FLAG)
+    Ptr = DAG.getLoad(PtrVT, DL, DAG.getEntryNode(), Ptr, MachinePointerInfo(),
+                      false, false, 0);
+  return Ptr;
 }
 
 SDValue PPCTargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
@@ -1443,15 +1412,15 @@ SDValue PPCTargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG,
 
 #include "PPCGenCallingConv.inc"
 
-static bool CC_PPC_SVR4_Custom_Dummy(unsigned &ValNo, EVT &ValVT, EVT &LocVT,
+static bool CC_PPC_SVR4_Custom_Dummy(unsigned &ValNo, MVT &ValVT, MVT &LocVT,
                                      CCValAssign::LocInfo &LocInfo,
                                      ISD::ArgFlagsTy &ArgFlags,
                                      CCState &State) {
   return true;
 }
 
-static bool CC_PPC_SVR4_Custom_AlignArgRegs(unsigned &ValNo, EVT &ValVT,
-                                            EVT &LocVT,
+static bool CC_PPC_SVR4_Custom_AlignArgRegs(unsigned &ValNo, MVT &ValVT,
+                                            MVT &LocVT,
                                             CCValAssign::LocInfo &LocInfo,
                                             ISD::ArgFlagsTy &ArgFlags,
                                             CCState &State) {
@@ -1477,8 +1446,8 @@ static bool CC_PPC_SVR4_Custom_AlignArgRegs(unsigned &ValNo, EVT &ValVT,
   return false;
 }
 
-static bool CC_PPC_SVR4_Custom_AlignFPArgRegs(unsigned &ValNo, EVT &ValVT,
-                                              EVT &LocVT,
+static bool CC_PPC_SVR4_Custom_AlignFPArgRegs(unsigned &ValNo, MVT &ValVT,
+                                              MVT &LocVT,
                                               CCValAssign::LocInfo &LocInfo,
                                               ISD::ArgFlagsTy &ArgFlags,
                                               CCState &State) {
@@ -2451,7 +2420,11 @@ unsigned PrepareCall(SelectionDAG &DAG, SDValue &Callee, SDValue &InFlag,
                      SDValue &Chain, DebugLoc dl, int SPDiff, bool isTailCall,
                      SmallVector<std::pair<unsigned, SDValue>, 8> &RegsToPass,
                      SmallVector<SDValue, 8> &Ops, std::vector<EVT> &NodeTys,
-                     bool isPPC64, bool isSVR4ABI) {
+                     const PPCSubtarget &PPCSubTarget) {
+  
+  bool isPPC64 = PPCSubTarget.isPPC64();
+  bool isSVR4ABI = PPCSubTarget.isSVR4ABI();
+
   EVT PtrVT = DAG.getTargetLoweringInfo().getPointerTy();
   NodeTys.push_back(MVT::Other);   // Returns a chain
   NodeTys.push_back(MVT::Flag);    // Returns a flag for retval copy to use.
@@ -2464,24 +2437,49 @@ unsigned PrepareCall(SelectionDAG &DAG, SDValue &Callee, SDValue &InFlag,
     Callee = SDValue(Dest, 0);
     needIndirectCall = false;
   }
-  // XXX Work around for http://llvm.org/bugs/show_bug.cgi?id=5201
-  // Use indirect calls for ALL functions calls in JIT mode, since the
-  // far-call stubs may be outside relocation limits for a BL instruction.
-  if (!DAG.getTarget().getSubtarget<PPCSubtarget>().isJITCodeModel()) {
-    // If the callee is a GlobalAddress/ExternalSymbol node (quite common, every
-    // direct call is) turn it into a TargetGlobalAddress/TargetExternalSymbol
-    // node so that legalize doesn't hack it.
-    if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+  
+  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+    // XXX Work around for http://llvm.org/bugs/show_bug.cgi?id=5201
+    // Use indirect calls for ALL functions calls in JIT mode, since the
+    // far-call stubs may be outside relocation limits for a BL instruction.
+    if (!DAG.getTarget().getSubtarget<PPCSubtarget>().isJITCodeModel()) {
+      unsigned OpFlags = 0;
+      if (DAG.getTarget().getRelocationModel() != Reloc::Static &&
+          PPCSubTarget.getDarwinVers() < 9 &&
+          (G->getGlobal()->isDeclaration() ||
+           G->getGlobal()->isWeakForLinker())) {
+        // PC-relative references to external symbols should go through $stub,
+        // unless we're building with the leopard linker or later, which
+        // automatically synthesizes these stubs.
+        OpFlags = PPCII::MO_DARWIN_STUB;
+      }
+      
+      // If the callee is a GlobalAddress/ExternalSymbol node (quite common,
+      // every direct call is) turn it into a TargetGlobalAddress /
+      // TargetExternalSymbol node so that legalize doesn't hack it.
       Callee = DAG.getTargetGlobalAddress(G->getGlobal(), dl,
-            Callee.getValueType());
+                                          Callee.getValueType(),
+                                          0, OpFlags);
       needIndirectCall = false;
-    }
+    }               
   }
+  
   if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(Callee)) {
-      Callee = DAG.getTargetExternalSymbol(S->getSymbol(),
-             Callee.getValueType());
-      needIndirectCall = false;
+    unsigned char OpFlags = 0;
+    
+    if (DAG.getTarget().getRelocationModel() != Reloc::Static &&
+        PPCSubTarget.getDarwinVers() < 9) {
+      // PC-relative references to external symbols should go through $stub,
+      // unless we're building with the leopard linker or later, which
+      // automatically synthesizes these stubs.
+      OpFlags = PPCII::MO_DARWIN_STUB;
+    }
+    
+    Callee = DAG.getTargetExternalSymbol(S->getSymbol(), Callee.getValueType(),
+                                         OpFlags);
+    needIndirectCall = false;
   }
+  
   if (needIndirectCall) {
     // Otherwise, this is an indirect call.  We have to use a MTCTR/BCTRL pair
     // to do the call, we can't use PPCISD::CALL.
@@ -2628,8 +2626,7 @@ PPCTargetLowering::FinishCall(CallingConv::ID CallConv, DebugLoc dl,
   SmallVector<SDValue, 8> Ops;
   unsigned CallOpc = PrepareCall(DAG, Callee, InFlag, Chain, dl, SPDiff,
                                  isTailCall, RegsToPass, Ops, NodeTys,
-                                 PPCSubTarget.isPPC64(),
-                                 PPCSubTarget.isSVR4ABI());
+                                 PPCSubTarget);
 
   // When performing tail call optimization the callee pops its arguments off
   // the stack. Account for this here so these bytes can be pushed back on in
@@ -2717,15 +2714,14 @@ PPCTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     isTailCall = IsEligibleForTailCallOptimization(Callee, CallConv, isVarArg,
                                                    Ins, DAG);
 
-  if (PPCSubTarget.isSVR4ABI() && !PPCSubTarget.isPPC64()) {
+  if (PPCSubTarget.isSVR4ABI() && !PPCSubTarget.isPPC64())
     return LowerCall_SVR4(Chain, Callee, CallConv, isVarArg,
                           isTailCall, Outs, OutVals, Ins,
                           dl, DAG, InVals);
-  } else {
-    return LowerCall_Darwin(Chain, Callee, CallConv, isVarArg,
-                            isTailCall, Outs, OutVals, Ins,
-                            dl, DAG, InVals);
-  }
+
+  return LowerCall_Darwin(Chain, Callee, CallConv, isVarArg,
+                          isTailCall, Outs, OutVals, Ins,
+                          dl, DAG, InVals);
 }
 
 SDValue
@@ -2774,7 +2770,7 @@ PPCTargetLowering::LowerCall_SVR4(SDValue Chain, SDValue Callee,
     unsigned NumArgs = Outs.size();
     
     for (unsigned i = 0; i != NumArgs; ++i) {
-      EVT ArgVT = Outs[i].VT;
+      MVT ArgVT = Outs[i].VT;
       ISD::ArgFlagsTy ArgFlags = Outs[i].Flags;
       bool Result;
       
@@ -2789,7 +2785,7 @@ PPCTargetLowering::LowerCall_SVR4(SDValue Chain, SDValue Callee,
       if (Result) {
 #ifndef NDEBUG
         errs() << "Call operand #" << i << " has unhandled type "
-             << ArgVT.getEVTString() << "\n";
+             << EVT(ArgVT).getEVTString() << "\n";
 #endif
         llvm_unreachable(0);
       }
@@ -2924,10 +2920,9 @@ PPCTargetLowering::LowerCall_SVR4(SDValue Chain, SDValue Callee,
     InFlag = Chain.getValue(1);
   }
 
-  if (isTailCall) {
+  if (isTailCall)
     PrepareTailCall(DAG, InFlag, Chain, dl, false, SPDiff, NumBytes, LROp, FPOp,
                     false, TailCallArguments);
-  }
 
   return FinishCall(CallConv, dl, isTailCall, isVarArg, DAG,
                     RegsToPass, InFlag, Chain, Callee, SPDiff, NumBytes,
@@ -3293,10 +3288,9 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
     InFlag = Chain.getValue(1);
   }
 
-  if (isTailCall) {
+  if (isTailCall)
     PrepareTailCall(DAG, InFlag, Chain, dl, isPPC64, SPDiff, NumBytes, LROp,
                     FPOp, true, TailCallArguments);
-  }
 
   return FinishCall(CallConv, dl, isTailCall, isVarArg, DAG,
                     RegsToPass, InFlag, Chain, Callee, SPDiff, NumBytes,
@@ -4388,7 +4382,7 @@ SDValue PPCTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::ConstantPool:       return LowerConstantPool(Op, DAG);
   case ISD::BlockAddress:       return LowerBlockAddress(Op, DAG);
   case ISD::GlobalAddress:      return LowerGlobalAddress(Op, DAG);
-  case ISD::GlobalTLSAddress:   return LowerGlobalTLSAddress(Op, DAG);
+  case ISD::GlobalTLSAddress:   llvm_unreachable("TLS not implemented for PPC");
   case ISD::JumpTable:          return LowerJumpTable(Op, DAG);
   case ISD::SETCC:              return LowerSETCC(Op, DAG);
   case ISD::TRAMPOLINE:         return LowerTRAMPOLINE(Op, DAG);

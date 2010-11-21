@@ -299,6 +299,7 @@ enum {
   SHN_HIPROC    = 0xff1f, // Highest processor-specific index
   SHN_ABS       = 0xfff1, // Symbol has absolute value; does not need relocation
   SHN_COMMON    = 0xfff2, // FORTRAN COMMON or C external global variables
+  SHN_XINDEX    = 0xffff, // Mark that the index is >= SHN_LORESERVE
   SHN_HIRESERVE = 0xffff  // Highest reserved index
 };
 
@@ -345,6 +346,13 @@ enum {
   SHF_ALLOC     = 0x2, // Section occupies memory during program execution.
   SHF_EXECINSTR = 0x4, // Section contains executable machine instructions.
   SHF_MASKPROC  = 0xf0000000 // Bits indicating processor-specific flags.
+};
+
+// Section Group Flags
+enum {
+  GRP_COMDAT = 0x1,
+  GRP_MASKOS = 0x0ff00000,
+  GRP_MASKPROC = 0xf0000000
 };
 
 // Symbol table entries for ELF32.

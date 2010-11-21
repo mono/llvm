@@ -40,8 +40,10 @@ namespace {
     }
 
     virtual void EmitAssemblerFlag(MCAssemblerFlag Flag) {}
+    virtual void EmitThumbFunc(MCSymbol *Func) {}
 
     virtual void EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) {}
+    virtual void EmitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol){}
 
     virtual void EmitSymbolAttribute(MCSymbol *Symbol, MCSymbolAttr Attribute){}
 
@@ -65,6 +67,10 @@ namespace {
 
     virtual void EmitValue(const MCExpr *Value, unsigned Size,
                            unsigned AddrSpace) {}
+    virtual void EmitULEB128Value(const MCExpr *Value,
+                                  unsigned AddrSpace = 0) {}
+    virtual void EmitSLEB128Value(const MCExpr *Value,
+                                  unsigned AddrSpace = 0) {}
     virtual void EmitGPRel32Value(const MCExpr *Value) {}
     virtual void EmitValueToAlignment(unsigned ByteAlignment, int64_t Value = 0,
                                       unsigned ValueSize = 1,
@@ -77,7 +83,12 @@ namespace {
                                    unsigned char Value = 0) {}
     
     virtual void EmitFileDirective(StringRef Filename) {}
-    virtual void EmitDwarfFileDirective(unsigned FileNo,StringRef Filename) {}
+    virtual bool EmitDwarfFileDirective(unsigned FileNo,StringRef Filename) {
+      return false;
+    }
+    virtual void EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
+                                       unsigned Column, unsigned Flags,
+                                       unsigned Isa, unsigned Discriminator) {}
     virtual void EmitInstruction(const MCInst &Inst) {}
 
     virtual void Finish() {}

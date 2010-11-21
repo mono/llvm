@@ -414,8 +414,8 @@ def HasFMA3      : Predicate<"Subtarget->hasFMA3()">;
 def HasFMA4      : Predicate<"Subtarget->hasFMA4()">;
 def FPStackf32   : Predicate<"!Subtarget->hasSSE1()">;
 def FPStackf64   : Predicate<"!Subtarget->hasSSE2()">;
-def In32BitMode  : Predicate<"!Subtarget->is64Bit()">;
-def In64BitMode  : Predicate<"Subtarget->is64Bit()">;
+def In32BitMode  : Predicate<"!Subtarget->is64Bit()">, AssemblerPredicate;
+def In64BitMode  : Predicate<"Subtarget->is64Bit()">, AssemblerPredicate;
 def IsWin64      : Predicate<"Subtarget->isTargetWin64()">;
 def NotWin64     : Predicate<"!Subtarget->isTargetWin64()">;
 def SmallCode    : Predicate<"TM.getCodeModel() == CodeModel::Small">;
@@ -1060,17 +1060,14 @@ let Constraints = "$val = $dst" in {
 def XCHG8rm  : I<0x86, MRMSrcMem, (outs GR8:$dst), (ins GR8:$val, i8mem:$ptr),
                "xchg{b}\t{$val, $ptr|$ptr, $val}",
                [(set GR8:$dst, (atomic_swap_8 addr:$ptr, GR8:$val))]>;
-def XCHG16rm : I<0x87, MRMSrcMem, (outs GR16:$dst),
-                 (ins GR16:$val, i16mem:$ptr),
+def XCHG16rm : I<0x87, MRMSrcMem, (outs GR16:$dst),(ins GR16:$val, i16mem:$ptr),
                "xchg{w}\t{$val, $ptr|$ptr, $val}",
                [(set GR16:$dst, (atomic_swap_16 addr:$ptr, GR16:$val))]>,
                 OpSize;
-def XCHG32rm : I<0x87, MRMSrcMem, (outs GR32:$dst),
-                 (ins GR32:$val, i32mem:$ptr),
+def XCHG32rm : I<0x87, MRMSrcMem, (outs GR32:$dst),(ins GR32:$val, i32mem:$ptr),
                "xchg{l}\t{$val, $ptr|$ptr, $val}",
                [(set GR32:$dst, (atomic_swap_32 addr:$ptr, GR32:$val))]>;
-def XCHG64rm : RI<0x87, MRMSrcMem, (outs GR64:$dst),
-                  (ins GR64:$val,i64mem:$ptr),
+def XCHG64rm : RI<0x87, MRMSrcMem, (outs GR64:$dst),(ins GR64:$val,i64mem:$ptr),
                   "xchg{q}\t{$val, $ptr|$ptr, $val}",
                   [(set GR64:$dst, (atomic_swap_64 addr:$ptr, GR64:$val))]>;
 
@@ -1253,4 +1250,340 @@ include "X86InstrSystem.td"
 
 // Compiler Pseudo Instructions and Pat Patterns
 include "X86InstrCompiler.td"
+
+//===----------------------------------------------------------------------===//
+// Assembler Mnemonic Aliases
+//===----------------------------------------------------------------------===//
+
+def : MnemonicAlias<"call", "calll">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"call", "callq">, Requires<[In64BitMode]>;
+
+def : MnemonicAlias<"cbw",  "cbtw">;
+def : MnemonicAlias<"cwd",  "cwtd">;
+def : MnemonicAlias<"cdq", "cltd">;
+def : MnemonicAlias<"cwde", "cwtl">;
+def : MnemonicAlias<"cdqe", "cltq">;
+
+// lret maps to lretl, it is not ambiguous with lretq.
+def : MnemonicAlias<"lret", "lretl">;
+
+def : MnemonicAlias<"pop", "popl">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"pop", "popq">, Requires<[In64BitMode]>;
+def : MnemonicAlias<"popf", "popfl">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"popf", "popfq">, Requires<[In64BitMode]>;
+def : MnemonicAlias<"popfd",  "popfl">;
+
+// FIXME: This is wrong for "push reg".  "push %bx" should turn into pushw in
+// all modes.  However: "push (addr)" and "push $42" should default to
+// pushl/pushq depending on the current mode.  Similar for "pop %bx"
+def : MnemonicAlias<"push", "pushl">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"push", "pushq">, Requires<[In64BitMode]>;
+def : MnemonicAlias<"pushf", "pushfl">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"pushf", "pushfq">, Requires<[In64BitMode]>;
+def : MnemonicAlias<"pushfd", "pushfl">;
+
+def : MnemonicAlias<"repe", "rep">;
+def : MnemonicAlias<"repz", "rep">;
+def : MnemonicAlias<"repnz", "repne">;
+
+def : MnemonicAlias<"retl", "ret">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"retq", "ret">, Requires<[In64BitMode]>;
+
+def : MnemonicAlias<"salb", "shlb">;
+def : MnemonicAlias<"salw", "shlw">;
+def : MnemonicAlias<"sall", "shll">;
+def : MnemonicAlias<"salq", "shlq">;
+
+def : MnemonicAlias<"smovb", "movsb">;
+def : MnemonicAlias<"smovw", "movsw">;
+def : MnemonicAlias<"smovl", "movsl">;
+def : MnemonicAlias<"smovq", "movsq">;
+
+def : MnemonicAlias<"ud2a", "ud2">;
+def : MnemonicAlias<"verrw", "verr">;
+
+// System instruction aliases.
+def : MnemonicAlias<"iret", "iretl">;
+def : MnemonicAlias<"sysret", "sysretl">;
+
+def : MnemonicAlias<"lgdtl", "lgdt">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"lgdtq", "lgdt">, Requires<[In64BitMode]>;
+def : MnemonicAlias<"lidtl", "lidt">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"lidtq", "lidt">, Requires<[In64BitMode]>;
+def : MnemonicAlias<"sgdtl", "sgdt">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"sgdtq", "sgdt">, Requires<[In64BitMode]>;
+def : MnemonicAlias<"sidtl", "sidt">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"sidtq", "sidt">, Requires<[In64BitMode]>;
+
+
+// Floating point stack aliases.
+def : MnemonicAlias<"fcmovz",   "fcmove">;
+def : MnemonicAlias<"fcmova",   "fcmovnbe">;
+def : MnemonicAlias<"fcmovnae", "fcmovb">;
+def : MnemonicAlias<"fcmovna",  "fcmovbe">;
+def : MnemonicAlias<"fcmovae",  "fcmovnb">;
+def : MnemonicAlias<"fcomip",   "fcompi">;
+def : MnemonicAlias<"fildq",    "fildll">;
+def : MnemonicAlias<"fldcww",   "fldcw">;
+def : MnemonicAlias<"fnstcww", "fnstcw">;
+def : MnemonicAlias<"fnstsww", "fnstsw">;
+def : MnemonicAlias<"fucomip",  "fucompi">;
+def : MnemonicAlias<"fwait",    "wait">;
+
+
+class CondCodeAlias<string Prefix,string Suffix, string OldCond, string NewCond>
+  : MnemonicAlias<!strconcat(Prefix, OldCond, Suffix),
+                  !strconcat(Prefix, NewCond, Suffix)>;
+
+/// IntegerCondCodeMnemonicAlias - This multiclass defines a bunch of
+/// MnemonicAlias's that canonicalize the condition code in a mnemonic, for
+/// example "setz" -> "sete".
+multiclass IntegerCondCodeMnemonicAlias<string Prefix, string Suffix> {
+  def C   : CondCodeAlias<Prefix, Suffix, "c",   "b">;   // setc   -> setb
+  def Z   : CondCodeAlias<Prefix, Suffix, "z" ,  "e">;   // setz   -> sete
+  def NA  : CondCodeAlias<Prefix, Suffix, "na",  "be">;  // setna  -> setbe
+  def NB  : CondCodeAlias<Prefix, Suffix, "nb",  "ae">;  // setnb  -> setae
+  def NC  : CondCodeAlias<Prefix, Suffix, "nc",  "ae">;  // setnc  -> setae
+  def NG  : CondCodeAlias<Prefix, Suffix, "ng",  "le">;  // setng  -> setle
+  def NL  : CondCodeAlias<Prefix, Suffix, "nl",  "ge">;  // setnl  -> setge
+  def NZ  : CondCodeAlias<Prefix, Suffix, "nz",  "ne">;  // setnz  -> setne
+  def PE  : CondCodeAlias<Prefix, Suffix, "pe",  "p">;   // setpe  -> setp
+  def PO  : CondCodeAlias<Prefix, Suffix, "po",  "np">;  // setpo  -> setnp
+
+  def NAE : CondCodeAlias<Prefix, Suffix, "nae", "b">;   // setnae -> setb
+  def NBE : CondCodeAlias<Prefix, Suffix, "nbe", "a">;   // setnbe -> seta
+  def NGE : CondCodeAlias<Prefix, Suffix, "nge", "l">;   // setnge -> setl
+  def NLE : CondCodeAlias<Prefix, Suffix, "nle", "g">;   // setnle -> setg
+}
+
+// Aliases for set<CC>
+defm : IntegerCondCodeMnemonicAlias<"set", "">;
+// Aliases for j<CC>
+defm : IntegerCondCodeMnemonicAlias<"j", "">;
+// Aliases for cmov<CC>{w,l,q}
+defm : IntegerCondCodeMnemonicAlias<"cmov", "w">;
+defm : IntegerCondCodeMnemonicAlias<"cmov", "l">;
+defm : IntegerCondCodeMnemonicAlias<"cmov", "q">;
+
+
+//===----------------------------------------------------------------------===//
+// Assembler Instruction Aliases
+//===----------------------------------------------------------------------===//
+
+// aad/aam default to base 10 if no operand is specified.
+def : InstAlias<"aad", (AAD8i8 10)>;
+def : InstAlias<"aam", (AAM8i8 10)>;
+
+// clr aliases.
+def : InstAlias<"clrb $reg", (XOR8rr  GR8 :$reg, GR8 :$reg)>;
+def : InstAlias<"clrw $reg", (XOR16rr GR16:$reg, GR16:$reg)>;
+def : InstAlias<"clrl $reg", (XOR32rr GR32:$reg, GR32:$reg)>;
+def : InstAlias<"clrq $reg", (XOR64rr GR64:$reg, GR64:$reg)>;
+
+// div and idiv aliases for explicit A register.
+def : InstAlias<"divb $src, %al",  (DIV8r  GR8 :$src)>;
+def : InstAlias<"divw $src, %ax",  (DIV16r GR16:$src)>;
+def : InstAlias<"divl $src, %eax", (DIV32r GR32:$src)>;
+def : InstAlias<"divq $src, %rax", (DIV64r GR64:$src)>;
+def : InstAlias<"divb $src, %al",  (DIV8m  i8mem :$src)>;
+def : InstAlias<"divw $src, %ax",  (DIV16m i16mem:$src)>;
+def : InstAlias<"divl $src, %eax", (DIV32m i32mem:$src)>;
+def : InstAlias<"divq $src, %rax", (DIV64m i64mem:$src)>;
+def : InstAlias<"idivb $src, %al",  (IDIV8r  GR8 :$src)>;
+def : InstAlias<"idivw $src, %ax",  (IDIV16r GR16:$src)>;
+def : InstAlias<"idivl $src, %eax", (IDIV32r GR32:$src)>;
+def : InstAlias<"idivq $src, %rax", (IDIV64r GR64:$src)>;
+def : InstAlias<"idivb $src, %al",  (IDIV8m  i8mem :$src)>;
+def : InstAlias<"idivw $src, %ax",  (IDIV16m i16mem:$src)>;
+def : InstAlias<"idivl $src, %eax", (IDIV32m i32mem:$src)>;
+def : InstAlias<"idivq $src, %rax", (IDIV64m i64mem:$src)>;
+
+
+
+// Various unary fpstack operations default to operating on on ST1.
+// For example, "fxch" -> "fxch %st(1)"
+def : InstAlias<"faddp",        (ADD_FPrST0  ST1)>;
+def : InstAlias<"fsubp",        (SUBR_FPrST0 ST1)>;
+def : InstAlias<"fsubrp",       (SUB_FPrST0  ST1)>;
+def : InstAlias<"fmulp",        (MUL_FPrST0  ST1)>;
+def : InstAlias<"fdivp",        (DIVR_FPrST0 ST1)>;
+def : InstAlias<"fdivrp",       (DIV_FPrST0  ST1)>;
+def : InstAlias<"fxch",         (XCH_F       ST1)>;
+def : InstAlias<"fcomi",        (COM_FIr     ST1)>;
+def : InstAlias<"fcompi",       (COM_FIPr    ST1)>;
+def : InstAlias<"fucom",        (UCOM_Fr     ST1)>;
+def : InstAlias<"fucomp",       (UCOM_FPr    ST1)>;
+def : InstAlias<"fucomi",       (UCOM_FIr    ST1)>;
+def : InstAlias<"fucompi",      (UCOM_FIPr   ST1)>;
+
+// Handle fmul/fadd/fsub/fdiv instructions with explicitly written st(0) op.
+// For example, "fadd %st(4), %st(0)" -> "fadd %st(4)".  We also disambiguate
+// instructions like "fadd %st(0), %st(0)" as "fadd %st(0)" for consistency with
+// gas.
+multiclass FpUnaryAlias<string Mnemonic, Instruction Inst> {
+ def : InstAlias<!strconcat(Mnemonic, " $op, %st(0)"),    (Inst RST:$op)>;
+ def : InstAlias<!strconcat(Mnemonic, " %st(0), %st(0)"), (Inst ST0)>;
+}
+
+defm : FpUnaryAlias<"fadd",   ADD_FST0r>;
+defm : FpUnaryAlias<"faddp",  ADD_FPrST0>;
+defm : FpUnaryAlias<"fsub",   SUB_FST0r>;
+defm : FpUnaryAlias<"fsubp",  SUBR_FPrST0>;
+defm : FpUnaryAlias<"fsubr",  SUBR_FST0r>;
+defm : FpUnaryAlias<"fsubrp", SUB_FPrST0>;
+defm : FpUnaryAlias<"fmul",   MUL_FST0r>;
+defm : FpUnaryAlias<"fmulp",  MUL_FPrST0>;
+defm : FpUnaryAlias<"fdiv",   DIV_FST0r>;
+defm : FpUnaryAlias<"fdivp",  DIVR_FPrST0>;
+defm : FpUnaryAlias<"fdivr",  DIVR_FST0r>;
+defm : FpUnaryAlias<"fdivrp", DIV_FPrST0>;
+defm : FpUnaryAlias<"fcomi",   COM_FIr>;
+defm : FpUnaryAlias<"fucomi",  UCOM_FIr>;
+defm : FpUnaryAlias<"fcompi",   COM_FIPr>;
+defm : FpUnaryAlias<"fucompi",  UCOM_FIPr>;
+
+
+// Handle "f{mulp,addp} st(0), $op" the same as "f{mulp,addp} $op", since they
+// commute.  We also allow fdivrp/fsubrp even though they don't commute, solely
+// because gas supports it.
+def : InstAlias<"faddp %st(0), $op", (ADD_FPrST0 RST:$op)>;
+def : InstAlias<"fmulp %st(0), $op", (MUL_FPrST0 RST:$op)>;
+def : InstAlias<"fsubrp %st(0), $op", (SUB_FPrST0 RST:$op)>;
+def : InstAlias<"fdivrp %st(0), $op", (DIV_FPrST0 RST:$op)>;
+
+// We accepts "fnstsw %eax" even though it only writes %ax.
+def : InstAlias<"fnstsw %eax", (FNSTSW8r)>;
+def : InstAlias<"fnstsw %al" , (FNSTSW8r)>;
+def : InstAlias<"fnstsw"     , (FNSTSW8r)>;
+
+// lcall and ljmp aliases.  This seems to be an odd mapping in 64-bit mode, but
+// this is compatible with what GAS does.
+def : InstAlias<"lcall $seg, $off", (FARCALL32i i32imm:$off, i16imm:$seg)>;
+def : InstAlias<"ljmp $seg, $off",  (FARJMP32i  i32imm:$off, i16imm:$seg)>;
+def : InstAlias<"lcall *$dst",      (FARCALL32m opaque48mem:$dst)>;
+def : InstAlias<"ljmp *$dst",       (FARJMP32m  opaque48mem:$dst)>;
+
+// "imul <imm>, B" is an alias for "imul <imm>, B, B".
+def : InstAlias<"imulw $imm, $r", (IMUL16rri  GR16:$r, GR16:$r, i16imm:$imm)>;
+def : InstAlias<"imulw $imm, $r", (IMUL16rri8 GR16:$r, GR16:$r, i16i8imm:$imm)>;
+def : InstAlias<"imull $imm, $r", (IMUL32rri  GR32:$r, GR32:$r, i32imm:$imm)>;
+def : InstAlias<"imull $imm, $r", (IMUL32rri8 GR32:$r, GR32:$r, i32i8imm:$imm)>;
+def : InstAlias<"imulq $imm, $r",(IMUL64rri32 GR64:$r, GR64:$r,i64i32imm:$imm)>;
+def : InstAlias<"imulq $imm, $r", (IMUL64rri8 GR64:$r, GR64:$r, i64i8imm:$imm)>;
+
+// inb %dx -> inb %al, %dx
+def : InstAlias<"inb %dx", (IN8rr)>;
+def : InstAlias<"inw %dx", (IN16rr)>;
+def : InstAlias<"inl %dx", (IN32rr)>;
+def : InstAlias<"inb $port", (IN8ri i8imm:$port)>;
+def : InstAlias<"inw $port", (IN16ri i8imm:$port)>;
+def : InstAlias<"inl $port", (IN32ri i8imm:$port)>;
+
+
+// jmp and call aliases for lcall and ljmp.  jmp $42,$5 -> ljmp
+def : InstAlias<"call $seg, $off",  (FARCALL32i i32imm:$off, i16imm:$seg)>;
+def : InstAlias<"jmp $seg, $off",   (FARJMP32i  i32imm:$off, i16imm:$seg)>;
+def : InstAlias<"callw $seg, $off", (FARCALL16i i16imm:$off, i16imm:$seg)>;
+def : InstAlias<"jmpw $seg, $off",  (FARJMP16i  i16imm:$off, i16imm:$seg)>;
+def : InstAlias<"calll $seg, $off", (FARCALL32i i32imm:$off, i16imm:$seg)>;
+def : InstAlias<"jmpl $seg, $off",  (FARJMP32i  i32imm:$off, i16imm:$seg)>;
+
+// Force mov without a suffix with a segment and mem to prefer the 'l' form of
+// the move.  All segment/mem forms are equivalent, this has the shortest
+// encoding.
+def : InstAlias<"mov $mem, $seg", (MOV32sm SEGMENT_REG:$seg, i32mem:$mem)>;
+def : InstAlias<"mov $seg, $mem", (MOV32ms i32mem:$mem, SEGMENT_REG:$seg)>;
+
+// Match 'movq <largeimm>, <reg>' as an alias for movabsq.
+def : InstAlias<"movq $imm, $reg", (MOV64ri GR64:$reg, i64imm:$imm)>;
+
+// movsd with no operands (as opposed to the SSE scalar move of a double) is an
+// alias for movsl. (as in rep; movsd)
+def : InstAlias<"movsd", (MOVSD)>;
+
+// movsx aliases
+def : InstAlias<"movsx $src, $dst", (MOVSX16rr8W GR16:$dst, GR8:$src)>;
+def : InstAlias<"movsx $src, $dst", (MOVSX16rm8W GR16:$dst, i8mem:$src)>;
+def : InstAlias<"movsx $src, $dst", (MOVSX32rr8 GR32:$dst, GR8:$src)>;
+def : InstAlias<"movsx $src, $dst", (MOVSX32rr16 GR32:$dst, GR16:$src)>;
+def : InstAlias<"movsx $src, $dst", (MOVSX64rr8 GR64:$dst, GR8:$src)>;
+def : InstAlias<"movsx $src, $dst", (MOVSX64rr16 GR64:$dst, GR16:$src)>;
+def : InstAlias<"movsx $src, $dst", (MOVSX64rr32 GR64:$dst, GR32:$src)>;
+
+// movzx aliases
+def : InstAlias<"movzx $src, $dst", (MOVZX16rr8W GR16:$dst, GR8:$src)>;
+def : InstAlias<"movzx $src, $dst", (MOVZX16rm8W GR16:$dst, i8mem:$src)>;
+def : InstAlias<"movzx $src, $dst", (MOVZX32rr8 GR32:$dst, GR8:$src)>;
+def : InstAlias<"movzx $src, $dst", (MOVZX32rr16 GR32:$dst, GR16:$src)>;
+def : InstAlias<"movzx $src, $dst", (MOVZX64rr8_Q GR64:$dst, GR8:$src)>;
+def : InstAlias<"movzx $src, $dst", (MOVZX64rr16_Q GR64:$dst, GR16:$src)>;
+// Note: No GR32->GR64 movzx form.
+
+// outb %dx -> outb %al, %dx
+def : InstAlias<"outb %dx", (OUT8rr)>;
+def : InstAlias<"outw %dx", (OUT16rr)>;
+def : InstAlias<"outl %dx", (OUT32rr)>;
+def : InstAlias<"outb $port", (OUT8ir i8imm:$port)>;
+def : InstAlias<"outw $port", (OUT16ir i8imm:$port)>;
+def : InstAlias<"outl $port", (OUT32ir i8imm:$port)>;
+
+// 'sldt <mem>' can be encoded with either sldtw or sldtq with the same
+// effect (both store to a 16-bit mem).  Force to sldtw to avoid ambiguity
+// errors, since its encoding is the most compact.
+def : InstAlias<"sldt $mem", (SLDT16m i16mem:$mem)>;
+
+// shld/shrd op,op -> shld op, op, 1
+def : InstAlias<"shldw $r1, $r2", (SHLD16rri8 GR16:$r1, GR16:$r2, 1)>;
+def : InstAlias<"shldl $r1, $r2", (SHLD32rri8 GR32:$r1, GR32:$r2, 1)>;
+def : InstAlias<"shldq $r1, $r2", (SHLD64rri8 GR64:$r1, GR64:$r2, 1)>;
+def : InstAlias<"shrdw $r1, $r2", (SHRD16rri8 GR16:$r1, GR16:$r2, 1)>;
+def : InstAlias<"shrdl $r1, $r2", (SHRD32rri8 GR32:$r1, GR32:$r2, 1)>;
+def : InstAlias<"shrdq $r1, $r2", (SHRD64rri8 GR64:$r1, GR64:$r2, 1)>;
+
+def : InstAlias<"shldw $mem, $reg", (SHLD16mri8 i16mem:$mem, GR16:$reg, 1)>;
+def : InstAlias<"shldl $mem, $reg", (SHLD32mri8 i32mem:$mem, GR32:$reg, 1)>;
+def : InstAlias<"shldq $mem, $reg", (SHLD64mri8 i64mem:$mem, GR64:$reg, 1)>;
+def : InstAlias<"shrdw $mem, $reg", (SHRD16mri8 i16mem:$mem, GR16:$reg, 1)>;
+def : InstAlias<"shrdl $mem, $reg", (SHRD32mri8 i32mem:$mem, GR32:$reg, 1)>;
+def : InstAlias<"shrdq $mem, $reg", (SHRD64mri8 i64mem:$mem, GR64:$reg, 1)>;
+
+/*  FIXME: This is disabled because the asm matcher is currently incapable of
+ *  matching a fixed immediate like $1.
+// "shl X, $1" is an alias for "shl X".
+multiclass ShiftRotateByOneAlias<string Mnemonic, string Opc> {
+ def : InstAlias<!strconcat(Mnemonic, "b $op, $$1"),
+                 (!cast<Instruction>(!strconcat(Opc, "8r1")) GR8:$op)>;
+ def : InstAlias<!strconcat(Mnemonic, "w $op, $$1"),
+                 (!cast<Instruction>(!strconcat(Opc, "16r1")) GR16:$op)>;
+ def : InstAlias<!strconcat(Mnemonic, "l $op, $$1"),
+                 (!cast<Instruction>(!strconcat(Opc, "32r1")) GR32:$op)>;
+ def : InstAlias<!strconcat(Mnemonic, "q $op, $$1"),
+                 (!cast<Instruction>(!strconcat(Opc, "64r1")) GR64:$op)>;
+ def : InstAlias<!strconcat(Mnemonic, "b $op, $$1"),
+                 (!cast<Instruction>(!strconcat(Opc, "8m1")) i8mem:$op)>;
+ def : InstAlias<!strconcat(Mnemonic, "w $op, $$1"),
+                 (!cast<Instruction>(!strconcat(Opc, "16m1")) i16mem:$op)>;
+ def : InstAlias<!strconcat(Mnemonic, "l $op, $$1"),
+                 (!cast<Instruction>(!strconcat(Opc, "32m1")) i32mem:$op)>;
+ def : InstAlias<!strconcat(Mnemonic, "q $op, $$1"),
+                 (!cast<Instruction>(!strconcat(Opc, "64m1")) i64mem:$op)>;
+}
+
+defm : ShiftRotateByOneAlias<"rcl", "RCL">;
+defm : ShiftRotateByOneAlias<"rcr", "RCR">;
+defm : ShiftRotateByOneAlias<"rol", "ROL">;
+defm : ShiftRotateByOneAlias<"ror", "ROR">;
+FIXME */
+
+// test: We accept "testX <reg>, <mem>" and "testX <mem>, <reg>" as synonyms.
+def : InstAlias<"testb $val, $mem", (TEST8rm  GR8 :$val, i8mem :$mem)>;
+def : InstAlias<"testw $val, $mem", (TEST16rm GR16:$val, i16mem:$mem)>;
+def : InstAlias<"testl $val, $mem", (TEST32rm GR32:$val, i32mem:$mem)>;
+def : InstAlias<"testq $val, $mem", (TEST64rm GR64:$val, i64mem:$mem)>;
+
+// xchg: We accept "xchgX <reg>, <mem>" and "xchgX <mem>, <reg>" as synonyms.
+def : InstAlias<"xchgb $mem, $val", (XCHG8rm  GR8 :$val, i8mem :$mem)>;
+def : InstAlias<"xchgw $mem, $val", (XCHG16rm GR16:$val, i16mem:$mem)>;
+def : InstAlias<"xchgl $mem, $val", (XCHG32rm GR32:$val, i32mem:$mem)>;
+def : InstAlias<"xchgq $mem, $val", (XCHG64rm GR64:$val, i64mem:$mem)>;
 

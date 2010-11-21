@@ -43,8 +43,10 @@ add_llvm_unittest(ADT
   ADT/DeltaAlgorithmTest.cpp
   ADT/DenseMapTest.cpp
   ADT/DenseSetTest.cpp
+  ADT/FoldingSet.cpp
   ADT/ilistTest.cpp
   ADT/ImmutableSetTest.cpp
+  ADT/IntervalMapTest.cpp
   ADT/SmallBitVectorTest.cpp
   ADT/SmallStringTest.cpp
   ADT/SmallVectorTest.cpp
@@ -63,25 +65,40 @@ add_llvm_unittest(ExecutionEngine
   ExecutionEngine/ExecutionEngineTest.cpp
   )
 
-add_llvm_unittest(JIT
+set(JITTestsSources
   ExecutionEngine/JIT/JITEventListenerTest.cpp
   ExecutionEngine/JIT/JITMemoryManagerTest.cpp
   ExecutionEngine/JIT/JITTest.cpp
   ExecutionEngine/JIT/MultiJITTest.cpp
   )
 
+if(MSVC)
+  list(APPEND JITTestsSources ExecutionEngine/JIT/JITTests.def)
+endif()
+
+add_llvm_unittest(JIT ${JITTestsSources})
+
 add_llvm_unittest(Transforms
   Transforms/Utils/Cloning.cpp
   )
 
-add_llvm_unittest(VMCore
+set(VMCoreSources
   VMCore/ConstantsTest.cpp
   VMCore/DerivedTypesTest.cpp
   VMCore/InstructionsTest.cpp
   VMCore/MetadataTest.cpp
   VMCore/PassManagerTest.cpp
+  VMCore/ValueMapTest.cpp
   VMCore/VerifierTest.cpp
   )
+
+# MSVC9 and 8 cannot compile ValueMapTest.cpp due to their bug.
+# See issue#331418 in Visual Studio.
+if(MSVC AND MSVC_VERSION LESS 1600)
+  list(REMOVE_ITEM VMCoreSources VMCore/ValueMapTest.cpp)
+endif()
+
+add_llvm_unittest(VMCore ${VMCoreSources})
 
 set(LLVM_LINK_COMPONENTS
   System

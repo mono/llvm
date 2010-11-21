@@ -89,6 +89,13 @@ set(C_INCLUDE_DIRS "" CACHE STRING
 set(LLVM_TARGET_ARCH "host"
   CACHE STRING "Set target to use for LLVM JIT or use \"host\" for automatic detection.")
 
+set(LIT_ARGS_DEFAULT "-sv")
+if (MSVC OR XCODE)
+  set(LIT_ARGS_DEFAULT "${LIT_ARGS_DEFAULT} --no-progress-bar")
+endif()
+set(LLVM_LIT_ARGS "${LIT_ARGS_DEFAULT}"
+    CACHE STRING "Default options for lit")
+
 option(LLVM_ENABLE_THREADS "Use threads if available." ON)
 
 if( uppercase_CMAKE_BUILD_TYPE STREQUAL "RELEASE" )
@@ -225,7 +232,7 @@ if( MSVC )
   add_llvm_definitions( -D_SCL_SECURE_NO_WARNINGS -DCRT_NONSTDC_NO_WARNINGS )
   add_llvm_definitions( -D_SCL_SECURE_NO_DEPRECATE )
   add_llvm_definitions( -wd4146 -wd4503 -wd4996 -wd4800 -wd4244 -wd4624 )
-  add_llvm_definitions( -wd4355 -wd4715 -wd4180 -wd4345 -wd4224 -wd4267 )
+  add_llvm_definitions( -wd4355 -wd4715 -wd4180 -wd4345 -wd4224 -wd4267 -wd4291 )
 
   # Suppress 'new behavior: elements of array 'array' will be default initialized'
   add_llvm_definitions( -wd4351 )
@@ -308,6 +315,7 @@ add_subdirectory(lib/Analysis/IPA)
 add_subdirectory(lib/MC)
 add_subdirectory(lib/MC/MCParser)
 add_subdirectory(lib/MC/MCDisassembler)
+add_subdirectory(lib/Object)
 
 add_subdirectory(utils/FileCheck)
 add_subdirectory(utils/count)
@@ -321,26 +329,25 @@ foreach(t ${LLVM_TARGETS_TO_BUILD})
   message(STATUS "Targeting ${t}")
   add_subdirectory(lib/Target/${t})
   add_subdirectory(lib/Target/${t}/TargetInfo)
-  if( EXISTS ${LLVM_MAIN_SRC_DIR}/lib/Target/${t}/AsmPrinter/CMakeLists.txt )
-    add_subdirectory(lib/Target/${t}/AsmPrinter)
+  set( td ${LLVM_MAIN_SRC_DIR}/lib/Target/${t} )
+  file(GLOB asmp_file "${td}/*AsmPrinter.cpp")
+  if( asmp_file )
     set(LLVM_ENUM_ASM_PRINTERS 
       "${LLVM_ENUM_ASM_PRINTERS}LLVM_ASM_PRINTER(${t})\n")
-  endif( EXISTS ${LLVM_MAIN_SRC_DIR}/lib/Target/${t}/AsmPrinter/CMakeLists.txt )
-  if( EXISTS ${LLVM_MAIN_SRC_DIR}/lib/Target/${t}/InstPrinter/CMakeLists.txt )
+  endif()
+  if( EXISTS ${td}/InstPrinter/CMakeLists.txt )
     add_subdirectory(lib/Target/${t}/InstPrinter)
-    set(LLVM_ENUM_ASM_PRINTERS
-      "${LLVM_ENUM_ASM_PRINTERS}LLVM_ASM_PRINTER(${t})\n")
-  endif( EXISTS ${LLVM_MAIN_SRC_DIR}/lib/Target/${t}/InstPrinter/CMakeLists.txt )
-  if( EXISTS ${LLVM_MAIN_SRC_DIR}/lib/Target/${t}/AsmParser/CMakeLists.txt )
+  endif()
+  if( EXISTS ${td}/AsmParser/CMakeLists.txt )
     add_subdirectory(lib/Target/${t}/AsmParser)
     set(LLVM_ENUM_ASM_PARSERS 
       "${LLVM_ENUM_ASM_PARSERS}LLVM_ASM_PARSER(${t})\n")
-  endif( EXISTS ${LLVM_MAIN_SRC_DIR}/lib/Target/${t}/AsmParser/CMakeLists.txt )
-  if( EXISTS ${LLVM_MAIN_SRC_DIR}/lib/Target/${t}/Disassembler/CMakeLists.txt )
+  endif()
+  if( EXISTS ${td}/Disassembler/CMakeLists.txt )
     add_subdirectory(lib/Target/${t}/Disassembler)
     set(LLVM_ENUM_DISASSEMBLERS
       "${LLVM_ENUM_DISASSEMBLERS}LLVM_DISASSEMBLER(${t})\n")
-  endif( EXISTS ${LLVM_MAIN_SRC_DIR}/lib/Target/${t}/Disassembler/CMakeLists.txt )
+  endif()
   set(CURRENT_LLVM_TARGET)
 endforeach(t)
 
@@ -365,6 +372,7 @@ configure_file(
 add_subdirectory(lib/ExecutionEngine)
 add_subdirectory(lib/ExecutionEngine/Interpreter)
 add_subdirectory(lib/ExecutionEngine/JIT)
+add_subdirectory(lib/ExecutionEngine/MCJIT)
 add_subdirectory(lib/Target)
 add_subdirectory(lib/AsmParser)
 add_subdirectory(lib/Archive)
@@ -430,3 +438,12 @@ set(CPACK_PACKAGE_VERSION_MAJOR 2)
 set(CPACK_PACKAGE_VERSION_MINOR 9)
 add_version_info_from_vcs(CPACK_PACKAGE_VERSION_PATCH)
 include(CPack)
+
+# Workaround for MSVS10 to avoid the Dialog Hell
+# FIXME: This could be removed with future version of CMake.
+if(MSVC_VERSION EQUAL 1600)
+  set(LLVM_SLN_FILENAME "${CMAKE_CURRENT_BINARY_DIR}/LLVM.sln")
+  if( EXISTS "${LLVM_SLN_FILENAME}" )
+    file(APPEND "${LLVM_SLN_FILENAME}" "\n# This should be regenerated!\n")
+  endif()
+endif()

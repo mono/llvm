@@ -5,6 +5,17 @@
   <meta http-equiv="content-type" content="text/html; charset=utf-8">
   <title>The LLVM Target-Independent Code Generator</title>
   <link rel="stylesheet" href="llvm.css" type="text/css">
+
+  <style type="text/css">
+    .unknown { background-color: #C0C0C0; text-align: center; }
+    .unknown:before { content: "?" }
+    .no { background-color: #C11B17 }
+    .no:before { content: "N" }
+    .partial { background-color: #F88017 }
+    .yes { background-color: #0F0; }
+    .yes:before { content: "Y" }
+  </style>
+
 </head>
 <body>
 
@@ -872,7 +883,7 @@ directive in a .s file).
 
 <!-- ======================================================================= -->
 <div class="doc_subsection">
-  <a name="mcinst">The <tt>MCInst</tt> class</a></li>
+  <a name="mcinst">The <tt>MCInst</tt> class</a>
 </div>
 
 <div class="doc_text">
@@ -1878,15 +1889,143 @@ We've tried hard to automate the generation of the assembler from the .td files
 part of the manual and repetitive data entry can be factored and shared with the
 compiler.</p>
 
-
-
 </div>
+
+<!-- ======================================================================= -->
+<div class="doc_subsection" id="na_instparsing">Instruction Parsing</div>
+
+<div class="doc_text"><p>To Be Written</p></div>
 
 
 <!-- ======================================================================= -->
-<div class="doc_subsection">
-  <a name="proepicode">Prolog/Epilog Code Insertion</a>
+<div class="doc_subsection" id="na_instaliases">
+  Instruction Alias Processing
 </div>
+
+<div class="doc_text">
+<p>Once the instruction is parsed, it enters the MatchInstructionImpl function.
+The MatchInstructionImpl function performs alias processing and then does
+actual matching.</p>
+
+<p>Alias processing is the phase that canonicalizes different lexical forms of
+the same instructions down to one representation.  There are several different
+kinds of alias that are possible to implement and they are listed below in the
+order that they are processed (which is in order from simplest/weakest to most
+complex/powerful).  Generally you want to use the first alias mechanism that
+meets the needs of your instruction, because it will allow a more concise
+description.</p>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">Mnemonic Aliases</div>
+
+<div class="doc_text">
+
+<p>The first phase of alias processing is simple instruction mnemonic
+remapping for classes of instructions which are allowed with two different
+mnemonics.  This phase is a simple and unconditionally remapping from one input
+mnemonic to one output mnemonic.  It isn't possible for this form of alias to
+look at the operands at all, so the remapping must apply for all forms of a
+given mnemonic.  Mnemonic aliases are defined simply, for example X86 has:
+</p>
+
+<div class="doc_code">
+<pre>
+def : MnemonicAlias&lt;"cbw",     "cbtw"&gt;;
+def : MnemonicAlias&lt;"smovq",   "movsq"&gt;;
+def : MnemonicAlias&lt;"fldcww",  "fldcw"&gt;;
+def : MnemonicAlias&lt;"fucompi", "fucomip"&gt;;
+def : MnemonicAlias&lt;"ud2a",    "ud2"&gt;;
+</pre>
+</div>
+
+<p>... and many others.  With a MnemonicAlias definition, the mnemonic is
+remapped simply and directly.  Though MnemonicAlias's can't look at any aspect
+of the instruction (such as the operands) they can depend on global modes (the
+same ones supported by the matcher), through a Requires clause:</p>
+
+<div class="doc_code">
+<pre>
+def : MnemonicAlias&lt;"pushf", "pushfq"&gt;, Requires&lt;[In64BitMode]&gt;;
+def : MnemonicAlias&lt;"pushf", "pushfl"&gt;, Requires&lt;[In32BitMode]&gt;;
+</pre>
+</div>
+
+<p>In this example, the mnemonic gets mapped into different a new one depending
+on the current instruction set.</p>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsubsection">Instruction Aliases</div>
+
+<div class="doc_text">
+
+<p>The most general phase of alias processing occurs while matching is
+happening: it provides new forms for the matcher to match along with a specific
+instruction to generate.  An instruction alias has two parts: the string to
+match and the instruction to generate.  For example:
+</p>
+
+<div class="doc_code">
+<pre>
+def : InstAlias&lt;"movsx $src, $dst", (MOVSX16rr8W GR16:$dst, GR8  :$src)&gt;;
+def : InstAlias&lt;"movsx $src, $dst", (MOVSX16rm8W GR16:$dst, i8mem:$src)&gt;;
+def : InstAlias&lt;"movsx $src, $dst", (MOVSX32rr8  GR32:$dst, GR8  :$src)&gt;;
+def : InstAlias&lt;"movsx $src, $dst", (MOVSX32rr16 GR32:$dst, GR16 :$src)&gt;;
+def : InstAlias&lt;"movsx $src, $dst", (MOVSX64rr8  GR64:$dst, GR8  :$src)&gt;;
+def : InstAlias&lt;"movsx $src, $dst", (MOVSX64rr16 GR64:$dst, GR16 :$src)&gt;;
+def : InstAlias&lt;"movsx $src, $dst", (MOVSX64rr32 GR64:$dst, GR32 :$src)&gt;;
+</pre>
+</div>
+
+<p>This shows a powerful example of the instruction aliases, matching the
+same mnemonic in multiple different ways depending on what operands are present
+in the assembly.  The result of instruction aliases can include operands in a
+different order than the destination instruction, and can use an input
+multiple times, for example:</p>
+
+<div class="doc_code">
+<pre>
+def : InstAlias&lt;"clrb $reg", (XOR8rr  GR8 :$reg, GR8 :$reg)&gt;;
+def : InstAlias&lt;"clrw $reg", (XOR16rr GR16:$reg, GR16:$reg)&gt;;
+def : InstAlias&lt;"clrl $reg", (XOR32rr GR32:$reg, GR32:$reg)&gt;;
+def : InstAlias&lt;"clrq $reg", (XOR64rr GR64:$reg, GR64:$reg)&gt;;
+</pre>
+</div>
+
+<p>This example also shows that tied operands are only listed once.  In the X86
+backend, XOR8rr has two input GR8's and one output GR8 (where an input is tied
+to the output).  InstAliases take a flattened operand list without duplicates
+for tied operands.  The result of an instruction alias can also use immediates
+and fixed physical registers which are added as simple immediate operands in the
+result, for example:</p>
+
+<div class="doc_code">
+<pre>
+// Fixed Immediate operand.
+def : InstAlias&lt;"aad", (AAD8i8 10)&gt;;
+
+// Fixed register operand.
+def : InstAlias&lt;"fcomi", (COM_FIr ST1)&gt;;
+
+// Simple alias.
+def : InstAlias&lt;"fcomi $reg", (COM_FIr RST:$reg)&gt;;
+</pre>
+</div>
+
+
+<p>Instruction aliases can also have a Requires clause to make them
+subtarget specific.</p>
+
+</div>
+
+
+
+<!-- ======================================================================= -->
+<div class="doc_subsection" id="na_matching">Instruction Matching</div>
+
 <div class="doc_text"><p>To Be Written</p></div>
 
 
@@ -1910,17 +2049,6 @@ compiler.</p>
 <div class="doc_subsection">
   <a name="targetfeatures">Target Feature Matrix</a>
 </div>
-
-<style type="text/css">
-  .unknown { background-color: #C0C0C0; text-align: center; }
-  .unknown:before { content: "?" }
-  .no { background-color: #C11B17 }
-  .no:before { content: "N" }
-  .partial { background-color: #F88017 }
-  .yes { background-color: #00FF00; }
-  .yes:before { content: "Y" }
-</style>
-
 
 <div class="doc_text">
 
@@ -1952,7 +2080,7 @@ is the key:</p>
 
 <table width="689" border="1" cellspacing="0">
 <tr><td></td>
-<td colspan="13" align="center" bgcolor="#ffffcc">Target</td>
+<td colspan="13" align="center" style="background-color:#ffc">Target</td>
 </tr>
   <tr>
     <th>Feature</th>
@@ -2042,7 +2170,7 @@ is the key:</p>
 <tr>
   <td><a href="#feat_jit">jit</a></td>
   <td class="partial"><a href="#feat_jit_arm">*</a></td> <!-- ARM -->
-  <td class="unknown"></td> <!-- Alpha -->
+  <td class="no"></td> <!-- Alpha -->
   <td class="no"></td> <!-- Blackfin -->
   <td class="no"></td> <!-- CellSPU -->
   <td class="no"></td> <!-- MBlaze -->

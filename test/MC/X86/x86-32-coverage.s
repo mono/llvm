@@ -18,7 +18,7 @@
 // CHECK: 	movswl	3735928559(%ebx,%ecx,8), %ecx
         	movswl	0xdeadbeef(%ebx,%ecx,8),%ecx
 
-// CHECK: 	movzbl	3735928559(%ebx,%ecx,8), %ecx  # NOREX
+// CHECK: 	movzbl	3735928559(%ebx,%ecx,8), %ecx
         	movzbl	0xdeadbeef(%ebx,%ecx,8),%ecx
 
 // CHECK: 	movzwl	3735928559(%ebx,%ecx,8), %ecx
@@ -4474,19 +4474,19 @@
 // CHECK:  encoding: [0xdb,0xda]
         	fcmovnu	%st(2),%st
 
-// CHECK: fcomi	%st(2), %st(0)
+// CHECK: fcomi	%st(2)
 // CHECK:  encoding: [0xdb,0xf2]
         	fcomi	%st(2),%st
 
-// CHECK: fucomi	%st(2), %st(0)
+// CHECK: fucomi	%st(2)
 // CHECK:  encoding: [0xdb,0xea]
         	fucomi	%st(2),%st
 
-// CHECK: fcomip	%st(2), %st(0)
+// CHECK: fcompi	%st(2)
 // CHECK:  encoding: [0xdf,0xf2]
         	fcomip	%st(2),%st
 
-// CHECK: fucomip	%st(2), %st(0)
+// CHECK: fucompi	%st(2)
 // CHECK:  encoding: [0xdf,0xea]
         	fucomip	%st(2),%st
 
@@ -11807,19 +11807,19 @@
 // CHECK: 	movswl	305419896, %ecx
         	movswl	0x12345678,%ecx
 
-// CHECK: 	movzbl	3735928559(%ebx,%ecx,8), %ecx  # NOREX
+// CHECK: 	movzbl	3735928559(%ebx,%ecx,8), %ecx
         	movzbl	0xdeadbeef(%ebx,%ecx,8),%ecx
 
-// CHECK: 	movzbl	69, %ecx  # NOREX
+// CHECK: 	movzbl	69, %ecx
         	movzbl	0x45,%ecx
 
-// CHECK: 	movzbl	32493, %ecx  # NOREX
+// CHECK: 	movzbl	32493, %ecx
         	movzbl	0x7eed,%ecx
 
-// CHECK: 	movzbl	3133065982, %ecx  # NOREX
+// CHECK: 	movzbl	3133065982, %ecx
         	movzbl	0xbabecafe,%ecx
 
-// CHECK: 	movzbl	305419896, %ecx  # NOREX
+// CHECK: 	movzbl	305419896, %ecx
         	movzbl	0x12345678,%ecx
 
 // CHECK: 	movzbw	3735928559(%ebx,%ecx,8), %bx
@@ -14150,16 +14150,16 @@
 // CHECK: 	fcmovnu	%st(2), %st(0)
         	fcmovnu	%st(2),%st
 
-// CHECK: 	fcomi	%st(2), %st(0)
+// CHECK: 	fcomi	%st(2)
         	fcomi	%st(2),%st
 
-// CHECK: 	fucomi	%st(2), %st(0)
+// CHECK: 	fucomi	%st(2)
         	fucomi	%st(2),%st
 
-// CHECK: 	fcomip	%st(2), %st(0)
+// CHECK: 	fcompi	%st(2)
         	fcomip	%st(2),%st
 
-// CHECK: 	fucomip	%st(2), %st(0)
+// CHECK: 	fucompi	%st(2)
         	fucomip	%st(2),%st
 
 // CHECK: 	movnti	%ecx, 3735928559(%ebx,%ecx,8)

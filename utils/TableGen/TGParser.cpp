@@ -812,7 +812,7 @@ Init *TGParser::ParseOperation(Record *CurRec) {
     case tgtok::XSRA:    Code = BinOpInit::SRA;    Type = new IntRecTy(); break;
     case tgtok::XSRL:    Code = BinOpInit::SRL;    Type = new IntRecTy(); break;
     case tgtok::XSHL:    Code = BinOpInit::SHL;    Type = new IntRecTy(); break;
-    case tgtok::XEq:     Code = BinOpInit::EQ;     Type = new IntRecTy(); break;
+    case tgtok::XEq:     Code = BinOpInit::EQ;     Type = new BitRecTy(); break;
     case tgtok::XStrConcat:
       Code = BinOpInit::STRCONCAT;
       Type = new StringRecTy();
@@ -2087,7 +2087,8 @@ bool TGParser::ParseDefm(MultiClass *CurMultiClass) {
 ///   Object ::= LETCommand Object
 bool TGParser::ParseObject(MultiClass *MC) {
   switch (Lex.getCode()) {
-  default: assert(0 && "This is not an object");
+  default:
+    return TokError("Expected class, def, defm, multiclass or let definition");
   case tgtok::Let:   return ParseTopLevelLet(MC);
   case tgtok::Def:   return ParseDef(MC);
   case tgtok::Defm:  return ParseDefm(MC);

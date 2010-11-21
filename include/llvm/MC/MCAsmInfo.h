@@ -212,6 +212,10 @@ namespace llvm {
     /// directive.
     bool HasNoDeadStrip;                     // Defaults to false.
 
+    /// HasSymbolResolver - True if this target supports the MachO
+    /// .symbol_resolver directive.
+    bool HasSymbolResolver;                     // Defaults to false.
+
     /// WeakRefDirective - This directive, if non-null, is used to declare a
     /// global as being a weak undefined symbol.
     const char *WeakRefDirective;            // Defaults to NULL.
@@ -236,10 +240,6 @@ namespace llvm {
 
     /// HasLEB128 - True if target asm supports leb128 directives.
     bool HasLEB128;                          // Defaults to false.
-
-    /// hasDotLocAndDotFile - True if target asm supports .loc and .file
-    /// directives for emitting debugging information.
-    bool HasDotLocAndDotFile;                // Defaults to false.
 
     /// SupportsDebugInformation - True if target supports emission of debugging
     /// information.
@@ -399,6 +399,7 @@ namespace llvm {
     }
     bool hasSingleParameterDotFile() const { return HasSingleParameterDotFile; }
     bool hasNoDeadStrip() const { return HasNoDeadStrip; }
+    bool hasSymbolResolver() const { return HasSymbolResolver; }
     const char *getWeakRefDirective() const { return WeakRefDirective; }
     const char *getWeakDefDirective() const { return WeakDefDirective; }
     const char *getLinkOnceDirective() const { return LinkOnceDirective; }
@@ -409,9 +410,6 @@ namespace llvm {
     }
     bool hasLEB128() const {
       return HasLEB128;
-    }
-    bool hasDotLocAndDotFile() const {
-      return HasDotLocAndDotFile;
     }
     bool doesSupportDebugInformation() const {
       return SupportsDebugInformation;

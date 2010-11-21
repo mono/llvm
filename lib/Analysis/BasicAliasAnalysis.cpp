@@ -456,7 +456,7 @@ namespace {
 
     /// pointsToConstantMemory - Chase pointers until we find a (constant
     /// global) or not.
-    virtual bool pointsToConstantMemory(const Location &Loc);
+    virtual bool pointsToConstantMemory(const Location &Loc, bool OrLocal);
 
     /// getModRefBehavior - Return the behavior when calling the given
     /// call site.
@@ -517,18 +517,67 @@ ImmutablePass *llvm::createBasicAliasAnalysisPass() {
   return new BasicAliasAnalysis();
 }
 
+/// pointsToConstantMemory - Returns whether the given pointer value
+/// points to memory that is local to the function, with global constants being
+/// considered local to all functions.
+bool
+BasicAliasAnalysis::pointsToConstantMemory(const Location &Loc, bool OrLocal) {
+  assert(Visited.empty() && "Visited must be cleared after use!");
 
-/// pointsToConstantMemory - Chase pointers until we find a (constant
-/// global) or not.
-bool BasicAliasAnalysis::pointsToConstantMemory(const Location &Loc) {
-  if (const GlobalVariable *GV = 
-        dyn_cast<GlobalVariable>(Loc.Ptr->getUnderlyingObject()))
-    // Note: this doesn't require GV to be "ODR" because it isn't legal for a
-    // global to be marked constant in some modules and non-constant in others.
-    // GV may even be a declaration, not a definition.
-    return GV->isConstant();
+  unsigned MaxLookup = 8;
+  SmallVector<const Value *, 16> Worklist;
+  Worklist.push_back(Loc.Ptr);
+  do {
+    const Value *V = Worklist.pop_back_val()->getUnderlyingObject();
+    if (!Visited.insert(V)) {
+      Visited.clear();
+      return AliasAnalysis::pointsToConstantMemory(Loc, OrLocal);
+    }
 
-  return AliasAnalysis::pointsToConstantMemory(Loc);
+    // An alloca instruction defines local memory.
+    if (OrLocal && isa<AllocaInst>(V))
+      continue;
+
+    // A global constant counts as local memory for our purposes.
+    if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(V)) {
+      // Note: this doesn't require GV to be "ODR" because it isn't legal for a
+      // global to be marked constant in some modules and non-constant in
+      // others.  GV may even be a declaration, not a definition.
+      if (!GV->isConstant()) {
+        Visited.clear();
+        return AliasAnalysis::pointsToConstantMemory(Loc, OrLocal);
+      }
+      continue;
+    }
+
+    // If both select values point to local memory, then so does the select.
+    if (const SelectInst *SI = dyn_cast<SelectInst>(V)) {
+      Worklist.push_back(SI->getTrueValue());
+      Worklist.push_back(SI->getFalseValue());
+      continue;
+    }
+
+    // If all values incoming to a phi node point to local memory, then so does
+    // the phi.
+    if (const PHINode *PN = dyn_cast<PHINode>(V)) {
+      // Don't bother inspecting phi nodes with many operands.
+      if (PN->getNumIncomingValues() > MaxLookup) {
+        Visited.clear();
+        return AliasAnalysis::pointsToConstantMemory(Loc, OrLocal);
+      }
+      for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
+        Worklist.push_back(PN->getIncomingValue(i));
+      continue;
+    }
+
+    // Otherwise be conservative.
+    Visited.clear();
+    return AliasAnalysis::pointsToConstantMemory(Loc, OrLocal);
+
+  } while (!Worklist.empty() && --MaxLookup);
+
+  Visited.clear();
+  return Worklist.empty();
 }
 
 /// getModRefBehavior - Return the behavior when calling the given call site.
@@ -546,22 +595,32 @@ BasicAliasAnalysis::getModRefBehavior(ImmutableCallSite CS) {
     Min = OnlyReadsMemory;
 
   // The AliasAnalysis base class has some smarts, lets use them.
-  return std::min(AliasAnalysis::getModRefBehavior(CS), Min);
+  return ModRefBehavior(AliasAnalysis::getModRefBehavior(CS) & Min);
 }
 
 /// getModRefBehavior - Return the behavior when calling the given function.
 /// For use when the call site is not known.
 AliasAnalysis::ModRefBehavior
 BasicAliasAnalysis::getModRefBehavior(const Function *F) {
+  // If the function declares it doesn't access memory, we can't do better.
   if (F->doesNotAccessMemory())
-    // Can't do better than this.
     return DoesNotAccessMemory;
-  if (F->onlyReadsMemory())
-    return OnlyReadsMemory;
-  if (unsigned id = F->getIntrinsicID())
-    return getIntrinsicModRefBehavior(id);
 
-  return AliasAnalysis::getModRefBehavior(F);
+  // For intrinsics, we can check the table.
+  if (unsigned iid = F->getIntrinsicID()) {
+#define GET_INTRINSIC_MODREF_BEHAVIOR
+#include "llvm/Intrinsics.gen"
+#undef GET_INTRINSIC_MODREF_BEHAVIOR
+  }
+
+  ModRefBehavior Min = UnknownModRefBehavior;
+
+  // If the function declares it only reads memory, go with that.
+  if (F->onlyReadsMemory())
+    Min = OnlyReadsMemory;
+
+  // Otherwise be conservative.
+  return ModRefBehavior(AliasAnalysis::getModRefBehavior(F) & Min);
 }
 
 /// getModRefInfo - Check to see if the specified callsite can clobber the
@@ -614,6 +673,8 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
       return NoModRef;
   }
 
+  ModRefResult Min = ModRef;
+
   // Finally, handle specific knowledge of intrinsics.
   const IntrinsicInst *II = dyn_cast<IntrinsicInst>(CS.getInstruction());
   if (II != 0)
@@ -629,7 +690,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
       if (isNoAlias(Location(Dest, Len), Loc)) {
         if (isNoAlias(Location(Src, Len), Loc))
           return NoModRef;
-        return Ref;
+        Min = Ref;
       }
       break;
     }
@@ -688,7 +749,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
     }
 
   // The AliasAnalysis base class has some smarts, lets use them.
-  return AliasAnalysis::getModRefInfo(CS, Loc);
+  return ModRefResult(AliasAnalysis::getModRefInfo(CS, Loc) & Min);
 }
 
 /// aliasGEP - Provide a bunch of ad-hoc rules to disambiguate a GEP instruction

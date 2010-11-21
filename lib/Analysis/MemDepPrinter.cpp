@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Analysis/Passes.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/Support/CallSite.h"
@@ -40,7 +41,8 @@ namespace {
     void print(raw_ostream &OS, const Module * = 0) const;
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-      AU.addRequired<MemoryDependenceAnalysis>();
+      AU.addRequiredTransitive<AliasAnalysis>();
+      AU.addRequiredTransitive<MemoryDependenceAnalysis>();
       AU.setPreservesAll();
     }
 
@@ -64,6 +66,7 @@ FunctionPass *llvm::createMemDepPrinter() {
 
 bool MemDepPrinter::runOnFunction(Function &F) {
   this->F = &F;
+  AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
   MemoryDependenceAnalysis &MDA = getAnalysis<MemoryDependenceAnalysis>();
 
   // All this code uses non-const interfaces because MemDep is not
@@ -99,15 +102,16 @@ bool MemDepPrinter::runOnFunction(Function &F) {
       SmallVector<NonLocalDepResult, 4> NLDI;
       if (LoadInst *LI = dyn_cast<LoadInst>(Inst)) {
         // FIXME: Volatile is not handled properly here.
-        MDA.getNonLocalPointerDependency(LI->getPointerOperand(), !LI->isVolatile(),
+        AliasAnalysis::Location Loc = AA.getLocation(LI);
+        MDA.getNonLocalPointerDependency(Loc, !LI->isVolatile(),
                                          LI->getParent(), NLDI);
       } else if (StoreInst *SI = dyn_cast<StoreInst>(Inst)) {
         // FIXME: Volatile is not handled properly here.
-        MDA.getNonLocalPointerDependency(SI->getPointerOperand(), false,
-                                         SI->getParent(), NLDI);
+        AliasAnalysis::Location Loc = AA.getLocation(SI);
+        MDA.getNonLocalPointerDependency(Loc, false, SI->getParent(), NLDI);
       } else if (VAArgInst *VI = dyn_cast<VAArgInst>(Inst)) {
-        MDA.getNonLocalPointerDependency(VI->getPointerOperand(), false,
-                                         VI->getParent(), NLDI);
+        AliasAnalysis::Location Loc = AA.getLocation(VI);
+        MDA.getNonLocalPointerDependency(Loc, false, VI->getParent(), NLDI);
       } else {
         llvm_unreachable("Unknown memory instruction!");
       }

@@ -470,3 +470,42 @@ define i32 @test37(i32 %x) {
 ; CHECK: or i32 {{.*}}, 1
 ; CHECK: ret
 }
+
+define i1 @test38(i1 %cond) {
+  %zero = alloca i32
+  %one = alloca i32
+  %ptr = select i1 %cond, i32* %zero, i32* %one
+  %isnull = icmp eq i32* %ptr, null
+  ret i1 %isnull
+; CHECK: @test38
+; CHECK: ret i1 false
+}
+
+define i1 @test39(i1 %cond, double %x) {
+  %s = select i1 %cond, double %x, double 0x7FF0000000000000 ; RHS = +infty
+  %cmp = fcmp ule double %x, %s
+  ret i1 %cmp
+; CHECK: @test39
+; CHECK: ret i1 true
+}
+
+define i1 @test40(i1 %cond) {
+  %a = alloca i32
+  %b = alloca i32
+  %c = alloca i32
+  %s = select i1 %cond, i32* %a, i32* %b
+  %r = icmp eq i32* %s, %c
+  ret i1 %r
+; CHECK: @test40
+; CHECK: ret i1 false
+}
+
+define i32 @test41(i1 %cond, i32 %x, i32 %y) {
+  %z = and i32 %x, %y
+  %s = select i1 %cond, i32 %y, i32 %z
+  %r = and i32 %x, %s
+  ret i32 %r
+; CHECK: @test41
+; CHECK: %r = and i32 %x, %y
+; CHECK: ret i32 %r
+}

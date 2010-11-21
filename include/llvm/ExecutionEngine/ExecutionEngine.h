@@ -41,6 +41,8 @@ class MutexGuard;
 class TargetData;
 class Type;
 
+/// \brief Helper class for helping synchronize access to the global address map
+/// table.
 class ExecutionEngineState {
 public:
   struct AddressMapConfig : public ValueMapConfig<const GlobalValue*> {
@@ -70,8 +72,7 @@ private:
 public:
   ExecutionEngineState(ExecutionEngine &EE);
 
-  GlobalAddressMapTy &
-  getGlobalAddressMap(const MutexGuard &) {
+  GlobalAddressMapTy &getGlobalAddressMap(const MutexGuard &) {
     return GlobalAddressMap;
   }
 
@@ -80,23 +81,41 @@ public:
     return GlobalAddressReverseMap;
   }
 
-  // Returns the address ToUnmap was mapped to.
+  /// \brief Erase an entry from the mapping table.
+  ///
+  /// \returns The address that \arg ToUnmap was happed to.
   void *RemoveMapping(const MutexGuard &, const GlobalValue *ToUnmap);
 };
 
-
+/// \brief Abstract interface for implementation execution of LLVM modules,
+/// designed to support both interpreter and just-in-time (JIT) compiler
+/// implementations.
 class ExecutionEngine {
-  const TargetData *TD;
+  /// The state object holding the global address mapping, which must be
+  /// accessed synchronously.
+  //
+  // FIXME: There is no particular need the entire map needs to be
+  // synchronized.  Wouldn't a reader-writer design be better here?
   ExecutionEngineState EEState;
+
+  /// The target data for the platform for which execution is being performed.
+  const TargetData *TD;
+
+  /// Whether lazy JIT compilation is enabled.
   bool CompilingLazily;
+
+  /// Whether JIT compilation of external global variables is allowed.
   bool GVCompilationDisabled;
+
+  /// Whether the JIT should perform lookups of external symbols (e.g.,
+  /// using dlsym).
   bool SymbolSearchingDisabled;
 
   friend class EngineBuilder;  // To allow access to JITCtor and InterpCtor.
 
 protected:
-  /// Modules - This is a list of Modules that we are JIT'ing from.  We use a
-  /// smallvector to optimize for the case where there is only one module.
+  /// The list of Modules that we are JIT'ing from.  We use a SmallVector to
+  /// optimize for the case where there is only one module.
   SmallVector<Module*, 1> Modules;
   
   void setTargetData(const TargetData *td) {
@@ -104,12 +123,22 @@ protected:
   }
   
   /// getMemoryforGV - Allocate memory for a global variable.
-  virtual char* getMemoryForGV(const GlobalVariable* GV);
+  virtual char *getMemoryForGV(const GlobalVariable *GV);
 
   // To avoid having libexecutionengine depend on the JIT and interpreter
-  // libraries, the JIT and Interpreter set these functions to ctor pointers
-  // at startup time if they are linked in.
+  // libraries, the execution engine implementations set these functions to ctor
+  // pointers at startup time if they are linked in.
   static ExecutionEngine *(*JITCtor)(
+    Module *M,
+    std::string *ErrorStr,
+    JITMemoryManager *JMM,
+    CodeGenOpt::Level OptLevel,
+    bool GVsWithCode,
+    CodeModel::Model CMM,
+    StringRef MArch,
+    StringRef MCPU,
+    const SmallVectorImpl<std::string>& MAttrs);
+  static ExecutionEngine *(*MCJITCtor)(
     Module *M,
     std::string *ErrorStr,
     JITMemoryManager *JMM,
@@ -123,8 +152,9 @@ protected:
                                         std::string *ErrorStr);
 
   /// LazyFunctionCreator - If an unknown function is needed, this function
-  /// pointer is invoked to create it. If this returns null, the JIT will abort.
-  void* (*LazyFunctionCreator)(const std::string &);
+  /// pointer is invoked to create it.  If this returns null, the JIT will
+  /// abort.
+  void *(*LazyFunctionCreator)(const std::string &);
   
   /// ExceptionTableRegister - If Exception Handling is set, the JIT will
   /// register dwarf tables with this function.
@@ -134,10 +164,10 @@ protected:
   std::vector<void*> AllExceptionTables;
 
 public:
-  /// lock - This lock is protects the ExecutionEngine, JIT, JITResolver and
+  /// lock - This lock protects the ExecutionEngine, JIT, JITResolver and
   /// JITEmitter classes.  It must be held while changing the internal state of
   /// any of those classes.
-  sys::Mutex lock; // Used to make this class and subclasses thread-safe
+  sys::Mutex lock;
 
   //===--------------------------------------------------------------------===//
   //  ExecutionEngine Startup
@@ -148,20 +178,18 @@ public:
   /// create - This is the factory method for creating an execution engine which
   /// is appropriate for the current machine.  This takes ownership of the
   /// module.
+  ///
+  /// \param GVsWithCode - Allocating globals with code breaks
+  /// freeMachineCodeForFunction and is probably unsafe and bad for performance.
+  /// However, we have clients who depend on this behavior, so we must support
+  /// it.  Eventually, when we're willing to break some backwards compatability,
+  /// this flag should be flipped to false, so that by default
+  /// freeMachineCodeForFunction works.
   static ExecutionEngine *create(Module *M,
                                  bool ForceInterpreter = false,
                                  std::string *ErrorStr = 0,
                                  CodeGenOpt::Level OptLevel =
                                    CodeGenOpt::Default,
-                                 // Allocating globals with code breaks
-                                 // freeMachineCodeForFunction and is probably
-                                 // unsafe and bad for performance.  However,
-                                 // we have clients who depend on this
-                                 // behavior, so we must support it.
-                                 // Eventually, when we're willing to break
-                                 // some backwards compatability, this flag
-                                 // should be flipped to false, so that by
-                                 // default freeMachineCodeForFunction works.
                                  bool GVsWithCode = true);
 
   /// createJIT - This is the factory method for creating a JIT for the current
@@ -186,10 +214,9 @@ public:
     Modules.push_back(M);
   }
   
-  //===----------------------------------------------------------------------===//
+  //===--------------------------------------------------------------------===//
 
   const TargetData *getTargetData() const { return TD; }
-
 
   /// removeModule - Remove a Module from the list of modules.  Returns true if
   /// M is found.
@@ -202,17 +229,19 @@ public:
   
   /// runFunction - Execute the specified function with the specified arguments,
   /// and return the result.
-  ///
   virtual GenericValue runFunction(Function *F,
                                 const std::vector<GenericValue> &ArgValues) = 0;
 
   /// runStaticConstructorsDestructors - This method is used to execute all of
-  /// the static constructors or destructors for a program, depending on the
-  /// value of isDtors.
+  /// the static constructors or destructors for a program.
+  ///
+  /// \param isDtors - Run the destructors instead of constructors.
   void runStaticConstructorsDestructors(bool isDtors);
+
   /// runStaticConstructorsDestructors - This method is used to execute all of
-  /// the static constructors or destructors for a module, depending on the
-  /// value of isDtors.
+  /// the static constructors or destructors for a particular module.
+  ///
+  /// \param isDtors - Run the destructors instead of constructors.
   void runStaticConstructorsDestructors(Module *module, bool isDtors);
   
   
@@ -231,8 +260,8 @@ public:
   /// GlobalValue is destroyed.
   void addGlobalMapping(const GlobalValue *GV, void *Addr);
   
-  /// clearAllGlobalMappings - Clear all global mappings and start over again
-  /// use in dynamic compilation scenarios when you want to move globals
+  /// clearAllGlobalMappings - Clear all global mappings and start over again,
+  /// for use in dynamic compilation scenarios to move globals.
   void clearAllGlobalMappings();
   
   /// clearGlobalMappingsFromModule - Clear all global mappings that came from a
@@ -248,12 +277,10 @@ public:
   /// getPointerToGlobalIfAvailable - This returns the address of the specified
   /// global value if it is has already been codegen'd, otherwise it returns
   /// null.
-  ///
   void *getPointerToGlobalIfAvailable(const GlobalValue *GV);
 
   /// getPointerToGlobal - This returns the address of the specified global
-  /// value.  This may involve code generation if it's a function.
-  ///
+  /// value. This may involve code generation if it's a function.
   void *getPointerToGlobal(const GlobalValue *GV);
 
   /// getPointerToFunction - The different EE's represent function bodies in
@@ -261,20 +288,17 @@ public:
   /// pointer should look like.  When F is destroyed, the ExecutionEngine will
   /// remove its global mapping and free any machine code.  Be sure no threads
   /// are running inside F when that happens.
-  ///
   virtual void *getPointerToFunction(Function *F) = 0;
 
   /// getPointerToBasicBlock - The different EE's represent basic blocks in
   /// different ways.  Return the representation for a blockaddress of the
   /// specified block.
-  ///
   virtual void *getPointerToBasicBlock(BasicBlock *BB) = 0;
   
   /// getPointerToFunctionOrStub - If the specified function has been
   /// code-gen'd, return a pointer to the function.  If not, compile it, or use
   /// a stub to implement lazy compilation if available.  See
   /// getPointerToFunction for the requirements on destroying F.
-  ///
   virtual void *getPointerToFunctionOrStub(Function *F) {
     // Default implementation, just codegen the function.
     return getPointerToFunction(F);
@@ -288,23 +312,25 @@ public:
   ///
   const GlobalValue *getGlobalValueAtAddress(void *Addr);
 
-
+  /// StoreValueToMemory - Stores the data in Val of type Ty at address Ptr.
+  /// Ptr is the address of the memory at which to store Val, cast to
+  /// GenericValue *.  It is not a pointer to a GenericValue containing the
+  /// address at which to store Val.
   void StoreValueToMemory(const GenericValue &Val, GenericValue *Ptr,
                           const Type *Ty);
+
   void InitializeMemory(const Constant *Init, void *Addr);
 
-  /// recompileAndRelinkFunction - This method is used to force a function
-  /// which has already been compiled to be compiled again, possibly
-  /// after it has been modified. Then the entry to the old copy is overwritten
-  /// with a branch to the new copy. If there was no old copy, this acts
-  /// just like VM::getPointerToFunction().
-  ///
+  /// recompileAndRelinkFunction - This method is used to force a function which
+  /// has already been compiled to be compiled again, possibly after it has been
+  /// modified.  Then the entry to the old copy is overwritten with a branch to
+  /// the new copy.  If there was no old copy, this acts just like
+  /// VM::getPointerToFunction().
   virtual void *recompileAndRelinkFunction(Function *F) = 0;
 
   /// freeMachineCodeForFunction - Release memory in the ExecutionEngine
   /// corresponding to the machine code emitted to execute this function, useful
   /// for garbage-collecting generated code.
-  ///
   virtual void freeMachineCodeForFunction(Function *F) = 0;
 
   /// getOrEmitGlobalVariable - Return the address of the specified global
@@ -382,8 +408,8 @@ public:
     ExceptionTableDeregister = F;
   }
   
-  /// RegisterTable - Registers the given pointer as an exception table. It uses
-  /// the ExceptionTableRegister function.
+  /// RegisterTable - Registers the given pointer as an exception table.  It
+  /// uses the ExceptionTableRegister function.
   void RegisterTable(void* res) {
     if (ExceptionTableRegister) {
       ExceptionTableRegister(res);
@@ -392,7 +418,7 @@ public:
   }
 
   /// DeregisterAllTables - Deregisters all previously registered pointers to an
-  /// exception tables. It uses the ExceptionTableoDeregister function.
+  /// exception tables.  It uses the ExceptionTableoDeregister function.
   void DeregisterAllTables();
 
 protected:
@@ -400,9 +426,6 @@ protected:
 
   void emitGlobals();
 
-  // EmitGlobalVariable - This method emits the specified global variable to the
-  // address specified in GlobalAddresses, or allocates new memory if it's not
-  // already in the map.
   void EmitGlobalVariable(const GlobalVariable *GV);
 
   GenericValue getConstantValue(const Constant *C);
@@ -423,8 +446,7 @@ namespace EngineKind {
 /// stack-allocating a builder, chaining the various set* methods, and
 /// terminating it with a .create() call.
 class EngineBuilder {
-
- private:
+private:
   Module *M;
   EngineKind::Kind WhichEngine;
   std::string *ErrorStr;
@@ -435,9 +457,9 @@ class EngineBuilder {
   std::string MArch;
   std::string MCPU;
   SmallVector<std::string, 4> MAttrs;
+  bool UseMCJIT;
 
   /// InitEngine - Does the common initialization of default options.
-  ///
   void InitEngine() {
     WhichEngine = EngineKind::Either;
     ErrorStr = NULL;
@@ -445,9 +467,10 @@ class EngineBuilder {
     JMM = NULL;
     AllocateGVsWithCode = false;
     CMModel = CodeModel::Default;
+    UseMCJIT = false;
   }
 
- public:
+public:
   /// EngineBuilder - Constructor for EngineBuilder.  If create() is called and
   /// is successful, the created engine takes ownership of the module.
   EngineBuilder(Module *m) : M(m) {
@@ -513,6 +536,12 @@ class EngineBuilder {
   EngineBuilder &setMCPU(StringRef mcpu) {
     MCPU.assign(mcpu.begin(), mcpu.end());
     return *this;
+  }
+
+  /// setUseMCJIT - Set whether the MC-JIT implementation should be used
+  /// (experimental).
+  void setUseMCJIT(bool Value) {
+    UseMCJIT = Value;
   }
 
   /// setMAttrs - Set cpu-specific attributes.

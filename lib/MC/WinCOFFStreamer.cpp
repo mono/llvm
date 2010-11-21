@@ -51,6 +51,7 @@ public:
   virtual void InitSections();
   virtual void EmitLabel(MCSymbol *Symbol);
   virtual void EmitAssemblerFlag(MCAssemblerFlag Flag);
+  virtual void EmitThumbFunc(MCSymbol *Func);
   virtual void EmitAssignment(MCSymbol *Symbol, const MCExpr *Value);
   virtual void EmitSymbolAttribute(MCSymbol *Symbol, MCSymbolAttr Attribute);
   virtual void EmitSymbolDesc(MCSymbol *Symbol, unsigned DescValue);
@@ -76,11 +77,17 @@ public:
                                  unsigned MaxBytesToEmit);
   virtual void EmitValueToOffset(const MCExpr *Offset, unsigned char Value);
   virtual void EmitFileDirective(StringRef Filename);
-  virtual void EmitDwarfFileDirective(unsigned FileNo,StringRef Filename);
   virtual void EmitInstruction(const MCInst &Instruction);
   virtual void Finish();
 
 private:
+  virtual void EmitInstToFragment(const MCInst &Inst) {
+    llvm_unreachable("Not used by WinCOFF.");
+  }
+  virtual void EmitInstToData(const MCInst &Inst) {
+    llvm_unreachable("Not used by WinCOFF.");
+  }
+
   void SetSection(StringRef Section,
                   unsigned Characteristics,
                   SectionKind Kind) {
@@ -192,6 +199,10 @@ void WinCOFFStreamer::EmitLabel(MCSymbol *Symbol) {
 }
 
 void WinCOFFStreamer::EmitAssemblerFlag(MCAssemblerFlag Flag) {
+  llvm_unreachable("not implemented");
+}
+
+void WinCOFFStreamer::EmitThumbFunc(MCSymbol *Func) {
   llvm_unreachable("not implemented");
 }
 
@@ -400,11 +411,6 @@ void WinCOFFStreamer::EmitValueToOffset(const MCExpr *Offset,
 void WinCOFFStreamer::EmitFileDirective(StringRef Filename) {
   // Ignore for now, linkers don't care, and proper debug
   // info will be a much large effort.
-}
-
-void WinCOFFStreamer::EmitDwarfFileDirective(unsigned FileNo,
-                                             StringRef Filename) {
-  llvm_unreachable("not implemented");
 }
 
 void WinCOFFStreamer::EmitInstruction(const MCInst &Instruction) {

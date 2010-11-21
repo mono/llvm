@@ -1102,16 +1102,6 @@ unsigned X86TargetLowering::getJumpTableEncoding() const {
   return TargetLowering::getJumpTableEncoding();
 }
 
-/// getPICBaseSymbol - Return the X86-32 PIC base.
-MCSymbol *
-X86TargetLowering::getPICBaseSymbol(const MachineFunction *MF,
-                                    MCContext &Ctx) const {
-  const MCAsmInfo &MAI = *getTargetMachine().getMCAsmInfo();
-  return Ctx.GetOrCreateSymbol(Twine(MAI.getPrivateGlobalPrefix())+
-                               Twine(MF->getFunctionNumber())+"$pb");
-}
-
-
 const MCExpr *
 X86TargetLowering::LowerCustomJumpTableEntry(const MachineJumpTableInfo *MJTI,
                                              const MachineBasicBlock *MBB,
@@ -1146,7 +1136,7 @@ getPICJumpTableRelocBaseExpr(const MachineFunction *MF, unsigned JTI,
     return TargetLowering::getPICJumpTableRelocBaseExpr(MF, JTI, Ctx);
 
   // Otherwise, the reference is relative to the PIC base.
-  return MCSymbolRefExpr::Create(getPICBaseSymbol(MF, Ctx), Ctx);
+  return MCSymbolRefExpr::Create(MF->getPICBaseSymbol(), Ctx);
 }
 
 /// getFunctionAlignment - Return the Log2 alignment of this function.
@@ -1182,7 +1172,9 @@ X86TargetLowering::findRepresentativeClass(EVT VT) const{
 unsigned
 X86TargetLowering::getRegPressureLimit(const TargetRegisterClass *RC,
                                        MachineFunction &MF) const {
-  unsigned FPDiff = RegInfo->hasFP(MF) ? 1 : 0;
+  const TargetFrameInfo *TFI = MF.getTarget().getFrameInfo();
+
+  unsigned FPDiff = TFI->hasFP(MF) ? 1 : 0;
   switch (RC->getID()) {
   default:
     return 0;
@@ -1457,34 +1449,6 @@ ArgsAreStructReturn(const SmallVectorImpl<ISD::InputArg> &Ins) {
   return Ins[0].Flags.isSRet();
 }
 
-/// CCAssignFnForNode - Selects the correct CCAssignFn for a the
-/// given CallingConvention value.
-CCAssignFn *X86TargetLowering::CCAssignFnForNode(CallingConv::ID CC) const {
-  if (Subtarget->is64Bit()) {
-    if (CC == CallingConv::GHC)
-      return CC_X86_64_GHC;
-    else if (CC == CallingConv::Mono1)
-      return CC_X86_64_Mono1;
-    else if (Subtarget->isTargetWin64())
-      return CC_X86_Win64_C;
-    else
-      return CC_X86_64_C;
-  }
-
-  if (CC == CallingConv::X86_FastCall)
-    return CC_X86_32_FastCall;
-  else if (CC == CallingConv::Mono1)
-      return CC_X86_32_Mono1;
-  else if (CC == CallingConv::X86_ThisCall)
-    return CC_X86_32_ThisCall;
-  else if (CC == CallingConv::Fast)
-    return CC_X86_32_FastCC;
-  else if (CC == CallingConv::GHC)
-    return CC_X86_32_GHC;
-  else
-    return CC_X86_32_C;
-}
-
 /// CreateCopyOfByValArgument - Make a copy of an aggregate at address specified
 /// by "Src" to address "Dst" with size and alignment information specified by
 /// the specific parameter attribute. The copy will be passed as a byval
@@ -1580,7 +1544,7 @@ X86TargetLowering::LowerFormalArguments(SDValue Chain,
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, isVarArg, getTargetMachine(),
                  ArgLocs, *DAG.getContext());
-  CCInfo.AnalyzeFormalArguments(Ins, CCAssignFnForNode(CallConv));
+  CCInfo.AnalyzeFormalArguments(Ins, CC_X86);
 
   unsigned LastVal = ~0U;
   SDValue ArgValue;
@@ -1899,7 +1863,7 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, isVarArg, getTargetMachine(),
                  ArgLocs, *DAG.getContext());
-  CCInfo.AnalyzeCallOperands(Outs, CCAssignFnForNode(CallConv));
+  CCInfo.AnalyzeCallOperands(Outs, CC_X86);
 
   // Get a count of how many bytes are to be pushed on the stack.
   unsigned NumBytes = CCInfo.getNextStackOffset();
@@ -2493,7 +2457,7 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
     SmallVector<CCValAssign, 16> ArgLocs;
     CCState CCInfo(CalleeCC, isVarArg, getTargetMachine(),
                    ArgLocs, *DAG.getContext());
-    CCInfo.AnalyzeCallOperands(Outs, CCAssignFnForNode(CalleeCC));
+    CCInfo.AnalyzeCallOperands(Outs, CC_X86);
     if (CCInfo.getNextStackOffset()) {
       MachineFunction &MF = DAG.getMachineFunction();
       if (MF.getInfo<X86MachineFunctionInfo>()->getBytesToPopOnReturn())
@@ -2548,7 +2512,7 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
   }
 
   // An stdcall caller is expected to clean up its arguments; the callee
-  // isn't going to do that.   PR 8461.
+  // isn't going to do that.
   if (!CCMatch && CallerCC==CallingConv::X86_StdCall)
     return false;
 
@@ -4932,7 +4896,7 @@ static SDValue getVZextMovL(EVT VT, EVT OpVT,
       // movssrr and movsdrr do not clear top bits. Try to use movd, movq
       // instead.
       MVT ExtVT = (OpVT == MVT::v2f64) ? MVT::i64 : MVT::i32;
-      if ((ExtVT.SimpleTy != MVT::i64 || Subtarget->is64Bit()) &&
+      if ((ExtVT != MVT::i64 || Subtarget->is64Bit()) &&
           SrcOp.getOpcode() == ISD::SCALAR_TO_VECTOR &&
           SrcOp.getOperand(0).getOpcode() == ISD::BIT_CONVERT &&
           SrcOp.getOperand(0).getOperand(0).getValueType() == ExtVT) {
@@ -5933,12 +5897,11 @@ SDValue X86TargetLowering::LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
   Result = DAG.getNode(WrapperKind, DL, getPointerTy(), Result);
 
   // With PIC, the address is actually $g + Offset.
-  if (OpFlag) {
+  if (OpFlag)
     Result = DAG.getNode(ISD::ADD, DL, getPointerTy(),
                          DAG.getNode(X86ISD::GlobalBaseReg,
                                      DebugLoc(), getPointerTy()),
                          Result);
-  }
 
   return Result;
 }
@@ -11449,7 +11412,7 @@ bool X86TargetLowering::ExpandInlineAsm(CallInst *CI) const {
 
   // TODO: should remove alternatives from the asmstring: "foo {a|b}" -> "foo a"
   SmallVector<StringRef, 4> AsmPieces;
-  SplitString(AsmStr, AsmPieces, "\n");  // ; as separator?
+  SplitString(AsmStr, AsmPieces, ";\n");
 
   switch (AsmPieces.size()) {
   default: return false;
@@ -11490,6 +11453,35 @@ bool X86TargetLowering::ExpandInlineAsm(CallInst *CI) const {
     }
     break;
   case 3:
+    if (CI->getType()->isIntegerTy(32) &&
+        IA->getConstraintString().compare(0, 5, "=r,0,") == 0) {
+      SmallVector<StringRef, 4> Words;
+      SplitString(AsmPieces[0], Words, " \t,");
+      if (Words.size() == 3 && Words[0] == "rorw" && Words[1] == "$$8" &&
+          Words[2] == "${0:w}") {
+        Words.clear();
+        SplitString(AsmPieces[1], Words, " \t,");
+        if (Words.size() == 3 && Words[0] == "rorl" && Words[1] == "$$16" &&
+            Words[2] == "$0") {
+          Words.clear();
+          SplitString(AsmPieces[2], Words, " \t,");
+          if (Words.size() == 3 && Words[0] == "rorw" && Words[1] == "$$8" &&
+              Words[2] == "${0:w}") {
+            AsmPieces.clear();
+            const std::string &Constraints = IA->getConstraintString();
+            SplitString(StringRef(Constraints).substr(5), AsmPieces, ",");
+            std::sort(AsmPieces.begin(), AsmPieces.end());
+            if (AsmPieces.size() == 4 &&
+                AsmPieces[0] == "~{cc}" &&
+                AsmPieces[1] == "~{dirflag}" &&
+                AsmPieces[2] == "~{flags}" &&
+                AsmPieces[3] == "~{fpsr}") {
+              return LowerToBSwap(CI);
+            }
+          }
+        }
+      }
+    }
     if (CI->getType()->isIntegerTy(64) &&
         Constraints.size() >= 2 &&
         Constraints[0].Codes.size() == 1 && Constraints[0].Codes[0] == "A" &&

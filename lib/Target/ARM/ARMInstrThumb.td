@@ -126,61 +126,67 @@ def t_addrmode_sp : Operand<i32>,
 // these will always be in pairs, and asserts if it finds otherwise. Better way?
 let Defs = [SP], Uses = [SP], hasSideEffects = 1 in {
 def tADJCALLSTACKUP :
-PseudoInst<(outs), (ins i32imm:$amt1, i32imm:$amt2), NoItinerary, "",
-           [(ARMcallseq_end imm:$amt1, imm:$amt2)]>, Requires<[IsThumb1Only]>;
+  PseudoInst<(outs), (ins i32imm:$amt1, i32imm:$amt2), NoItinerary,
+             [(ARMcallseq_end imm:$amt1, imm:$amt2)]>,
+            Requires<[IsThumb, IsThumb1Only]>;
 
 def tADJCALLSTACKDOWN :
-PseudoInst<(outs), (ins i32imm:$amt), NoItinerary, "",
-           [(ARMcallseq_start imm:$amt)]>, Requires<[IsThumb1Only]>;
+  PseudoInst<(outs), (ins i32imm:$amt), NoItinerary,
+             [(ARMcallseq_start imm:$amt)]>,
+            Requires<[IsThumb, IsThumb1Only]>;
 }
 
 def tNOP : T1pI<(outs), (ins), NoItinerary, "nop", "",
                 [/* For disassembly only; pattern left blank */]>,
            T1Encoding<0b101111> {
   let Inst{9-8} = 0b11;
-  let Inst{7-0} = 0b00000000;
+  let Inst{7-0} = 0x00;
 } 
 
 def tYIELD : T1pI<(outs), (ins), NoItinerary, "yield", "",
                   [/* For disassembly only; pattern left blank */]>,
              T1Encoding<0b101111> {
   let Inst{9-8} = 0b11;
-  let Inst{7-0} = 0b00010000;
+  let Inst{7-0} = 0x10;
 } 
 
 def tWFE : T1pI<(outs), (ins), NoItinerary, "wfe", "",
                 [/* For disassembly only; pattern left blank */]>,
            T1Encoding<0b101111> {
   let Inst{9-8} = 0b11;
-  let Inst{7-0} = 0b00100000;
+  let Inst{7-0} = 0x20;
 } 
 
 def tWFI : T1pI<(outs), (ins), NoItinerary, "wfi", "",
                 [/* For disassembly only; pattern left blank */]>,
            T1Encoding<0b101111> {
   let Inst{9-8} = 0b11;
-  let Inst{7-0} = 0b00110000;
+  let Inst{7-0} = 0x30;
 } 
 
 def tSEV : T1pI<(outs), (ins), NoItinerary, "sev", "",
                 [/* For disassembly only; pattern left blank */]>,
            T1Encoding<0b101111> {
   let Inst{9-8} = 0b11;
-  let Inst{7-0} = 0b01000000;
+  let Inst{7-0} = 0x40;
 } 
 
 def tSETENDBE : T1I<(outs), (ins), NoItinerary, "setend\tbe",
                     [/* For disassembly only; pattern left blank */]>,
                 T1Encoding<0b101101> {
   let Inst{9-5} = 0b10010;
-  let Inst{3} = 1;
+  let Inst{4}   = 1;
+  let Inst{3}   = 1;            // Big-Endian
+  let Inst{2-0} = 0b000;
 }
 
 def tSETENDLE : T1I<(outs), (ins), NoItinerary, "setend\tle",
                     [/* For disassembly only; pattern left blank */]>,
                 T1Encoding<0b101101> {
   let Inst{9-5} = 0b10010;
-  let Inst{3} = 0;
+  let Inst{4}   = 1;
+  let Inst{3}   = 0;            // Little-Endian
+  let Inst{2-0} = 0b000;
 }
 
 // The i32imm operand $val can be used by a debugger to store more information
@@ -188,7 +194,9 @@ def tSETENDLE : T1I<(outs), (ins), NoItinerary, "setend\tle",
 def tBKPT : T1I<(outs), (ins i32imm:$val), NoItinerary, "bkpt\t$val",
                 [/* For disassembly only; pattern left blank */]>,
             T1Encoding<0b101111> {
+  bits<8> val;
   let Inst{9-8} = 0b10;
+  let Inst{7-0} = val;
 }
 
 // Change Processor State is a system instruction -- for disassembly only.
@@ -205,50 +213,79 @@ def tCPS : T1I<(outs), (ins cps_opt:$opt), NoItinerary, "cps$opt",
            T1Misc<0b0110011>;
 
 // For both thumb1 and thumb2.
-let isNotDuplicable = 1 in
+let isNotDuplicable = 1, isCodeGenOnly = 1 in
 def tPICADD : TIt<(outs GPR:$dst), (ins GPR:$lhs, pclabel:$cp), IIC_iALUr, "",
-                 [(set GPR:$dst, (ARMpic_add GPR:$lhs, imm:$cp))]>,
+                  [(set GPR:$dst, (ARMpic_add GPR:$lhs, imm:$cp))]>,
               T1Special<{0,0,?,?}> {
-  let Inst{6-3} = 0b1111; // A8.6.6 Rm = pc
+  // A8.6.6 Rm = pc
+  bits<3> dst;
+  let Inst{6-3} = 0b1111;
+  let Inst{2-0} = dst;
 }
 
 // PC relative add.
 def tADDrPCi : T1I<(outs tGPR:$dst), (ins t_imm_s4:$rhs), IIC_iALUi,
-                  "add\t$dst, pc, $rhs", []>,
-               T1Encoding<{1,0,1,0,0,?}>; // A6.2 & A8.6.10
-
-// ADD rd, sp, #imm8
-// This is rematerializable, which is particularly useful for taking the
-// address of locals.
-let isReMaterializable = 1 in {
-def tADDrSPi : T1I<(outs tGPR:$dst), (ins GPR:$sp, t_imm_s4:$rhs), IIC_iALUi,
-                  "add\t$dst, $sp, $rhs", []>,
-               T1Encoding<{1,0,1,0,1,?}>; // A6.2 & A8.6.8
+                   "add\t$dst, pc, $rhs", []>,
+               T1Encoding<{1,0,1,0,0,?}> {
+  // A6.2 & A8.6.10
+  bits<3> dst;
+  bits<8> rhs;
+  let Inst{10-8} = dst;
+  let Inst{7-0}  = rhs;
 }
 
-// ADD sp, sp, #imm7
+// ADD <Rd>, sp, #<imm8>
+// This is rematerializable, which is particularly useful for taking the
+// address of locals.
+let isReMaterializable = 1 in
+def tADDrSPi : T1I<(outs tGPR:$dst), (ins GPR:$sp, t_imm_s4:$rhs), IIC_iALUi,
+                   "add\t$dst, $sp, $rhs", []>,
+               T1Encoding<{1,0,1,0,1,?}> {
+  // A6.2 & A8.6.8
+  bits<3> dst;
+  bits<8> rhs;
+  let Inst{10-8} = dst;
+  let Inst{7-0}  = rhs;
+}
+
+// ADD sp, sp, #<imm7>
 def tADDspi : TIt<(outs GPR:$dst), (ins GPR:$lhs, t_imm_s4:$rhs), IIC_iALUi,
                   "add\t$dst, $rhs", []>,
-              T1Misc<{0,0,0,0,0,?,?}>; // A6.2.5 & A8.6.8
+              T1Misc<{0,0,0,0,0,?,?}> {
+  // A6.2.5 & A8.6.8
+  bits<7> rhs;
+  let Inst{6-0} = rhs;
+}
 
-// SUB sp, sp, #imm7
+// SUB sp, sp, #<imm7>
+// FIXME: The encoding and the ASM string don't match up.
 def tSUBspi : TIt<(outs GPR:$dst), (ins GPR:$lhs, t_imm_s4:$rhs), IIC_iALUi,
                   "sub\t$dst, $rhs", []>,
-              T1Misc<{0,0,0,0,1,?,?}>; // A6.2.5 & A8.6.215
+              T1Misc<{0,0,0,0,1,?,?}> {
+  // A6.2.5 & A8.6.214
+  bits<7> rhs;
+  let Inst{6-0} = rhs;
+}
 
-// ADD rm, sp
+// ADD <Rm>, sp
 def tADDrSP : TIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iALUr,
                   "add\t$dst, $rhs", []>,
               T1Special<{0,0,?,?}> {
-  let Inst{6-3} = 0b1101; // A8.6.9 Encoding T1
+  // A8.6.9 Encoding T1
+  bits<4> dst;
+  let Inst{7}   = dst{3};
+  let Inst{6-3} = 0b1101;
+  let Inst{2-0} = dst{2-0};
 }
 
-// ADD sp, rm
+// ADD sp, <Rm>
 def tADDspr : TIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iALUr,
                   "add\t$dst, $rhs", []>,
               T1Special<{0,0,?,?}> {
   // A8.6.9 Encoding T2
+  bits<4> dst;
   let Inst{7} = 1;
+  let Inst{6-3} = dst;
   let Inst{2-0} = 0b101;
 }
 
@@ -257,21 +294,32 @@ def tADDspr : TIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iALUr,
 //
 
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
-  def tBX_RET : TI<(outs), (ins), IIC_Br, "bx\tlr", [(ARMretflag)]>,
+  def tBX_RET : TI<(outs), (ins), IIC_Br, "bx\tlr",
+                   [(ARMretflag)]>,
                 T1Special<{1,1,0,?}> { // A6.2.3 & A8.6.25
     let Inst{6-3} = 0b1110; // Rm = lr
+    let Inst{2-0} = 0b000;
   }
+
   // Alternative return instruction used by vararg functions.
-  def tBX_RET_vararg : TI<(outs), (ins tGPR:$target), IIC_Br, "bx\t$target",[]>,
-                       T1Special<{1,1,0,?}>; // A6.2.3 & A8.6.25
+  def tBX_RET_vararg : TI<(outs), (ins tGPR:$Rm),
+                          IIC_Br, "bx\t$Rm",
+                          []>,
+                       T1Special<{1,1,0,?}> { // A6.2.3 & A8.6.25
+    bits<4> Rm;
+    let Inst{6-3} = Rm;
+    let Inst{2-0} = 0b000;
+  }
 }
 
 // Indirect branches
 let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
-  def tBRIND : TI<(outs), (ins GPR:$dst), IIC_Br, "mov\tpc, $dst",
-                  [(brind GPR:$dst)]>,
-               T1Special<{1,0,1,?}> {
-    // <Rd> = Inst{7:2-0} = pc
+  def tBRIND : TI<(outs), (ins GPR:$Rm), IIC_Br, "mov\tpc, $Rm",
+                  [(brind GPR:$Rm)]>,
+               T1Special<{1,0,?,?}> {
+    bits<4> Rm;
+    let Inst{6-3} = Rm;
+    let Inst{7}   = 0b1;        // <Rd> = Inst{7:2-0} = pc
     let Inst{2-0} = 0b111;
   }
 }
@@ -279,10 +327,14 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
 // FIXME: remove when we have a way to marking a MI with these properties.
 let isReturn = 1, isTerminator = 1, isBarrier = 1, mayLoad = 1,
     hasExtraDefRegAllocReq = 1 in
-def tPOP_RET : T1I<(outs), (ins pred:$p, reglist:$dsts, variable_ops),
+def tPOP_RET : T1I<(outs), (ins pred:$p, reglist:$regs, variable_ops),
                    IIC_iPop_Br,
-                   "pop${p}\t$dsts", []>,
-               T1Misc<{1,1,0,?,?,?,?}>;
+                   "pop${p}\t$regs", []>,
+               T1Misc<{1,1,0,?,?,?,?}> {
+  bits<16> regs;
+  let Inst{8}   = regs{15};
+  let Inst{7-0} = regs{7-0};
+}
 
 let isCall = 1,
   Defs = [R0,  R1,  R2,  R3,  R12, LR,
@@ -311,11 +363,12 @@ let isCall = 1,
               T1Special<{1,1,1,?}>; // A6.2.3 & A8.6.24;
 
   // ARMv4T
+  let isCodeGenOnly = 1 in
   def tBX : TIx2<{?,?,?,?,?}, {?,?}, ?,
                   (outs), (ins tGPR:$func, variable_ops), IIC_Br,
                   "mov\tlr, pc\n\tbx\t$func",
                   [(ARMcall_nolink tGPR:$func)]>,
-            Requires<[IsThumb1Only, IsNotDarwin]>;
+            Requires<[IsThumb, IsThumb1Only, IsNotDarwin]>;
 }
 
 // On Darwin R9 is call-clobbered.
@@ -346,11 +399,12 @@ let isCall = 1,
                  T1Special<{1,1,1,?}>; // A6.2.3 & A8.6.24
 
   // ARMv4T
+  let isCodeGenOnly = 1 in
   def tBXr9 : TIx2<{?,?,?,?,?}, {?,?}, ?,
                    (outs), (ins tGPR:$func, variable_ops), IIC_Br,
                    "mov\tlr, pc\n\tbx\t$func",
                    [(ARMcall_nolink tGPR:$func)]>,
-              Requires<[IsThumb1Only, IsDarwin]>;
+              Requires<[IsThumb, IsThumb1Only, IsDarwin]>;
 }
 
 let isBranch = 1, isTerminator = 1 in {
@@ -365,6 +419,7 @@ let isBranch = 1, isTerminator = 1 in {
   def tBfar : TIx2<0b11110, 0b11, 1, (outs), (ins brtarget:$target), IIC_Br,
                     "bl\t$target",[]>;
 
+  let isCodeGenOnly = 1 in
   def tBR_JTr : T1JTI<(outs),
                       (ins tGPR:$target, jtblock_operand:$jt, i32imm:$id),
                       IIC_Br, "mov\tpc, $target\n\t.align\t2$jt",
@@ -386,24 +441,37 @@ let isBranch = 1, isTerminator = 1 in
 
 // Compare and branch on zero / non-zero
 let isBranch = 1, isTerminator = 1 in {
-  def tCBZ  : T1I<(outs), (ins tGPR:$cmp, brtarget:$target), IIC_Br,
-                  "cbz\t$cmp, $target", []>,
-              T1Misc<{0,0,?,1,?,?,?}>;
+  def tCBZ  : T1I<(outs), (ins tGPR:$Rn, brtarget:$target), IIC_Br,
+                  "cbz\t$Rn, $target", []>,
+              T1Misc<{0,0,?,1,?,?,?}> {
+    bits<6> target;
+    bits<3> Rn;
+    let Inst{9}   = target{5};
+    let Inst{7-3} = target{4-0};
+    let Inst{2-0} = Rn;
+  }
 
   def tCBNZ : T1I<(outs), (ins tGPR:$cmp, brtarget:$target), IIC_Br,
                   "cbnz\t$cmp, $target", []>,
-              T1Misc<{1,0,?,1,?,?,?}>;
+              T1Misc<{1,0,?,1,?,?,?}> {
+    bits<6> target;
+    bits<3> Rn;
+    let Inst{9}   = target{5};
+    let Inst{7-3} = target{4-0};
+    let Inst{2-0} = Rn;
+  }
 }
 
 // A8.6.218 Supervisor Call (Software Interrupt) -- for disassembly only
 // A8.6.16 B: Encoding T1
 // If Inst{11-8} == 0b1111 then SEE SVC
-let isCall = 1 in {
-def tSVC : T1pI<(outs), (ins i32imm:$svc), IIC_Br, "svc", "\t$svc", []>,
-           Encoding16 {
+let isCall = 1 in
+def tSVC : T1pI<(outs), (ins i32imm:$imm), IIC_Br,
+                "svc", "\t$imm", []>, Encoding16 {
+  bits<8> imm;
   let Inst{15-12} = 0b1101;
-  let Inst{11-8} = 0b1111;
-}
+  let Inst{11-8}  = 0b1111;
+  let Inst{7-0}   = imm;
 }
 
 // A8.6.16 B: Encoding T1
@@ -412,7 +480,7 @@ let isBarrier = 1, isTerminator = 1 in
 def tTRAP : TI<(outs), (ins), IIC_Br, 
                "trap", [(trap)]>, Encoding16 {
   let Inst{15-12} = 0b1101;
-  let Inst{11-8} = 0b1110;
+  let Inst{11-8}  = 0b1110;
 }
 
 //===----------------------------------------------------------------------===//
@@ -420,10 +488,11 @@ def tTRAP : TI<(outs), (ins), IIC_Br,
 //
 
 let canFoldAsLoad = 1, isReMaterializable = 1 in
-def tLDR : T1pI4<(outs tGPR:$dst), (ins t_addrmode_s4:$addr), IIC_iLoad_r,
-               "ldr", "\t$dst, $addr",
-               [(set tGPR:$dst, (load t_addrmode_s4:$addr))]>,
+def tLDR : T1pI4<(outs tGPR:$Rt), (ins t_addrmode_s4:$addr), IIC_iLoad_r,
+               "ldr", "\t$Rt, $addr",
+               [(set tGPR:$Rt, (load t_addrmode_s4:$addr))]>,
            T1LdSt<0b100>;
+
 def tLDRi: T1pI4<(outs tGPR:$dst), (ins t_addrmode_s4:$addr), IIC_iLoad_r,
                "ldr", "\t$dst, $addr",
                []>,
@@ -531,41 +600,61 @@ def tSpill : T1pIs<(outs), (ins tGPR:$src, t_addrmode_sp:$addr), IIC_iStore_i,
 //  Load / store multiple Instructions.
 //
 
+multiclass thumb_ldst_mult<string asm, InstrItinClass itin,
+                           InstrItinClass itin_upd, bits<6> T1Enc,
+                           bit L_bit> {
+  def IA :
+    T1I<(outs), (ins GPR:$Rn, pred:$p, reglist:$regs, variable_ops),
+        itin, !strconcat(asm, "ia${p}\t$Rn, $regs"), []>,
+       T1Encoding<T1Enc> {
+    bits<3> Rn;
+    bits<8> regs;
+    let Inst{10-8} = Rn;
+    let Inst{7-0}  = regs;
+  }
+  def IA_UPD :
+    T1It<(outs GPR:$wb), (ins GPR:$Rn, pred:$p, reglist:$regs, variable_ops),
+         itin_upd, !strconcat(asm, "ia${p}\t$Rn!, $regs"), "$Rn = $wb", []>,
+        T1Encoding<T1Enc> {
+    bits<3> Rn;
+    bits<8> regs;
+    let Inst{10-8} = Rn;
+    let Inst{7-0}  = regs;
+  }
+}
+
 // These require base address to be written back or one of the loaded regs.
-let mayLoad = 1, neverHasSideEffects = 1, hasExtraDefRegAllocReq = 1 in {
-def tLDM : T1I<(outs),
-               (ins addrmode4:$addr, pred:$p, reglist:$dsts, variable_ops),
-               IIC_iLoad_m,
-               "ldm${addr:submode}${p}\t$addr, $dsts", []>,
-           T1Encoding<{1,1,0,0,1,?}>; // A6.2 & A8.6.53
+let neverHasSideEffects = 1 in {
 
-def tLDM_UPD : T1It<(outs tGPR:$wb),
-                    (ins addrmode4:$addr, pred:$p, reglist:$dsts, variable_ops),
-                    IIC_iLoad_m,
-                    "ldm${addr:submode}${p}\t$addr!, $dsts",
-                    "$addr.addr = $wb", []>,
-               T1Encoding<{1,1,0,0,1,?}>; // A6.2 & A8.6.53
-} // mayLoad, neverHasSideEffects = 1, hasExtraDefRegAllocReq
+let mayLoad = 1, hasExtraDefRegAllocReq = 1 in
+defm tLDM : thumb_ldst_mult<"ldm", IIC_iLoad_m, IIC_iLoad_mu,
+                            {1,1,0,0,1,?}, 1>;
 
-let mayStore = 1, neverHasSideEffects = 1, hasExtraSrcRegAllocReq = 1 in
-def tSTM_UPD : T1It<(outs tGPR:$wb),
-                    (ins addrmode4:$addr, pred:$p, reglist:$srcs, variable_ops),
-                    IIC_iStore_mu,
-                    "stm${addr:submode}${p}\t$addr!, $srcs",
-                    "$addr.addr = $wb", []>,
-           T1Encoding<{1,1,0,0,0,?}>; // A6.2 & A8.6.189
+let mayStore = 1, hasExtraSrcRegAllocReq = 1 in
+defm tSTM : thumb_ldst_mult<"stm", IIC_iStore_m, IIC_iStore_mu,
+                            {1,1,0,0,0,?}, 0>;
+ 
+} // neverHasSideEffects
 
 let mayLoad = 1, Uses = [SP], Defs = [SP], hasExtraDefRegAllocReq = 1 in
-def tPOP : T1I<(outs), (ins pred:$p, reglist:$dsts, variable_ops),
+def tPOP : T1I<(outs), (ins pred:$p, reglist:$regs, variable_ops),
                IIC_iPop,
-               "pop${p}\t$dsts", []>,
-           T1Misc<{1,1,0,?,?,?,?}>;
+               "pop${p}\t$regs", []>,
+           T1Misc<{1,1,0,?,?,?,?}> {
+  bits<16> regs;
+  let Inst{8}   = regs{15};
+  let Inst{7-0} = regs{7-0};
+}
 
 let mayStore = 1, Uses = [SP], Defs = [SP], hasExtraSrcRegAllocReq = 1 in
-def tPUSH : T1I<(outs), (ins pred:$p, reglist:$srcs, variable_ops),
+def tPUSH : T1I<(outs), (ins pred:$p, reglist:$regs, variable_ops),
                 IIC_iStore_m,
-                "push${p}\t$srcs", []>,
-            T1Misc<{0,1,0,?,?,?,?}>;
+                "push${p}\t$regs", []>,
+            T1Misc<{0,1,0,?,?,?,?}> {
+  bits<16> regs;
+  let Inst{8}   = regs{14};
+  let Inst{7-0} = regs{7-0};
+}
 
 //===----------------------------------------------------------------------===//
 //  Arithmetic Instructions.
@@ -576,55 +665,116 @@ let isCommutable = 1, Uses = [CPSR] in
 def tADC : T1sIt<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs), IIC_iALUr,
                  "adc", "\t$dst, $rhs",
                  [(set tGPR:$dst, (adde tGPR:$lhs, tGPR:$rhs))]>,
-           T1DataProcessing<0b0101>;
+           T1DataProcessing<0b0101> {
+  // A8.6.2
+  bits<3> lhs;
+  bits<3> rhs;
+  let Inst{5-3} = lhs;
+  let Inst{2-0} = rhs;
+}
 
 // Add immediate
-def tADDi3 : T1sI<(outs tGPR:$dst), (ins tGPR:$lhs, i32imm:$rhs), IIC_iALUi,
-                   "add", "\t$dst, $lhs, $rhs",
-                   [(set tGPR:$dst, (add tGPR:$lhs, imm0_7:$rhs))]>,
-             T1General<0b01110>;
+def tADDi3 : T1sI<(outs tGPR:$Rd), (ins tGPR:$Rn, i32imm:$imm3), IIC_iALUi,
+                   "add", "\t$Rd, $Rn, $imm3",
+                   [(set tGPR:$Rd, (add tGPR:$Rn, imm0_7:$imm3))]>,
+             T1General<0b01110> {
+  // A8.6.4 T1
+  bits<3> Rd;
+  bits<3> Rn;
+  bits<3> imm3;
+  let Inst{8-6} = imm3;
+  let Inst{5-3} = Rn;
+  let Inst{2-0} = Rd;
+}
 
 def tADDi8 : T1sIt<(outs tGPR:$dst), (ins tGPR:$lhs, i32imm:$rhs), IIC_iALUi,
                    "add", "\t$dst, $rhs",
                    [(set tGPR:$dst, (add tGPR:$lhs, imm8_255:$rhs))]>,
-             T1General<{1,1,0,?,?}>;
+             T1General<{1,1,0,?,?}> {
+  // A8.6.4 T2
+  bits<3> lhs;
+  bits<8> rhs;
+  let Inst{10-8} = lhs;
+  let Inst{7-0}  = rhs;
+}
 
 // Add register
 let isCommutable = 1 in
-def tADDrr : T1sI<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs), IIC_iALUr,
-                   "add", "\t$dst, $lhs, $rhs",
-                   [(set tGPR:$dst, (add tGPR:$lhs, tGPR:$rhs))]>,
-             T1General<0b01100>;
+def tADDrr : T1sI<(outs tGPR:$Rd), (ins tGPR:$Rn, tGPR:$Rm), IIC_iALUr,
+                   "add", "\t$Rd, $Rn, $Rm",
+                   [(set tGPR:$Rd, (add tGPR:$Rn, tGPR:$Rm))]>,
+             T1General<0b01100> {
+  // A8.6.6 T1
+  bits<3> Rm;
+  bits<3> Rn;
+  bits<3> Rd;
+  let Inst{8-6} = Rm;
+  let Inst{5-3} = Rn;
+  let Inst{2-0} = Rd;
+}
 
 let neverHasSideEffects = 1 in
 def tADDhirr : T1pIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iALUr,
                      "add", "\t$dst, $rhs", []>,
-               T1Special<{0,0,?,?}>;
+               T1Special<{0,0,?,?}> {
+  // A8.6.6 T2
+  bits<4> dst;
+  bits<4> rhs;
+  let Inst{6-3} = rhs;
+  let Inst{7}   = dst{3};
+  let Inst{2-0} = dst{2-0};
+}
 
-// And register
+// AND register
 let isCommutable = 1 in
 def tAND : T1sIt<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs), IIC_iBITr,
                  "and", "\t$dst, $rhs",
                  [(set tGPR:$dst, (and tGPR:$lhs, tGPR:$rhs))]>,
-           T1DataProcessing<0b0000>;
+           T1DataProcessing<0b0000> {
+  // A8.6.12
+  bits<3> rhs;
+  bits<3> dst;
+  let Inst{5-3} = rhs;
+  let Inst{2-0} = dst;
+}
 
 // ASR immediate
-def tASRri : T1sI<(outs tGPR:$dst), (ins tGPR:$lhs, i32imm:$rhs), IIC_iMOVsi,
-                  "asr", "\t$dst, $lhs, $rhs",
-                  [(set tGPR:$dst, (sra tGPR:$lhs, (i32 imm:$rhs)))]>,
-             T1General<{0,1,0,?,?}>;
+def tASRri : T1sI<(outs tGPR:$Rd), (ins tGPR:$Rm, i32imm:$imm5), IIC_iMOVsi,
+                  "asr", "\t$Rd, $Rm, $imm5",
+                  [(set tGPR:$Rd, (sra tGPR:$Rm, (i32 imm:$imm5)))]>,
+             T1General<{0,1,0,?,?}> {
+  // A8.6.14
+  bits<3> Rd;
+  bits<3> Rm;
+  bits<5> imm5;
+  let Inst{10-6} = imm5;
+  let Inst{5-3}  = Rm;
+  let Inst{2-0}  = Rd;
+}
 
 // ASR register
 def tASRrr : T1sIt<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs), IIC_iMOVsr,
                    "asr", "\t$dst, $rhs",
                    [(set tGPR:$dst, (sra tGPR:$lhs, tGPR:$rhs))]>,
-             T1DataProcessing<0b0100>;
+             T1DataProcessing<0b0100> {
+  // A8.6.15
+  bits<3> rhs;
+  bits<3> dst;
+  let Inst{5-3} = rhs;
+  let Inst{2-0} = dst;
+}
 
 // BIC register
 def tBIC : T1sIt<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs), IIC_iBITr,
                  "bic", "\t$dst, $rhs",
                  [(set tGPR:$dst, (and tGPR:$lhs, (not tGPR:$rhs)))]>,
-           T1DataProcessing<0b1110>;
+           T1DataProcessing<0b1110> {
+  // A8.6.20
+  bits<3> dst;
+  bits<3> rhs;
+  let Inst{5-3} = rhs;
+  let Inst{2-0} = dst;
+}
 
 // CMN register
 let isCompare = 1, Defs = [CPSR] in {
@@ -634,30 +784,53 @@ let isCompare = 1, Defs = [CPSR] in {
 //                "cmn", "\t$lhs, $rhs",
 //                [(ARMcmp tGPR:$lhs, (ineg tGPR:$rhs))]>,
 //           T1DataProcessing<0b1011>;
-def tCMNz : T1pI<(outs), (ins tGPR:$lhs, tGPR:$rhs), IIC_iCMPr,
-                 "cmn", "\t$lhs, $rhs",
-                 [(ARMcmpZ tGPR:$lhs, (ineg tGPR:$rhs))]>,
-            T1DataProcessing<0b1011>;
+def tCMNz : T1pI<(outs), (ins tGPR:$Rn, tGPR:$Rm), IIC_iCMPr,
+                 "cmn", "\t$Rn, $Rm",
+                 [(ARMcmpZ tGPR:$Rn, (ineg tGPR:$Rm))]>,
+            T1DataProcessing<0b1011> {
+  // A8.6.33
+  bits<3> Rm;
+  bits<3> Rn;
+  let Inst{5-3} = Rm;
+  let Inst{2-0} = Rn;
+}
 }
 
 // CMP immediate
 let isCompare = 1, Defs = [CPSR] in {
-def tCMPi8 : T1pI<(outs), (ins tGPR:$lhs, i32imm:$rhs), IIC_iCMPi,
-                  "cmp", "\t$lhs, $rhs",
-                  [(ARMcmp tGPR:$lhs, imm0_255:$rhs)]>,
-             T1General<{1,0,1,?,?}>;
-def tCMPzi8 : T1pI<(outs), (ins tGPR:$lhs, i32imm:$rhs), IIC_iCMPi,
-                  "cmp", "\t$lhs, $rhs",
-                  [(ARMcmpZ tGPR:$lhs, imm0_255:$rhs)]>,
-              T1General<{1,0,1,?,?}>;
+def tCMPi8 : T1pI<(outs), (ins tGPR:$Rn, i32imm:$imm8), IIC_iCMPi,
+                  "cmp", "\t$Rn, $imm8",
+                  [(ARMcmp tGPR:$Rn, imm0_255:$imm8)]>,
+             T1General<{1,0,1,?,?}> {
+  // A8.6.35
+  bits<3> Rn;
+  bits<8> imm8;
+  let Inst{10-8} = Rn;
+  let Inst{7-0}  = imm8;
+}
+
+def tCMPzi8 : T1pI<(outs), (ins tGPR:$Rn, i32imm:$imm8), IIC_iCMPi,
+                  "cmp", "\t$Rn, $imm8",
+                  [(ARMcmpZ tGPR:$Rn, imm0_255:$imm8)]>,
+              T1General<{1,0,1,?,?}> {
+  // A8.6.35
+  bits<3> Rn;
+  let Inst{10-8} = Rn;
+  let Inst{7-0}  = 0x00;
 }
 
 // CMP register
-let isCompare = 1, Defs = [CPSR] in {
-def tCMPr : T1pI<(outs), (ins tGPR:$lhs, tGPR:$rhs), IIC_iCMPr,
-                 "cmp", "\t$lhs, $rhs",
-                 [(ARMcmp tGPR:$lhs, tGPR:$rhs)]>,
-            T1DataProcessing<0b1010>;
+def tCMPr : T1pI<(outs), (ins tGPR:$Rn, tGPR:$Rm), IIC_iCMPr,
+                 "cmp", "\t$Rn, $Rm",
+                 [(ARMcmp tGPR:$Rn, tGPR:$Rm)]>,
+            T1DataProcessing<0b1010> {
+  // A8.6.36
+  bits<3> Rm;
+  bits<3> Rn;
+  let Inst{5-3} = Rm;
+  let Inst{2-0} = Rn;
+}
+
 def tCMPzr : T1pI<(outs), (ins tGPR:$lhs, tGPR:$rhs), IIC_iCMPr,
                   "cmp", "\t$lhs, $rhs",
                   [(ARMcmpZ tGPR:$lhs, tGPR:$rhs)]>,
@@ -669,7 +842,7 @@ def tCMPhir : T1pI<(outs), (ins GPR:$lhs, GPR:$rhs), IIC_iCMPr,
 def tCMPzhir : T1pI<(outs), (ins GPR:$lhs, GPR:$rhs), IIC_iCMPr,
                     "cmp", "\t$lhs, $rhs", []>,
                T1Special<{0,1,?,?}>;
-}
+} // isCompare = 1, Defs = [CPSR]
 
 
 // XOR register
@@ -704,6 +877,7 @@ def tLSRrr : T1sIt<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs), IIC_iMOVsr,
              T1DataProcessing<0b0011>;
 
 // move register
+let isMoveImm = 1 in
 def tMOVi8 : T1sI<(outs tGPR:$dst), (ins i32imm:$src), IIC_iMOVi,
                   "mov", "\t$dst, $src",
                   [(set tGPR:$dst, imm0_255:$src)]>,
@@ -759,7 +933,7 @@ def tORR : T1sIt<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs),  IIC_iBITr,
 def tREV : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
                 "rev", "\t$dst, $src",
                 [(set tGPR:$dst, (bswap tGPR:$src))]>,
-                Requires<[IsThumb1Only, HasV6]>,
+                Requires<[IsThumb, IsThumb1Only, HasV6]>,
            T1Misc<{1,0,1,0,0,0,?}>;
 
 def tREV16 : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
@@ -769,7 +943,7 @@ def tREV16 : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
                        (or (and (shl tGPR:$src, (i32 8)), 0xFF00),
                            (or (and (srl tGPR:$src, (i32 8)), 0xFF0000),
                                (and (shl tGPR:$src, (i32 8)), 0xFF000000)))))]>,
-                Requires<[IsThumb1Only, HasV6]>,
+                Requires<[IsThumb, IsThumb1Only, HasV6]>,
              T1Misc<{1,0,1,0,0,1,?}>;
 
 def tREVSH : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
@@ -778,7 +952,7 @@ def tREVSH : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
                         (sext_inreg
                           (or (srl (and tGPR:$src, 0xFF00), (i32 8)),
                               (shl tGPR:$src, (i32 8))), i16))]>,
-                  Requires<[IsThumb1Only, HasV6]>,
+                  Requires<[IsThumb, IsThumb1Only, HasV6]>,
              T1Misc<{1,0,1,0,1,1,?}>;
 
 // rotate right register
@@ -823,35 +997,35 @@ def tSUBrr : T1sI<(outs tGPR:$dst), (ins tGPR:$lhs, tGPR:$rhs), IIC_iALUr,
 def tSXTB  : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
                   "sxtb", "\t$dst, $src",
                   [(set tGPR:$dst, (sext_inreg tGPR:$src, i8))]>,
-                  Requires<[IsThumb1Only, HasV6]>,
+                  Requires<[IsThumb, IsThumb1Only, HasV6]>,
              T1Misc<{0,0,1,0,0,1,?}>;
 
 // sign-extend short
 def tSXTH  : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
                   "sxth", "\t$dst, $src",
                   [(set tGPR:$dst, (sext_inreg tGPR:$src, i16))]>,
-                  Requires<[IsThumb1Only, HasV6]>,
+                  Requires<[IsThumb, IsThumb1Only, HasV6]>,
              T1Misc<{0,0,1,0,0,0,?}>;
 
 // test
 let isCompare = 1, isCommutable = 1, Defs = [CPSR] in
 def tTST  : T1pI<(outs), (ins tGPR:$lhs, tGPR:$rhs), IIC_iTSTr,
                  "tst", "\t$lhs, $rhs",
-                 [(ARMcmpZ (and tGPR:$lhs, tGPR:$rhs), 0)]>,
+                 [(ARMcmpZ (and_su tGPR:$lhs, tGPR:$rhs), 0)]>,
             T1DataProcessing<0b1000>;
 
 // zero-extend byte
 def tUXTB  : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
                   "uxtb", "\t$dst, $src",
                   [(set tGPR:$dst, (and tGPR:$src, 0xFF))]>,
-                  Requires<[IsThumb1Only, HasV6]>,
+                  Requires<[IsThumb, IsThumb1Only, HasV6]>,
              T1Misc<{0,0,1,0,1,1,?}>;
 
 // zero-extend short
 def tUXTH  : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
                   "uxth", "\t$dst, $src",
                   [(set tGPR:$dst, (and tGPR:$src, 0xFFFF))]>,
-                  Requires<[IsThumb1Only, HasV6]>,
+                  Requires<[IsThumb, IsThumb1Only, HasV6]>,
              T1Misc<{0,0,1,0,1,0,?}>;
 
 
@@ -860,7 +1034,7 @@ def tUXTH  : T1pI<(outs tGPR:$dst), (ins tGPR:$src), IIC_iUNAr,
 let usesCustomInserter = 1 in  // Expanded after instruction selection.
   def tMOVCCr_pseudo :
   PseudoInst<(outs tGPR:$dst), (ins tGPR:$false, tGPR:$true, pred:$cc),
-              NoItinerary, "",
+              NoItinerary,
              [/*(set tGPR:$dst, (ARMcmov tGPR:$false, tGPR:$true, imm:$cc))*/]>;
 
 
@@ -870,6 +1044,7 @@ def tMOVCCr : T1pIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iCMOVr,
                     "mov", "\t$dst, $rhs", []>,
               T1Special<{1,0,?,?}>;
 
+let isMoveImm = 1 in
 def tMOVCCi : T1pIt<(outs tGPR:$dst), (ins tGPR:$lhs, i32imm:$rhs), IIC_iCMOVi,
                     "mov", "\t$dst, $rhs", []>,
               T1General<{1,0,0,?,?}>;
@@ -915,14 +1090,14 @@ let isCall = 1,
 //   $val is a scratch register for our use.
 let Defs =
   [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7, R12 ], hasSideEffects = 1,
-   isBarrier = 1  in {
+   isBarrier = 1, isCodeGenOnly = 1 in {
   def tInt_eh_sjlj_setjmp : ThumbXI<(outs),(ins tGPR:$src, tGPR:$val),
                               AddrModeNone, SizeSpecial, NoItinerary, "", "",
                    [(set R0, (ARMeh_sjlj_setjmp tGPR:$src, tGPR:$val))]>;
 }
 
 // FIXME: Non-Darwin version(s)
-let isBarrier = 1, hasSideEffects = 1, isTerminator = 1,
+let isBarrier = 1, hasSideEffects = 1, isTerminator = 1, isCodeGenOnly = 1,
     Defs = [ R7, LR, SP ] in {
 def tInt_eh_sjlj_longjmp : XI<(outs), (ins GPR:$src, GPR:$scratch),
                              AddrModeNone, SizeSpecial, IndexModeNone,
@@ -989,10 +1164,10 @@ def : T1Pat<(extloadi16 t_addrmode_s2:$addr),  (tLDRH t_addrmode_s2:$addr)>;
 // ldr{b|h} + sxt{b|h} instead.
 def : T1Pat<(sextloadi8 t_addrmode_s1:$addr),
             (tSXTB (tLDRB t_addrmode_s1:$addr))>,
-      Requires<[IsThumb1Only, HasV6]>;
+      Requires<[IsThumb, IsThumb1Only, HasV6]>;
 def : T1Pat<(sextloadi16 t_addrmode_s2:$addr),
             (tSXTH (tLDRH t_addrmode_s2:$addr))>,
-      Requires<[IsThumb1Only, HasV6]>;
+      Requires<[IsThumb, IsThumb1Only, HasV6]>;
 
 def : T1Pat<(sextloadi8 t_addrmode_s1:$addr),
             (tASRri (tLSLri (tLDRB t_addrmode_s1:$addr), 24), 24)>;
@@ -1014,7 +1189,7 @@ def : T1Pat<(i32 imm0_255_comp:$src),
 // scheduling.
 let isReMaterializable = 1 in
 def tLDRpci_pic : PseudoInst<(outs GPR:$dst), (ins i32imm:$addr, pclabel:$cp),
-                   NoItinerary, "",
+                   NoItinerary,
                [(set GPR:$dst, (ARMpic_add (load (ARMWrapper tconstpool:$addr)),
                                            imm:$cp))]>,
-               Requires<[IsThumb1Only]>;
+               Requires<[IsThumb, IsThumb1Only]>;

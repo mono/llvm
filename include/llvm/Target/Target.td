@@ -150,8 +150,8 @@ class DwarfRegNum<list<int> Numbers> {
   // These values can be determined by locating the <target>.h file in the
   // directory llvmgcc/gcc/config/<target>/ and looking for REGISTER_NAMES.  The
   // order of these names correspond to the enumeration used by gcc.  A value of
-  // -1 indicates that the gcc number is undefined and -2 that register number is 
-  // invalid for this mode/flavour.
+  // -1 indicates that the gcc number is undefined and -2 that register number
+  // is invalid for this mode/flavour.
   list<int> DwarfNumbers = Numbers;
 }
 
@@ -199,6 +199,7 @@ class Instruction {
   bit isBranch     = 0;     // Is this instruction a branch instruction?
   bit isIndirectBranch = 0; // Is this instruction an indirect branch?
   bit isCompare    = 0;     // Is this instruction a comparison instruction?
+  bit isMoveImm    = 0;     // Is this instruction a move immediate instruction?
   bit isBarrier    = 0;     // Can control flow fall through this instruction?
   bit isCall       = 0;     // Is this instruction a call instruction?
   bit canFoldAsLoad = 0;    // Can this be folded as a simple memory operand?
@@ -243,6 +244,8 @@ class Instruction {
   /// be encoded into the output machineinstr.
   string DisableEncoding = "";
 
+  string PostEncoderMethod = "";
+
   /// Target-specific flags. This becomes the TSFlags field in TargetInstrDesc.
   bits<64> TSFlags = 0;
 }
@@ -251,6 +254,11 @@ class Instruction {
 /// selector matching code. Currently each predicate is just a string.
 class Predicate<string cond> {
   string CondString = cond;
+  
+  /// AssemblerMatcherPredicate - If this feature can be used by the assembler
+  /// matcher, this is true.  Targets should set this by inheriting their
+  /// feature from the AssemblerPredicate class in addition to Predicate.
+  bit AssemblerMatcherPredicate = 0;
 }
 
 /// NoHonorSignDependentRounding - This predicate is true if support for
@@ -262,9 +270,9 @@ class Requires<list<Predicate> preds> {
   list<Predicate> Predicates = preds;
 }
 
-/// ops definition - This is just a simple marker used to identify the operands
-/// list for an instruction. outs and ins are identical both syntatically and
-/// semantically, they are used to define def operands and use operands to
+/// ops definition - This is just a simple marker used to identify the operand
+/// list for an instruction. outs and ins are identical both syntactically and
+/// semanticallyr; they are used to define def operands and use operands to
 /// improve readibility. This should be used like this:
 ///     (outs R32:$dst), (ins R32:$src1, R32:$src2) or something similar.
 def ops;
@@ -338,6 +346,7 @@ def ImmAsmOperand : AsmOperandClass {
 class Operand<ValueType ty> {
   ValueType Type = ty;
   string PrintMethod = "printOperand";
+  string EncoderMethod = "";
   string AsmOperandLowerMethod = ?;
   dag MIOperandInfo = (ops);
 
@@ -506,9 +515,9 @@ class AsmParser {
   // name.
   string AsmParserClassName  = "AsmParser";
 
-  // AsmParserInstCleanup - If non-empty, this is the name of a custom function on the
-  // AsmParser class to call on every matched instruction. This can be used to
-  // perform target specific instruction post-processing.
+  // AsmParserInstCleanup - If non-empty, this is the name of a custom member
+  // function of the AsmParser class to call on every matched instruction.
+  // This can be used to perform target specific instruction post-processing.
   string AsmParserInstCleanup  = "";
 
   // Variant - AsmParsers can be of multiple different variants.  Variants are
@@ -529,6 +538,49 @@ class AsmParser {
 }
 def DefaultAsmParser : AsmParser;
 
+/// AssemblerPredicate - This is a Predicate that can be used when the assembler
+/// matches instructions and aliases.
+class AssemblerPredicate {
+  bit AssemblerMatcherPredicate = 1;
+}
+
+
+
+/// MnemonicAlias - This class allows targets to define assembler mnemonic
+/// aliases.  This should be used when all forms of one mnemonic are accepted
+/// with a different mnemonic.  For example, X86 allows:
+///   sal %al, 1    -> shl %al, 1
+///   sal %ax, %cl  -> shl %ax, %cl
+///   sal %eax, %cl -> shl %eax, %cl
+/// etc.  Though "sal" is accepted with many forms, all of them are directly
+/// translated to a shl, so it can be handled with (in the case of X86, it
+/// actually has one for each suffix as well):
+///   def : MnemonicAlias<"sal", "shl">;
+///
+/// Mnemonic aliases are mapped before any other translation in the match phase,
+/// and do allow Requires predicates, e.g.:
+///
+///  def : MnemonicAlias<"pushf", "pushfq">, Requires<[In64BitMode]>;
+///  def : MnemonicAlias<"pushf", "pushfl">, Requires<[In32BitMode]>;
+///
+class MnemonicAlias<string From, string To> {
+  string FromMnemonic = From;
+  string ToMnemonic = To;
+  
+  // Predicates - Predicates that must be true for this remapping to happen.
+  list<Predicate> Predicates = [];
+}
+
+/// InstAlias - This defines an alternate assembly syntax that is allowed to
+/// match an instruction that has a different (more canonical) assembly
+/// representation.
+class InstAlias<string Asm, dag Result> {
+  string AsmString = Asm;      // The .s format to match the instruction with.
+  dag ResultInst = Result;     // The MCInst to generate.
+  
+  // Predicates - Predicates that must be true for this to match.
+  list<Predicate> Predicates = [];
+}
 
 //===----------------------------------------------------------------------===//
 // AsmWriter - This class can be implemented by targets that need to customize
@@ -542,10 +594,6 @@ class AsmWriter {
   // class.  Generated AsmWriter classes are always prefixed with the target
   // name.
   string AsmWriterClassName  = "AsmPrinter";
-
-  // InstFormatName - AsmWriters can specify the name of the format string to
-  // print instructions with.
-  string InstFormatName = "AsmString";
 
   // Variant - AsmWriters can be of multiple different variants.  Variants are
   // used to support targets that need to emit assembly code in ways that are

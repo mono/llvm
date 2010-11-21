@@ -41,8 +41,6 @@ namespace llvm {
       return &BF::PRegClass;
     }
 
-    bool hasFP(const MachineFunction &MF) const;
-
     // bool hasReservedCallFrame(MachineFunction &MF) const;
 
     bool requiresRegisterScavenging(const MachineFunction &MF) const;
@@ -56,9 +54,6 @@ namespace llvm {
 
     void processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
                                               RegScavenger *RS) const;
-
-    void emitPrologue(MachineFunction &MF) const;
-    void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const;
 
     unsigned getFrameRegister(const MachineFunction &MF) const;
     unsigned getRARegister() const;

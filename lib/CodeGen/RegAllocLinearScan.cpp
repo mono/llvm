@@ -15,6 +15,7 @@
 #include "VirtRegMap.h"
 #include "VirtRegRewriter.h"
 #include "Spiller.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Function.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
@@ -193,6 +194,8 @@ namespace {
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesCFG();
+      AU.addRequired<AliasAnalysis>();
+      AU.addPreserved<AliasAnalysis>();
       AU.addRequired<LiveIntervals>();
       AU.addPreserved<SlotIndexes>();
       if (StrongPHIElim)
@@ -391,6 +394,7 @@ INITIALIZE_PASS_DEPENDENCY(LiveStacks)
 INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
 INITIALIZE_PASS_DEPENDENCY(VirtRegMap)
 INITIALIZE_AG_DEPENDENCY(RegisterCoalescer)
+INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_END(RALinScan, "linearscan-regalloc",
                 "Linear Scan Register Allocator", false, false)
 
@@ -461,6 +465,10 @@ unsigned RALinScan::attemptTrivialCoalescing(LiveInterval &cur, unsigned Reg) {
       // Only used by a copy, try to extend DstReg backwards
       CandReg = CopyMI->getOperand(0).getReg();
     else
+      return Reg;
+
+    // If the target of the copy is a sub-register then don't coalesce.
+    if(CopyMI->getOperand(0).getSubReg())
       return Reg;
   }
 
@@ -950,10 +958,11 @@ namespace {
 /// assignRegOrStackSlotAtInterval - assign a register if one is available, or
 /// spill.
 void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
-  DEBUG(dbgs() << "\tallocating current interval: ");
+  const TargetRegisterClass *RC = mri_->getRegClass(cur->reg);
+  DEBUG(dbgs() << "\tallocating current interval from "
+               << RC->getName() << ": ");
 
   // This is an implicitly defined live interval, just assign any register.
-  const TargetRegisterClass *RC = mri_->getRegClass(cur->reg);
   if (cur->empty()) {
     unsigned physReg = vrm_->getRegAllocPref(cur->reg);
     if (!physReg)

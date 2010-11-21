@@ -11,7 +11,6 @@
 #include "X86.h"
 #include "X86FixupKinds.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/MC/ELFObjectWriter.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCObjectFormat.h"
@@ -19,8 +18,8 @@
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
-#include "llvm/MC/MachObjectWriter.h"
 #include "llvm/Support/ELF.h"
+#include "llvm/Support/MachO.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegistry.h"
@@ -236,10 +235,8 @@ bool X86AsmBackend::WriteNopData(uint64_t Count, MCObjectWriter *OW) const {
     {0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
     // nopw %cs:0L(%[re]ax,%[re]ax,1)
     {0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
-    // nopl 0(%[re]ax,%[re]ax,1)
-    // nopw 0(%[re]ax,%[re]ax,1)
-    {0x0f, 0x1f, 0x44, 0x00, 0x00,
-     0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00},
+    // nopw %cs:0L(%[re]ax,%[re]ax,1)
+    {0x66, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
     // nopw 0(%[re]ax,%[re]ax,1)
     // nopw 0(%[re]ax,%[re]ax,1)
     {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00,
@@ -292,11 +289,6 @@ public:
     const MCSectionELF &ES = static_cast<const MCSectionELF&>(Section);
     return ES.getFlags() & MCSectionELF::SHF_MERGE;
   }
-
-  bool isVirtualSection(const MCSection &Section) const {
-    const MCSectionELF &SE = static_cast<const MCSectionELF&>(Section);
-    return SE.getType() == MCSectionELF::SHT_NOBITS;
-  }
 };
 
 class ELFX86_32AsmBackend : public ELFX86AsmBackend {
@@ -309,10 +301,10 @@ public:
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return new ELFObjectWriter(OS, /*Is64Bit=*/false,
-                               OSType, ELF::EM_386,
-                               /*IsLittleEndian=*/true,
-                               /*HasRelocationAddend=*/false);
+    return createELFObjectWriter(OS, /*Is64Bit=*/false,
+                                 OSType, ELF::EM_386,
+                                 /*IsLittleEndian=*/true,
+                                 /*HasRelocationAddend=*/false);
   }
 };
 
@@ -326,10 +318,10 @@ public:
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return new ELFObjectWriter(OS, /*Is64Bit=*/true,
-                               OSType, ELF::EM_X86_64,
-                               /*IsLittleEndian=*/true,
-                               /*HasRelocationAddend=*/true);
+    return createELFObjectWriter(OS, /*Is64Bit=*/true,
+                                 OSType, ELF::EM_X86_64,
+                                 /*IsLittleEndian=*/true,
+                                 /*HasRelocationAddend=*/true);
   }
 };
 
@@ -358,11 +350,6 @@ public:
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
     return createWinCOFFObjectWriter(OS, Is64Bit);
   }
-
-  bool isVirtualSection(const MCSection &Section) const {
-    const MCSectionCOFF &SE = static_cast<const MCSectionCOFF&>(Section);
-    return SE.getCharacteristics() & COFF::IMAGE_SCN_CNT_UNINITIALIZED_DATA;
-  }
 };
 
 class DarwinX86AsmBackend : public X86AsmBackend {
@@ -377,13 +364,6 @@ public:
   virtual const MCObjectFormat &getObjectFormat() const {
     return Format;
   }
-
-  bool isVirtualSection(const MCSection &Section) const {
-    const MCSectionMachO &SMO = static_cast<const MCSectionMachO&>(Section);
-    return (SMO.getType() == MCSectionMachO::S_ZEROFILL ||
-            SMO.getType() == MCSectionMachO::S_GB_ZEROFILL ||
-            SMO.getType() == MCSectionMachO::S_THREAD_LOCAL_ZEROFILL);
-  }
 };
 
 class DarwinX86_32AsmBackend : public DarwinX86AsmBackend {
@@ -396,7 +376,9 @@ public:
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return new MachObjectWriter(OS, /*Is64Bit=*/false);
+    return createMachObjectWriter(OS, /*Is64Bit=*/false, MachO::CPUTypeI386,
+                                  MachO::CPUSubType_I386_ALL,
+                                  /*IsLittleEndian=*/true);
   }
 };
 
@@ -412,7 +394,9 @@ public:
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return new MachObjectWriter(OS, /*Is64Bit=*/true);
+    return createMachObjectWriter(OS, /*Is64Bit=*/true, MachO::CPUTypeX86_64,
+                                  MachO::CPUSubType_I386_ALL,
+                                  /*IsLittleEndian=*/true);
   }
 
   virtual bool doesSectionRequireSymbols(const MCSection &Section) const {

@@ -7,7 +7,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/MC/MachObjectWriter.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAssembler.h"
@@ -159,7 +158,7 @@ static bool isScatteredFixupFullyResolvedSimple(const MCAssembler &Asm,
 
 namespace {
 
-class MachObjectWriterImpl {
+class MachObjectWriter : public MCObjectWriter {
   // See <mach-o/loader.h>.
   enum {
     Header_Magic32 = 0xFEEDFACE,
@@ -284,24 +283,17 @@ class MachObjectWriterImpl {
 
   /// @}
 
-  MachObjectWriter *Writer;
-
-  raw_ostream &OS;
-
   unsigned Is64Bit : 1;
 
-public:
-  MachObjectWriterImpl(MachObjectWriter *_Writer, bool _Is64Bit)
-    : Writer(_Writer), OS(Writer->getStream()), Is64Bit(_Is64Bit) {
-  }
+  uint32_t CPUType;
+  uint32_t CPUSubtype;
 
-  void Write8(uint8_t Value) { Writer->Write8(Value); }
-  void Write16(uint16_t Value) { Writer->Write16(Value); }
-  void Write32(uint32_t Value) { Writer->Write32(Value); }
-  void Write64(uint64_t Value) { Writer->Write64(Value); }
-  void WriteZeros(unsigned N) { Writer->WriteZeros(N); }
-  void WriteBytes(StringRef Str, unsigned ZeroFillSize = 0) {
-    Writer->WriteBytes(Str, ZeroFillSize);
+public:
+  MachObjectWriter(raw_ostream &_OS,
+                   bool _Is64Bit, uint32_t _CPUType, uint32_t _CPUSubtype,
+                   bool _IsLittleEndian)
+    : MCObjectWriter(_OS, _IsLittleEndian),
+      Is64Bit(_Is64Bit), CPUType(_CPUType), CPUSubtype(_CPUSubtype) {
   }
 
   void WriteHeader(unsigned NumLoadCommands, unsigned LoadCommandsSize,
@@ -319,10 +311,9 @@ public:
 
     Write32(Is64Bit ? Header_Magic64 : Header_Magic32);
 
-    // FIXME: Support cputype.
-    Write32(Is64Bit ? MachO::CPUTypeX86_64 : MachO::CPUTypeI386);
-    // FIXME: Support cpusubtype.
-    Write32(MachO::CPUSubType_I386_ALL);
+    Write32(CPUType);
+    Write32(CPUSubtype);
+
     Write32(HFT_Object);
     Write32(NumLoadCommands);    // Object files have a single load command, the
                                  // segment.
@@ -380,7 +371,7 @@ public:
     uint64_t SectionSize = Layout.getSectionSize(&SD);
 
     // The offset is unused for virtual sections.
-    if (Asm.getBackend().isVirtualSection(SD.getSection())) {
+    if (SD.getSection().isVirtualSection()) {
       assert(Layout.getSectionFileSize(&SD) == 0 && "Invalid file size!");
       FileOffset = 0;
     }
@@ -629,7 +620,7 @@ public:
       if (A_Base == B_Base && A_Base)
         report_fatal_error("unsupported relocation with identical base");
 
-      Value += Layout.getSymbolAddress(&A_SD) - 
+      Value += Layout.getSymbolAddress(&A_SD) -
                (A_Base == NULL ? 0 : Layout.getSymbolAddress(A_Base));
       Value -= Layout.getSymbolAddress(&B_SD) -
                (B_Base == NULL ? 0 : Layout.getSymbolAddress(B_Base));
@@ -871,7 +862,7 @@ public:
     } else {
       FixedValue = 0;
     }
-    
+
     // struct relocation_info (8 bytes)
     MachRelocationEntry MRE;
     MRE.Word0 = Value;
@@ -882,7 +873,7 @@ public:
                  (RIT_TLV   << 28)); // Type
     Relocations[Fragment->getParent()].push_back(MRE);
   }
-  
+
   void RecordRelocation(const MCAssembler &Asm, const MCAsmLayout &Layout,
                         const MCFragment *Fragment, const MCFixup &Fixup,
                         MCValue Target, uint64_t &FixedValue) {
@@ -900,7 +891,7 @@ public:
       RecordTLVPRelocation(Asm, Layout, Fragment, Fixup, Target, FixedValue);
       return;
     }
-    
+
     // If this is a difference or a defined symbol plus an offset, then we need
     // a scattered relocation entry.
     // Differences always require scattered relocations.
@@ -984,7 +975,7 @@ public:
       // Initialize the section indirect symbol base, if necessary.
       if (!IndirectSymBase.count(it->SectionData))
         IndirectSymBase[it->SectionData] = IndirectIndex;
-      
+
       Asm.getOrCreateSymbolData(*it->Symbol);
     }
 
@@ -1166,7 +1157,7 @@ public:
     return true;
   }
 
-  void WriteObject(const MCAssembler &Asm, const MCAsmLayout &Layout) {
+  void WriteObject(MCAssembler &Asm, const MCAsmLayout &Layout) {
     unsigned NumSections = Asm.size();
 
     // The section data starts after the header, the segment load command (and
@@ -1200,7 +1191,7 @@ public:
 
       VMSize = std::max(VMSize, Address + Size);
 
-      if (Asm.getBackend().isVirtualSection(SD.getSection()))
+      if (SD.getSection().isVirtualSection())
         continue;
 
       SectionDataSize = std::max(SectionDataSize, Address + Size);
@@ -1267,7 +1258,7 @@ public:
     // Write the actual section data.
     for (MCAssembler::const_iterator it = Asm.begin(),
            ie = Asm.end(); it != ie; ++it)
-      Asm.WriteSectionData(it, Layout, Writer);
+      Asm.WriteSectionData(it, Layout, this);
 
     // Write the extra padding.
     WriteZeros(SectionDataPadding);
@@ -1327,40 +1318,9 @@ public:
 
 }
 
-MachObjectWriter::MachObjectWriter(raw_ostream &OS,
-                                   bool Is64Bit,
-                                   bool IsLittleEndian)
-  : MCObjectWriter(OS, IsLittleEndian)
-{
-  Impl = new MachObjectWriterImpl(this, Is64Bit);
-}
-
-MachObjectWriter::~MachObjectWriter() {
-  delete (MachObjectWriterImpl*) Impl;
-}
-
-void MachObjectWriter::ExecutePostLayoutBinding(MCAssembler &Asm) {
-  ((MachObjectWriterImpl*) Impl)->ExecutePostLayoutBinding(Asm);
-}
-
-void MachObjectWriter::RecordRelocation(const MCAssembler &Asm,
-                                        const MCAsmLayout &Layout,
-                                        const MCFragment *Fragment,
-                                        const MCFixup &Fixup, MCValue Target,
-                                        uint64_t &FixedValue) {
-  ((MachObjectWriterImpl*) Impl)->RecordRelocation(Asm, Layout, Fragment, Fixup,
-                                                   Target, FixedValue);
-}
-
-bool MachObjectWriter::IsFixupFullyResolved(const MCAssembler &Asm,
-                                           const MCValue Target,
-                                           bool IsPCRel,
-                                           const MCFragment *DF) const {
-  return ((MachObjectWriterImpl*) Impl)->IsFixupFullyResolved(Asm, Target,
-                                                              IsPCRel, DF);
-}
-
-void MachObjectWriter::WriteObject(MCAssembler &Asm,
-                                   const MCAsmLayout &Layout) {
-  ((MachObjectWriterImpl*) Impl)->WriteObject(Asm, Layout);
+MCObjectWriter *llvm::createMachObjectWriter(raw_ostream &OS, bool is64Bit,
+                                             uint32_t CPUType,
+                                             uint32_t CPUSubtype,
+                                             bool IsLittleEndian) {
+  return new MachObjectWriter(OS, is64Bit, CPUType, CPUSubtype, IsLittleEndian);
 }

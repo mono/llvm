@@ -1963,3 +1963,52 @@ bb3:            ; preds = %entry
         ret i32 %b
 }
 //===---------------------------------------------------------------------===//
+
+clang -O3 fails to devirtualize this virtual inheritance case: (GCC PR45875)
+Looks related to PR3100
+
+struct c1 {};
+struct c10 : c1{
+  virtual void foo ();
+};
+struct c11 : c10, c1{
+  virtual void f6 ();
+};
+struct c28 : virtual c11{
+  void f6 ();
+};
+void check_c28 () {
+  c28 obj;
+  c11 *ptr = &obj;
+  ptr->f6 ();
+}
+
+//===---------------------------------------------------------------------===//
+
+We compile this:
+
+int foo(int a) { return (a & (~15)) / 16; }
+
+Into:
+
+define i32 @foo(i32 %a) nounwind readnone ssp {
+entry:
+  %and = and i32 %a, -16
+  %div = sdiv i32 %and, 16
+  ret i32 %div
+}
+
+but this code (X & -A)/A is X >> log2(A) when A is a power of 2, so this case
+should be instcombined into just "a >> 4".
+
+We do get this at the codegen level, so something knows about it, but 
+instcombine should catch it earlier:
+
+_foo:                                   ## @foo
+## BB#0:                                ## %entry
+	movl	%edi, %eax
+	sarl	$4, %eax
+	ret
+
+//===---------------------------------------------------------------------===//
+

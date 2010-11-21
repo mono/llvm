@@ -64,6 +64,9 @@ def FeatureNEONForFP : SubtargetFeature<"neonfp", "UseNEONForSinglePrecisionFP",
 def FeaturePref32BitThumb : SubtargetFeature<"32bit", "Pref32BitThumb", "true",
                                              "Prefer 32-bit Thumb instrs">;
 
+// Multiprocessing extension.
+def FeatureMP : SubtargetFeature<"mp", "HasMPExtension", "true",
+                                 "Supports Multiprocessing extension">;
 
 // ARM architectures.
 def ArchV4T     : SubtargetFeature<"v4t", "ARMArchVersion", "V4T",
@@ -165,7 +168,8 @@ def : Processor<"cortex-a8",        CortexA8Itineraries,
                                     [ArchV7A, ProcA8,
                                      FeatureHasSlowVMLx, FeatureT2XtPk]>;
 def : Processor<"cortex-a9",        CortexA9Itineraries,
-                                    [ArchV7A, ProcA9, FeatureT2XtPk]>;
+                                    [ArchV7A, ProcA9,
+                                     FeatureHasSlowVMLx, FeatureT2XtPk]>;
 
 // V7M Processors.
 def : ProcNoItin<"cortex-m3",       [ArchV7M]>;

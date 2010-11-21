@@ -211,6 +211,21 @@ public:
                                  const std::vector<CalleeSavedInfo> &CSI,
                                  const TargetRegisterInfo *TRI) const;
 
+  bool restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator MI,
+                                   const std::vector<CalleeSavedInfo> &CSI,
+                                   const TargetRegisterInfo *TRI) const;
+
+private:
+  void emitPopInst(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
+                   const std::vector<CalleeSavedInfo> &CSI, unsigned Opc,
+                   bool isVarArg, bool(*Func)(unsigned, bool)) const;
+  void emitPushInst(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
+                    const std::vector<CalleeSavedInfo> &CSI, unsigned Opc,
+                    bool(*Func)(unsigned, bool)) const;
+  
+  
+public:
   // Branch analysis.
   virtual bool AnalyzeBranch(MachineBasicBlock &MBB, MachineBasicBlock *&TBB,
                              MachineBasicBlock *&FBB,
@@ -318,18 +333,20 @@ public:
                                     const MachineFunction &MF) const;
 
   virtual bool isProfitableToIfCvt(MachineBasicBlock &MBB,
-                                   unsigned NumInstrs,
+                                   unsigned NumCyles, unsigned ExtraPredCycles,
                                    float Prob, float Confidence) const;
 
-  virtual bool isProfitableToIfCvt(MachineBasicBlock &TMBB,unsigned NumT,
-                                   MachineBasicBlock &FMBB,unsigned NumF,
+  virtual bool isProfitableToIfCvt(MachineBasicBlock &TMBB,
+                                   unsigned NumT, unsigned ExtraT,
+                                   MachineBasicBlock &FMBB,
+                                   unsigned NumF, unsigned ExtraF,
                                    float Probability, float Confidence) const;
 
   virtual bool isProfitableToDupForIfCvt(MachineBasicBlock &MBB,
-                                         unsigned NumInstrs,
+                                         unsigned NumCyles,
                                          float Probability,
                                          float Confidence) const {
-    return NumInstrs == 1;
+    return NumCyles == 1;
   }
 
   /// AnalyzeCompare - For a comparison instruction, return the source register
@@ -342,11 +359,15 @@ public:
   /// that we can remove a "comparison with zero".
   virtual bool OptimizeCompareInstr(MachineInstr *CmpInstr, unsigned SrcReg,
                                     int CmpMask, int CmpValue,
-                                    const MachineRegisterInfo *MRI,
-                                    MachineBasicBlock::iterator &MII) const;
+                                    const MachineRegisterInfo *MRI) const;
 
-  virtual unsigned getNumMicroOps(const MachineInstr *MI,
-                                  const InstrItineraryData *ItinData) const;
+  /// FoldImmediate - 'Reg' is known to be defined by a move immediate
+  /// instruction, try to fold the immediate into the use instruction.
+  virtual bool FoldImmediate(MachineInstr *UseMI, MachineInstr *DefMI,
+                             unsigned Reg, MachineRegisterInfo *MRI) const;
+
+  virtual unsigned getNumMicroOps(const InstrItineraryData *ItinData,
+                                  const MachineInstr *MI) const;
 
   virtual
   int getOperandLatency(const InstrItineraryData *ItinData,
@@ -378,6 +399,12 @@ private:
                         unsigned DefIdx, unsigned DefAlign,
                         const TargetInstrDesc &UseTID,
                         unsigned UseIdx, unsigned UseAlign) const;
+
+  int getInstrLatency(const InstrItineraryData *ItinData,
+                      const MachineInstr *MI, unsigned *PredCost = 0) const;
+
+  int getInstrLatency(const InstrItineraryData *ItinData,
+                      SDNode *Node) const;
 
   bool hasHighOperandLatency(const InstrItineraryData *ItinData,
                              const MachineRegisterInfo *MRI,

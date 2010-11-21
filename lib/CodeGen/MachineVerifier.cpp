@@ -26,6 +26,7 @@
 #include "llvm/Function.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveVariables.h"
+#include "llvm/CodeGen/LiveStackAnalysis.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
@@ -168,6 +169,7 @@ namespace {
     // Analysis information if available
     LiveVariables *LiveVars;
     LiveIntervals *LiveInts;
+    LiveStacks *LiveStks;
     SlotIndexes *Indexes;
 
     void visitMachineFunctionBefore();
@@ -250,12 +252,14 @@ bool MachineVerifier::runOnMachineFunction(MachineFunction &MF) {
 
   LiveVars = NULL;
   LiveInts = NULL;
+  LiveStks = NULL;
   Indexes = NULL;
   if (PASS) {
     LiveInts = PASS->getAnalysisIfAvailable<LiveIntervals>();
     // We don't want to verify LiveVariables if LiveIntervals is available.
     if (!LiveInts)
       LiveVars = PASS->getAnalysisIfAvailable<LiveVariables>();
+    LiveStks = PASS->getAnalysisIfAvailable<LiveStacks>();
     Indexes = PASS->getAnalysisIfAvailable<SlotIndexes>();
   }
 
@@ -554,7 +558,9 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
     else if (MO->isImplicit())
       report("Explicit definition marked as implicit", MO, MONum);
   } else if (MONum < TI.getNumOperands()) {
-    if (MO->isReg()) {
+    // Don't check if it's the last operand in a variadic instruction. See,
+    // e.g., LDM_RET in the arm back end.
+    if (MO->isReg() && !(TI.isVariadic() && MONum == TI.getNumOperands()-1)) {
       if (MO->isDef())
         report("Explicit operand marked as def", MO, MONum);
       if (MO->isImplicit())
@@ -585,7 +591,7 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
         unsigned DefReg = MI->getOperand(defIdx).getReg();
         if (Reg == DefReg) {
           isKill = true;
-          // ANd in that case an explicit kill flag is not allowed.
+          // And in that case an explicit kill flag is not allowed.
           if (MO->isKill())
             report("Illegal kill flag on two-address instruction operand",
                    MO, MONum);
@@ -609,7 +615,8 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
       }
 
       // Check LiveInts liveness and kill.
-      if (LiveInts && !LiveInts->isNotInMIMap(MI)) {
+      if (TargetRegisterInfo::isVirtualRegister(Reg) &&
+          LiveInts && !LiveInts->isNotInMIMap(MI)) {
         SlotIndex UseIdx = LiveInts->getInstructionIndex(MI).getUseIndex();
         if (LiveInts->hasInterval(Reg)) {
           const LiveInterval &LI = LiveInts->getInterval(Reg);
@@ -617,8 +624,21 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
             report("No live range at use", MO, MONum);
             *OS << UseIdx << " is not live in " << LI << '\n';
           }
-          // TODO: Verify isKill == LI.killedAt.
-        } else if (TargetRegisterInfo::isVirtualRegister(Reg)) {
+          // Verify isKill == LI.killedAt.
+          if (!MI->isRegTiedToDefOperand(MONum)) {
+            // MI could kill register without a kill flag on MO.
+            bool miKill = MI->killsRegister(Reg);
+            bool liKill = LI.killedAt(UseIdx.getDefIndex());
+            if (miKill && !liKill) {
+              report("Live range continues after kill flag", MO, MONum);
+              *OS << "Live range: " << LI << '\n';
+            }
+            if (!miKill && liKill) {
+              report("Live range ends without kill flag", MO, MONum);
+              *OS << "Live range: " << LI << '\n';
+            }
+          }
+        } else {
           report("Virtual register has no Live interval", MO, MONum);
         }
       }
@@ -723,6 +743,22 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
   case MachineOperand::MO_MachineBasicBlock:
     if (MI->isPHI() && !MO->getMBB()->isSuccessor(MI->getParent()))
       report("PHI operand is not in the CFG", MO, MONum);
+    break;
+
+  case MachineOperand::MO_FrameIndex:
+    if (LiveStks && LiveStks->hasInterval(MO->getIndex()) &&
+        LiveInts && !LiveInts->isNotInMIMap(MI)) {
+      LiveInterval &LI = LiveStks->getInterval(MO->getIndex());
+      SlotIndex Idx = LiveInts->getInstructionIndex(MI);
+      if (TI.mayLoad() && !LI.liveAt(Idx.getUseIndex())) {
+        report("Instruction loads from dead spill slot", MO, MONum);
+        *OS << "Live stack: " << LI << '\n';
+      }
+      if (TI.mayStore() && !LI.liveAt(Idx.getDefIndex())) {
+        report("Instruction stores to dead spill slot", MO, MONum);
+        *OS << "Live stack: " << LI << '\n';
+      }
+    }
     break;
 
   default:

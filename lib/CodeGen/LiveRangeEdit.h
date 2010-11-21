@@ -80,10 +80,6 @@ public:
   unsigned size() const { return newRegs_.size()-firstNew_; }
   LiveInterval *get(unsigned idx) const { return newRegs_[idx+firstNew_]; }
 
-  /// assignStackSlot - Ensure a stack slot is assigned to parent.
-  /// @return the assigned stack slot number.
-  int assignStackSlot(VirtRegMap&);
-
   /// create - Create a new register with the same class and stack slot as
   /// parent.
   LiveInterval &create(MachineRegisterInfo&, LiveIntervals&, VirtRegMap&);
@@ -98,16 +94,16 @@ public:
   struct Remat {
     VNInfo *ParentVNI;      // parent_'s value at the remat location.
     MachineInstr *OrigMI;   // Instruction defining ParentVNI.
-    operator bool() const { return OrigMI; }
+    explicit Remat(VNInfo *ParentVNI) : ParentVNI(ParentVNI), OrigMI(0) {}
   };
 
   /// canRematerializeAt - Determine if ParentVNI can be rematerialized at
   /// UseIdx. It is assumed that parent_.getVNINfoAt(UseIdx) == ParentVNI.
   /// When cheapAsAMove is set, only cheap remats are allowed.
-  Remat canRematerializeAt(VNInfo *ParentVNI,
-                           SlotIndex UseIdx,
-                           bool cheapAsAMove,
-                           LiveIntervals &lis);
+  bool canRematerializeAt(Remat &RM,
+                          SlotIndex UseIdx,
+                          bool cheapAsAMove,
+                          LiveIntervals &lis);
 
   /// rematerializeAt - Rematerialize RM.ParentVNI into DestReg by inserting an
   /// instruction into MBB before MI. The new instruction is mapped, but

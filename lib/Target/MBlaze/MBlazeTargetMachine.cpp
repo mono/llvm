@@ -61,7 +61,7 @@ extern "C" void LLVMInitializeMBlazeTarget() {
   // Register the MC code emitter
   TargetRegistry::RegisterCodeEmitter(TheMBlazeTarget,
                                       llvm::createMBlazeMCCodeEmitter);
-  
+
   // Register the asm backend
   TargetRegistry::RegisterAsmBackend(TheMBlazeTarget,
                                      createMBlazeAsmBackend);
@@ -85,7 +85,7 @@ MBlazeTargetMachine(const Target &T, const std::string &TT,
   Subtarget(TT, FS),
   DataLayout("E-p:32:32:32-i8:8:8-i16:16:16"),
   InstrInfo(*this),
-  FrameInfo(TargetFrameInfo::StackGrowsUp, 8, 0),
+  FrameInfo(Subtarget),
   TLInfo(*this), TSInfo(*this), ELFWriterInfo(*this) {
   if (getRelocationModel() == Reloc::Default) {
       setRelocationModel(Reloc::Static);

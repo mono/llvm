@@ -33,6 +33,7 @@ namespace llvm {
   class DbgDeclareInst;
   class Instruction;
   class MDNode;
+  class NamedMDNode;
   class LLVMContext;
   class raw_ostream;
 
@@ -238,6 +239,7 @@ namespace llvm {
      
      return getFieldAs<DIFile>(3).getCompileUnit();
     }
+    DIFile getFile() const              { return getFieldAs<DIFile>(3); }
     unsigned getLineNumber() const      { return getUnsignedField(4); }
     uint64_t getSizeInBits() const      { return getUInt64Field(5); }
     uint64_t getAlignInBits() const     { return getUInt64Field(6); }
@@ -833,6 +835,14 @@ namespace llvm {
 
   /// getDICompositeType - Find underlying composite type.
   DICompositeType getDICompositeType(DIType T);
+
+  /// getOrInsertFnSpecificMDNode - Return a NameMDNode that is suitable
+  /// to hold function specific information.
+  NamedMDNode *getOrInsertFnSpecificMDNode(Module &M, StringRef Name);
+
+  /// getFnSpecificMDNode - Return a NameMDNode, if available, that is 
+  /// suitable to hold function specific information.
+  NamedMDNode *getFnSpecificMDNode(const Module &M, StringRef Name);
 
   class DebugInfoFinder {
   public:

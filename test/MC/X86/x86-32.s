@@ -57,6 +57,11 @@ rdtscp
 // CHECK: shrl	%eax                    # encoding: [0xd1,0xe8]
         shrl $1, %eax
 
+// CHECK: shll	%eax                    # encoding: [0xd1,0xe0]
+        sall $1, %eax
+// CHECK: shll	%eax                    # encoding: [0xd1,0xe0]
+        sal $1, %eax
+
 // moffset forms of moves, rdar://7947184
 movb	0, %al    // CHECK: movb 0, %al  # encoding: [0xa0,A,A,A,A]
 movw	0, %ax    // CHECK: movw 0, %ax  # encoding: [0x66,0xa1,A,A,A,A]
@@ -703,27 +708,27 @@ pshufw $90, %mm4, %mm0
 // CHECK:  encoding: [0x0f,0x01,0x48,0x04]
         	sidtl	4(%eax)
 
-// CHECK: fcomip	%st(2), %st(0)
+// CHECK: fcompi	%st(2)
 // CHECK:  encoding: [0xdf,0xf2]
-        	fcompi	%st(2),%st
+        	fcompi	%st(2), %st
 
-// CHECK: fcomip	%st(2), %st(0)
+// CHECK: fcompi	%st(2)
 // CHECK:  encoding: [0xdf,0xf2]
         	fcompi	%st(2)
 
-// CHECK: fcomip	%st(1), %st(0)
+// CHECK: fcompi	%st(1)
 // CHECK:  encoding: [0xdf,0xf1]
         	fcompi
 
-// CHECK: fucomip	%st(2), %st(0)
+// CHECK: fucompi	%st(2)
 // CHECK:  encoding: [0xdf,0xea]
         	fucompi	%st(2),%st
 
-// CHECK: fucomip	%st(2), %st(0)
+// CHECK: fucompi	%st(2)
 // CHECK:  encoding: [0xdf,0xea]
         	fucompi	%st(2)
 
-// CHECK: fucomip	%st(1), %st(0)
+// CHECK: fucompi	%st(1)
 // CHECK:  encoding: [0xdf,0xe9]
         	fucompi
 
@@ -782,6 +787,10 @@ pshufw $90, %mm4, %mm0
 // CHECK: fnclex
 // CHECK:  encoding: [0xdb,0xe2]
         	fnclex
+
+// CHECK: ud2
+// CHECK:  encoding: [0x0f,0x0b]
+        	ud2
 
 // CHECK: ud2
 // CHECK:  encoding: [0x0f,0x0b]

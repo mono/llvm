@@ -53,8 +53,9 @@ void ilist_traits<MachineBasicBlock>::deleteNode(MachineBasicBlock *MBB) {
 }
 
 MachineFunction::MachineFunction(const Function *F, const TargetMachine &TM,
-                                 unsigned FunctionNum, MachineModuleInfo &mmi)
-  : Fn(F), Target(TM), Ctx(mmi.getContext()), MMI(mmi) {
+                                 unsigned FunctionNum, MachineModuleInfo &mmi,
+                                 GCModuleInfo* gmi)
+  : Fn(F), Target(TM), Ctx(mmi.getContext()), MMI(mmi), GMI(gmi) {
   if (TM.getRegisterInfo())
     RegInfo = new (Allocator) MachineRegisterInfo(*TM.getRegisterInfo());
   else
@@ -354,17 +355,15 @@ namespace llvm {
 
     std::string getNodeLabel(const MachineBasicBlock *Node,
                              const MachineFunction *Graph) {
-      if (isSimple () && Node->getBasicBlock() &&
-          !Node->getBasicBlock()->getName().empty())
-        return Node->getBasicBlock()->getNameStr() + ":";
-
       std::string OutStr;
       {
         raw_string_ostream OSS(OutStr);
-        
-        if (isSimple())
-          OSS << Node->getNumber() << ':';
-        else
+
+        if (isSimple()) {
+          OSS << "BB#" << Node->getNumber();
+          if (const BasicBlock *BB = Node->getBasicBlock())
+            OSS << ": " << BB->getName();
+        } else
           Node->print(OSS);
       }
 
@@ -434,6 +433,13 @@ MCSymbol *MachineFunction::getJTISymbol(unsigned JTI, MCContext &Ctx,
   return Ctx.GetOrCreateSymbol(Name.str());
 }
 
+/// getPICBaseSymbol - Return a function-local symbol to represent the PIC
+/// base.
+MCSymbol *MachineFunction::getPICBaseSymbol() const {
+  const MCAsmInfo &MAI = *Target.getMCAsmInfo();
+  return Ctx.GetOrCreateSymbol(Twine(MAI.getPrivateGlobalPrefix())+
+                               Twine(getFunctionNumber())+"$pb");
+}
 
 //===----------------------------------------------------------------------===//
 //  MachineFrameInfo implementation

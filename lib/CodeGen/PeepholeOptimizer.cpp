@@ -41,7 +41,9 @@
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 using namespace llvm;
 
@@ -50,8 +52,13 @@ static cl::opt<bool>
 Aggressive("aggressive-ext-opt", cl::Hidden,
            cl::desc("Aggressive extension optimization"));
 
+static cl::opt<bool>
+DisablePeephole("disable-peephole", cl::Hidden, cl::init(false),
+                cl::desc("Disable the peephole optimizer"));
+
 STATISTIC(NumReuse,      "Number of extension results reused");
 STATISTIC(NumEliminated, "Number of compares eliminated");
+STATISTIC(NumImmFold,    "Number of move immediate foled");
 
 namespace {
   class PeepholeOptimizer : public MachineFunctionPass {
@@ -78,10 +85,15 @@ namespace {
     }
 
   private:
-    bool OptimizeCmpInstr(MachineInstr *MI, MachineBasicBlock *MBB,
-                          MachineBasicBlock::iterator &MII);
+    bool OptimizeCmpInstr(MachineInstr *MI, MachineBasicBlock *MBB);
     bool OptimizeExtInstr(MachineInstr *MI, MachineBasicBlock *MBB,
                           SmallPtrSet<MachineInstr*, 8> &LocalMIs);
+    bool isMoveImmediate(MachineInstr *MI,
+                         SmallSet<unsigned, 4> &ImmDefRegs,
+                         DenseMap<unsigned, MachineInstr*> &ImmDefMIs);
+    bool FoldImmediate(MachineInstr *MI, MachineBasicBlock *MBB,
+                       SmallSet<unsigned, 4> &ImmDefRegs,
+                       DenseMap<unsigned, MachineInstr*> &ImmDefMIs);
   };
 }
 
@@ -108,12 +120,10 @@ FunctionPass *llvm::createPeepholeOptimizerPass() {
 bool PeepholeOptimizer::
 OptimizeExtInstr(MachineInstr *MI, MachineBasicBlock *MBB,
                  SmallPtrSet<MachineInstr*, 8> &LocalMIs) {
-  LocalMIs.insert(MI);
-
   unsigned SrcReg, DstReg, SubIdx;
   if (!TII->isCoalescableExtInstr(*MI, SrcReg, DstReg, SubIdx))
     return false;
-
+  
   if (TargetRegisterInfo::isPhysicalRegister(DstReg) ||
       TargetRegisterInfo::isPhysicalRegister(SrcReg))
     return false;
@@ -238,8 +248,7 @@ OptimizeExtInstr(MachineInstr *MI, MachineBasicBlock *MBB,
 /// set) the same flag as the compare, then we can remove the comparison and use
 /// the flag from the previous instruction.
 bool PeepholeOptimizer::OptimizeCmpInstr(MachineInstr *MI,
-                                         MachineBasicBlock *MBB,
-                                         MachineBasicBlock::iterator &NextIter){
+                                         MachineBasicBlock *MBB){
   // If this instruction is a comparison against zero and isn't comparing a
   // physical register, we can try to optimize it.
   unsigned SrcReg;
@@ -249,7 +258,7 @@ bool PeepholeOptimizer::OptimizeCmpInstr(MachineInstr *MI,
     return false;
 
   // Attempt to optimize the comparison instruction.
-  if (TII->OptimizeCompareInstr(MI, SrcReg, CmpMask, CmpValue, MRI, NextIter)) {
+  if (TII->OptimizeCompareInstr(MI, SrcReg, CmpMask, CmpValue, MRI)) {
     ++NumEliminated;
     return true;
   }
@@ -257,7 +266,53 @@ bool PeepholeOptimizer::OptimizeCmpInstr(MachineInstr *MI,
   return false;
 }
 
+bool PeepholeOptimizer::isMoveImmediate(MachineInstr *MI,
+                                        SmallSet<unsigned, 4> &ImmDefRegs,
+                                 DenseMap<unsigned, MachineInstr*> &ImmDefMIs) {
+  const TargetInstrDesc &TID = MI->getDesc();
+  if (!TID.isMoveImmediate())
+    return false;
+  if (TID.getNumDefs() != 1)
+    return false;
+  unsigned Reg = MI->getOperand(0).getReg();
+  if (TargetRegisterInfo::isVirtualRegister(Reg)) {
+    ImmDefMIs.insert(std::make_pair(Reg, MI));
+    ImmDefRegs.insert(Reg);
+    return true;
+  }
+  
+  return false;
+}
+
+/// FoldImmediate - Try folding register operands that are defined by move
+/// immediate instructions, i.e. a trivial constant folding optimization, if
+/// and only if the def and use are in the same BB.
+bool PeepholeOptimizer::FoldImmediate(MachineInstr *MI, MachineBasicBlock *MBB,
+                                      SmallSet<unsigned, 4> &ImmDefRegs,
+                                 DenseMap<unsigned, MachineInstr*> &ImmDefMIs) {
+  for (unsigned i = 0, e = MI->getDesc().getNumOperands(); i != e; ++i) {
+    MachineOperand &MO = MI->getOperand(i);
+    if (!MO.isReg() || MO.isDef())
+      continue;
+    unsigned Reg = MO.getReg();
+    if (!Reg || TargetRegisterInfo::isPhysicalRegister(Reg))
+      continue;
+    if (ImmDefRegs.count(Reg) == 0)
+      continue;
+    DenseMap<unsigned, MachineInstr*>::iterator II = ImmDefMIs.find(Reg);
+    assert(II != ImmDefMIs.end());
+    if (TII->FoldImmediate(MI, II->second, Reg, MRI)) {
+      ++NumImmFold;
+      return true;
+    }
+  }
+  return false;
+}
+
 bool PeepholeOptimizer::runOnMachineFunction(MachineFunction &MF) {
+  if (DisablePeephole)
+    return false;
+  
   TM  = &MF.getTarget();
   TII = TM->getInstrInfo();
   MRI = &MF.getRegInfo();
@@ -266,23 +321,32 @@ bool PeepholeOptimizer::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
 
   SmallPtrSet<MachineInstr*, 8> LocalMIs;
+  SmallSet<unsigned, 4> ImmDefRegs;
+  DenseMap<unsigned, MachineInstr*> ImmDefMIs;
   for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E; ++I) {
     MachineBasicBlock *MBB = &*I;
+    
+    bool SeenMoveImm = false;
     LocalMIs.clear();
+    ImmDefRegs.clear();
+    ImmDefMIs.clear();
 
     for (MachineBasicBlock::iterator
            MII = I->begin(), MIE = I->end(); MII != MIE; ) {
-      MachineInstr *MI = &*MII;
+      MachineInstr *MI = &*MII++;
+      LocalMIs.insert(MI);
 
-      if (MI->getDesc().isCompare() &&
-          !MI->getDesc().hasUnmodeledSideEffects()) {
-        if (OptimizeCmpInstr(MI, MBB, MII))
-          Changed = true;
-        else
-          ++MII;
+      if (MI->getDesc().hasUnmodeledSideEffects())
+        continue;
+
+      if (MI->getDesc().isCompare()) {
+        Changed |= OptimizeCmpInstr(MI, MBB);
+      } else if (isMoveImmediate(MI, ImmDefRegs, ImmDefMIs)) {
+        SeenMoveImm = true;
       } else {
         Changed |= OptimizeExtInstr(MI, MBB, LocalMIs);
-        ++MII;
+        if (SeenMoveImm)
+          Changed |= FoldImmediate(MI, MBB, ImmDefRegs, ImmDefMIs);
       }
     }
   }

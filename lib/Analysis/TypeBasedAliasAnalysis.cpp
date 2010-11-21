@@ -67,7 +67,7 @@
 using namespace llvm;
 
 // For testing purposes, enable TBAA only via a special option.
-static cl::opt<bool> EnableTBAA("enable-tbaa");
+static cl::opt<bool> EnableTBAA("enable-tbaa", cl::init(false));
 
 namespace {
   /// TBAANode - This is a simple wrapper around an MDNode which provides a
@@ -138,7 +138,9 @@ namespace {
   private:
     virtual void getAnalysisUsage(AnalysisUsage &AU) const;
     virtual AliasResult alias(const Location &LocA, const Location &LocB);
-    virtual bool pointsToConstantMemory(const Location &Loc);
+    virtual bool pointsToConstantMemory(const Location &Loc, bool OrLocal);
+    virtual ModRefBehavior getModRefBehavior(ImmutableCallSite CS);
+    virtual ModRefBehavior getModRefBehavior(const Function *F);
     virtual ModRefResult getModRefInfo(ImmutableCallSite CS,
                                        const Location &Loc);
     virtual ModRefResult getModRefInfo(ImmutableCallSite CS1,
@@ -225,19 +227,42 @@ TypeBasedAliasAnalysis::alias(const Location &LocA,
   return NoAlias;
 }
 
-bool TypeBasedAliasAnalysis::pointsToConstantMemory(const Location &Loc) {
+bool TypeBasedAliasAnalysis::pointsToConstantMemory(const Location &Loc,
+                                                    bool OrLocal) {
   if (!EnableTBAA)
-    return AliasAnalysis::pointsToConstantMemory(Loc);
+    return AliasAnalysis::pointsToConstantMemory(Loc, OrLocal);
 
   const MDNode *M = Loc.TBAATag;
-  if (!M) return AliasAnalysis::pointsToConstantMemory(Loc);
+  if (!M) return AliasAnalysis::pointsToConstantMemory(Loc, OrLocal);
 
   // If this is an "immutable" type, we can assume the pointer is pointing
   // to constant memory.
   if (TBAANode(M).TypeIsImmutable())
     return true;
 
-  return AliasAnalysis::pointsToConstantMemory(Loc);
+  return AliasAnalysis::pointsToConstantMemory(Loc, OrLocal);
+}
+
+AliasAnalysis::ModRefBehavior
+TypeBasedAliasAnalysis::getModRefBehavior(ImmutableCallSite CS) {
+  if (!EnableTBAA)
+    return AliasAnalysis::getModRefBehavior(CS);
+
+  ModRefBehavior Min = UnknownModRefBehavior;
+
+  // If this is an "immutable" type, we can assume the call doesn't write
+  // to memory.
+  if (const MDNode *M = CS.getInstruction()->getMetadata(LLVMContext::MD_tbaa))
+    if (TBAANode(M).TypeIsImmutable())
+      Min = OnlyReadsMemory;
+
+  return ModRefBehavior(AliasAnalysis::getModRefBehavior(CS) & Min);
+}
+
+AliasAnalysis::ModRefBehavior
+TypeBasedAliasAnalysis::getModRefBehavior(const Function *F) {
+  // Functions don't have metadata. Just chain to the next implementation.
+  return AliasAnalysis::getModRefBehavior(F);
 }
 
 AliasAnalysis::ModRefResult

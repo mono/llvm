@@ -81,13 +81,20 @@ namespace llvm {
 
       DYN_ALLOC,    // Dynamic allocation on the stack.
 
-      MEMBARRIER,   // Memory barrier
-      SYNCBARRIER,  // Memory sync barrier
+      MEMBARRIER,   // Memory barrier (DMB)
+      MEMBARRIER_MCR, // Memory barrier (MCR)
+
+      PRELOAD,      // Preload
       
       VCEQ,         // Vector compare equal.
+      VCEQZ,        // Vector compare equal to zero.
       VCGE,         // Vector compare greater than or equal.
+      VCGEZ,        // Vector compare greater than or equal to zero.
+      VCLEZ,        // Vector compare less than or equal to zero.
       VCGEU,        // Vector compare unsigned greater than or equal.
       VCGT,         // Vector compare greater than.
+      VCGTZ,        // Vector compare greater than zero.
+      VCLTZ,        // Vector compare less than zero.
       VCGTU,        // Vector compare unsigned greater than.
       VTST,         // Vector test bits.
 
@@ -160,7 +167,12 @@ namespace llvm {
       FMIN,
 
       // Bit-field insert
-      BFI
+      BFI,
+      
+      // Vector OR with immediate
+      VORRIMM,
+      // Vector AND with NOT of immediate
+      VBICIMM
     };
   }
 
@@ -420,6 +432,13 @@ namespace llvm {
                                         unsigned BinOpcode) const;
 
   };
+  
+  enum NEONModImmType {
+    VMOVModImm,
+    VMVNModImm,
+    OtherModImm
+  };
+  
   
   namespace ARM {
     FastISel *createFastISel(FunctionLoweringInfo &funcInfo);

@@ -18,12 +18,14 @@
     <ul>
       <li><a href="#regressiontests">Regression tests</a></li>
       <li><a href="#testsuite">Test suite</a></li>
+      <li><a href="#debuginfotests">Debugging Information tests</a></li>
     </ul>
   </li>
   <li><a href="#quick">Quick start</a>
     <ul>
       <li><a href="#quickregressiontests">Regression tests</a></li>
       <li><a href="#quicktestsuite">Test suite</a></li>
+      <li><a href="#quickdebuginfotests">Debugging Information tests</a></li>
    </ul>
   </li>
   <li><a href="#rtstructure">Regression test structure</a>
@@ -141,6 +143,23 @@ generates code.</p>
 
 </div>
 
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsection"><a name="debuginfotests">Debugging Information 
+tests</a></div>
+<!-- _______________________________________________________________________ -->
+
+<div class="doc_text">
+
+<p>The test suite contains tests to check quality of debugging information.
+The test are written in C based languages or in LLVM assembly language. </p>
+
+<p>These tests are compiled and run under a debugger. The debugger output
+is checked to validate of debugging information. See README.txt in the 
+test suite for more information . This test suite is located in the 
+<tt>debuginfo-tests</tt> Subversion module. </p>
+
+</div>
+
 <!--=========================================================================-->
 <div class="doc_section"><a name="quick">Quick start</a></div>
 <!--=========================================================================-->
@@ -153,7 +172,7 @@ generates code.</p>
   The more comprehensive test suite that includes whole 
 programs in C and C++ is in the <tt>test-suite</tt> module. This module should
 be checked out to the <tt>llvm/projects</tt> directory (don't use another name
-then the default "test-suite", for then the test suite will be run every time
+than the default "test-suite", for then the test suite will be run every time
 you run <tt>make</tt> in the main <tt>llvm</tt> directory).
 When you <tt>configure</tt> the <tt>llvm</tt> module, 
 the <tt>test-suite</tt> directory will be automatically configured. 
@@ -237,7 +256,7 @@ programs), first checkout and setup the <tt>test-suite</tt> module:</p>
 </div>
 
 <p>where <tt>$LLVM_GCC_DIR</tt> is the directory where
-you <em>installed</em> llvm-gcc, not it's src or obj
+you <em>installed</em> llvm-gcc, not its src or obj
 dir. The <tt>--with-llvmgccdir</tt> option assumes that
 the <tt>llvm-gcc-4.2</tt> module was configured with
 <tt>--program-prefix=llvm-</tt>, and therefore that the C and C++
@@ -269,6 +288,25 @@ let it generate a report by running:</p>
 <p>Any of the above commands can also be run in a subdirectory of
 <tt>projects/test-suite</tt> to run the specified test only on the programs in
 that subdirectory.</p>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<div class="doc_subsection"><a name="quickdebuginfotests">Debugging Information 
+tests</a></div>
+<!-- _______________________________________________________________________ -->
+
+<p> To run debugging information tests simply checkout the tests inside
+clang/test directory. </p>
+
+<div class="doc_code">
+<pre>
+%cd clang/test
+% svn co http://llvm.org/svn/llvm-project/debuginfo-tests/trunk debuginfo-tests
+</pre>
+</div>
+
+<p> These tests are already set up to run as part of clang regression tests.</p>
 
 </div>
 

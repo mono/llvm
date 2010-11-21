@@ -109,7 +109,6 @@ namespace {
     const char *getPassName() const { return "Machine Instruction LICM"; }
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
-      AU.setPreservesCFG();
       AU.addRequired<MachineLoopInfo>();
       AU.addRequired<MachineDominatorTree>();
       AU.addRequired<AliasAnalysis>();
@@ -945,6 +944,8 @@ bool MachineLICM::IsProfitableToHoist(MachineInstr &MI) {
     // In low register pressure situation, we can be more aggressive about 
     // hoisting. Also, favors hoisting long latency instructions even in
     // moderately high pressure situation.
+    // FIXME: If there are long latency loop-invariant instructions inside the
+    // loop at this point, why didn't the optimizer's LICM hoist them?
     DenseMap<unsigned, int> Cost;
     for (unsigned i = 0, e = MI.getDesc().getNumOperands(); i != e; ++i) {
       const MachineOperand &MO = MI.getOperand(i);

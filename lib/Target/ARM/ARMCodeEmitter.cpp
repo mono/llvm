@@ -101,7 +101,6 @@ namespace {
                                     unsigned OpIdx);
 
     unsigned getMachineSoImmOpValue(unsigned SoImm);
-
     unsigned getAddrModeSBit(const MachineInstr &MI,
                              const TargetInstrDesc &TID) const;
 
@@ -162,40 +161,108 @@ namespace {
     //  are already handled elsewhere. They are placeholders to allow this
     //  encoder to continue to function until the MC encoder is sufficiently
     //  far along that this one can be eliminated entirely.
+    unsigned NEONThumb2DataIPostEncoder(const MachineInstr &MI, unsigned Val) 
+      const { return 0; }
+    unsigned NEONThumb2LoadStorePostEncoder(const MachineInstr &MI,unsigned Val) 
+      const { return 0; }
+    unsigned NEONThumb2DupPostEncoder(const MachineInstr &MI,unsigned Val) 
+      const { return 0; }
+    unsigned getBranchTargetOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
     unsigned getCCOutOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
     unsigned getSOImmOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
+    unsigned getT2SOImmOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
     unsigned getSORegOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
+    unsigned getT2SORegOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
     unsigned getRotImmOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
     unsigned getImmMinusOneOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
+    unsigned getAddrMode6AddressOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
+    unsigned getAddrMode6OffsetOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
     unsigned getBitfieldInvertedMaskOpValue(const MachineInstr &MI,
                                             unsigned Op) const { return 0; }
+    uint32_t getLdStmModeOpValue(const MachineInstr &MI, unsigned OpIdx)
+      const {return 0; }
+    uint32_t getLdStSORegOpValue(const MachineInstr &MI, unsigned OpIdx)
+      const { return 0; }
+
     unsigned getAddrModeImm12OpValue(const MachineInstr &MI, unsigned Op)
       const {
-        // {17-13} = reg
-        // {12}    = (U)nsigned (add == '1', sub == '0')
-        // {11-0}  = imm12
-        const MachineOperand &MO  = MI.getOperand(Op);
-        const MachineOperand &MO1 = MI.getOperand(Op + 1);
-        if (!MO.isReg()) {
-          emitConstPoolAddress(MO.getIndex(), ARM::reloc_arm_cp_entry);
-          return 0;
-        }
-        unsigned Reg = getARMRegisterNumbering(MO.getReg());
-        int32_t Imm12 = MO1.getImm();
-        uint32_t Binary;
-        Binary = Imm12 & 0xfff;
-        if (Imm12 >= 0)
-          Binary |= (1 << 12);
-        Binary |= (Reg << 13);
-        return Binary;
+      // {17-13} = reg
+      // {12}    = (U)nsigned (add == '1', sub == '0')
+      // {11-0}  = imm12
+      const MachineOperand &MO  = MI.getOperand(Op);
+      const MachineOperand &MO1 = MI.getOperand(Op + 1);
+      if (!MO.isReg()) {
+        emitConstPoolAddress(MO.getIndex(), ARM::reloc_arm_cp_entry);
+        return 0;
       }
-    unsigned getNEONVcvtImm32(const MachineInstr &MI, unsigned Op) const {
-       return 0; }
+      unsigned Reg = getARMRegisterNumbering(MO.getReg());
+      int32_t Imm12 = MO1.getImm();
+      uint32_t Binary;
+      Binary = Imm12 & 0xfff;
+      if (Imm12 >= 0)
+        Binary |= (1 << 12);
+      Binary |= (Reg << 13);
+      return Binary;
+    }
+
+    unsigned getMovtImmOpValue(const MachineInstr &MI, unsigned Op) const {
+      return 0;
+    }
+
+    uint32_t getAddrMode2OpValue(const MachineInstr &MI, unsigned OpIdx)
+      const { return 0;}
+    uint32_t getAddrMode2OffsetOpValue(const MachineInstr &MI, unsigned OpIdx)
+      const { return 0;}
+    uint32_t getAddrMode3OffsetOpValue(const MachineInstr &MI, unsigned OpIdx)
+      const { return 0;}
+    uint32_t getAddrMode3OpValue(const MachineInstr &MI, unsigned Op) const
+      { return 0; }
+    uint32_t getAddrMode5OpValue(const MachineInstr &MI, unsigned Op) const {
+      // {17-13} = reg
+      // {12}    = (U)nsigned (add == '1', sub == '0')
+      // {11-0}  = imm12
+      const MachineOperand &MO  = MI.getOperand(Op);
+      const MachineOperand &MO1 = MI.getOperand(Op + 1);
+      if (!MO.isReg()) {
+        emitConstPoolAddress(MO.getIndex(), ARM::reloc_arm_cp_entry);
+        return 0;
+      }
+      unsigned Reg = getARMRegisterNumbering(MO.getReg());
+      int32_t Imm12 = MO1.getImm();
+
+      // Special value for #-0
+      if (Imm12 == INT32_MIN)
+        Imm12 = 0;
+
+      // Immediate is always encoded as positive. The 'U' bit controls add vs
+      // sub.
+      bool isAdd = true;
+      if (Imm12 < 0) {
+        Imm12 = -Imm12;
+        isAdd = false;
+      }
+
+      uint32_t Binary = Imm12 & 0xfff;
+      if (isAdd)
+        Binary |= (1 << 12);
+      Binary |= (Reg << 13);
+      return Binary;
+    }
+    unsigned getNEONVcvtImm32OpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
+
+    unsigned getRegisterListOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
 
     /// getMovi32Value - Return binary encoding of operand for movw/movt. If the
     /// machine operand requires relocation, record the relocation and return
@@ -323,12 +390,8 @@ unsigned ARMCodeEmitter::getMachineOpValue(const MachineInstr &MI,
     emitJumpTableAddress(MO.getIndex(), ARM::reloc_arm_relative);
   else if (MO.isMBB())
     emitMachineBasicBlock(MO.getMBB(), ARM::reloc_arm_branch);
-  else {
-#ifndef NDEBUG
-    errs() << MO;
-#endif
-    llvm_unreachable(0);
-  }
+  else
+    llvm_unreachable("Unable to encode MachineOperand!");
   return 0;
 }
 
@@ -405,6 +468,14 @@ void ARMCodeEmitter::emitInstruction(const MachineInstr &MI) {
     llvm_unreachable("Unhandled instruction encoding format!");
     break;
   }
+  case ARMII::MiscFrm:
+    if (MI.getOpcode() == ARM::LEApcrelJT) {
+      // Materialize jumptable address.
+      emitLEApcrelJTInstruction(MI);
+      break;
+    }
+    llvm_unreachable("Unhandled instruction encoding!");
+    break;
   case ARMII::Pseudo:
     emitPseudoInstruction(MI);
     break;
@@ -627,7 +698,7 @@ void ARMCodeEmitter::emitLEApcrelJTInstruction(const MachineInstr &MI) {
   const TargetInstrDesc &TID = MI.getDesc();
 
   // Emit the 'add' instruction.
-  unsigned Binary = 0x4 << 21;  // add: Insts{24-31} = 0b0100
+  unsigned Binary = 0x4 << 21;  // add: Insts{24-21} = 0b0100
 
   // Set the conditional execution predicate
   Binary |= II->getPredicate(&MI) << ARMII::CondShift;
@@ -759,13 +830,13 @@ void ARMCodeEmitter::emitPseudoInstruction(const MachineInstr &MI) {
   }
 
   case ARM::MOVi32imm:
-    emitMOVi32immInstruction(MI);
+    // Two instructions to materialize a constant.
+    if (Subtarget->hasV6T2Ops())
+      emitMOVi32immInstruction(MI);
+    else
+      emitMOVi2piecesInstruction(MI);
     break;
 
-  case ARM::MOVi2pieces:
-    // Two instructions to materialize a constant.
-    emitMOVi2piecesInstruction(MI);
-    break;
   case ARM::LEApcrelJT:
     // Materialize jumptable address.
     emitLEApcrelJTInstruction(MI);
@@ -1140,8 +1211,8 @@ void ARMCodeEmitter::emitLoadStoreMultipleInstruction(const MachineInstr &MI) {
   Binary |= getMachineOpValue(MI, OpIdx++) << ARMII::RegRnShift;
 
   // Set addressing mode by modifying bits U(23) and P(24)
-  const MachineOperand &MO = MI.getOperand(OpIdx++);
-  Binary |= getAddrModeUPBits(ARM_AM::getAM4SubMode(MO.getImm()));
+  ARM_AM::AMSubMode Mode = ARM_AM::getLoadStoreMultipleSubMode(MI.getOpcode());
+  Binary |= getAddrModeUPBits(ARM_AM::getAM4SubMode(Mode));
 
   // Set bit W(21)
   if (IsUpdating)
@@ -1588,8 +1659,8 @@ ARMCodeEmitter::emitVFPLoadStoreMultipleInstruction(const MachineInstr &MI) {
   Binary |= getMachineOpValue(MI, OpIdx++) << ARMII::RegRnShift;
 
   // Set addressing mode by modifying bits U(23) and P(24)
-  const MachineOperand &MO = MI.getOperand(OpIdx++);
-  Binary |= getAddrModeUPBits(ARM_AM::getAM4SubMode(MO.getImm()));
+  ARM_AM::AMSubMode Mode = ARM_AM::getLoadStoreMultipleSubMode(MI.getOpcode());
+  Binary |= getAddrModeUPBits(ARM_AM::getAM4SubMode(Mode));
 
   // Set bit W(21)
   if (IsUpdating)

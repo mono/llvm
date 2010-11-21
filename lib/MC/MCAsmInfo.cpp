@@ -58,13 +58,13 @@ MCAsmInfo::MCAsmInfo() {
   HasDotTypeDotSizeDirective = true;
   HasSingleParameterDotFile = true;
   HasNoDeadStrip = false;
+  HasSymbolResolver = false;
   WeakRefDirective = 0;
   WeakDefDirective = 0;
   LinkOnceDirective = 0;
   HiddenVisibilityAttr = MCSA_Hidden;
   ProtectedVisibilityAttr = MCSA_Protected;
   HasLEB128 = false;
-  HasDotLocAndDotFile = false;
   SupportsDebugInformation = false;
   ExceptionsType = ExceptionHandling::None;
   DwarfRequiresFrameSection = true;

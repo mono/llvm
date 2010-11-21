@@ -29,7 +29,6 @@ class ConstantInt;
 class ConstantRange;
 class APInt;
 class LLVMContext;
-class DominatorTree;
 
 //===----------------------------------------------------------------------===//
 //                                AllocaInst Class
@@ -1946,13 +1945,7 @@ public:
 
   /// hasConstantValue - If the specified PHI node always merges together the
   /// same value, return the value, otherwise return null.
-  ///
-  /// If the PHI has undef operands, but all the rest of the operands are
-  /// some unique value, return that value if it can be proved that the
-  /// value dominates the PHI. If DT is null, use a conservative check,
-  /// otherwise use DT to test for dominance.
-  ///
-  Value *hasConstantValue(DominatorTree *DT = 0) const;
+  Value *hasConstantValue() const;
 
   /// Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const PHINode *) { return true; }
@@ -2168,7 +2161,7 @@ class SwitchInst : public TerminatorInst {
   // Operand[2n  ] = Value to match
   // Operand[2n+1] = BasicBlock to go to on match
   SwitchInst(const SwitchInst &SI);
-  void init(Value *Value, BasicBlock *Default, unsigned NumCases);
+  void init(Value *Value, BasicBlock *Default, unsigned NumReserved);
   void resizeOperands(unsigned No);
   // allocate space for exactly zero operands
   void *operator new(size_t s) {

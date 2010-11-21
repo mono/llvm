@@ -47,7 +47,7 @@ static bool MultiplyOverflows(ConstantInt *C1, ConstantInt *C2, bool sign) {
 }
 
 Instruction *InstCombiner::visitMul(BinaryOperator &I) {
-  bool Changed = SimplifyCommutative(I);
+  bool Changed = SimplifyAssociativeOrCommutative(I);
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
 
   if (isa<UndefValue>(Op1))              // undef * X -> 0
@@ -194,7 +194,7 @@ Instruction *InstCombiner::visitMul(BinaryOperator &I) {
 }
 
 Instruction *InstCombiner::visitFMul(BinaryOperator &I) {
-  bool Changed = SimplifyCommutative(I);
+  bool Changed = SimplifyAssociativeOrCommutative(I);
   Value *Op0 = I.getOperand(0), *Op1 = I.getOperand(1);
 
   // Simplify mul instructions with a constant RHS...
@@ -550,6 +550,10 @@ Instruction *InstCombiner::commonIRemTransforms(BinaryOperator &I) {
 
   if (Instruction *common = commonRemTransforms(I))
     return common;
+
+  // X % X == 0
+  if (Op0 == Op1)
+    return ReplaceInstUsesWith(I, Constant::getNullValue(I.getType()));
 
   // 0 % X == 0 for integer, we don't need to preserve faults!
   if (Constant *LHS = dyn_cast<Constant>(Op0))

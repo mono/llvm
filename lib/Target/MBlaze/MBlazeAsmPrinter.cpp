@@ -69,7 +69,7 @@ namespace {
     void printMemOperand(const MachineInstr *MI, int opNum, raw_ostream &O,
                          const char *Modifier = 0);
 
-    void EmitInstruction(const MachineInstr *MI); 
+    void EmitInstruction(const MachineInstr *MI);
   };
 } // end of anonymous namespace
 
@@ -205,9 +205,9 @@ void MBlazeAsmPrinter::printFSLImm(const MachineInstr *MI, int opNum,
 void MBlazeAsmPrinter::
 printMemOperand(const MachineInstr *MI, int opNum, raw_ostream &O,
                 const char *Modifier) {
-  printOperand(MI, opNum+1, O);
-  O << ", ";
   printOperand(MI, opNum, O);
+  O << ", ";
+  printOperand(MI, opNum+1, O);
 }
 
 static MCInstPrinter *createMBlazeMCInstPrinter(const Target &T,

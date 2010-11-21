@@ -133,8 +133,8 @@ SelectAddrRegReg(SDValue N, SDValue &Base, SDValue &Index) {
         N.getOperand(1).getOpcode() == ISD::TargetJumpTable)
       return false; // jump tables.
 
-    Base = N.getOperand(1);
-    Index = N.getOperand(0);
+    Base = N.getOperand(0);
+    Index = N.getOperand(1);
     return true;
   }
 
@@ -145,9 +145,9 @@ SelectAddrRegReg(SDValue N, SDValue &Base, SDValue &Index) {
 /// a signed 32-bit displacement [r+imm], and if it is not better
 /// represented as reg+reg.
 bool MBlazeDAGToDAGISel::
-SelectAddrRegImm(SDValue N, SDValue &Disp, SDValue &Base) {
+SelectAddrRegImm(SDValue N, SDValue &Base, SDValue &Disp) {
   // If this can be more profitably realized as r+r, fail.
-  if (SelectAddrRegReg(N, Disp, Base))
+  if (SelectAddrRegReg(N, Base, Disp))
     return false;
 
   if (N.getOpcode() == ISD::ADD || N.getOpcode() == ISD::OR) {
@@ -159,7 +159,6 @@ SelectAddrRegImm(SDValue N, SDValue &Disp, SDValue &Base) {
       } else {
         Base = N.getOperand(0);
       }
-      DEBUG( errs() << "WESLEY: Using Operand Immediate\n" );
       return true; // [r+i]
     }
   } else if (ConstantSDNode *CN = dyn_cast<ConstantSDNode>(N)) {
@@ -167,7 +166,6 @@ SelectAddrRegImm(SDValue N, SDValue &Disp, SDValue &Base) {
     uint32_t Imm = CN->getZExtValue();
     Disp = CurDAG->getTargetConstant(Imm, CN->getValueType(0));
     Base = CurDAG->getRegister(MBlaze::R0, CN->getValueType(0));
-    DEBUG( errs() << "WESLEY: Using Constant Node\n" );
     return true;
   }
 
@@ -192,20 +190,15 @@ SDNode* MBlazeDAGToDAGISel::Select(SDNode *Node) {
   unsigned Opcode = Node->getOpcode();
   DebugLoc dl = Node->getDebugLoc();
 
-  // Dump information about the Node being selected
-  DEBUG(errs() << "Selecting: "; Node->dump(CurDAG); errs() << "\n");
-
   // If we have a custom node, we already have selected!
-  if (Node->isMachineOpcode()) {
-    DEBUG(errs() << "== "; Node->dump(CurDAG); errs() << "\n");
+  if (Node->isMachineOpcode())
     return NULL;
-  }
 
   ///
   // Instruction Selection not handled by the auto-generated
   // tablegen selection should be handled here.
   ///
-  switch(Opcode) {
+  switch (Opcode) {
     default: break;
 
     // Get target GOT address.
@@ -235,8 +228,8 @@ SDNode* MBlazeDAGToDAGISel::Select(SDNode *Node) {
         SDValue R20Reg = CurDAG->getRegister(MBlaze::R20, MVT::i32);
         SDValue InFlag(0, 0);
 
-        if ( (isa<GlobalAddressSDNode>(Callee)) ||
-             (isa<ExternalSymbolSDNode>(Callee)) )
+        if ((isa<GlobalAddressSDNode>(Callee)) ||
+            (isa<ExternalSymbolSDNode>(Callee)))
         {
           /// Direct call for global addresses and external symbols
           SDValue GPReg = CurDAG->getRegister(MBlaze::R15, MVT::i32);

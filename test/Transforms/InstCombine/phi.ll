@@ -423,3 +423,83 @@ bb2:        ; preds = %bb1, %entry
     ret i32 %res
 }
 
+define i1 @test18(i1 %cond) {
+  %zero = alloca i32
+  %one = alloca i32
+  br i1 %cond, label %true, label %false
+true:
+  br label %ret
+false:
+  br label %ret
+ret:
+  %ptr = phi i32* [ %zero, %true ] , [ %one, %false ]
+  %isnull = icmp eq i32* %ptr, null
+  ret i1 %isnull
+; CHECK: @test18
+; CHECK: ret i1 false
+}
+
+define i1 @test19(i1 %cond, double %x) {
+  br i1 %cond, label %true, label %false
+true:
+  br label %ret
+false:
+  br label %ret
+ret:
+  %p = phi double [ %x, %true ], [ 0x7FF0000000000000, %false ]; RHS = +infty
+  %cmp = fcmp ule double %x, %p
+  ret i1 %cmp
+; CHECK: @test19
+; CHECK: ret i1 true
+}
+
+define i1 @test20(i1 %cond) {
+  %a = alloca i32
+  %b = alloca i32
+  %c = alloca i32
+  br i1 %cond, label %true, label %false
+true:
+  br label %ret
+false:
+  br label %ret
+ret:
+  %p = phi i32* [ %a, %true ], [ %b, %false ]
+  %r = icmp eq i32* %p, %c
+  ret i1 %r
+; CHECK: @test20
+; CHECK: ret i1 false
+}
+
+define i1 @test21(i1 %c1, i1 %c2) {
+  %a = alloca i32
+  %b = alloca i32
+  %c = alloca i32
+  br i1 %c1, label %true, label %false
+true:
+  br label %loop
+false:
+  br label %loop
+loop:
+  %p = phi i32* [ %a, %true ], [ %b, %false ], [ %p, %loop ]
+  %r = icmp eq i32* %p, %c
+  br i1 %c2, label %ret, label %loop
+ret:
+  ret i1 %r
+; CHECK: @test21
+; CHECK: ret i1 false
+}
+
+define void @test22() {
+; CHECK: @test22
+entry:
+  br label %loop
+loop:
+  %phi = phi i32 [ 0, %entry ], [ %y, %loop ]
+  %y = add i32 %phi, 1
+  %o = or i32 %y, %phi
+  %e = icmp eq i32 %o, %y
+  br i1 %e, label %loop, label %ret
+; CHECK: br i1 %e
+ret:
+  ret void
+}

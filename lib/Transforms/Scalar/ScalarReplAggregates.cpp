@@ -34,6 +34,7 @@
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/CallSite.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
@@ -1476,7 +1477,7 @@ void SROA::RewriteMemIntrinUserOfAlloca(MemIntrinsic *MI, Instruction *Inst,
         EltPtr, MI->getArgOperand(1),  // Dest, Value,
         ConstantInt::get(MI->getArgOperand(2)->getType(), EltSize), // Size
         Zero,  // Align
-        ConstantInt::get(Type::getInt1Ty(MI->getContext()), 0) // isVolatile
+        ConstantInt::getFalse(MI->getContext()) // isVolatile
       };
       const Type *Tys[] = { Ops[0]->getType(), Ops[2]->getType() };
       Module *M = MI->getParent()->getParent()->getParent();
@@ -1789,10 +1790,11 @@ static bool isOnlyCopiedFromConstantGlobal(Value *V, MemTransferInst *&TheCopy,
   for (Value::use_iterator UI = V->use_begin(), E = V->use_end(); UI!=E; ++UI) {
     User *U = cast<Instruction>(*UI);
 
-    if (LoadInst *LI = dyn_cast<LoadInst>(U))
+    if (LoadInst *LI = dyn_cast<LoadInst>(U)) {
       // Ignore non-volatile loads, they are always ok.
-      if (!LI->isVolatile())
-        continue;
+      if (LI->isVolatile()) return false;
+      continue;
+    }
     
     if (BitCastInst *BCI = dyn_cast<BitCastInst>(U)) {
       // If uses of the bitcast are ok, we are ok.
@@ -1809,11 +1811,31 @@ static bool isOnlyCopiedFromConstantGlobal(Value *V, MemTransferInst *&TheCopy,
       continue;
     }
     
+    if (CallSite CS = U) {
+      // If this is a readonly/readnone call site, then we know it is just a
+      // load and we can ignore it.
+      if (CS.onlyReadsMemory())
+        continue;
+      
+      // If this is being passed as a byval argument, the caller is making a
+      // copy, so it is only a read of the alloca.
+      unsigned ArgNo = CS.getArgumentNo(UI);
+      if (CS.paramHasAttr(ArgNo+1, Attribute::ByVal))
+        continue;
+    }
+    
     // If this is isn't our memcpy/memmove, reject it as something we can't
     // handle.
     MemTransferInst *MI = dyn_cast<MemTransferInst>(U);
     if (MI == 0)
       return false;
+    
+    // If the transfer is using the alloca as a source of the transfer, then
+    // ignore it since it is a load (unless the transfer is volatile).
+    if (UI.getOperandNo() == 1) {
+      if (MI->isVolatile()) return false;
+      continue;
+    }
 
     // If we already have seen a copy, reject the second one.
     if (TheCopy) return false;

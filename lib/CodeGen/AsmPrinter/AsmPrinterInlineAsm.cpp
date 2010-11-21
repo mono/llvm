@@ -34,8 +34,40 @@
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
+namespace {
+  struct SrcMgrDiagInfo {
+    const MDNode *LocInfo;
+    LLVMContext::InlineAsmDiagHandlerTy DiagHandler;
+    void *DiagContext;
+  };
+}
+
+/// SrcMgrDiagHandler - This callback is invoked when the SourceMgr for an
+/// inline asm has an error in it.  diagInfo is a pointer to the SrcMgrDiagInfo
+/// struct above.
+static void SrcMgrDiagHandler(const SMDiagnostic &Diag, void *diagInfo) {
+  SrcMgrDiagInfo *DiagInfo = static_cast<SrcMgrDiagInfo *>(diagInfo);
+  assert(DiagInfo && "Diagnostic context not passed down?");
+  
+  // If the inline asm had metadata associated with it, pull out a location
+  // cookie corresponding to which line the error occurred on.
+  unsigned LocCookie = 0;
+  if (const MDNode *LocInfo = DiagInfo->LocInfo) {
+    unsigned ErrorLine = Diag.getLineNo()-1;
+    if (ErrorLine >= LocInfo->getNumOperands())
+      ErrorLine = 0;
+    
+    if (LocInfo->getNumOperands() != 0)
+      if (const ConstantInt *CI =
+          dyn_cast<ConstantInt>(LocInfo->getOperand(ErrorLine)))
+        LocCookie = CI->getZExtValue();
+  }
+  
+  DiagInfo->DiagHandler(Diag, DiagInfo->DiagContext, LocCookie);
+}
+
 /// EmitInlineAsm - Emit a blob of inline asm to the output streamer.
-void AsmPrinter::EmitInlineAsm(StringRef Str, unsigned LocCookie) const {
+void AsmPrinter::EmitInlineAsm(StringRef Str, const MDNode *LocMDNode) const {
   assert(!Str.empty() && "Can't emit empty inline asm block");
 
   // Remember if the buffer is nul terminated or not so we can avoid a copy.
@@ -52,13 +84,18 @@ void AsmPrinter::EmitInlineAsm(StringRef Str, unsigned LocCookie) const {
   }
 
   SourceMgr SrcMgr;
+  SrcMgrDiagInfo DiagInfo;
 
   // If the current LLVMContext has an inline asm handler, set it in SourceMgr.
   LLVMContext &LLVMCtx = MMI->getModule()->getContext();
   bool HasDiagHandler = false;
-  if (void *DiagHandler = LLVMCtx.getInlineAsmDiagnosticHandler()) {
-    SrcMgr.setDiagHandler((SourceMgr::DiagHandlerTy)(intptr_t)DiagHandler,
-                          LLVMCtx.getInlineAsmDiagnosticContext(), LocCookie);
+  if (LLVMCtx.getInlineAsmDiagnosticHandler() != 0) {
+    // If the source manager has an issue, we arrange for SrcMgrDiagHandler
+    // to be invoked, getting DiagInfo passed into it.
+    DiagInfo.LocInfo = LocMDNode;
+    DiagInfo.DiagHandler = LLVMCtx.getInlineAsmDiagnosticHandler();
+    DiagInfo.DiagContext = LLVMCtx.getInlineAsmDiagnosticContext();
+    SrcMgr.setDiagHandler(SrcMgrDiagHandler, &DiagInfo);
     HasDiagHandler = true;
   }
 
@@ -128,15 +165,16 @@ void AsmPrinter::EmitInlineAsm(const MachineInstr *MI) const {
   // Get the !srcloc metadata node if we have it, and decode the loc cookie from
   // it.
   unsigned LocCookie = 0;
+  const MDNode *LocMD = 0;
   for (unsigned i = MI->getNumOperands(); i != 0; --i) {
-    if (MI->getOperand(i-1).isMetadata())
-      if (const MDNode *SrcLoc = MI->getOperand(i-1).getMetadata())
-        if (SrcLoc->getNumOperands() != 0)
-          if (const ConstantInt *CI =
-              dyn_cast<ConstantInt>(SrcLoc->getOperand(0))) {
-            LocCookie = CI->getZExtValue();
-            break;
-          }
+    if (MI->getOperand(i-1).isMetadata() &&
+        (LocMD = MI->getOperand(i-1).getMetadata()) &&
+        LocMD->getNumOperands() != 0) {
+      if (const ConstantInt *CI = dyn_cast<ConstantInt>(LocMD->getOperand(0))) {
+        LocCookie = CI->getZExtValue();
+        break;
+      }
+    }
   }
 
   // Emit the inline asm to a temporary string so we can emit it through
@@ -310,7 +348,7 @@ void AsmPrinter::EmitInlineAsm(const MachineInstr *MI) const {
     }
   }
   OS << '\n' << (char)0;  // null terminate string.
-  EmitInlineAsm(OS.str(), LocCookie);
+  EmitInlineAsm(OS.str(), LocMD);
 
   // Emit the #NOAPP end marker.  This has to happen even if verbose-asm isn't
   // enabled, so we use EmitRawText.

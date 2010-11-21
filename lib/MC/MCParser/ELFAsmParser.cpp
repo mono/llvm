@@ -53,6 +53,7 @@ public:
     AddDirectiveHandler<&ELFAsmParser::ParseDirectiveType>(".type");
     AddDirectiveHandler<&ELFAsmParser::ParseDirectiveIdent>(".ident");
     AddDirectiveHandler<&ELFAsmParser::ParseDirectiveSymver>(".symver");
+    AddDirectiveHandler<&ELFAsmParser::ParseDirectiveWeakref>(".weakref");
   }
 
   // FIXME: Part of this logic is duplicated in the MCELFStreamer. What is
@@ -119,6 +120,7 @@ public:
   bool ParseDirectiveType(StringRef, SMLoc);
   bool ParseDirectiveIdent(StringRef, SMLoc);
   bool ParseDirectiveSymver(StringRef, SMLoc);
+  bool ParseDirectiveWeakref(StringRef, SMLoc);
 
 private:
   bool ParseSectionName(StringRef &SectionName);
@@ -201,6 +203,7 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
   StringRef FlagsStr;
   StringRef TypeName;
   int64_t Size = 0;
+  StringRef GroupName;
   if (getLexer().is(AsmToken::Comma)) {
     Lex();
 
@@ -209,12 +212,6 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
 
     FlagsStr = getTok().getStringContents();
     Lex();
-
-    AsmToken::TokenKind TypeStartToken;
-    if (getContext().getAsmInfo().getCommentString()[0] == '@')
-      TypeStartToken = AsmToken::Percent;
-    else
-      TypeStartToken = AsmToken::At;
 
     bool Mergeable = FlagsStr.find('M') != StringRef::npos;
     bool Group = FlagsStr.find('G') != StringRef::npos;
@@ -226,8 +223,8 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
         return TokError("Group section must specify the type");
     } else {
       Lex();
-      if (getLexer().isNot(TypeStartToken))
-        return TokError("expected the type");
+      if (getLexer().isNot(AsmToken::Percent) && getLexer().isNot(AsmToken::At))
+        return TokError("expected '@' or '%' before type");
 
       Lex();
       if (getParser().ParseIdentifier(TypeName))
@@ -247,7 +244,6 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
         if (getLexer().isNot(AsmToken::Comma))
           return TokError("expected group name");
         Lex();
-        StringRef GroupName;
         if (getParser().ParseIdentifier(GroupName))
           return true;
         if (getLexer().is(AsmToken::Comma)) {
@@ -255,8 +251,8 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
           StringRef Linkage;
           if (getParser().ParseIdentifier(Linkage))
             return true;
-          if (Linkage != "comdat" && Linkage != ".gnu.linkonce")
-            return TokError("Linkage must be 'comdat' or '.gnu.linkonce'");
+          if (Linkage != "comdat")
+            return TokError("Linkage must be 'comdat'");
         }
       }
     }
@@ -269,9 +265,11 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
   unsigned Type = MCSectionELF::SHT_NULL;
 
   // Set the defaults first.
-  if (SectionName == ".fini" || SectionName == ".init") {
+  if (SectionName == ".fini" || SectionName == ".init" || SectionName == ".rodata") {
     Type = MCSectionELF::SHT_PROGBITS;
     Flags |= MCSectionELF::SHF_ALLOC;
+  }
+  if (SectionName == ".fini" || SectionName == ".init") {
     Flags |= MCSectionELF::SHF_EXECINSTR;
   }
 
@@ -302,6 +300,7 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
       Flags |= MCSectionELF::XCORE_SHF_DP_SECTION;
       break;
     case 'G':
+      Flags |= MCSectionELF::SHF_GROUP;
       break;
     default:
       return TokError("unknown flag");
@@ -327,8 +326,8 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
                      ? SectionKind::getText()
                      : SectionKind::getDataRel();
   getStreamer().SwitchSection(getContext().getELFSection(SectionName, Type,
-                                                         Flags, Kind, false,
-                                                         Size));
+                                                         Flags, Kind, Size,
+                                                         GroupName));
   return false;
 }
 
@@ -354,8 +353,8 @@ bool ELFAsmParser::ParseDirectiveType(StringRef, SMLoc) {
     return TokError("unexpected token in '.type' directive");
   Lex();
 
-  if (getLexer().isNot(AsmToken::At))
-    return TokError("expected '@' before type");
+  if (getLexer().isNot(AsmToken::Percent) && getLexer().isNot(AsmToken::At))
+    return TokError("expected '@' or '%' before type");
   Lex();
 
   StringRef Type;
@@ -371,6 +370,7 @@ bool ELFAsmParser::ParseDirectiveType(StringRef, SMLoc) {
     .Case("tls_object", MCSA_ELF_TypeTLS)
     .Case("common", MCSA_ELF_TypeCommon)
     .Case("notype", MCSA_ELF_TypeNoType)
+    .Case("gnu_unique_object", MCSA_ELF_TypeGnuUniqueObject)
     .Default(MCSA_Invalid);
 
   if (Attr == MCSA_Invalid)
@@ -402,7 +402,7 @@ bool ELFAsmParser::ParseDirectiveIdent(StringRef, SMLoc) {
                                MCSectionELF::SHF_MERGE |
                                MCSectionELF::SHF_STRINGS,
                                SectionKind::getReadOnly(),
-                               false, 1);
+                               1, "");
 
   static bool First = true;
 
@@ -440,6 +440,32 @@ bool ELFAsmParser::ParseDirectiveSymver(StringRef, SMLoc) {
   const MCExpr *Value = MCSymbolRefExpr::Create(Sym, getContext());
 
   getStreamer().EmitAssignment(Alias, Value);
+  return false;
+}
+
+/// ParseDirectiveWeakref
+///  ::= .weakref foo, bar
+bool ELFAsmParser::ParseDirectiveWeakref(StringRef, SMLoc) {
+  // FIXME: Share code with the other alias building directives.
+
+  StringRef AliasName;
+  if (getParser().ParseIdentifier(AliasName))
+    return TokError("expected identifier in directive");
+
+  if (getLexer().isNot(AsmToken::Comma))
+    return TokError("expected a comma");
+
+  Lex();
+
+  StringRef Name;
+  if (getParser().ParseIdentifier(Name))
+    return TokError("expected identifier in directive");
+
+  MCSymbol *Alias = getContext().GetOrCreateSymbol(AliasName);
+
+  MCSymbol *Sym = getContext().GetOrCreateSymbol(Name);
+
+  getStreamer().EmitWeakReference(Alias, Sym);
   return false;
 }
 

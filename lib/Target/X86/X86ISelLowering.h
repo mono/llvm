@@ -256,6 +256,12 @@ namespace llvm {
       // WIN_ALLOCA - Windows's _chkstk call to do stack probing.
       WIN_ALLOCA,
 
+      // Memory barrier
+      MEMBARRIER,
+      MFENCE,
+      SFENCE,
+      LFENCE,
+
       // ATOMADD64_DAG, ATOMSUB64_DAG, ATOMOR64_DAG, ATOMAND64_DAG,
       // ATOMXOR64_DAG, ATOMNAND64_DAG, ATOMSWAP64_DAG -
       // Atomic 64-bit binary operations.
@@ -266,12 +272,6 @@ namespace llvm {
       ATOMAND64_DAG,
       ATOMNAND64_DAG,
       ATOMSWAP64_DAG,
-
-      // Memory barrier
-      MEMBARRIER,
-      MFENCE,
-      SFENCE,
-      LFENCE,
 
       // LCMPXCHG_DAG, LCMPXCHG8_DAG - Compare and swap.
       LCMPXCHG_DAG,
@@ -429,9 +429,6 @@ namespace llvm {
   class X86TargetLowering : public TargetLowering {
   public:
     explicit X86TargetLowering(X86TargetMachine &TM);
-
-    /// getPICBaseSymbol - Return the X86-32 PIC base.
-    MCSymbol *getPICBaseSymbol(const MachineFunction *MF, MCContext &Ctx) const;
 
     virtual unsigned getJumpTableEncoding() const;
 
@@ -717,7 +714,6 @@ namespace llvm {
                                 SDValue Chain, bool IsTailCall, bool Is64Bit,
                                 int FPDiff, DebugLoc dl) const;
 
-    CCAssignFn *CCAssignFnForNode(CallingConv::ID CallConv) const;
     unsigned GetAlignedArgumentStackSize(unsigned StackSize,
                                          SelectionDAG &DAG) const;
 

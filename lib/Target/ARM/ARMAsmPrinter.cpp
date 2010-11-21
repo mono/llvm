@@ -19,7 +19,6 @@
 #include "ARMConstantPoolValue.h"
 #include "InstPrinter/ARMInstPrinter.h"
 #include "ARMMachineFunctionInfo.h"
-#include "ARMMCInstLower.h"
 #include "ARMTargetMachine.h"
 #include "ARMTargetObjectFile.h"
 #include "llvm/Analysis/DebugInfo.h"
@@ -201,7 +200,7 @@ namespace {
 
     MachineLocation getDebugValueLocation(const MachineInstr *MI) const {
       MachineLocation Location;
-      assert (MI->getNumOperands() == 4 && "Invalid no. of machine operands!");
+      assert(MI->getNumOperands() == 4 && "Invalid no. of machine operands!");
       // Frame address.  Currently handles register +- offset only.
       if (MI->getOperand(0).isReg() && MI->getOperand(1).isImm())
         Location.set(MI->getOperand(0).getReg(), MI->getOperand(1).getImm());
@@ -227,79 +226,14 @@ namespace {
 
     /// EmitMachineConstantPoolValue - Print a machine constantpool value to
     /// the .s file.
-    virtual void EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV) {
-      SmallString<128> Str;
-      raw_svector_ostream OS(Str);
-      EmitMachineConstantPoolValue(MCPV, OS);
-      OutStreamer.EmitRawText(OS.str());
-    }
-
-    void EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV,
-                                      raw_ostream &O) {
-      switch (TM.getTargetData()->getTypeAllocSize(MCPV->getType())) {
-      case 1: O << MAI->getData8bitsDirective(0); break;
-      case 2: O << MAI->getData16bitsDirective(0); break;
-      case 4: O << MAI->getData32bitsDirective(0); break;
-      default: assert(0 && "Unknown CPV size");
-      }
-
-      ARMConstantPoolValue *ACPV = static_cast<ARMConstantPoolValue*>(MCPV);
-
-      if (ACPV->isLSDA()) {
-        O << MAI->getPrivateGlobalPrefix() << "_LSDA_" << getFunctionNumber();
-      } else if (ACPV->isBlockAddress()) {
-        O << *GetBlockAddressSymbol(ACPV->getBlockAddress());
-      } else if (ACPV->isGlobalValue()) {
-        const GlobalValue *GV = ACPV->getGV();
-        bool isIndirect = Subtarget->isTargetDarwin() &&
-          Subtarget->GVIsIndirectSymbol(GV, TM.getRelocationModel());
-        if (!isIndirect)
-          O << *Mang->getSymbol(GV);
-        else {
-          // FIXME: Remove this when Darwin transition to @GOT like syntax.
-          MCSymbol *Sym = GetSymbolWithGlobalValueBase(GV, "$non_lazy_ptr");
-          O << *Sym;
-
-          MachineModuleInfoMachO &MMIMachO =
-            MMI->getObjFileInfo<MachineModuleInfoMachO>();
-          MachineModuleInfoImpl::StubValueTy &StubSym =
-            GV->hasHiddenVisibility() ? MMIMachO.getHiddenGVStubEntry(Sym) :
-                                        MMIMachO.getGVStubEntry(Sym);
-          if (StubSym.getPointer() == 0)
-            StubSym = MachineModuleInfoImpl::
-              StubValueTy(Mang->getSymbol(GV), !GV->hasInternalLinkage());
-        }
-      } else {
-        assert(ACPV->isExtSymbol() && "unrecognized constant pool value");
-        O << *GetExternalSymbolSymbol(ACPV->getSymbol());
-      }
-
-      if (ACPV->hasModifier()) O << "(" << ACPV->getModifier() << ")";
-      if (ACPV->getPCAdjustment() != 0) {
-        O << "-(" << MAI->getPrivateGlobalPrefix() << "PC"
-          << getFunctionNumber() << "_"  << ACPV->getLabelId()
-          << "+" << (unsigned)ACPV->getPCAdjustment();
-         if (ACPV->mustAddCurrentAddress())
-           O << "-.";
-         O << ')';
-      }
-    }
+    virtual void EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV);
   };
 } // end of anonymous namespace
 
 void ARMAsmPrinter::EmitFunctionEntryLabel() {
   if (AFI->isThumbFunction()) {
-    OutStreamer.EmitRawText(StringRef("\t.code\t16"));
-    if (!Subtarget->isTargetDarwin())
-      OutStreamer.EmitRawText(StringRef("\t.thumb_func"));
-    else {
-      // This needs to emit to a temporary string to get properly quoted
-      // MCSymbols when they have spaces in them.
-      SmallString<128> Tmp;
-      raw_svector_ostream OS(Tmp);
-      OS << "\t.thumb_func\t" << *CurrentFnSym;
-      OutStreamer.EmitRawText(OS.str());
-    }
+    OutStreamer.EmitAssemblerFlag(MCAF_Code16);
+    OutStreamer.EmitThumbFunc(Subtarget->isTargetDarwin()? CurrentFnSym : 0);
   }
 
   OutStreamer.EmitLabel(CurrentFnSym);
@@ -689,6 +623,87 @@ static MCSymbol *getPICLabel(const char *Prefix, unsigned FunctionNumber,
   return Label;
 }
 
+static MCSymbolRefExpr::VariantKind
+getModifierVariantKind(ARMCP::ARMCPModifier Modifier) {
+  switch (Modifier) {
+  default: llvm_unreachable("Unknown modifier!");
+  case ARMCP::no_modifier: return MCSymbolRefExpr::VK_None;
+  case ARMCP::TLSGD:       return MCSymbolRefExpr::VK_ARM_TLSGD;
+  case ARMCP::TPOFF:       return MCSymbolRefExpr::VK_ARM_TPOFF;
+  case ARMCP::GOTTPOFF:    return MCSymbolRefExpr::VK_ARM_GOTTPOFF;
+  case ARMCP::GOT:         return MCSymbolRefExpr::VK_ARM_GOT;
+  case ARMCP::GOTOFF:      return MCSymbolRefExpr::VK_ARM_GOTOFF;
+  }
+  return MCSymbolRefExpr::VK_None;
+}
+
+void ARMAsmPrinter::
+EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV) {
+  int Size = TM.getTargetData()->getTypeAllocSize(MCPV->getType());
+
+  ARMConstantPoolValue *ACPV = static_cast<ARMConstantPoolValue*>(MCPV);
+
+  MCSymbol *MCSym;
+  if (ACPV->isLSDA()) {
+    SmallString<128> Str;
+    raw_svector_ostream OS(Str);
+    OS << MAI->getPrivateGlobalPrefix() << "_LSDA_" << getFunctionNumber();
+    MCSym = OutContext.GetOrCreateSymbol(OS.str());
+  } else if (ACPV->isBlockAddress()) {
+    MCSym = GetBlockAddressSymbol(ACPV->getBlockAddress());
+  } else if (ACPV->isGlobalValue()) {
+    const GlobalValue *GV = ACPV->getGV();
+    bool isIndirect = Subtarget->isTargetDarwin() &&
+      Subtarget->GVIsIndirectSymbol(GV, TM.getRelocationModel());
+    if (!isIndirect)
+      MCSym = Mang->getSymbol(GV);
+    else {
+      // FIXME: Remove this when Darwin transition to @GOT like syntax.
+      MCSym = GetSymbolWithGlobalValueBase(GV, "$non_lazy_ptr");
+
+      MachineModuleInfoMachO &MMIMachO =
+        MMI->getObjFileInfo<MachineModuleInfoMachO>();
+      MachineModuleInfoImpl::StubValueTy &StubSym =
+        GV->hasHiddenVisibility() ? MMIMachO.getHiddenGVStubEntry(MCSym) :
+        MMIMachO.getGVStubEntry(MCSym);
+      if (StubSym.getPointer() == 0)
+        StubSym = MachineModuleInfoImpl::
+          StubValueTy(Mang->getSymbol(GV), !GV->hasInternalLinkage());
+    }
+  } else {
+    assert(ACPV->isExtSymbol() && "unrecognized constant pool value");
+    MCSym = GetExternalSymbolSymbol(ACPV->getSymbol());
+  }
+
+  // Create an MCSymbol for the reference.
+  const MCExpr *Expr =
+    MCSymbolRefExpr::Create(MCSym, getModifierVariantKind(ACPV->getModifier()),
+                            OutContext);
+
+  if (ACPV->getPCAdjustment()) {
+    MCSymbol *PCLabel = getPICLabel(MAI->getPrivateGlobalPrefix(),
+                                    getFunctionNumber(),
+                                    ACPV->getLabelId(),
+                                    OutContext);
+    const MCExpr *PCRelExpr = MCSymbolRefExpr::Create(PCLabel, OutContext);
+    PCRelExpr =
+      MCBinaryExpr::CreateAdd(PCRelExpr,
+                              MCConstantExpr::Create(ACPV->getPCAdjustment(),
+                                                     OutContext),
+                              OutContext);
+    if (ACPV->mustAddCurrentAddress()) {
+      // We want "(<expr> - .)", but MC doesn't have a concept of the '.'
+      // label, so just emit a local label end reference that instead.
+      MCSymbol *DotSym = OutContext.CreateTempSymbol();
+      OutStreamer.EmitLabel(DotSym);
+      const MCExpr *DotExpr = MCSymbolRefExpr::Create(DotSym, OutContext);
+      PCRelExpr = MCBinaryExpr::CreateSub(PCRelExpr, DotExpr, OutContext);
+    }
+    Expr = MCBinaryExpr::CreateSub(Expr, PCRelExpr, OutContext);
+  }
+  OutStreamer.EmitValue(Expr, Size);
+}
+
 void ARMAsmPrinter::EmitJumpTable(const MachineInstr *MI) {
   unsigned Opcode = MI->getOpcode();
   int OpNum = 1;
@@ -805,11 +820,9 @@ void ARMAsmPrinter::PrintDebugValueComment(const MachineInstr *MI,
 }
 
 void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
-  ARMMCInstLower MCInstLowering(OutContext, *Mang, *this);
   switch (MI->getOpcode()) {
-  case ARM::t2MOVi32imm:
-    assert(0 && "Should be lowered by thumb2it pass");
   default: break;
+  case ARM::t2MOVi32imm: assert(0 && "Should be lowered by thumb2it pass");
   case ARM::DBG_VALUE: {
     if (isVerbose() && OutStreamer.hasRawTextSupport()) {
       SmallString<128> TmpStr;
@@ -932,62 +945,46 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
 
     return;
   }
-  case ARM::MOVi2pieces: {
-    // FIXME: We'd like to remove the asm string in the .td file, but the
-    // This is a hack that lowers as a two instruction sequence.
-    unsigned DstReg = MI->getOperand(0).getReg();
-    unsigned ImmVal = (unsigned)MI->getOperand(1).getImm();
-
-    unsigned SOImmValV1 = ARM_AM::getSOImmTwoPartFirst(ImmVal);
-    unsigned SOImmValV2 = ARM_AM::getSOImmTwoPartSecond(ImmVal);
-
-    {
-      MCInst TmpInst;
-      TmpInst.setOpcode(ARM::MOVi);
-      TmpInst.addOperand(MCOperand::CreateReg(DstReg));
-      TmpInst.addOperand(MCOperand::CreateImm(SOImmValV1));
-
-      // Predicate.
-      TmpInst.addOperand(MCOperand::CreateImm(MI->getOperand(2).getImm()));
-      TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(3).getReg()));
-
-      TmpInst.addOperand(MCOperand::CreateReg(0));          // cc_out
-      OutStreamer.EmitInstruction(TmpInst);
-    }
-
-    {
-      MCInst TmpInst;
-      TmpInst.setOpcode(ARM::ORRri);
-      TmpInst.addOperand(MCOperand::CreateReg(DstReg));     // dstreg
-      TmpInst.addOperand(MCOperand::CreateReg(DstReg));     // inreg
-      TmpInst.addOperand(MCOperand::CreateImm(SOImmValV2)); // so_imm
-      // Predicate.
-      TmpInst.addOperand(MCOperand::CreateImm(MI->getOperand(2).getImm()));
-      TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(3).getReg()));
-
-      TmpInst.addOperand(MCOperand::CreateReg(0));          // cc_out
-      OutStreamer.EmitInstruction(TmpInst);
-    }
-    return;
-  }
   case ARM::t2TBB:
   case ARM::t2TBH:
   case ARM::t2BR_JT: {
     // Lower and emit the instruction itself, then the jump table following it.
     MCInst TmpInst;
-    MCInstLowering.Lower(MI, TmpInst);
+    // FIXME: The branch instruction is really a pseudo. We should xform it
+    // explicitly.
+    LowerARMMachineInstrToMCInst(MI, TmpInst, *this);
     OutStreamer.EmitInstruction(TmpInst);
     EmitJump2Table(MI);
     return;
   }
   case ARM::tBR_JTr:
   case ARM::BR_JTr:
-  case ARM::BR_JTm:
-  case ARM::BR_JTadd: {
+  case ARM::BR_JTm: {
     // Lower and emit the instruction itself, then the jump table following it.
     MCInst TmpInst;
-    MCInstLowering.Lower(MI, TmpInst);
+    // FIXME: The branch instruction is really a pseudo. We should xform it
+    // explicitly.
+    LowerARMMachineInstrToMCInst(MI, TmpInst, *this);
     OutStreamer.EmitInstruction(TmpInst);
+    EmitJumpTable(MI);
+    return;
+  }
+  case ARM::BR_JTadd: {
+    // Lower and emit the instruction itself, then the jump table following it.
+    // add pc, target, idx
+    MCInst AddInst;
+    AddInst.setOpcode(ARM::ADDrr);
+    AddInst.addOperand(MCOperand::CreateReg(ARM::PC));
+    AddInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    AddInst.addOperand(MCOperand::CreateReg(MI->getOperand(1).getReg()));
+    // Add predicate operands.
+    AddInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    AddInst.addOperand(MCOperand::CreateReg(0));
+    // Add 's' bit operand (always reg0 for this)
+    AddInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(AddInst);
+
+    // Output the data for the jump table itself
     EmitJumpTable(MI);
     return;
   }
@@ -1297,7 +1294,7 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   }
 
   MCInst TmpInst;
-  MCInstLowering.Lower(MI, TmpInst);
+  LowerARMMachineInstrToMCInst(MI, TmpInst, *this);
   OutStreamer.EmitInstruction(TmpInst);
 }
 

@@ -213,6 +213,7 @@ void SelectionDAGISel::getAnalysisUsage(AnalysisUsage &AU) const {
 static bool FunctionCallsSetJmp(const Function *F) {
   const Module *M = F->getParent();
   static const char *ReturnsTwiceFns[] = {
+    "_setjmp",
     "setjmp",
     "sigsetjmp",
     "setjmp_syscall",
@@ -2232,7 +2233,7 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
     }
         
     case OPC_SwitchType: {
-      MVT::SimpleValueType CurNodeVT = N.getValueType().getSimpleVT().SimpleTy;
+      MVT CurNodeVT = N.getValueType().getSimpleVT();
       unsigned SwitchStart = MatcherIndex-1; (void)SwitchStart;
       unsigned CaseSize;
       while (1) {
@@ -2242,10 +2243,9 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
           CaseSize = GetVBR(CaseSize, MatcherTable, MatcherIndex);
         if (CaseSize == 0) break;
         
-        MVT::SimpleValueType CaseVT =
-          (MVT::SimpleValueType)MatcherTable[MatcherIndex++];
+        MVT CaseVT = (MVT::SimpleValueType)MatcherTable[MatcherIndex++];
         if (CaseVT == MVT::iPTR)
-          CaseVT = TLI.getPointerTy().SimpleTy;
+          CaseVT = TLI.getPointerTy();
         
         // If the VT matches, then we will execute this case.
         if (CurNodeVT == CaseVT)

@@ -393,7 +393,7 @@ namespace llvm {
       IndexListEntry *entry =
         static_cast<IndexListEntry*>(
           ileAllocator.Allocate(sizeof(IndexListEntry),
-          alignof<IndexListEntry>()));
+          alignOf<IndexListEntry>()));
 
       new (entry) IndexListEntry(mi, index);
 
@@ -590,29 +590,6 @@ namespace llvm {
       return resVal;
     }
 
-    /// Return a list of MBBs that can be reach via any branches or
-    /// fall-throughs.
-    bool findReachableMBBs(SlotIndex start, SlotIndex end,
-                           SmallVectorImpl<MachineBasicBlock*> &mbbs) const {
-      std::vector<IdxMBBPair>::const_iterator itr =
-        std::lower_bound(idx2MBBMap.begin(), idx2MBBMap.end(), start);
-
-      bool resVal = false;
-      while (itr != idx2MBBMap.end()) {
-        if (itr->first > end)
-          break;
-        MachineBasicBlock *mbb = itr->second;
-        if (getMBBEndIdx(mbb) > end)
-          break;
-        for (MachineBasicBlock::succ_iterator si = mbb->succ_begin(),
-             se = mbb->succ_end(); si != se; ++si)
-          mbbs.push_back(*si);
-        resVal = true;
-        ++itr;
-      }
-      return resVal;
-    }
-
     /// Returns the MBB covering the given range, or null if the range covers
     /// more than one basic block.
     MachineBasicBlock* getMBBCoveringRange(SlotIndex start, SlotIndex end) const {
@@ -761,6 +738,7 @@ namespace llvm {
       MachineFunction::iterator nextMBB =
         llvm::next(MachineFunction::iterator(mbb));
       IndexListEntry *startEntry = createEntry(0, 0);
+      IndexListEntry *stopEntry = createEntry(0, 0);
       IndexListEntry *nextEntry = 0;
 
       if (nextMBB == mbb->getParent()->end()) {
@@ -770,6 +748,7 @@ namespace llvm {
       }
 
       insert(nextEntry, startEntry);
+      insert(nextEntry, stopEntry);
 
       SlotIndex startIdx(startEntry, SlotIndex::LOAD);
       SlotIndex endIdx(nextEntry, SlotIndex::LOAD);

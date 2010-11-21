@@ -33,11 +33,9 @@ public:
   static const char *getRegisterName(unsigned RegNo);
 
 
-  void printOperand(const MCInst *MI, unsigned OpNo, raw_ostream &O,
-                    const char *Modifier = 0);
+  void printOperand(const MCInst *MI, unsigned OpNo, raw_ostream &O);
 
   void printSOImmOperand(const MCInst *MI, unsigned OpNum, raw_ostream &O);
-  void printSOImm2PartOperand(const MCInst *MI, unsigned OpNum, raw_ostream &O);
 
   void printSORegOperand(const MCInst *MI, unsigned OpNum, raw_ostream &O);
   void printAddrMode2Operand(const MCInst *MI, unsigned OpNum, raw_ostream &O);
@@ -46,15 +44,11 @@ public:
   void printAddrMode3Operand(const MCInst *MI, unsigned OpNum, raw_ostream &O);
   void printAddrMode3OffsetOperand(const MCInst *MI, unsigned OpNum,
                                    raw_ostream &O);
-  void printAddrMode4Operand(const MCInst *MI, unsigned OpNum, raw_ostream &O,
-                             const char *Modifier = 0);
-  void printAddrMode5Operand(const MCInst *MI, unsigned OpNum, raw_ostream &O,
-                             const char *Modifier = 0);
+  void printLdStmModeOperand(const MCInst *MI, unsigned OpNum, raw_ostream &O);
+  void printAddrMode5Operand(const MCInst *MI, unsigned OpNum, raw_ostream &O);
   void printAddrMode6Operand(const MCInst *MI, unsigned OpNum, raw_ostream &O);
   void printAddrMode6OffsetOperand(const MCInst *MI, unsigned OpNum,
                                    raw_ostream &O);
-  void printAddrModePCOperand(const MCInst *MI, unsigned OpNum, raw_ostream &O,
-                              const char *Modifier = 0);
 
   void printBitfieldInvMaskImmOperand(const MCInst *MI, unsigned OpNum,
                                       raw_ostream &O);
@@ -100,8 +94,6 @@ public:
   void printSBitModifierOperand(const MCInst *MI, unsigned OpNum,
                                 raw_ostream &O);
   void printRegisterList(const MCInst *MI, unsigned OpNum, raw_ostream &O);
-  void printCPInstOperand(const MCInst *MI, unsigned OpNum, raw_ostream &O,
-                          const char *Modifier);
   // The jump table instructions have custom handling in ARMAsmPrinter
   // to output the jump table. Nothing further is necessary here.
   void printJTBlockOperand(const MCInst *MI, unsigned OpNum, raw_ostream &O) {}
@@ -115,6 +107,6 @@ public:
   void printPCLabel(const MCInst *MI, unsigned OpNum, raw_ostream &O);
 };
 
-}
+} // end namespace llvm
 
 #endif

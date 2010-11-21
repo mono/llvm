@@ -16,11 +16,21 @@
 // which automatically provides functionality for the entire suite of client
 // APIs.
 //
-// This API represents memory as a (Pointer, Size) pair.  The Pointer component
-// specifies the base memory address of the region, the Size specifies how large
-// of an area is being queried, or UnknownSize if the size is not known.
-// Pointers that point to two completely different objects in memory never
-// alias, regardless of the value of the Size component.
+// This API identifies memory regions with the Location class. The pointer
+// component specifies the base memory address of the region. The Size specifies
+// the maximum size (in address units) of the memory region, or UnknownSize if
+// the size is not known. The TBAA tag identifies the "type" of the memory
+// reference; see the TypeBasedAliasAnalysis class for details.
+//
+// Some non-obvious details include:
+//  - Pointers that point to two completely different objects in memory never
+//    alias, regardless of the value of the Size component.
+//  - NoAlias doesn't imply inequal pointers. The most obvious example of this
+//    is two pointers to constant memory. Even if they are equal, constant
+//    memory is never stored to, so there will never be any dependencies.
+//    In this and other situations, the pointers may be both NoAlias and
+//    MustAlias at the same time. The current API can only return one result,
+//    though this is rarely a problem in practice.
 //
 //===----------------------------------------------------------------------===//
 
@@ -86,10 +96,14 @@ public:
   struct Location {
     /// Ptr - The address of the start of the location.
     const Value *Ptr;
-    /// Size - The size of the location.
+    /// Size - The maximum size of the location, in address-units, or
+    /// UnknownSize if the size is not known.  Note that an unknown size does
+    /// not mean the pointer aliases the entire virtual address space, because
+    /// there are restrictions on stepping out of one object and into another.
+    /// See http://llvm.org/docs/LangRef.html#pointeraliasing
     uint64_t Size;
     /// TBAATag - The metadata node which describes the TBAA type of
-    /// the location, or null if there is no (unique) tag.
+    /// the location, or null if there is no known unique tag.
     const MDNode *TBAATag;
 
     explicit Location(const Value *P = 0,
@@ -103,12 +117,24 @@ public:
       return Copy;
     }
 
+    Location getWithNewSize(uint64_t NewSize) const {
+      Location Copy(*this);
+      Copy.Size = NewSize;
+      return Copy;
+    }
+
     Location getWithoutTBAATag() const {
       Location Copy(*this);
       Copy.TBAATag = 0;
       return Copy;
     }
   };
+
+  /// getLocation - Fill in Loc with information about the memory reference by
+  /// the given instruction.
+  Location getLocation(const LoadInst *LI);
+  Location getLocation(const StoreInst *SI);
+  Location getLocation(const VAArgInst *VI);
 
   /// Alias analysis result - Either we know for sure that it does not alias, we
   /// know for sure it must alias, or we don't know anything: The two pointers
@@ -119,12 +145,16 @@ public:
   /// See docs/AliasAnalysis.html for more information on the specific meanings
   /// of these values.
   ///
-  enum AliasResult { NoAlias = 0, MayAlias = 1, MustAlias = 2 };
+  enum AliasResult {
+    NoAlias = 0,        ///< No dependencies.
+    MayAlias = 1,       ///< Anything goes.
+    MustAlias = 2       ///< Pointers are equal.
+  };
 
   /// alias - The main low level interface to the alias analysis implementation.
-  /// Returns a Result indicating whether the two pointers are aliased to each
-  /// other.  This is the interface that must be implemented by specific alias
-  /// analysis implementations.
+  /// Returns an AliasResult indicating whether the two pointers are aliased to
+  /// each other.  This is the interface that must be implemented by specific
+  /// alias analysis implementations.
   virtual AliasResult alias(const Location &LocA, const Location &LocB);
 
   /// alias - A convenience wrapper.
@@ -150,15 +180,16 @@ public:
     return isNoAlias(Location(V1, V1Size), Location(V2, V2Size));
   }
 
-  /// pointsToConstantMemory - If the specified memory location is known to be
-  /// constant, return true.  This allows disambiguation of store
-  /// instructions from constant pointers.
-  ///
-  virtual bool pointsToConstantMemory(const Location &Loc);
+  /// pointsToConstantMemory - If the specified memory location is
+  /// known to be constant, return true. If OrLocal is true and the
+  /// specified memory location is known to be "local" (derived from
+  /// an alloca), return true. Otherwise return false.
+  virtual bool pointsToConstantMemory(const Location &Loc,
+                                      bool OrLocal = false);
 
   /// pointsToConstantMemory - A convenient wrapper.
-  bool pointsToConstantMemory(const Value *P) {
-    return pointsToConstantMemory(Location(P));
+  bool pointsToConstantMemory(const Value *P, bool OrLocal = false) {
+    return pointsToConstantMemory(Location(P), OrLocal);
   }
 
   //===--------------------------------------------------------------------===//
@@ -170,36 +201,48 @@ public:
   ///
   enum ModRefResult { NoModRef = 0, Ref = 1, Mod = 2, ModRef = 3 };
 
+  /// These values define additional bits used to define the
+  /// ModRefBehavior values.
+  enum { Nowhere = 0, ArgumentPointees = 4, Anywhere = 8 | ArgumentPointees };
 
   /// ModRefBehavior - Summary of how a function affects memory in the program.
   /// Loads from constant globals are not considered memory accesses for this
   /// interface.  Also, functions may freely modify stack space local to their
   /// invocation without having to report it through these interfaces.
   enum ModRefBehavior {
-    // DoesNotAccessMemory - This function does not perform any non-local loads
-    // or stores to memory.
-    //
-    // This property corresponds to the GCC 'const' attribute.
-    DoesNotAccessMemory,
+    /// DoesNotAccessMemory - This function does not perform any non-local loads
+    /// or stores to memory.
+    ///
+    /// This property corresponds to the GCC 'const' attribute.
+    /// This property corresponds to the LLVM IR 'readnone' attribute.
+    /// This property corresponds to the IntrNoMem LLVM intrinsic flag.
+    DoesNotAccessMemory = Nowhere | NoModRef,
 
-    // AccessesArguments - This function accesses function arguments in well
-    // known (possibly volatile) ways, but does not access any other memory.
-    AccessesArguments,
+    /// OnlyReadsArgumentPointees - The only memory references in this function
+    /// (if it has any) are non-volatile loads from objects pointed to by its
+    /// pointer-typed arguments, with arbitrary offsets.
+    ///
+    /// This property corresponds to the IntrReadArgMem LLVM intrinsic flag.
+    OnlyReadsArgumentPointees = ArgumentPointees | Ref,
 
-    // AccessesArgumentsAndGlobals - This function has accesses function
-    // arguments and global variables well known (possibly volatile) ways, but
-    // does not access any other memory.
-    AccessesArgumentsAndGlobals,
+    /// OnlyAccessesArgumentPointees - The only memory references in this
+    /// function (if it has any) are non-volatile loads and stores from objects
+    /// pointed to by its pointer-typed arguments, with arbitrary offsets.
+    ///
+    /// This property corresponds to the IntrReadWriteArgMem LLVM intrinsic flag.
+    OnlyAccessesArgumentPointees = ArgumentPointees | ModRef,
 
-    // OnlyReadsMemory - This function does not perform any non-local stores or
-    // volatile loads, but may read from any memory location.
-    //
-    // This property corresponds to the GCC 'pure' attribute.
-    OnlyReadsMemory,
+    /// OnlyReadsMemory - This function does not perform any non-local stores or
+    /// volatile loads, but may read from any memory location.
+    ///
+    /// This property corresponds to the GCC 'pure' attribute.
+    /// This property corresponds to the LLVM IR 'readonly' attribute.
+    /// This property corresponds to the IntrReadMem LLVM intrinsic flag.
+    OnlyReadsMemory = Anywhere | Ref,
 
-    // UnknownModRefBehavior - This indicates that the function could not be
-    // classified into one of the behaviors above.
-    UnknownModRefBehavior
+    /// UnknownModRefBehavior - This indicates that the function could not be
+    /// classified into one of the behaviors above.
+    UnknownModRefBehavior = Anywhere | ModRef
   };
 
   /// getModRefBehavior - Return the behavior when calling the given call site.
@@ -208,11 +251,6 @@ public:
   /// getModRefBehavior - Return the behavior when calling the given function.
   /// For use when the call site is not known.
   virtual ModRefBehavior getModRefBehavior(const Function *F);
-
-  /// getIntrinsicModRefBehavior - Return the modref behavior of the intrinsic
-  /// with the given id.  Most clients won't need this, because the regular
-  /// getModRefBehavior incorporates this information.
-  static ModRefBehavior getIntrinsicModRefBehavior(unsigned iid);
 
   /// doesNotAccessMemory - If the specified call is known to never read or
   /// write memory, return true.  If the call only reads from known-constant
@@ -246,8 +284,7 @@ public:
   /// This property corresponds to the GCC 'pure' attribute.
   ///
   bool onlyReadsMemory(ImmutableCallSite CS) {
-    ModRefBehavior MRB = getModRefBehavior(CS);
-    return MRB == DoesNotAccessMemory || MRB == OnlyReadsMemory;
+    return onlyReadsMemory(getModRefBehavior(CS));
   }
 
   /// onlyReadsMemory - If the specified function is known to only read from
@@ -255,10 +292,31 @@ public:
   /// when the call site is not known.
   ///
   bool onlyReadsMemory(const Function *F) {
-    ModRefBehavior MRB = getModRefBehavior(F);
-    return MRB == DoesNotAccessMemory || MRB == OnlyReadsMemory;
+    return onlyReadsMemory(getModRefBehavior(F));
   }
 
+  /// onlyReadsMemory - Return true if functions with the specified behavior are
+  /// known to only read from non-volatile memory (or not access memory at all).
+  ///
+  static bool onlyReadsMemory(ModRefBehavior MRB) {
+    return !(MRB & Mod);
+  }
+
+  /// onlyAccessesArgPointees - Return true if functions with the specified
+  /// behavior are known to read and write at most from objects pointed to by
+  /// their pointer-typed arguments (with arbitrary offsets).
+  ///
+  static bool onlyAccessesArgPointees(ModRefBehavior MRB) {
+    return !(MRB & Anywhere & ~ArgumentPointees);
+  }
+
+  /// doesAccessArgPointees - Return true if functions with the specified
+  /// behavior are known to potentially read or write  from objects pointed
+  /// to be their pointer-typed arguments (with arbitrary offsets).
+  ///
+  static bool doesAccessArgPointees(ModRefBehavior MRB) {
+    return (MRB & ModRef) && (MRB & ArgumentPointees);
+  }
 
   /// getModRefInfo - Return information about whether or not an instruction may
   /// read or write the specified memory location.  An instruction

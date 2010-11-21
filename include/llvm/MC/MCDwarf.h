@@ -83,6 +83,8 @@ namespace llvm {
     unsigned Flags;
     // Isa
     unsigned Isa;
+    // Discriminator
+    unsigned Discriminator;
 
 // Flag that indicates the initial value of the is_stmt_start flag.
 #define DWARF2_LINE_DEFAULT_IS_STMT     1
@@ -96,27 +98,31 @@ namespace llvm {
     friend class MCContext;
     friend class MCLineEntry;
     MCDwarfLoc(unsigned fileNum, unsigned line, unsigned column, unsigned flags,
-               unsigned isa)
-      : FileNum(fileNum), Line(line), Column(column), Flags(flags), Isa(isa) {}
+               unsigned isa, unsigned discriminator)
+      : FileNum(fileNum), Line(line), Column(column), Flags(flags), Isa(isa),
+        Discriminator(discriminator) {}
 
     // Allow the default copy constructor and assignment operator to be used
     // for an MCDwarfLoc object.
 
   public:
     /// getFileNum - Get the FileNum of this MCDwarfLoc.
-    unsigned getFileNum() { return FileNum; }
+    unsigned getFileNum() const { return FileNum; }
 
     /// getLine - Get the Line of this MCDwarfLoc.
-    unsigned getLine() { return Line; }
+    unsigned getLine() const { return Line; }
 
     /// getColumn - Get the Column of this MCDwarfLoc.
-    unsigned getColumn() { return Column; }
+    unsigned getColumn() const { return Column; }
 
     /// getFlags - Get the Flags of this MCDwarfLoc.
-    unsigned getFlags() { return Flags; }
+    unsigned getFlags() const { return Flags; }
 
     /// getIsa - Get the Isa of this MCDwarfLoc.
-    unsigned getIsa() { return Isa; }
+    unsigned getIsa() const { return Isa; }
+
+    /// getDiscriminator - Get the Discriminator of this MCDwarfLoc.
+    unsigned getDiscriminator() const { return Discriminator; }
 
     /// setFileNum - Set the FileNum of this MCDwarfLoc.
     void setFileNum(unsigned fileNum) { FileNum = fileNum; }
@@ -132,6 +138,11 @@ namespace llvm {
 
     /// setIsa - Set the Isa of this MCDwarfLoc.
     void setIsa(unsigned isa) { Isa = isa; }
+
+    /// setDiscriminator - Set the Discriminator of this MCDwarfLoc.
+    void setDiscriminator(unsigned discriminator) {
+      Discriminator = discriminator;
+    }
   };
 
   /// MCLineEntry - Instances of this class represent the line information for
@@ -151,12 +162,12 @@ namespace llvm {
     MCLineEntry(MCSymbol *label, const MCDwarfLoc loc) : MCDwarfLoc(loc),
                 Label(label) {}
 
-    MCSymbol *getLabel() { return Label; }
+    MCSymbol *getLabel() const { return Label; }
 
     // This is called when an instruction is assembled into the specified
     // section and if there is information from the last .loc directive that
     // has yet to have a line entry made for it is made.
-    static void Make(MCObjectStreamer *MCOS, const MCSection *Section);
+    static void Make(MCStreamer *MCOS, const MCSection *Section);
   };
 
   /// MCLineSection - Instances of this class represent the line information
@@ -181,12 +192,15 @@ namespace llvm {
 
     typedef std::vector<MCLineEntry> MCLineEntryCollection;
     typedef MCLineEntryCollection::iterator iterator;
+    typedef MCLineEntryCollection::const_iterator const_iterator;
 
   private:
     MCLineEntryCollection MCLineEntries;
 
   public:
-    MCLineEntryCollection *getMCLineEntries() { return &MCLineEntries; }
+    const MCLineEntryCollection *getMCLineEntries() const {
+      return &MCLineEntries;
+    }
   };
 
   class MCDwarfFileTable {
@@ -194,7 +208,8 @@ namespace llvm {
     //
     // This emits the Dwarf file and the line tables.
     //
-    static void Emit(MCObjectStreamer *MCOS, const MCSection *DwarfLineSection);
+    static void Emit(MCStreamer *MCOS, const MCSection *DwarfLineSection,
+                     MCSectionData *DLS, int PointerSize);
   };
 
   class MCDwarfLineAddr {
@@ -203,7 +218,7 @@ namespace llvm {
     static void Encode(int64_t LineDelta, uint64_t AddrDelta, raw_ostream &OS);
 
     /// Utility function to emit the encoding to a streamer.
-    static void Emit(MCObjectStreamer *MCOS,
+    static void Emit(MCStreamer *MCOS,
                      int64_t LineDelta,uint64_t AddrDelta);
 
     /// Utility function to compute the size of the encoding.

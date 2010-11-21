@@ -231,10 +231,11 @@ void Lint::visitCallSite(CallSite CS) {
         // to do. Known partial overlap is not distinguished from the case
         // where nothing is known.
         if (Formal->hasNoAliasAttr() && Actual->getType()->isPointerTy())
-          for (CallSite::arg_iterator BI = CS.arg_begin(); BI != AE; ++BI) {
-            Assert1(AI == BI || AA->alias(*AI, *BI) != AliasAnalysis::MustAlias,
+          for (CallSite::arg_iterator BI = CS.arg_begin(); BI != AE; ++BI)
+            Assert1(AI == BI ||
+                    !(*BI)->getType()->isPointerTy() ||
+                    AA->alias(*AI, *BI) != AliasAnalysis::MustAlias,
                     "Unusual: noalias argument aliases another argument", &I);
-          }
 
         // Check that an sret argument points to valid memory.
         if (Formal->hasStructRetAttr() && Actual->getType()->isPointerTy()) {
@@ -581,8 +582,9 @@ Value *Lint::findValueImpl(Value *V, bool OffsetOk,
       BBI = BB->end();
     }
   } else if (PHINode *PN = dyn_cast<PHINode>(V)) {
-    if (Value *W = PN->hasConstantValue(DT))
-      return findValueImpl(W, OffsetOk, Visited);
+    if (Value *W = PN->hasConstantValue())
+      if (W != V)
+        return findValueImpl(W, OffsetOk, Visited);
   } else if (CastInst *CI = dyn_cast<CastInst>(V)) {
     if (CI->isNoopCast(TD ? TD->getIntPtrType(V->getContext()) :
                             Type::getInt64Ty(V->getContext())))
@@ -614,9 +616,8 @@ Value *Lint::findValueImpl(Value *V, bool OffsetOk,
 
   // As a last resort, try SimplifyInstruction or constant folding.
   if (Instruction *Inst = dyn_cast<Instruction>(V)) {
-    if (Value *W = SimplifyInstruction(Inst, TD))
-      if (W != Inst)
-        return findValueImpl(W, OffsetOk, Visited);
+    if (Value *W = SimplifyInstruction(Inst, TD, DT))
+      return findValueImpl(W, OffsetOk, Visited);
   } else if (ConstantExpr *CE = dyn_cast<ConstantExpr>(V)) {
     if (Value *W = ConstantFoldConstantExpression(CE, TD))
       if (W != V)

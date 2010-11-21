@@ -104,7 +104,7 @@ sys::IdentifyFileType(const char *magic, unsigned length) {
         case 2: return Mach_O_Executable_FileType;
         case 3: return Mach_O_FixedVirtualMemorySharedLib_FileType;
         case 4: return Mach_O_Core_FileType;
-        case 5: return Mach_O_PreloadExectuable_FileType;
+        case 5: return Mach_O_PreloadExecutable_FileType;
         case 6: return Mach_O_DynamicallyLinkedSharedLib_FileType;
         case 7: return Mach_O_DynamicLinker_FileType;
         case 8: return Mach_O_Bundle_FileType;
@@ -192,7 +192,22 @@ Path::FindLibrary(std::string& name) {
 }
 
 StringRef Path::GetDLLSuffix() {
-  return LTDL_SHLIB_EXT;
+  return &(LTDL_SHLIB_EXT[1]);
+}
+
+bool
+Path::appendSuffix(StringRef suffix) {
+  if (!suffix.empty()) {
+    std::string save(path);
+    path.append(".");
+    path.append(suffix);
+    if (!isValid()) {
+      path = save;
+      return false;
+    }
+  }
+
+  return true;
 }
 
 bool

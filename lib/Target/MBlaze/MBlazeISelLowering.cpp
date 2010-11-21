@@ -290,7 +290,7 @@ MBlazeTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     else if (MI->getOpcode() == MBlaze::ShiftRL)
       BuildMI(loop, dl, TII->get(MBlaze::SRL), NDST).addReg(DST);
     else
-        llvm_unreachable( "Cannot lower unknown shift instruction" );
+        llvm_unreachable("Cannot lower unknown shift instruction");
 
     BuildMI(loop, dl, TII->get(MBlaze::ADDI), NAMT)
       .addReg(SAMT)
@@ -332,7 +332,7 @@ MBlazeTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
 
     unsigned Opc;
     switch (MI->getOperand(4).getImm()) {
-    default: llvm_unreachable( "Unknown branch condition" );
+    default: llvm_unreachable("Unknown branch condition");
     case MBlazeCC::EQ: Opc = MBlaze::BNEID; break;
     case MBlazeCC::NE: Opc = MBlaze::BEQID; break;
     case MBlazeCC::GT: Opc = MBlaze::BLEID; break;
@@ -396,9 +396,9 @@ SDValue MBlazeTargetLowering::LowerSELECT_CC(SDValue Op,
     CompareFlag = DAG.getNode(MBlazeISD::ICmp, dl, MVT::i32, LHS, RHS)
                     .getValue(1);
   } else {
-    llvm_unreachable( "Cannot lower select_cc with unknown type" );
+    llvm_unreachable("Cannot lower select_cc with unknown type");
   }
- 
+
   return DAG.getNode(Opc, dl, TrueVal.getValueType(), TrueVal, FalseVal,
                      CompareFlag);
 }
@@ -429,7 +429,7 @@ LowerJumpTable(SDValue Op, SelectionDAG &DAG) const {
   EVT PtrVT = Op.getValueType();
   JumpTableSDNode *JT  = cast<JumpTableSDNode>(Op);
 
-  SDValue JTI = DAG.getTargetJumpTable(JT->getIndex(), PtrVT, 0 );
+  SDValue JTI = DAG.getTargetJumpTable(JT->getIndex(), PtrVT, 0);
   return DAG.getNode(MBlazeISD::Wrap, dl, MVT::i32, JTI);
 }
 
@@ -441,7 +441,7 @@ LowerConstantPool(SDValue Op, SelectionDAG &DAG) const {
   DebugLoc dl = Op.getDebugLoc();
 
   SDValue CP = DAG.getTargetConstantPool(C, MVT::i32, N->getAlignment(),
-                                         N->getOffset(), 0 );
+                                         N->getOffset(), 0);
   return DAG.getNode(MBlazeISD::Wrap, dl, MVT::i32, CP);
 }
 
@@ -468,8 +468,8 @@ SDValue MBlazeTargetLowering::LowerVASTART(SDValue Op,
 
 #include "MBlazeGenCallingConv.inc"
 
-static bool CC_MBlaze2(unsigned ValNo, EVT ValVT,
-                       EVT LocVT, CCValAssign::LocInfo LocInfo,
+static bool CC_MBlaze2(unsigned ValNo, MVT ValVT,
+                       MVT LocVT, CCValAssign::LocInfo LocInfo,
                        ISD::ArgFlagsTy ArgFlags, CCState &State) {
   static const unsigned RegsSize=6;
   static const unsigned IntRegs[] = {
@@ -553,7 +553,7 @@ LowerCall(SDValue Chain, SDValue Callee, CallingConv::ID CallConv,
   // Walk the register/memloc assignments, inserting copies/loads.
   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
     CCValAssign &VA = ArgLocs[i];
-    EVT RegVT = VA.getLocVT();
+    MVT RegVT = VA.getLocVT();
     SDValue Arg = OutVals[i];
 
     // Promote the value if needed.
@@ -616,10 +616,10 @@ LowerCall(SDValue Chain, SDValue Callee, CallingConv::ID CallConv,
   // node so that legalize doesn't hack it.
   if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee))
     Callee = DAG.getTargetGlobalAddress(G->getGlobal(), dl,
-                                getPointerTy(), 0, 0 );
+                                getPointerTy(), 0, 0);
   else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(Callee))
     Callee = DAG.getTargetExternalSymbol(S->getSymbol(),
-                                getPointerTy(), 0 );
+                                getPointerTy(), 0);
 
   // MBlazeJmpLink = #chain, #target_address, #opt_in_flags...
   //             = Chain, Callee, Reg#1, Reg#2, ...
@@ -675,7 +675,7 @@ LowerCallResult(SDValue Chain, SDValue InFlag, CallingConv::ID CallConv,
                                RVLocs[i].getValVT(), InFlag).getValue(1);
     InFlag = Chain.getValue(2);
     InVals.push_back(Chain.getValue(0));
-  } 
+  }
 
   return Chain;
 }
@@ -720,7 +720,7 @@ LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv, bool isVarArg,
 
     // Arguments stored on registers
     if (VA.isRegLoc()) {
-      EVT RegVT = VA.getLocVT();
+      MVT RegVT = VA.getLocVT();
       ArgRegEnd = VA.getLocReg();
       TargetRegisterClass *RC = 0;
 
@@ -785,7 +785,7 @@ LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv, bool isVarArg,
 
   // To meet ABI, when VARARGS are passed on registers, the registers
   // must have their values written to the caller stack frame. If the last
-  // argument was placed in the stack, there's no need to save any register. 
+  // argument was placed in the stack, there's no need to save any register.
   if ((isVarArg) && ArgRegEnd) {
     if (StackPtr.getNode() == 0)
       StackPtr = DAG.getRegister(StackReg, getPointerTy());
@@ -817,7 +817,7 @@ LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv, bool isVarArg,
     }
   }
 
-  // All stores are grouped in one node to allow the matching between 
+  // All stores are grouped in one node to allow the matching between
   // the size of Ins and InVals. This only happens when on varg functions
   if (!OutChains.empty()) {
     OutChains.push_back(Chain);

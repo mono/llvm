@@ -78,6 +78,10 @@ using namespace sys;
 
 const char sys::PathSeparator = ':';
 
+StringRef Path::GetEXESuffix() {
+  return StringRef();
+}
+
 Path::Path(StringRef p)
   : path(p) {}
 
@@ -92,10 +96,12 @@ Path::operator=(StringRef that) {
 
 bool
 Path::isValid() const {
-  // Check some obvious things
-  if (path.empty())
-    return false;
-  return path.length() < MAXPATHLEN;
+  // Empty paths are considered invalid here.
+  // This code doesn't check MAXPATHLEN because there's no need. Nothing in
+  // LLVM manipulates Paths with fixed-sizes arrays, and if the OS can't
+  // handle names longer than some limit, it'll report this on demand using
+  // ENAMETOLONG.
+  return !path.empty();
 }
 
 bool
@@ -137,25 +143,20 @@ Path::GetTemporaryDirectory(std::string *ErrMsg) {
 #if defined(HAVE_MKDTEMP)
   // The best way is with mkdtemp but that's not available on many systems,
   // Linux and FreeBSD have it. Others probably won't.
-  char pathname[MAXPATHLEN];
-  strcpy(pathname,"/tmp/llvm_XXXXXX");
+  char pathname[] = "/tmp/llvm_XXXXXX";
   if (0 == mkdtemp(pathname)) {
     MakeErrMsg(ErrMsg,
-      std::string(pathname) + ": can't create temporary directory");
+               std::string(pathname) + ": can't create temporary directory");
     return Path();
   }
-  Path result;
-  result.set(pathname);
-  assert(result.isValid() && "mkdtemp didn't create a valid pathname!");
-  return result;
+  return Path(pathname);
 #elif defined(HAVE_MKSTEMP)
   // If no mkdtemp is available, mkstemp can be used to create a temporary file
   // which is then removed and created as a directory. We prefer this over
   // mktemp because of mktemp's inherent security and threading risks. We still
   // have a slight race condition from the time the temporary file is created to
   // the time it is re-created as a directoy.
-  char pathname[MAXPATHLEN];
-  strcpy(pathname, "/tmp/llvm_XXXXXX");
+  char pathname[] = "/tmp/llvm_XXXXXX";
   int fd = 0;
   if (-1 == (fd = mkstemp(pathname))) {
     MakeErrMsg(ErrMsg,
@@ -169,18 +170,14 @@ Path::GetTemporaryDirectory(std::string *ErrMsg) {
       std::string(pathname) + ": can't create temporary directory");
     return Path();
   }
-  Path result;
-  result.set(pathname);
-  assert(result.isValid() && "mkstemp didn't create a valid pathname!");
-  return result;
+  return Path(pathname);
 #elif defined(HAVE_MKTEMP)
   // If a system doesn't have mkdtemp(3) or mkstemp(3) but it does have
   // mktemp(3) then we'll assume that system (e.g. AIX) has a reasonable
   // implementation of mktemp(3) and doesn't follow BSD 4.3's lead of replacing
   // the XXXXXX with the pid of the process and a letter. That leads to only
   // twenty six temporary files that can be generated.
-  char pathname[MAXPATHLEN];
-  strcpy(pathname, "/tmp/llvm_XXXXXX");
+  char pathname[] = "/tmp/llvm_XXXXXX";
   char *TmpName = ::mktemp(pathname);
   if (TmpName == 0) {
     MakeErrMsg(ErrMsg,
@@ -192,10 +189,7 @@ Path::GetTemporaryDirectory(std::string *ErrMsg) {
         std::string(TmpName) + ": can't create temporary directory");
     return Path();
   }
-  Path result;
-  result.set(TmpName);
-  assert(result.isValid() && "mktemp didn't create a valid pathname!");
-  return result;
+  return Path(TmpName);
 #else
   // This is the worst case implementation. tempnam(3) leaks memory unless its
   // on an SVID2 (or later) system. On BSD 4.3 it leaks. tmpnam(3) has thread
@@ -216,10 +210,7 @@ Path::GetTemporaryDirectory(std::string *ErrMsg) {
       std::string(pathname) + ": can't create temporary directory");
     return Path();
   }
-  Path result;
-  result.set(pathname);
-  assert(result.isValid() && "mkstemp didn't create a valid pathname!");
-  return result;
+  return Path(pathname);
 #endif
 }
 
@@ -348,18 +339,18 @@ Path Path::GetMainExecutable(const char *argv0, void *MainAddr) {
   if (_NSGetExecutablePath(exe_path, &size) == 0) {
     char link_path[MAXPATHLEN];
     if (realpath(exe_path, link_path))
-      return Path(std::string(link_path));
+      return Path(link_path);
   }
 #elif defined(__FreeBSD__) || defined (__NetBSD__) || defined(__minix)
   char exe_path[PATH_MAX];
 
   if (getprogpath(exe_path, argv0) != NULL)
-    return Path(std::string(exe_path));
+    return Path(exe_path);
 #elif defined(__linux__) || defined(__CYGWIN__)
   char exe_path[MAXPATHLEN];
   ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path));
   if (len >= 0)
-    return Path(std::string(exe_path, len));
+    return Path(StringRef(exe_path, len));
 #elif defined(HAVE_DLFCN_H)
   // Use dladdr to get executable path if available.
   Dl_info DLInfo;
@@ -371,7 +362,7 @@ Path Path::GetMainExecutable(const char *argv0, void *MainAddr) {
   // the actual executable.
   char link_path[MAXPATHLEN];
   if (realpath(DLInfo.dli_fname, link_path))
-    return Path(std::string(link_path));
+    return Path(link_path);
 #else
 #error GetMainExecutable is not implemented on this host yet.
 #endif
@@ -441,6 +432,15 @@ Path::isDirectory() const {
     return false;
   return ((buf.st_mode & S_IFMT) == S_IFDIR) ? true : false;
 }
+
+bool
+Path::isSymLink() const {
+  struct stat buf;
+  if (0 != lstat(path.c_str(), &buf))
+    return false;
+  return S_ISLNK(buf.st_mode);
+}
+
 
 bool
 Path::canRead() const {
@@ -592,12 +592,7 @@ bool
 Path::set(StringRef a_path) {
   if (a_path.empty())
     return false;
-  std::string save(path);
   path = a_path;
-  if (!isValid()) {
-    path = save;
-    return false;
-  }
   return true;
 }
 
@@ -605,14 +600,9 @@ bool
 Path::appendComponent(StringRef name) {
   if (name.empty())
     return false;
-  std::string save(path);
   if (!lastIsSlash(path))
     path += '/';
   path += name;
-  if (!isValid()) {
-    path = save;
-    return false;
-  }
   return true;
 }
 
@@ -634,20 +624,7 @@ Path::eraseComponent() {
 }
 
 bool
-Path::appendSuffix(StringRef suffix) {
-  std::string save(path);
-  path.append(".");
-  path.append(suffix);
-  if (!isValid()) {
-    path = save;
-    return false;
-  }
-  return true;
-}
-
-bool
 Path::eraseSuffix() {
-  std::string save = path;
   size_t dotpos = path.rfind('.',path.size());
   size_t slashpos = path.rfind('/',path.size());
   if (dotpos != std::string::npos) {
@@ -656,8 +633,6 @@ Path::eraseSuffix() {
       return true;
     }
   }
-  if (!isValid())
-    path = save;
   return false;
 }
 
@@ -692,8 +667,7 @@ static bool createDirectoryHelper(char* beg, char* end, bool create_parents) {
 bool
 Path::createDirectoryOnDisk( bool create_parents, std::string* ErrMsg ) {
   // Get a writeable copy of the path name
-  char pathname[MAXPATHLEN];
-  path.copy(pathname,MAXPATHLEN);
+  std::string pathname(path);
 
   // Null-terminate the last component
   size_t lastchar = path.length() - 1 ;
@@ -701,11 +675,10 @@ Path::createDirectoryOnDisk( bool create_parents, std::string* ErrMsg ) {
   if (pathname[lastchar] != '/')
     ++lastchar;
 
-  pathname[lastchar] = 0;
+  pathname[lastchar] = '\0';
 
-  if (createDirectoryHelper(pathname, pathname+lastchar, create_parents))
-    return MakeErrMsg(ErrMsg,
-                      std::string(pathname) + ": can't create directory");
+  if (createDirectoryHelper(&pathname[0], &pathname[lastchar], create_parents))
+    return MakeErrMsg(ErrMsg, pathname + ": can't create directory");
 
   return false;
 }
@@ -770,17 +743,15 @@ Path::eraseFromDisk(bool remove_contents, std::string *ErrStr) const {
   }
 
   // Otherwise, try to just remove the one directory.
-  char pathname[MAXPATHLEN];
-  path.copy(pathname, MAXPATHLEN);
+  std::string pathname(path);
   size_t lastchar = path.length() - 1;
   if (pathname[lastchar] == '/')
-    pathname[lastchar] = 0;
+    pathname[lastchar] = '\0';
   else
-    pathname[lastchar+1] = 0;
+    pathname[lastchar+1] = '\0';
 
-  if (rmdir(pathname) != 0)
-    return MakeErrMsg(ErrStr,
-      std::string(pathname) + ": can't erase directory");
+  if (rmdir(pathname.c_str()) != 0)
+    return MakeErrMsg(ErrStr, pathname + ": can't erase directory");
   return false;
 }
 

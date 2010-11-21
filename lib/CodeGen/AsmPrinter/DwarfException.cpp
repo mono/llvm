@@ -128,6 +128,7 @@ void DwarfException::EmitCIE(const Function *PersonalityFn, unsigned Index) {
   Asm->OutStreamer.AddComment("CIE Return Address Column");
 
   const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
+  const TargetFrameInfo *TFI = Asm->TM.getFrameInfo();
   Asm->EmitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
 
   if (Augmentation[0]) {
@@ -148,7 +149,7 @@ void DwarfException::EmitCIE(const Function *PersonalityFn, unsigned Index) {
 
   // Indicate locations of general callee saved registers in frame.
   std::vector<MachineMove> Moves;
-  RI->getInitialFrameState(Moves);
+  TFI->getInitialFrameState(Moves);
   Asm->EmitFrameMoves(Moves, 0, true);
 
   // On Darwin the linker honors the alignment of eh_frame, which means it must

@@ -45,6 +45,7 @@ template<typename T> class SmallVectorImpl;
 class TargetRegisterInfo;
 class VirtRegMap;
 class LiveIntervals;
+class Spiller;
 
 // Heuristic that determines the priority of assigning virtual to physical
 // registers. The main impact of the heuristic is expected to be compile time.
@@ -94,6 +95,10 @@ protected:
   LiveIntervals *lis_;
   LIUArray physReg2liu_;
 
+  // Current queries, one per physreg. They must be reinitialized each time we
+  // query on a new live virtual register.
+  OwningArrayPtr<LiveIntervalUnion::Query> queries_;
+
   RegAllocBase(): tri_(0), vrm_(0), lis_(0) {}
 
   virtual ~RegAllocBase() {}
@@ -101,6 +106,15 @@ protected:
   // A RegAlloc pass should call this before allocatePhysRegs.
   void init(const TargetRegisterInfo &tri, VirtRegMap &vrm, LiveIntervals &lis);
 
+  // Get an initialized query to check interferences between lvr and preg.  Note
+  // that Query::init must be called at least once for each physical register
+  // before querying a new live virtual register. This ties queries_ and
+  // physReg2liu_ together.
+  LiveIntervalUnion::Query &query(LiveInterval &lvr, unsigned preg) {
+    queries_[preg].init(&lvr, &physReg2liu_[preg]);
+    return queries_[preg];
+  }
+  
   // The top-level driver. The output is a VirtRegMap that us updated with
   // physical register assignments.
   //
@@ -109,6 +123,9 @@ protected:
   // LiveVirtRegQueue.
   void allocatePhysRegs();
 
+  // Get a temporary reference to a Spiller instance.
+  virtual Spiller &spiller() = 0;
+  
   // A RegAlloc pass should override this to provide the allocation heuristics.
   // Each call must guarantee forward progess by returning an available PhysReg
   // or new set of split live virtual registers. It is up to the splitter to
@@ -120,11 +137,26 @@ protected:
   virtual void releaseMemory();
 
   // Helper for checking interference between a live virtual register and a
-  // physical register, including all its register aliases.
-  bool checkPhysRegInterference(LiveIntervalUnion::Query &query, unsigned preg);
+  // physical register, including all its register aliases. If an interference
+  // exists, return the interfering register, which may be preg or an alias.
+  unsigned checkPhysRegInterference(LiveInterval& lvr, unsigned preg);
+
+  // Helper for spilling all live virtual registers currently unified under preg
+  // that interfere with the most recently queried lvr.  Return true if spilling
+  // was successful, and append any new spilled/split intervals to splitLVRs.
+  bool spillInterferences(LiveInterval &lvr, unsigned preg,
+                          SmallVectorImpl<LiveInterval*> &splitLVRs);
+
+#ifndef NDEBUG
+  // Verify each LiveIntervalUnion.
+  void verify();
+#endif
   
 private:
   void seedLiveVirtRegs(LiveVirtRegQueue &lvrQ);
+
+  void spillReg(LiveInterval &lvr, unsigned reg,
+                SmallVectorImpl<LiveInterval*> &splitLVRs);
 };
 
 } // end namespace llvm

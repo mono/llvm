@@ -3667,6 +3667,20 @@ SDValue DAGCombiner::visitZERO_EXTEND(SDNode *N) {
   // fold (zext (truncate x)) -> (and x, mask)
   if (N0.getOpcode() == ISD::TRUNCATE &&
       (!LegalOperations || TLI.isOperationLegal(ISD::AND, VT))) {
+
+    // fold (zext (truncate (load x))) -> (zext (smaller load x))
+    // fold (zext (truncate (srl (load x), c))) -> (zext (smaller load (x+c/n)))
+    SDValue NarrowLoad = ReduceLoadWidth(N0.getNode());
+    if (NarrowLoad.getNode()) {
+      SDNode* oye = N0.getNode()->getOperand(0).getNode();
+      if (NarrowLoad.getNode() != N0.getNode()) {
+        CombineTo(N0.getNode(), NarrowLoad);
+        // CombineTo deleted the truncate, if needed, but not what's under it.
+        AddToWorkList(oye);
+      }
+      return SDValue(N, 0);   // Return N so it doesn't get rechecked!
+    }
+
     SDValue Op = N0.getOperand(0);
     if (Op.getValueType().bitsLT(VT)) {
       Op = DAG.getNode(ISD::ANY_EXTEND, N->getDebugLoc(), VT, Op);
@@ -4102,6 +4116,18 @@ SDValue DAGCombiner::ReduceLoadWidth(SDNode *N) {
     }
   }
 
+  // If the load is shifted left (and the result isn't shifted back right),
+  // we can fold the truncate through the shift.
+  unsigned ShLeftAmt = 0;
+  if (ShAmt == 0 && N0.getOpcode() == ISD::SHL && N0.hasOneUse() &&
+      ExtVT == VT &&
+      TLI.isNarrowingProfitable(N0.getValueType(), VT)) {
+    if (ConstantSDNode *N01 = dyn_cast<ConstantSDNode>(N0.getOperand(1))) {
+      ShLeftAmt = N01->getZExtValue();
+      N0 = N0.getOperand(0);
+    }
+  }
+
   // Do not generate loads of non-round integer types since these can
   // be expensive (and would be wrong if the type is not byte sized).
   if (isa<LoadSDNode>(N0) && N0.hasOneUse() && ExtVT.isRound() &&
@@ -4140,8 +4166,18 @@ SDValue DAGCombiner::ReduceLoadWidth(SDNode *N) {
     DAG.ReplaceAllUsesOfValueWith(N0.getValue(1), Load.getValue(1),
                                   &DeadNodes);
 
+    // Shift the result left, if we've swallowed a left shift.
+    SDValue Result = Load;
+    if (ShLeftAmt != 0) {
+      EVT ShImmTy = getShiftAmountTy();
+      if (!isUIntN(ShImmTy.getSizeInBits(), ShLeftAmt))
+        ShImmTy = VT;
+      Result = DAG.getNode(ISD::SHL, N0.getDebugLoc(), VT,
+                           Result, DAG.getConstant(ShLeftAmt, ShImmTy));
+    }
+
     // Return the new loaded value.
-    return Load;
+    return Result;
   }
 
   return SDValue();
@@ -6155,7 +6191,7 @@ SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
   SDValue EltNo = N->getOperand(1);
 
   if (isa<ConstantSDNode>(EltNo)) {
-    unsigned Elt = cast<ConstantSDNode>(EltNo)->getZExtValue();
+    int Elt = cast<ConstantSDNode>(EltNo)->getZExtValue();
     bool NewLoad = false;
     bool BCNumEltsChanged = false;
     EVT VT = InVec.getValueType();
@@ -6193,7 +6229,7 @@ SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
 
       // Select the input vector, guarding against out of range extract vector.
       unsigned NumElems = VT.getVectorNumElements();
-      int Idx = (Elt > NumElems) ? -1 : SVN->getMaskElt(Elt);
+      int Idx = (Elt > (int)NumElems) ? -1 : SVN->getMaskElt(Elt);
       InVec = (Idx < (int)NumElems) ? InVec.getOperand(0) : InVec.getOperand(1);
 
       if (InVec.getOpcode() == ISD::BIT_CONVERT)
@@ -6206,6 +6242,10 @@ SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
 
     if (!LN0 || !LN0->hasOneUse() || LN0->isVolatile())
       return SDValue();
+
+    // If Idx was -1 above, Elt is going to be -1, so just return undef.
+    if (Elt == -1)
+      return DAG.getUNDEF(LN0->getBasePtr().getValueType());
 
     unsigned Align = LN0->getAlignment();
     if (NewLoad) {
@@ -6222,6 +6262,7 @@ SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
 
     SDValue NewPtr = LN0->getBasePtr();
     unsigned PtrOff = 0;
+    
     if (Elt) {
       PtrOff = LVT.getSizeInBits() * Elt / 8;
       EVT PtrType = NewPtr.getValueType();
@@ -6361,11 +6402,6 @@ SDValue DAGCombiner::visitVECTOR_SHUFFLE(SDNode *N) {
           ConvInput.getValueType().getVectorNumElements() == NumElts)
         V = ConvInput.getNode();
     }
-
-    // Fold a splat of a splat.
-    ShuffleVectorSDNode *SVV = dyn_cast<ShuffleVectorSDNode>(V);
-    if (SVV && SVV->isSplat())
-      return N0;
 
     if (V->getOpcode() == ISD::BUILD_VECTOR) {
       assert(V->getNumOperands() == NumElts &&
@@ -6622,6 +6658,11 @@ bool DAGCombiner::SimplifySelectOps(SDNode *TheSelect, SDValue LHS,
         LLD->isVolatile() || RLD->isVolatile() ||
         // If this is an EXTLOAD, the VT's must match.
         LLD->getMemoryVT() != RLD->getMemoryVT() ||
+        // If this is an EXTLOAD, the kind of extension must match.
+        (LLD->getExtensionType() != RLD->getExtensionType() &&
+         // The only exception is if one of the extensions is anyext.
+         LLD->getExtensionType() != ISD::EXTLOAD &&
+         RLD->getExtensionType() != ISD::EXTLOAD) ||
         // FIXME: this discards src value information.  This is
         // over-conservative. It would be beneficial to be able to remember
         // both potential memory locations.  Since we are discarding
@@ -6671,7 +6712,8 @@ bool DAGCombiner::SimplifySelectOps(SDNode *TheSelect, SDValue LHS,
                          LLD->isVolatile(), LLD->isNonTemporal(),
                          LLD->getAlignment());
     } else {
-      Load = DAG.getExtLoad(LLD->getExtensionType(),
+      Load = DAG.getExtLoad(LLD->getExtensionType() == ISD::EXTLOAD ?
+                            RLD->getExtensionType() : LLD->getExtensionType(),
                             TheSelect->getValueType(0),
                             TheSelect->getDebugLoc(),
                             // FIXME: Discards pointer info.

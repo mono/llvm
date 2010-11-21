@@ -107,6 +107,14 @@ Attributes Attribute::typeIncompatible(const Type *Ty) {
 //===----------------------------------------------------------------------===//
 
 namespace llvm {
+  class AttributeListImpl;
+}
+
+static ManagedStatic<FoldingSet<AttributeListImpl> > AttributesLists;
+
+namespace llvm {
+static ManagedStatic<sys::SmartMutex<true> > ALMutex;
+
 class AttributeListImpl : public FoldingSetNode {
   sys::cas_flag RefCount;
   
@@ -122,10 +130,17 @@ public:
     RefCount = 0;
   }
   
-  void AddRef() { sys::AtomicIncrement(&RefCount); }
+  void AddRef() {
+    sys::SmartScopedLock<true> Lock(*ALMutex);
+    ++RefCount;
+  }
   void DropRef() {
-    sys::cas_flag old = sys::AtomicDecrement(&RefCount);
-    if (old == 0) delete this;
+    sys::SmartScopedLock<true> Lock(*ALMutex);
+    if (!AttributesLists.isConstructed())
+      return;
+    sys::cas_flag new_val = --RefCount;
+    if (new_val == 0)
+      delete this;
   }
   
   void Profile(FoldingSetNodeID &ID) const {
@@ -139,11 +154,8 @@ public:
 };
 }
 
-static ManagedStatic<sys::SmartMutex<true> > ALMutex;
-static ManagedStatic<FoldingSet<AttributeListImpl> > AttributesLists;
-
 AttributeListImpl::~AttributeListImpl() {
-  sys::SmartScopedLock<true> Lock(*ALMutex);
+  // NOTE: Lock must be acquired by caller.
   AttributesLists->RemoveNode(this);
 }
 

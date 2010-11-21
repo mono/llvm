@@ -71,6 +71,24 @@ LimitFPPrecision("limit-float-precision",
                  cl::location(LimitFloatPrecision),
                  cl::init(0));
 
+// Limit the width of DAG chains. This is important in general to prevent
+// prevent DAG-based analysis from blowing up. For example, alias analysis and
+// load clustering may not complete in reasonable time. It is difficult to
+// recognize and avoid this situation within each individual analysis, and
+// future analyses are likely to have the same behavior. Limiting DAG width is
+// the safe approach, and will be especially important with global DAGs.
+//
+// MaxParallelChains default is arbitrarily high to avoid affecting
+// optimization, but could be lowered to improve compile time. Any ld-ld-st-st
+// sequence over this should have been converted to llvm.memcpy by the
+// frontend. It easy to induce this behavior with .ll code such as:
+// %buffer = alloca [4096 x i8]
+// %data = load [4096 x i8]* %argPtr
+// store [4096 x i8] %data, [4096 x i8]* %buffer
+static cl::opt<unsigned>
+MaxParallelChains("dag-chain-limit", cl::desc("Max parallel isel dag chains"),
+                  cl::init(64), cl::Hidden);
+
 static SDValue getCopyFromPartsVector(SelectionDAG &DAG, DebugLoc DL,
                                       const SDValue *Parts, unsigned NumParts,
                                       EVT PartVT, EVT ValueVT);
@@ -3067,7 +3085,7 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
 
   SDValue Root;
   bool ConstantMemory = false;
-  if (I.isVolatile())
+  if (I.isVolatile() || NumValues > MaxParallelChains)
     // Serialize volatile loads with other side effects.
     Root = getRoot();
   else if (AA->pointsToConstantMemory(
@@ -3079,11 +3097,26 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
     // Do not serialize non-volatile loads against each other.
     Root = DAG.getRoot();
   }
-
+  
   SmallVector<SDValue, 4> Values(NumValues);
-  SmallVector<SDValue, 4> Chains(NumValues);
+  SmallVector<SDValue, 4> Chains(std::min(unsigned(MaxParallelChains),
+                                          NumValues));
   EVT PtrVT = Ptr.getValueType();
-  for (unsigned i = 0; i != NumValues; ++i) {
+  unsigned ChainI = 0;
+  for (unsigned i = 0; i != NumValues; ++i, ++ChainI) {
+    // Serializing loads here may result in excessive register pressure, and
+    // TokenFactor places arbitrary choke points on the scheduler. SD scheduling
+    // could recover a bit by hoisting nodes upward in the chain by recognizing
+    // they are side-effect free or do not alias. The optimizer should really
+    // avoid this case by converting large object/array copies to llvm.memcpy
+    // (MaxParallelChains should always remain as failsafe).
+    if (ChainI == MaxParallelChains) {
+      assert(PendingLoads.empty() && "PendingLoads must be serialized first");
+      SDValue Chain = DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
+                                  MVT::Other, &Chains[0], ChainI);
+      Root = Chain;
+      ChainI = 0;
+    }
     SDValue A = DAG.getNode(ISD::ADD, getCurDebugLoc(),
                             PtrVT, Ptr,
                             DAG.getConstant(Offsets[i], PtrVT));
@@ -3092,12 +3125,12 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
                             isNonTemporal, Alignment, TBAAInfo);
 
     Values[i] = L;
-    Chains[i] = L.getValue(1);
+    Chains[ChainI] = L.getValue(1);
   }
 
   if (!ConstantMemory) {
     SDValue Chain = DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
-                                MVT::Other, &Chains[0], NumValues);
+                                MVT::Other, &Chains[0], ChainI);
     if (isVolatile)
       DAG.setRoot(Chain);
     else
@@ -3127,24 +3160,34 @@ void SelectionDAGBuilder::visitStore(const StoreInst &I) {
   SDValue Ptr = getValue(PtrV);
 
   SDValue Root = getRoot();
-  SmallVector<SDValue, 4> Chains(NumValues);
+  SmallVector<SDValue, 4> Chains(std::min(unsigned(MaxParallelChains),
+                                          NumValues));
   EVT PtrVT = Ptr.getValueType();
   bool isVolatile = I.isVolatile();
   bool isNonTemporal = I.getMetadata("nontemporal") != 0;
   unsigned Alignment = I.getAlignment();
   const MDNode *TBAAInfo = I.getMetadata(LLVMContext::MD_tbaa);
 
-  for (unsigned i = 0; i != NumValues; ++i) {
+  unsigned ChainI = 0;
+  for (unsigned i = 0; i != NumValues; ++i, ++ChainI) {
+    // See visitLoad comments.
+    if (ChainI == MaxParallelChains) {
+      SDValue Chain = DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
+                                  MVT::Other, &Chains[0], ChainI);
+      Root = Chain;
+      ChainI = 0;
+    }
     SDValue Add = DAG.getNode(ISD::ADD, getCurDebugLoc(), PtrVT, Ptr,
                               DAG.getConstant(Offsets[i], PtrVT));
-    Chains[i] = DAG.getStore(Root, getCurDebugLoc(),
-                             SDValue(Src.getNode(), Src.getResNo() + i),
-                             Add, MachinePointerInfo(PtrV, Offsets[i]),
-                             isVolatile, isNonTemporal, Alignment, TBAAInfo);
+    SDValue St = DAG.getStore(Root, getCurDebugLoc(),
+                              SDValue(Src.getNode(), Src.getResNo() + i),
+                              Add, MachinePointerInfo(PtrV, Offsets[i]),
+                              isVolatile, isNonTemporal, Alignment, TBAAInfo);
+    Chains[ChainI] = St;
   }
 
   SDValue StoreNode = DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
-                                  MVT::Other, &Chains[0], NumValues);
+                                  MVT::Other, &Chains[0], ChainI);
   ++SDNodeOrder;
   AssignOrderingToNode(StoreNode.getNode());
   DAG.setRoot(StoreNode);
@@ -4066,6 +4109,9 @@ SelectionDAGBuilder::EmitFuncArgumentDbgValue(const Value *V, MDNode *Variable,
     return false;
 
   MachineFunction &MF = DAG.getMachineFunction();
+  const TargetInstrInfo *TII = DAG.getTarget().getInstrInfo();
+  const TargetRegisterInfo *TRI = DAG.getTarget().getRegisterInfo();
+
   // Ignore inlined function arguments here.
   DIVariable DV(Variable);
   if (DV.isInlinedFnArgument(MF.getFunction()))
@@ -4079,7 +4125,6 @@ SelectionDAGBuilder::EmitFuncArgumentDbgValue(const Value *V, MDNode *Variable,
   if (Arg->hasByValAttr()) {
     // Byval arguments' frame index is recorded during argument lowering.
     // Use this info directly.
-    const TargetRegisterInfo *TRI = DAG.getTarget().getRegisterInfo();
     Reg = TRI->getFrameRegister(MF);
     Offset = FuncInfo.getByValArgumentFrameIndex(Arg);
     // If byval argument ofset is not recorded then ignore this.
@@ -4098,13 +4143,25 @@ SelectionDAGBuilder::EmitFuncArgumentDbgValue(const Value *V, MDNode *Variable,
   }
 
   if (!Reg) {
+    // Check if ValueMap has reg number.
     DenseMap<const Value *, unsigned>::iterator VMI = FuncInfo.ValueMap.find(V);
-    if (VMI == FuncInfo.ValueMap.end())
-      return false;
-    Reg = VMI->second;
+    if (VMI != FuncInfo.ValueMap.end())
+      Reg = VMI->second;
+  }
+  
+  if (!Reg && N.getNode()) {
+    // Check if frame index is available.
+    if (LoadSDNode *LNode = dyn_cast<LoadSDNode>(N.getNode()))
+      if (FrameIndexSDNode *FINode = 
+          dyn_cast<FrameIndexSDNode>(LNode->getBasePtr().getNode())) {
+        Reg = TRI->getFrameRegister(MF);
+        Offset = FINode->getIndex();
+      }
   }
 
-  const TargetInstrInfo *TII = DAG.getTarget().getInstrInfo();
+  if (!Reg)
+    return false;
+
   MachineInstrBuilder MIB = BuildMI(MF, getCurDebugLoc(),
                                     TII->get(TargetOpcode::DBG_VALUE))
     .addReg(Reg, RegState::Debug).addImm(Offset).addMetadata(Variable);
@@ -4194,20 +4251,6 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     SDValue Op3 = getValue(I.getArgOperand(2));
     unsigned Align = cast<ConstantInt>(I.getArgOperand(3))->getZExtValue();
     bool isVol = cast<ConstantInt>(I.getArgOperand(4))->getZExtValue();
-
-    // If the source and destination are known to not be aliases, we can
-    // lower memmove as memcpy.
-    uint64_t Size = -1ULL;
-    if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op3))
-      Size = C->getZExtValue();
-    if (AA->alias(I.getArgOperand(0), Size, I.getArgOperand(1), Size) ==
-        AliasAnalysis::NoAlias) {
-      DAG.setRoot(DAG.getMemcpy(getRoot(), dl, Op1, Op2, Op3, Align, isVol,
-                                false, MachinePointerInfo(I.getArgOperand(0)),
-                                MachinePointerInfo(I.getArgOperand(1))));
-      return 0;
-    }
-
     DAG.setRoot(DAG.getMemmove(getRoot(), dl, Op1, Op2, Op3, Align, isVol,
                                MachinePointerInfo(I.getArgOperand(0)),
                                MachinePointerInfo(I.getArgOperand(1))));
@@ -5171,13 +5214,11 @@ void SelectionDAGBuilder::visitCall(const CallInst &I) {
       !MMI.callsExternalVAFunctionWithFloatingPointArguments()) {
     for (unsigned i = 0, e = I.getNumArgOperands(); i != e; ++i) {
       const Type* T = I.getArgOperand(i)->getType();
-      for (po_iterator<const Type*> i = po_begin(T),
-                                    e = po_end(T);
-                                    i != e; ++i) {
-        if (i->isFloatingPointTy()) {
-          MMI.setCallsExternalVAFunctionWithFloatingPointArguments(true);
-          break;
-        }
+      for (po_iterator<const Type*> i = po_begin(T), e = po_end(T); 
+           i != e; ++i) {
+        if (!i->isFloatingPointTy()) continue;
+        MMI.setCallsExternalVAFunctionWithFloatingPointArguments(true);
+        break;
       }
     }
   }
@@ -5648,9 +5689,6 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
     // If this is an input or an indirect output, process the call argument.
     // BasicBlocks are labels, currently appearing only in asm's.
     if (OpInfo.CallOperandVal) {
-      // Strip bitcasts, if any.  This mostly comes up for functions.
-      OpInfo.CallOperandVal = OpInfo.CallOperandVal->stripPointerCasts();
-
       if (const BasicBlock *BB = dyn_cast<BasicBlock>(OpInfo.CallOperandVal)) {
         OpInfo.CallOperand = DAG.getBasicBlock(FuncInfo.MBBMap[BB]);
       } else {
@@ -6177,7 +6215,7 @@ TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
     unsigned NumRegs = getNumRegisters(RetTy->getContext(), VT);
     for (unsigned i = 0; i != NumRegs; ++i) {
       ISD::InputArg MyFlags;
-      MyFlags.VT = RegisterVT;
+      MyFlags.VT = RegisterVT.getSimpleVT();
       MyFlags.Used = isReturnValueUsed;
       if (RetSExt)
         MyFlags.Flags.setSExt();
@@ -6213,7 +6251,7 @@ TargetLowering::LowerCallTo(SDValue Chain, const Type *RetTy,
   DEBUG(for (unsigned i = 0, e = Ins.size(); i != e; ++i) {
           assert(InVals[i].getNode() &&
                  "LowerCall emitted a null value!");
-          assert(Ins[i].VT == InVals[i].getValueType() &&
+          assert(EVT(Ins[i].VT) == InVals[i].getValueType() &&
                  "LowerCall emitted a value with the wrong type!");
         });
 
@@ -6374,7 +6412,7 @@ void SelectionDAGISel::LowerArguments(const BasicBlock *LLVMBB) {
       for (unsigned i = 0, e = Ins.size(); i != e; ++i) {
         assert(InVals[i].getNode() &&
                "LowerFormalArguments emitted a null value!");
-        assert(Ins[i].VT == InVals[i].getValueType() &&
+        assert(EVT(Ins[i].VT) == InVals[i].getValueType() &&
                "LowerFormalArguments emitted a value with the wrong type!");
       }
     });

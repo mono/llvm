@@ -69,9 +69,19 @@ public:
     return Child->EmitAssemblerFlag(Flag);
   }
 
+  virtual void EmitThumbFunc(MCSymbol *Func) {
+    LogCall("EmitThumbFunc");
+    return Child->EmitThumbFunc(Func);
+  }
+
   virtual void EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
     LogCall("EmitAssignment");
     return Child->EmitAssignment(Symbol, Value);
+  }
+
+  virtual void EmitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol) {
+    LogCall("EmitWeakReference");
+    return Child->EmitWeakReference(Alias, Symbol);
   }
 
   virtual void EmitSymbolAttribute(MCSymbol *Symbol, MCSymbolAttr Attribute) {
@@ -147,6 +157,18 @@ public:
     return Child->EmitIntValue(Value, Size, AddrSpace);
   }
 
+  virtual void EmitULEB128Value(const MCExpr *Value,
+                                unsigned AddrSpace = 0) {
+    LogCall("EmitULEB128Value");
+    return Child->EmitULEB128Value(Value, AddrSpace);
+  }
+
+  virtual void EmitSLEB128Value(const MCExpr *Value,
+                                unsigned AddrSpace = 0) {
+    LogCall("EmitSLEB128Value");
+    return Child->EmitSLEB128Value(Value, AddrSpace);
+  }
+
   virtual void EmitGPRel32Value(const MCExpr *Value) {
     LogCall("EmitGPRel32Value");
     return Child->EmitGPRel32Value(Value);
@@ -183,10 +205,21 @@ public:
     return Child->EmitFileDirective(Filename);
   }
 
-  virtual void EmitDwarfFileDirective(unsigned FileNo, StringRef Filename) {
+  virtual bool EmitDwarfFileDirective(unsigned FileNo, StringRef Filename) {
     LogCall("EmitDwarfFileDirective",
             "FileNo:" + Twine(FileNo) + " Filename:" + Filename);
     return Child->EmitDwarfFileDirective(FileNo, Filename);
+  }
+
+  virtual void EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
+                                     unsigned Column, unsigned Flags,
+                                     unsigned Isa, unsigned Discriminator) {
+    LogCall("EmitDwarfLocDirective",
+            "FileNo:" + Twine(FileNo) + " Line:" + Twine(Line) +
+            " Column:" + Twine(Column) + " Flags:" + Twine(Flags) +
+            " Isa:" + Twine(Isa) + " Discriminator:" + Twine(Discriminator));
+            return Child->EmitDwarfLocDirective(FileNo, Line, Column, Flags,
+                                                Isa, Discriminator);
   }
 
   virtual void EmitInstruction(const MCInst &Inst) {
