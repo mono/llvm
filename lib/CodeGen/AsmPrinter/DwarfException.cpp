@@ -714,7 +714,7 @@ void DwarfException::EmitExceptionTable() {
 
     // Emit 'this' location
     unsigned FrameReg;
-    int Offset = Asm->MF->getTarget ().getRegisterInfo ()->getFrameIndexReference (*Asm->MF, ThisSlot, FrameReg);
+    int Offset = Asm->MF->getTarget ().getFrameInfo ()->getFrameIndexReference (*Asm->MF, ThisSlot, FrameReg);
     FrameReg = Asm->MF->getTarget ().getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
 
     Asm->OutStreamer.AddComment("bregx");

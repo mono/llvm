@@ -197,8 +197,6 @@ public:
   virtual void eliminateFrameIndex(MachineBasicBlock::iterator II,
                                    int SPAdj, RegScavenger *RS = NULL) const;
 
-  virtual void getInitialFrameState(std::vector<MachineMove> &Moves) const;
-
 private:
   unsigned estimateRSStackSizeLimit(MachineFunction &MF) const;
 
