@@ -78,7 +78,7 @@ bool MCAsmLayout::isFragmentUpToDate(const MCFragment *F) const {
           F->getLayoutOrder() <= LastValidFragment->getLayoutOrder());
 }
 
-void MCAsmLayout::UpdateForSlide(MCFragment *F, int SlideAmount) {
+void MCAsmLayout::Invalidate(MCFragment *F) {
   // If this fragment wasn't already up-to-date, we don't need to do anything.
   if (!isFragmentUpToDate(F))
     return;
@@ -113,12 +113,40 @@ void MCAsmLayout::EnsureValid(const MCFragment *F) const {
   }
 }
 
-void MCAsmLayout::FragmentReplaced(MCFragment *Src, MCFragment *Dst) {
+void MCAsmLayout::ReplaceFragment(MCFragment *Src, MCFragment *Dst) {
+  MCSectionData *SD = Src->getParent();
+
+  // Insert Dst immediately before Src
+  SD->getFragmentList().insert(Src, Dst);
+
+  // Set the data fragment's layout data.
+  Dst->setParent(Src->getParent());
+  Dst->setAtom(Src->getAtom());
+  Dst->setLayoutOrder(Src->getLayoutOrder());
+
   if (LastValidFragment == Src)
     LastValidFragment = Dst;
 
   Dst->Offset = Src->Offset;
   Dst->EffectiveSize = Src->EffectiveSize;
+
+  // Remove Src, but don't delete it yet.
+  SD->getFragmentList().remove(Src);
+}
+
+void MCAsmLayout::CoalesceFragments(MCFragment *Src, MCFragment *Dst) {
+  assert(Src->getPrevNode() == Dst);
+
+  if (isFragmentUpToDate(Src)) {
+    if (LastValidFragment == Src)
+      LastValidFragment = Dst;
+    Dst->EffectiveSize += Src->EffectiveSize;
+  } else {
+    // We don't know the effective size of Src, so we have to invalidate Dst.
+    Invalidate(Dst);
+  }
+  // Remove Src, but don't delete it yet.
+  Src->getParent()->getFragmentList().remove(Src);
 }
 
 uint64_t MCAsmLayout::getFragmentAddress(const MCFragment *F) const {
@@ -791,7 +819,6 @@ bool MCAssembler::RelaxInstruction(const MCObjectWriter &Writer,
   VecOS.flush();
 
   // Update the instruction fragment.
-  int SlideAmount = Code.size() - IF.getInstSize();
   IF.setInst(Relaxed);
   IF.getCode() = Code;
   IF.getFixups().clear();
@@ -799,8 +826,6 @@ bool MCAssembler::RelaxInstruction(const MCObjectWriter &Writer,
   for (unsigned i = 0, e = Fixups.size(); i != e; ++i)
     IF.getFixups().push_back(Fixups[i]);
 
-  // Update the layout, and remember that we relaxed.
-  Layout.UpdateForSlide(&IF, SlideAmount);
   return true;
 }
 
@@ -866,28 +891,49 @@ bool MCAssembler::LayoutOnce(const MCObjectWriter &Writer,
     for (MCSectionData::iterator it2 = SD.begin(),
            ie2 = SD.end(); it2 != ie2; ++it2) {
       // Check if this is an fragment that needs relaxation.
+      bool relaxedFrag = false;
       switch(it2->getKind()) {
       default:
         break;
       case MCFragment::FT_Inst:
-        WasRelaxed |= RelaxInstruction(Writer, Layout,
+        relaxedFrag = RelaxInstruction(Writer, Layout,
                                        *cast<MCInstFragment>(it2));
         break;
       case MCFragment::FT_Org:
-        WasRelaxed |= RelaxOrg(Writer, Layout, *cast<MCOrgFragment>(it2));
+        relaxedFrag = RelaxOrg(Writer, Layout, *cast<MCOrgFragment>(it2));
         break;
       case MCFragment::FT_Dwarf:
-        WasRelaxed |= RelaxDwarfLineAddr(Writer, Layout,
+        relaxedFrag = RelaxDwarfLineAddr(Writer, Layout,
 					 *cast<MCDwarfLineAddrFragment>(it2));
 	break;
       case MCFragment::FT_LEB:
-        WasRelaxed |= RelaxLEB(Writer, Layout, *cast<MCLEBFragment>(it2));
+        relaxedFrag = RelaxLEB(Writer, Layout, *cast<MCLEBFragment>(it2));
         break;
       }
+      // Update the layout, and remember that we relaxed.
+      if (relaxedFrag)
+	Layout.Invalidate(it2);
+      WasRelaxed |= relaxedFrag;
     }
   }
 
   return WasRelaxed;
+}
+
+static void LowerInstFragment(MCInstFragment *IF,
+                              MCDataFragment *DF) {
+
+  uint64_t DataOffset = DF->getContents().size();
+
+  // Copy in the data
+  DF->getContents().append(IF->getCode().begin(), IF->getCode().end());
+
+  // Adjust the fixup offsets and add them to the data fragment.
+  for (unsigned i = 0, e = IF->getFixups().size(); i != e; ++i) {
+    MCFixup &F = IF->getFixups()[i];
+    F.setOffset(DataOffset + F.getOffset());
+    DF->getFixups().push_back(F);
+  }
 }
 
 void MCAssembler::FinishLayout(MCAsmLayout &Layout) {
@@ -898,35 +944,42 @@ void MCAssembler::FinishLayout(MCAsmLayout &Layout) {
   // cheap (we will mostly end up eliminating fragments and appending on to data
   // fragments), so the extra complexity downstream isn't worth it. Evaluate
   // this assumption.
-  for (iterator it = begin(), ie = end(); it != ie; ++it) {
-    MCSectionData &SD = *it;
+  unsigned FragmentIndex = 0;
+  for (unsigned i = 0, e = Layout.getSectionOrder().size(); i != e; ++i) {
+    MCSectionData &SD = *Layout.getSectionOrder()[i];
+    MCDataFragment *CurDF = NULL;
 
     for (MCSectionData::iterator it2 = SD.begin(),
            ie2 = SD.end(); it2 != ie2; ++it2) {
-      MCInstFragment *IF = dyn_cast<MCInstFragment>(it2);
-      if (!IF)
-        continue;
+      switch (it2->getKind()) {
+      default:
+        CurDF = NULL;
+        break;
+      case MCFragment::FT_Data:
+        CurDF = cast<MCDataFragment>(it2);
+        break;
+      case MCFragment::FT_Inst: {
+        MCInstFragment *IF = cast<MCInstFragment>(it2);
+        // Use the existing data fragment if possible.
+        if (CurDF && CurDF->getAtom() == IF->getAtom()) {
+          Layout.CoalesceFragments(IF, CurDF);
+        } else {
+          // Otherwise, create a new data fragment.
+          CurDF = new MCDataFragment();
+          Layout.ReplaceFragment(IF, CurDF);
+        }
 
-      // Create a new data fragment for the instruction.
-      //
-      // FIXME-PERF: Reuse previous data fragment if possible.
-      MCDataFragment *DF = new MCDataFragment();
-      SD.getFragmentList().insert(it2, DF);
+        // Lower the Instruction Fragment
+        LowerInstFragment(IF, CurDF);
 
-      // Update the data fragments layout data.
-      DF->setParent(IF->getParent());
-      DF->setAtom(IF->getAtom());
-      DF->setLayoutOrder(IF->getLayoutOrder());
-      Layout.FragmentReplaced(IF, DF);
-
-      // Copy in the data and the fixups.
-      DF->getContents().append(IF->getCode().begin(), IF->getCode().end());
-      for (unsigned i = 0, e = IF->getFixups().size(); i != e; ++i)
-        DF->getFixups().push_back(IF->getFixups()[i]);
-
-      // Delete the instruction fragment and update the iterator.
-      SD.getFragmentList().erase(IF);
-      it2 = DF;
+        // Delete the instruction fragment and update the iterator.
+        delete IF;
+        it2 = CurDF;
+        break;
+      }
+      }
+      // Since we may have merged fragments, fix the layout order.
+      it2->setLayoutOrder(FragmentIndex++);
     }
   }
 }

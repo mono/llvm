@@ -538,7 +538,7 @@ static Constant *CastGEPIndices(Constant *const *Ops, unsigned NumOps,
   for (unsigned i = 1; i != NumOps; ++i) {
     if ((i == 1 ||
          !isa<StructType>(GetElementPtrInst::getIndexedType(Ops[0]->getType(),
-                                                            reinterpret_cast<Value *const *>(Ops+1),
+                                        reinterpret_cast<Value *const *>(Ops+1),
                                                             i-1))) &&
         Ops[i]->getType() != IntPtrTy) {
       Any = true;
@@ -639,12 +639,19 @@ static Constant *SymbolicallyEvaluateGEP(Constant *const *Ops, unsigned NumOps,
         
       // Determine which element of the array the offset points into.
       APInt ElemSize(BitWidth, TD->getTypeAllocSize(ATy->getElementType()));
+      const IntegerType *IntPtrTy = TD->getIntPtrType(Ty->getContext());
       if (ElemSize == 0)
-        return 0;
-      APInt NewIdx = Offset.udiv(ElemSize);
-      Offset -= NewIdx * ElemSize;
-      NewIdxs.push_back(ConstantInt::get(TD->getIntPtrType(Ty->getContext()),
-                                         NewIdx));
+        // The element size is 0. This may be [0 x Ty]*, so just use a zero
+        // index for this level and proceed to the next level to see if it can
+        // accommodate the offset.
+        NewIdxs.push_back(ConstantInt::get(IntPtrTy, 0));
+      else {
+        // The element size is non-zero divide the offset by the element
+        // size (rounding down), to compute the index at this level.
+        APInt NewIdx = Offset.udiv(ElemSize);
+        Offset -= NewIdx * ElemSize;
+        NewIdxs.push_back(ConstantInt::get(IntPtrTy, NewIdx));
+      }
       Ty = ATy->getElementType();
     } else if (const StructType *STy = dyn_cast<StructType>(Ty)) {
       // Determine which field of the struct the offset points into. The
@@ -688,22 +695,23 @@ static Constant *SymbolicallyEvaluateGEP(Constant *const *Ops, unsigned NumOps,
 // Constant Folding public APIs
 //===----------------------------------------------------------------------===//
 
-
-/// ConstantFoldInstruction - Attempt to constant fold the specified
-/// instruction.  If successful, the constant result is returned, if not, null
-/// is returned.  Note that this function can only fail when attempting to fold
-/// instructions like loads and stores, which have no constant expression form.
-///
+/// ConstantFoldInstruction - Try to constant fold the specified instruction.
+/// If successful, the constant result is returned, if not, null is returned.
+/// Note that this fails if not all of the operands are constant.  Otherwise,
+/// this function can only fail when attempting to fold instructions like loads
+/// and stores, which have no constant expression form.
 Constant *llvm::ConstantFoldInstruction(Instruction *I, const TargetData *TD) {
-  // Handle PHI nodes specially here...
+  // Handle PHI nodes quickly here...
   if (PHINode *PN = dyn_cast<PHINode>(I)) {
     Constant *CommonValue = 0;
 
     for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
       Value *Incoming = PN->getIncomingValue(i);
-      // If the incoming value is equal to the phi node itself or is undef then
-      // skip it.
-      if (Incoming == PN || isa<UndefValue>(Incoming))
+      // If the incoming value is undef then skip it.  Note that while we could
+      // skip the value if it is equal to the phi node itself we choose not to
+      // because that would break the rule that constant folding only applies if
+      // all operands are constants.
+      if (isa<UndefValue>(Incoming))
         continue;
       // If the incoming value is not a constant, or is a different constant to
       // the one we saw previously, then give up.
@@ -743,7 +751,8 @@ Constant *llvm::ConstantFoldInstruction(Instruction *I, const TargetData *TD) {
 Constant *llvm::ConstantFoldConstantExpression(const ConstantExpr *CE,
                                                const TargetData *TD) {
   SmallVector<Constant*, 8> Ops;
-  for (User::const_op_iterator i = CE->op_begin(), e = CE->op_end(); i != e; ++i) {
+  for (User::const_op_iterator i = CE->op_begin(), e = CE->op_end();
+       i != e; ++i) {
     Constant *NewC = cast<Constant>(*i);
     // Recursively fold the ConstantExpr's operands.
     if (ConstantExpr *NewCE = dyn_cast<ConstantExpr>(NewC))

@@ -8,8 +8,10 @@
 //===----------------------------------------------------------------------===//
 //
 // This file implements routines for folding instructions into simpler forms
-// that do not require creating new instructions.  For example, this does
-// constant folding, and can handle identities like (X&0)->0.
+// that do not require creating new instructions.  This does constant folding
+// ("add i32 1, 1" -> "2") but can also handle non-constant operands, either
+// returning a constant ("and i32 %x, 0" -> "0") or an already existing value
+// ("and i32 %x, %x" -> "%x").
 //
 //===----------------------------------------------------------------------===//
 
@@ -18,6 +20,7 @@
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Support/PatternMatch.h"
 #include "llvm/Support/ValueHandle.h"
+#include "llvm/Target/TargetData.h"
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
@@ -690,19 +693,33 @@ Value *llvm::SimplifySelectInst(Value *CondVal, Value *TrueVal, Value *FalseVal,
 /// fold the result.  If not, this returns null.
 Value *llvm::SimplifyGEPInst(Value *const *Ops, unsigned NumOps,
                              const TargetData *TD, const DominatorTree *) {
+  // The type of the GEP pointer operand.
+  const PointerType *PtrTy = cast<PointerType>(Ops[0]->getType());
+
   // getelementptr P -> P.
   if (NumOps == 1)
     return Ops[0];
 
-  // TODO.
-  //if (isa<UndefValue>(Ops[0]))
-  //  return UndefValue::get(GEP.getType());
+  if (isa<UndefValue>(Ops[0])) {
+    // Compute the (pointer) type returned by the GEP instruction.
+    const Type *LastType = GetElementPtrInst::getIndexedType(PtrTy, &Ops[1],
+                                                             NumOps-1);
+    const Type *GEPTy = PointerType::get(LastType, PtrTy->getAddressSpace());
+    return UndefValue::get(GEPTy);
+  }
 
-  // getelementptr P, 0 -> P.
-  if (NumOps == 2)
+  if (NumOps == 2) {
+    // getelementptr P, 0 -> P.
     if (ConstantInt *C = dyn_cast<ConstantInt>(Ops[1]))
       if (C->isZero())
         return Ops[0];
+    // getelementptr P, N -> P if P points to a type of zero size.
+    if (TD) {
+      const Type *Ty = PtrTy->getElementType();
+      if (Ty->isSized() && TD->getTypeAllocSize(Ty) == 0)
+        return Ops[0];
+    }
+  }
 
   // Check to see if this is constant foldable.
   for (unsigned i = 0; i != NumOps; ++i)

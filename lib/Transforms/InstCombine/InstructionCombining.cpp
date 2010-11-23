@@ -237,6 +237,115 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
   } while (1);
 }
 
+/// LeftDistributesOverRight - Whether "X LOp (Y ROp Z)" is always equal to
+/// "(X LOp Y) ROp (X LOp Z)".
+static bool LeftDistributesOverRight(Instruction::BinaryOps LOp,
+                                     Instruction::BinaryOps ROp) {
+  switch (LOp) {
+  default:
+    return false;
+
+  case Instruction::And:
+    // And distributes over Or and Xor.
+    switch (ROp) {
+    default:
+      return false;
+    case Instruction::Or:
+    case Instruction::Xor:
+      return true;
+    }
+
+  case Instruction::Mul:
+    // Multiplication distributes over addition and subtraction.
+    switch (ROp) {
+    default:
+      return false;
+    case Instruction::Add:
+    case Instruction::Sub:
+      return true;
+    }
+
+  case Instruction::Or:
+    // Or distributes over And.
+    switch (ROp) {
+    default:
+      return false;
+    case Instruction::And:
+      return true;
+    }
+  }
+}
+
+/// RightDistributesOverLeft - Whether "(X LOp Y) ROp Z" is always equal to
+/// "(X ROp Z) LOp (Y ROp Z)".
+static bool RightDistributesOverLeft(Instruction::BinaryOps LOp,
+                                     Instruction::BinaryOps ROp) {
+  if (Instruction::isCommutative(ROp))
+    return LeftDistributesOverRight(ROp, LOp);
+  // TODO: It would be nice to handle division, aka "(X + Y)/Z = X/Z + Y/Z",
+  // but this requires knowing that the addition does not overflow and other
+  // such subtleties.
+  return false;
+}
+
+/// SimplifyDistributed - This tries to simplify binary operations which some
+/// other binary operation distributes over (eg "A*B+A*C" -> "A*(B+C)" since
+/// addition is distributed over by multiplication).  Returns the result of
+/// the simplification, or null if no simplification was performed.
+Instruction *InstCombiner::SimplifyDistributed(BinaryOperator &I) {
+  BinaryOperator *Op0 = dyn_cast<BinaryOperator>(I.getOperand(0));
+  BinaryOperator *Op1 = dyn_cast<BinaryOperator>(I.getOperand(1));
+  if (!Op0 || !Op1 || Op0->getOpcode() != Op1->getOpcode())
+    return 0;
+
+  // The instruction has the form "(A op' B) op (C op' D)".
+  Value *A = Op0->getOperand(0); Value *B = Op0->getOperand(1);
+  Value *C = Op1->getOperand(0); Value *D = Op1->getOperand(1);
+  Instruction::BinaryOps OuterOpcode = I.getOpcode(); // op
+  Instruction::BinaryOps InnerOpcode = Op0->getOpcode(); // op'
+
+  // Does "X op' Y" always equal "Y op' X"?
+  bool InnerCommutative = Instruction::isCommutative(InnerOpcode);
+
+  // Does "X op' (Y op Z)" always equal "(X op' Y) op (X op' Z)"?
+  if (LeftDistributesOverRight(InnerOpcode, OuterOpcode))
+    // Does the instruction have the form "(A op' B) op (A op' D)" or, in the
+    // commutative case, "(A op' B) op (C op' A)"?
+    if (A == C || (InnerCommutative && A == D)) {
+      if (A != C)
+        std::swap(C, D);
+      // Consider forming "A op' (B op D)".
+      // If "B op D" simplifies then it can be formed with no cost.
+      Value *RHS = SimplifyBinOp(OuterOpcode, B, D, TD);
+      // If "B op D" doesn't simplify then only proceed if both of the existing
+      // operations "A op' B" and "C op' D" will be zapped since no longer used.
+      if (!RHS && Op0->hasOneUse() && Op1->hasOneUse())
+        RHS = Builder->CreateBinOp(OuterOpcode, B, D, Op1->getName());
+      if (RHS)
+        return BinaryOperator::Create(InnerOpcode, A, RHS);
+    }
+
+  // Does "(X op Y) op' Z" always equal "(X op' Z) op (Y op' Z)"?
+  if (RightDistributesOverLeft(OuterOpcode, InnerOpcode))
+    // Does the instruction have the form "(A op' B) op (C op' B)" or, in the
+    // commutative case, "(A op' B) op (B op' D)"?
+    if (B == D || (InnerCommutative && B == C)) {
+      if (B != D)
+        std::swap(C, D);
+      // Consider forming "(A op C) op' B".
+      // If "A op C" simplifies then it can be formed with no cost.
+      Value *LHS = SimplifyBinOp(OuterOpcode, A, C, TD);
+      // If "A op C" doesn't simplify then only proceed if both of the existing
+      // operations "A op' B" and "C op' D" will be zapped since no longer used.
+      if (!LHS && Op0->hasOneUse() && Op1->hasOneUse())
+        LHS = Builder->CreateBinOp(OuterOpcode, A, C, Op0->getName());
+      if (LHS)
+        return BinaryOperator::Create(InnerOpcode, LHS, B);
+    }
+
+  return 0;
+}
+
 // dyn_castNegVal - Given a 'sub' instruction, return the RHS of the instruction
 // if the LHS is a constant zero (which is the 'negate' form).
 //
@@ -523,28 +632,35 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
 
   Value *PtrOp = GEP.getOperand(0);
 
-  if (isa<UndefValue>(GEP.getOperand(0)))
-    return ReplaceInstUsesWith(GEP, UndefValue::get(GEP.getType()));
-
-  // Eliminate unneeded casts for indices.
+  // Eliminate unneeded casts for indices, and replace indices which displace
+  // by multiples of a zero size type with zero.
   if (TD) {
     bool MadeChange = false;
-    unsigned PtrSize = TD->getPointerSizeInBits();
-    
+    const Type *IntPtrTy = TD->getIntPtrType(GEP.getContext());
+
     gep_type_iterator GTI = gep_type_begin(GEP);
     for (User::op_iterator I = GEP.op_begin() + 1, E = GEP.op_end();
          I != E; ++I, ++GTI) {
-      if (!isa<SequentialType>(*GTI)) continue;
-      
-      // If we are using a wider index than needed for this platform, shrink it
-      // to what we need.  If narrower, sign-extend it to what we need.  This
-      // explicit cast can make subsequent optimizations more obvious.
-      unsigned OpBits = cast<IntegerType>((*I)->getType())->getBitWidth();
-      if (OpBits == PtrSize)
-        continue;
-      
-      *I = Builder->CreateIntCast(*I, TD->getIntPtrType(GEP.getContext()),true);
-      MadeChange = true;
+      // Skip indices into struct types.
+      const SequentialType *SeqTy = dyn_cast<SequentialType>(*GTI);
+      if (!SeqTy) continue;
+
+      // If the element type has zero size then any index over it is equivalent
+      // to an index of zero, so replace it with zero if it is not zero already.
+      if (SeqTy->getElementType()->isSized() &&
+          TD->getTypeAllocSize(SeqTy->getElementType()) == 0)
+        if (!isa<Constant>(*I) || !cast<Constant>(*I)->isNullValue()) {
+          *I = Constant::getNullValue(IntPtrTy);
+          MadeChange = true;
+        }
+
+      if ((*I)->getType() != IntPtrTy) {
+        // If we are using a wider index than needed for this platform, shrink
+        // it to what we need.  If narrower, sign-extend it to what we need.
+        // This explicit cast can make subsequent optimizations more obvious.
+        *I = Builder->CreateIntCast(*I, IntPtrTy, true);
+        MadeChange = true;
+      }
     }
     if (MadeChange) return &GEP;
   }

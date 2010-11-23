@@ -1144,6 +1144,9 @@ def CMPXCHG16B : RI<0xC7, MRM1m, (outs), (ins i128mem:$dst),
 // Lock instruction prefix
 def LOCK_PREFIX : I<0xF0, RawFrm, (outs),  (ins), "lock", []>;
 
+// Rex64 instruction prefix
+def REX64_PREFIX : I<0x48, RawFrm, (outs),  (ins), "rex64", []>;
+
 // Repeat string operation instruction prefixes
 // These uses the DF flag in the EFLAGS register to inc or dec ECX
 let Defs = [ECX], Uses = [ECX,EFLAGS] in {
@@ -1496,6 +1499,10 @@ def : InstAlias<"mov $seg, $mem", (MOV32ms i32mem:$mem, SEGMENT_REG:$seg)>;
 
 // Match 'movq <largeimm>, <reg>' as an alias for movabsq.
 def : InstAlias<"movq $imm, $reg", (MOV64ri GR64:$reg, i64imm:$imm)>;
+
+// Match 'movq GR64, MMX' as an alias for movd.
+def : InstAlias<"movq $src, $dst", (MMX_MOVD64to64rr VR64:$dst, GR64:$src)>;
+def : InstAlias<"movq $src, $dst", (MMX_MOVD64from64rr GR64:$dst, VR64:$src)>;
 
 // movsd with no operands (as opposed to the SSE scalar move of a double) is an
 // alias for movsl. (as in rep; movsd)

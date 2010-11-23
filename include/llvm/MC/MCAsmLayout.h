@@ -54,13 +54,19 @@ public:
   /// Get the assembler object this is a layout for.
   MCAssembler &getAssembler() const { return Assembler; }
 
-  /// \brief Update the layout because a fragment has been resized. The
-  /// fragments size should have already been updated, the \arg SlideAmount is
-  /// the delta from the old size.
-  void UpdateForSlide(MCFragment *F, int SlideAmount);
+  /// \brief Invalidate all following fragments because a fragment has been resized. The
+  /// fragments size should have already been updated.
+  void Invalidate(MCFragment *F);
 
-  /// \brief Update the layout because a fragment has been replaced.
-  void FragmentReplaced(MCFragment *Src, MCFragment *Dst);
+  /// \brief Update the layout, replacing Src with Dst. The contents
+  /// of Src and Dst are not modified, and must be copied by the caller.
+  /// Src will be removed from the layout, but not deleted.
+  void ReplaceFragment(MCFragment *Src, MCFragment *Dst);
+
+  /// \brief Update the layout to coalesce Src into Dst. The contents
+  /// of Src and Dst are not modified, and must be coalesced by the caller.
+  /// Src will be removed from the layout, but not deleted.
+  void CoalesceFragments(MCFragment *Src, MCFragment *Dst);
 
   /// \brief Perform a full layout.
   void LayoutFile();
