@@ -144,6 +144,8 @@ private:
   virtual void EmitInstToFragment(const MCInst &Inst);
   virtual void EmitInstToData(const MCInst &Inst);
 
+  void fixSymbolsInTLSFixups(const MCExpr *expr);
+
   struct LocalCommon {
     MCSymbolData *SD;
     uint64_t Size;
@@ -450,6 +452,46 @@ void MCELFStreamer::EmitFileDirective(StringRef Filename) {
   SD.setFlags(ELF_STT_File | ELF_STB_Local | ELF_STV_Default);
 }
 
+void  MCELFStreamer::fixSymbolsInTLSFixups(const MCExpr *expr) {
+  switch (expr->getKind()) {
+  case MCExpr::Target: llvm_unreachable("Can't handle target exprs yet!");
+  case MCExpr::Constant:
+    break;
+
+  case MCExpr::Binary: {
+    const MCBinaryExpr *be = cast<MCBinaryExpr>(expr);
+    fixSymbolsInTLSFixups(be->getLHS());
+    fixSymbolsInTLSFixups(be->getRHS());
+    break;
+  }
+
+  case MCExpr::SymbolRef: {
+    const MCSymbolRefExpr &symRef = *cast<MCSymbolRefExpr>(expr);
+    switch (symRef.getKind()) {
+    default:
+      return;
+    case MCSymbolRefExpr::VK_NTPOFF:
+    case MCSymbolRefExpr::VK_GOTNTPOFF:
+    case MCSymbolRefExpr::VK_TLSGD:
+    case MCSymbolRefExpr::VK_TLSLDM:
+    case MCSymbolRefExpr::VK_TPOFF:
+    case MCSymbolRefExpr::VK_DTPOFF:
+    case MCSymbolRefExpr::VK_GOTTPOFF:
+    case MCSymbolRefExpr::VK_TLSLD:
+    case MCSymbolRefExpr::VK_ARM_TLSGD:
+      break;
+    }
+    MCSymbolData &SD = getAssembler().getOrCreateSymbolData(symRef.getSymbol());
+    SetType(SD, ELF::STT_TLS);
+    break;
+  }
+
+  case MCExpr::Unary:
+    fixSymbolsInTLSFixups(cast<MCUnaryExpr>(expr)->getSubExpr());
+    break;
+  }
+}
+
 void MCELFStreamer::EmitInstToFragment(const MCInst &Inst) {
   MCInstFragment *IF = new MCInstFragment(Inst, getCurrentSectionData());
 
@@ -463,6 +505,9 @@ void MCELFStreamer::EmitInstToFragment(const MCInst &Inst) {
   getAssembler().getEmitter().EncodeInstruction(Inst, VecOS, Fixups);
   VecOS.flush();
 
+  for (unsigned i = 0, e = Fixups.size(); i != e; ++i)
+    fixSymbolsInTLSFixups(Fixups[i].getValue());
+
   IF->getCode() = Code;
   IF->getFixups() = Fixups;
 }
@@ -475,6 +520,9 @@ void MCELFStreamer::EmitInstToData(const MCInst &Inst) {
   raw_svector_ostream VecOS(Code);
   getAssembler().getEmitter().EncodeInstruction(Inst, VecOS, Fixups);
   VecOS.flush();
+
+  for (unsigned i = 0, e = Fixups.size(); i != e; ++i)
+    fixSymbolsInTLSFixups(Fixups[i].getValue());
 
   // Add the fixups and data.
   for (unsigned i = 0, e = Fixups.size(); i != e; ++i) {

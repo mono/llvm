@@ -13,14 +13,15 @@
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCObjectFormat.h"
 #include "llvm/MC/MCObjectWriter.h"
+#include "llvm/Object/MachOFormat.h"
 #include "llvm/Target/TargetRegistry.h"
-#include "llvm/Support/MachO.h"
 using namespace llvm;
 
 namespace {
   class PPCAsmBackend : public TargetAsmBackend {
+  const Target &TheTarget;
   public:
-    PPCAsmBackend(const Target &T) : TargetAsmBackend(T) {}
+    PPCAsmBackend(const Target &T) : TargetAsmBackend(), TheTarget(T) {}
     
     bool MayNeedRelaxation(const MCInst &Inst) const {
       // FIXME.
@@ -71,9 +72,9 @@ namespace {
     MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
       bool is64 = getPointerSize() == 8;
       return createMachObjectWriter(OS, /*Is64Bit=*/is64,
-                                    is64 ? MachO::CPUTypePowerPC64 : 
-                                    MachO::CPUTypePowerPC64,
-                                    MachO::CPUSubType_POWERPC_ALL,
+                                    (is64 ? object::mach::CTM_PowerPC64 :
+                                     object::mach::CTM_PowerPC),
+                                    object::mach::CSPPC_ALL,
                                     /*IsLittleEndian=*/false);
     }
     

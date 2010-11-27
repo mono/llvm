@@ -294,6 +294,91 @@ public:
   }
 };
 
+/// adjustSiblingSizes - Move elements between sibling nodes.
+/// @param Node  Array of pointers to sibling nodes.
+/// @param Nodes Number of nodes.
+/// @param CurSize Array of current node sizes, will be overwritten.
+/// @param NewSize Array of desired node sizes.
+template <typename NodeT>
+void adjustSiblingSizes(NodeT *Node[], unsigned Nodes,
+                        unsigned CurSize[], const unsigned NewSize[]) {
+  // Move elements right.
+  for (int n = Nodes - 1; n; --n) {
+    if (CurSize[n] == NewSize[n]) {
+      --Nodes;
+      continue;
+    }
+    for (int m = n - 1; m != -1; --m) {
+      int d = Node[n]->adjustFromLeftSib(CurSize[n], *Node[m], CurSize[m],
+                                         NewSize[n] - CurSize[n]);
+      CurSize[m] -= d;
+      CurSize[n] += d;
+      // Keep going if the current node was exhausted.
+      if (CurSize[n] >= NewSize[n])
+          break;
+    }
+  }
+
+  if (Nodes == 0)
+    return;
+
+  // Move elements left.
+  for (unsigned n = 0; n != Nodes - 1; ++n) {
+    if (CurSize[n] == NewSize[n])
+      continue;
+    for (unsigned m = n + 1; m != Nodes; ++m) {
+      int d = Node[m]->adjustFromLeftSib(CurSize[m], *Node[n], CurSize[n],
+                                        CurSize[n] -  NewSize[n]);
+      CurSize[m] += d;
+      CurSize[n] -= d;
+      // Keep going if the current node was exhausted.
+      if (CurSize[n] >= NewSize[n])
+          break;
+    }
+  }
+
+#ifndef NDEBUG
+  for (unsigned n = 0; n != Nodes; n++)
+    assert(CurSize[n] == NewSize[n] && "Insufficient element shuffle");
+#endif
+}
+
+/// distribute - Compute a new distribution of node elements after an overflow
+/// or underflow. Reserve space for a new element at Position, and compute the
+/// node that will hold Position after redistributing node elements.
+///
+/// It is required that
+///
+///   Elements == sum(CurSize), and
+///   Elements + Grow <= Nodes * Capacity.
+///
+/// NewSize[] will be filled in such that:
+///
+///   sum(NewSize) == Elements, and
+///   NewSize[i] <= Capacity.
+///
+/// The returned index is the node where Position will go, so:
+///
+///   sum(NewSize[0..idx-1]) <= Position
+///   sum(NewSize[0..idx])   >= Position
+///
+/// The last equality, sum(NewSize[0..idx]) == Position, can only happen when
+/// Grow is set and NewSize[idx] == Capacity-1. The index points to the node
+/// before the one holding the Position'th element where there is room for an
+/// insertion.
+///
+/// @param Nodes    The number of nodes.
+/// @param Elements Total elements in all nodes.
+/// @param Capacity The capacity of each node.
+/// @param CurSize  Array[Nodes] of current node sizes, or NULL.
+/// @param NewSize  Array[Nodes] to receive the new node sizes.
+/// @param Position Insert position.
+/// @param Grow     Reserve space for a new element at Position.
+/// @return         (node, offset) for Position.
+IdxPair distribute(unsigned Nodes, unsigned Elements, unsigned Capacity,
+                   const unsigned *CurSize, unsigned NewSize[],
+                   unsigned Position, bool Grow);
+
 
 //===----------------------------------------------------------------------===//
 //---                             NodeSizer                                ---//
@@ -403,7 +488,7 @@ public:
   /// subtree - Access the i'th subtree reference in a branch node.
   /// This depends on branch nodes storing the NodeRef array as their first
   /// member.
-  NodeRef &subtree(unsigned i) {
+  NodeRef &subtree(unsigned i) const {
     return reinterpret_cast<NodeRef*>(pip.getPointer())[i];
   }
 
@@ -500,11 +585,11 @@ public:
   unsigned extendStop(unsigned i, unsigned Size, KeyT b);
 
 #ifndef NDEBUG
-  void dump(unsigned Size) {
-    errs() << "  N" << this << " [shape=record label=\"{ " << Size << '/' << N;
+  void dump(raw_ostream &OS, unsigned Size) {
+    OS << "  N" << this << " [shape=record label=\"{ " << Size << '/' << N;
     for (unsigned i = 0; i != Size; ++i)
-      errs() << " | {" << start(i) << '-' << stop(i) << "|" << value(i) << '}';
-    errs() << "}\"];\n";
+      OS << " | {" << start(i) << '-' << stop(i) << "|" << value(i) << '}';
+    OS << "}\"];\n";
   }
 #endif
 
@@ -686,17 +771,178 @@ public:
   }
 
 #ifndef NDEBUG
-  void dump(unsigned Size) {
-    errs() << "  N" << this << " [shape=record label=\"" << Size << '/' << N;
+  void dump(raw_ostream &OS, unsigned Size) {
+    OS << "  N" << this << " [shape=record label=\"" << Size << '/' << N;
     for (unsigned i = 0; i != Size; ++i)
-      errs() << " | <s" << i << "> " << stop(i);
-    errs() << "\"];\n";
+      OS << " | <s" << i << "> " << stop(i);
+    OS << "\"];\n";
     for (unsigned i = 0; i != Size; ++i)
-      errs() << "  N" << this << ":s" << i << " -> N"
-             << &subtree(i).template get<BranchNode>() << ";\n";
+      OS << "  N" << this << ":s" << i << " -> N"
+         << &subtree(i).template get<BranchNode>() << ";\n";
   }
 #endif
 
+};
+
+//===----------------------------------------------------------------------===//
+//---                                  Path                                ---//
+//===----------------------------------------------------------------------===//
+//
+// A Path is used by iterators to represent a position in a B+-tree, and the
+// path to get there from the root.
+//
+// The Path class also constains the tree navigation code that doesn't have to
+// be templatized.
+//
+//===----------------------------------------------------------------------===//
+
+class Path {
+  /// Entry - Each step in the path is a node pointer and an offset into that
+  /// node.
+  struct Entry {
+    void *node;
+    unsigned size;
+    unsigned offset;
+
+    Entry(void *Node, unsigned Size, unsigned Offset)
+      : node(Node), size(Size), offset(Offset) {}
+
+    Entry(NodeRef Node, unsigned Offset)
+      : node(&Node.subtree(0)), size(Node.size()), offset(Offset) {}
+
+    NodeRef &subtree(unsigned i) const {
+      return reinterpret_cast<NodeRef*>(node)[i];
+    }
+  };
+
+  /// path - The path entries, path[0] is the root node, path.back() is a leaf.
+  SmallVector<Entry, 4> path;
+
+public:
+  // Node accessors.
+  template <typename NodeT> NodeT &node(unsigned Level) const {
+    return *reinterpret_cast<NodeT*>(path[Level].node);
+  }
+  unsigned size(unsigned Level) const { return path[Level].size; }
+  unsigned offset(unsigned Level) const { return path[Level].offset; }
+  unsigned &offset(unsigned Level) { return path[Level].offset; }
+
+  // Leaf accessors.
+  template <typename NodeT> NodeT &leaf() const {
+    return *reinterpret_cast<NodeT*>(path.back().node);
+  }
+  unsigned leafSize() const { return path.back().size; }
+  unsigned leafOffset() const { return path.back().offset; }
+  unsigned &leafOffset() { return path.back().offset; }
+
+  /// valid - Return true if path is at a valid node, not at end().
+  bool valid() const {
+    return !path.empty() && path.front().offset < path.front().size;
+  }
+
+  /// height - Return the height of the tree corresponding to this path.
+  /// This matches map->height in a full path.
+  unsigned height() const { return path.size() - 1; }
+
+  /// subtree - Get the subtree referenced from Level. When the path is
+  /// consistent, node(Level + 1) == subtree(Level).
+  /// @param Level 0..height-1. The leaves have no subtrees.
+  NodeRef &subtree(unsigned Level) const {
+    return path[Level].subtree(path[Level].offset);
+  }
+
+  /// reset - Reset cached information about node(Level) from subtree(Level -1).
+  /// @param Level 1..height. THe node to update after parent node changed.
+  void reset(unsigned Level) {
+    path[Level] = Entry(subtree(Level - 1), offset(Level));
+  }
+
+  /// push - Add entry to path.
+  /// @param Node Node to add, should be subtree(path.size()-1).
+  /// @param Offset Offset into Node.
+  void push(NodeRef Node, unsigned Offset) {
+    path.push_back(Entry(Node, Offset));
+  }
+
+  /// setSize - Set the size of a node both in the path and in the tree.
+  /// @param Level 0..height. Note that setting the root size won't change
+  ///              map->rootSize.
+  /// @param Size New node size.
+  void setSize(unsigned Level, unsigned Size) {
+    path[Level].size = Size;
+    if (Level)
+      subtree(Level - 1).setSize(Size);
+  }
+
+  /// setRoot - Clear the path and set a new root node.
+  /// @param Node New root node.
+  /// @param Size New root size.
+  /// @param Offset Offset into root node.
+  void setRoot(void *Node, unsigned Size, unsigned Offset) {
+    path.clear();
+    path.push_back(Entry(Node, Size, Offset));
+  }
+
+  /// replaceRoot - Replace the current root node with two new entries after the
+  /// tree height has increased.
+  /// @param Root The new root node.
+  /// @param Size Number of entries in the new root.
+  /// @param Offsets Offsets into the root and first branch nodes.
+  void replaceRoot(void *Root, unsigned Size, IdxPair Offsets);
+
+  /// getLeftSibling - Get the left sibling node at Level, or a null NodeRef.
+  /// @param Level Get the sibling to node(Level).
+  /// @return Left sibling, or NodeRef().
+  NodeRef getLeftSibling(unsigned Level) const;
+
+  /// moveLeft - Move path to the left sibling at Level. Leave nodes below Level
+  /// unaltered.
+  /// @param Level Move node(Level).
+  void moveLeft(unsigned Level);
+
+  /// fillLeft - Grow path to Height by taking leftmost branches.
+  /// @param Height The target height.
+  void fillLeft(unsigned Height) {
+    while (height() < Height)
+      push(subtree(height()), 0);
+  }
+
+  /// getLeftSibling - Get the left sibling node at Level, or a null NodeRef.
+  /// @param Level Get the sinbling to node(Level).
+  /// @return Left sibling, or NodeRef().
+  NodeRef getRightSibling(unsigned Level) const;
+
+  /// moveRight - Move path to the left sibling at Level. Leave nodes below
+  /// Level unaltered.
+  /// @param Level Move node(Level).
+  void moveRight(unsigned Level);
+
+  /// atLastBranch - Return true if the path is at the last branch of the node
+  /// at Level.
+  /// @param Level Node to examine.
+  bool atLastBranch(unsigned Level) const {
+    return path[Level].offset == path[Level].size - 1;
+  }
+
+  /// legalizeForInsert - Prepare the path for an insertion at Level. When the
+  /// path is at end(), node(Level) may not be a legal node. legalizeForInsert
+  /// ensures that node(Level) is real by moving back to the last node at Level,
+  /// and setting offset(Level) to size(Level) if required.
+  /// @param Level The level where an insertion is about to take place.
+  void legalizeForInsert(unsigned Level) {
+    if (valid())
+      return;
+    moveLeft(Level);
+    ++path[Level].offset;
+  }
+
+#ifndef NDEBUG
+  void dump() const {
+    for (unsigned l = 0, e = path.size(); l != e; ++l)
+      errs() << l << ": " << path[l].node << ' ' << path[l].size << ' '
+             << path[l].offset << '\n';
+  }
+#endif
 };
 
 } // namespace IntervalMapImpl
@@ -927,6 +1173,7 @@ public:
   }
 
 #ifndef NDEBUG
+  raw_ostream *OS;
   void dump();
   void dumpNode(IntervalMapImpl::NodeRef Node, unsigned Height);
 #endif
@@ -1020,6 +1267,7 @@ splitRoot(unsigned Position) {
     rootBranch().subtree(n) = Node[n];
   }
   rootSize = Nodes;
+  ++height;
   return NewOffset;
 }
 
@@ -1075,21 +1323,24 @@ template <typename KeyT, typename ValT, unsigned N, typename Traits>
 void IntervalMap<KeyT, ValT, N, Traits>::
 dumpNode(IntervalMapImpl::NodeRef Node, unsigned Height) {
   if (Height)
-    Node.get<Branch>().dump(Node.size());
+    Node.get<Branch>().dump(*OS, Node.size());
   else
-    Node.get<Leaf>().dump(Node.size());
+    Node.get<Leaf>().dump(*OS, Node.size());
 }
 
 template <typename KeyT, typename ValT, unsigned N, typename Traits>
 void IntervalMap<KeyT, ValT, N, Traits>::
 dump() {
-  errs() << "digraph {\n";
+  std::string errors;
+  raw_fd_ostream ofs("tree.dot", errors);
+  OS = &ofs;
+  ofs << "digraph {\n";
   if (branched())
-    rootBranch().dump(rootSize);
+    rootBranch().dump(ofs, rootSize);
   else
-    rootLeaf().dump(rootSize);
+    rootLeaf().dump(ofs, rootSize);
   visitNodes(&IntervalMap::dumpNode);
-  errs() << "}\n";
+  ofs << "}\n";
 }
 #endif
 
@@ -1102,107 +1353,54 @@ class IntervalMap<KeyT, ValT, N, Traits>::const_iterator :
   public std::iterator<std::bidirectional_iterator_tag, ValT> {
 protected:
   friend class IntervalMap;
-  typedef std::pair<IntervalMapImpl::NodeRef, unsigned> PathEntry;
-  typedef SmallVector<PathEntry, 4> Path;
 
   // The map referred to.
   IntervalMap *map;
 
-  // The offset into map's root node.
-  unsigned rootOffset;
-
   // We store a full path from the root to the current position.
-  //
-  // When rootOffset == map->rootSize, we are at end() and path() is empty.
-  // Otherwise, when branched these conditions hold:
-  //
-  // 1. path.front().first == rootBranch().subtree(rootOffset)
-  // 2. path[i].first == path[i-1].first.subtree(path[i-1].second)
-  // 3. path.size() == map->height.
-  //
-  // Thus, path.back() always refers to the current leaf node unless the root is
-  // unbranched.
-  //
   // The path may be partially filled, but never between iterator calls.
-  Path path;
+  IntervalMapImpl::Path path;
 
-  explicit const_iterator(IntervalMap &map)
-    : map(&map), rootOffset(map.rootSize) {}
+  explicit const_iterator(IntervalMap &map) : map(&map) {}
 
   bool branched() const {
     assert(map && "Invalid iterator");
     return map->branched();
   }
 
-  IntervalMapImpl::NodeRef pathNode(unsigned h) const { return path[h].first; }
-  IntervalMapImpl::NodeRef  &pathNode(unsigned h) { return path[h].first; }
-  unsigned  pathOffset(unsigned h) const { return path[h].second; }
-  unsigned &pathOffset(unsigned h)       { return path[h].second; }
-
-  Leaf &treeLeaf() const {
-    assert(branched() && path.size() == map->height);
-    return path.back().first.template get<Leaf>();
-  }
-  unsigned treeLeafSize() const {
-    assert(branched() && path.size() == map->height);
-    return path.back().first.size();
-  }
-  unsigned &treeLeafOffset() {
-    assert(branched() && path.size() == map->height);
-    return path.back().second;
-  }
-  unsigned treeLeafOffset() const {
-    assert(branched() && path.size() == map->height);
-    return path.back().second;
-  }
-
-  // Get the next node ptr for an incomplete path.
-  IntervalMapImpl::NodeRef pathNextDown() {
-    assert(path.size() < map->height && "Path is already complete");
-
-    if (path.empty())
-      return map->rootBranch().subtree(rootOffset);
+  void setRoot(unsigned Offset) {
+    if (branched())
+      path.setRoot(&map->rootBranch(), map->rootSize, Offset);
     else
-      return path.back().first.subtree(path.back().second);
+      path.setRoot(&map->rootLeaf(), map->rootSize, Offset);
   }
 
-  void pathFillLeft();
   void pathFillFind(KeyT x);
-  void pathFillRight();
-
-  IntervalMapImpl::NodeRef leftSibling(unsigned level) const;
-  IntervalMapImpl::NodeRef rightSibling(unsigned level) const;
-
-  void treeIncrement();
-  void treeDecrement();
   void treeFind(KeyT x);
 
 public:
   /// valid - Return true if the current position is valid, false for end().
-  bool valid() const {
-    assert(map && "Invalid iterator");
-    return rootOffset < map->rootSize;
-  }
+  bool valid() const { return path.valid(); }
 
   /// start - Return the beginning of the current interval.
   const KeyT &start() const {
     assert(valid() && "Cannot access invalid iterator");
-    return branched() ? treeLeaf().start(treeLeafOffset()) :
-                        map->rootLeaf().start(rootOffset);
+    return branched() ? path.leaf<Leaf>().start(path.leafOffset()) :
+                        path.leaf<RootLeaf>().start(path.leafOffset());
   }
 
   /// stop - Return the end of the current interval.
   const KeyT &stop() const {
     assert(valid() && "Cannot access invalid iterator");
-    return branched() ? treeLeaf().stop(treeLeafOffset()) :
-                        map->rootLeaf().stop(rootOffset);
+    return branched() ? path.leaf<Leaf>().stop(path.leafOffset()) :
+                        path.leaf<RootLeaf>().stop(path.leafOffset());
   }
 
   /// value - Return the mapped value at the current interval.
   const ValT &value() const {
     assert(valid() && "Cannot access invalid iterator");
-    return branched() ? treeLeaf().value(treeLeafOffset()) :
-                        map->rootLeaf().value(rootOffset);
+    return branched() ? path.leaf<Leaf>().value(path.leafOffset()) :
+                        path.leaf<RootLeaf>().value(path.leafOffset());
   }
 
   const ValT &operator*() const {
@@ -1211,8 +1409,11 @@ public:
 
   bool operator==(const const_iterator &RHS) const {
     assert(map == RHS.map && "Cannot compare iterators from different maps");
-    return rootOffset == RHS.rootOffset &&
-             (!valid() || !branched() || path.back() == RHS.path.back());
+    if (!valid())
+      return !RHS.valid();
+    if (path.leafOffset() != RHS.path.leafOffset())
+      return false;
+    return &path.template leaf<Leaf>() == &RHS.path.template leaf<Leaf>();
   }
 
   bool operator!=(const const_iterator &RHS) const {
@@ -1221,27 +1422,21 @@ public:
 
   /// goToBegin - Move to the first interval in map.
   void goToBegin() {
-    rootOffset = 0;
-    path.clear();
+    setRoot(0);
     if (branched())
-      pathFillLeft();
+      path.fillLeft(map->height);
   }
 
   /// goToEnd - Move beyond the last interval in map.
   void goToEnd() {
-    rootOffset = map->rootSize;
-    path.clear();
+    setRoot(map->rootSize);
   }
 
   /// preincrement - move to the next interval.
   const_iterator &operator++() {
     assert(valid() && "Cannot increment end()");
-    if (!branched())
-      ++rootOffset;
-    else if (treeLeafOffset() != treeLeafSize() - 1)
-      ++treeLeafOffset();
-    else
-      treeIncrement();
+    if (++path.leafOffset() == path.leafSize() && branched())
+      path.moveRight(map->height);
     return *this;
   }
 
@@ -1254,13 +1449,10 @@ public:
 
   /// predecrement - move to the previous interval.
   const_iterator &operator--() {
-    if (!branched()) {
-      assert(rootOffset && "Cannot decrement begin()");
-      --rootOffset;
-    } else if (valid() && treeLeafOffset())
-      --treeLeafOffset();
+    if (path.leafOffset() && (valid() || !branched()))
+      --path.leafOffset();
     else
-      treeDecrement();
+      path.moveLeft(map->height);
     return *this;
   }
 
@@ -1277,7 +1469,7 @@ public:
     if (branched())
       treeFind(x);
     else
-      rootOffset = map->rootLeaf().findFrom(0, map->rootSize, x);
+      setRoot(map->rootLeaf().findFrom(0, map->rootSize, x));
   }
 
   /// advanceTo - Move to the first interval with stop >= x, or end().
@@ -1287,150 +1479,30 @@ public:
     if (branched())
       treeAdvanceTo(x);
     else
-      rootOffset = map->rootLeaf().findFrom(rootOffset, map->rootSize, x);
+      path.leafOffset() =
+        map->rootLeaf().findFrom(path.leafOffset(), map->rootSize, x);
   }
 
 };
-
-// pathFillLeft - Complete path by following left-most branches.
-template <typename KeyT, typename ValT, unsigned N, typename Traits>
-void IntervalMap<KeyT, ValT, N, Traits>::
-const_iterator::pathFillLeft() {
-  IntervalMapImpl::NodeRef NR = pathNextDown();
-  for (unsigned i = map->height - path.size() - 1; i; --i) {
-    path.push_back(PathEntry(NR, 0));
-    NR = NR.subtree(0);
-  }
-  path.push_back(PathEntry(NR, 0));
-}
 
 // pathFillFind - Complete path by searching for x.
 template <typename KeyT, typename ValT, unsigned N, typename Traits>
 void IntervalMap<KeyT, ValT, N, Traits>::
 const_iterator::pathFillFind(KeyT x) {
-  IntervalMapImpl::NodeRef NR = pathNextDown();
-  for (unsigned i = map->height - path.size() - 1; i; --i) {
+  IntervalMapImpl::NodeRef NR = path.subtree(path.height());
+  for (unsigned i = map->height - path.height() - 1; i; --i) {
     unsigned p = NR.get<Branch>().safeFind(0, x);
-    path.push_back(PathEntry(NR, p));
+    path.push(NR, p);
     NR = NR.subtree(p);
   }
-  path.push_back(PathEntry(NR, NR.get<Leaf>().safeFind(0, x)));
-}
-
-// pathFillRight - Complete path by adding rightmost entries.
-template <typename KeyT, typename ValT, unsigned N, typename Traits>
-void IntervalMap<KeyT, ValT, N, Traits>::
-const_iterator::pathFillRight() {
-  IntervalMapImpl::NodeRef NR = pathNextDown();
-  for (unsigned i = map->height - path.size() - 1; i; --i) {
-    unsigned p = NR.size() - 1;
-    path.push_back(PathEntry(NR, p));
-    NR = NR.subtree(p);
-  }
-  path.push_back(PathEntry(NR, NR.size() - 1));
-}
-
-/// leftSibling - find the left sibling node to path[level].
-/// @param level 0 is just below the root, map->height - 1 for the leaves.
-/// @return The left sibling NodeRef, or NULL.
-template <typename KeyT, typename ValT, unsigned N, typename Traits>
-IntervalMapImpl::NodeRef IntervalMap<KeyT, ValT, N, Traits>::
-const_iterator::leftSibling(unsigned level) const {
-  using namespace IntervalMapImpl;
-  assert(branched() && "Not at a branched node");
-  assert(level <= path.size() && "Bad level");
-
-  // Go up the tree until we can go left.
-  unsigned h = level;
-  while (h && pathOffset(h - 1) == 0)
-    --h;
-
-  // We are at the first leaf node, no left sibling.
-  if (!h && rootOffset == 0)
-    return NodeRef();
-
-  // NR is the subtree containing our left sibling.
-  NodeRef NR = h ?
-    pathNode(h - 1).subtree(pathOffset(h - 1) - 1) :
-    map->rootBranch().subtree(rootOffset - 1);
-
-  // Keep right all the way down.
-  for (; h != level; ++h)
-    NR = NR.subtree(NR.size() - 1);
-  return NR;
-}
-
-/// rightSibling - find the right sibling node to path[level].
-/// @param level 0 is just below the root, map->height - 1 for the leaves.
-/// @return The right sibling NodeRef, or NULL.
-template <typename KeyT, typename ValT, unsigned N, typename Traits>
-IntervalMapImpl::NodeRef IntervalMap<KeyT, ValT, N, Traits>::
-const_iterator::rightSibling(unsigned level) const {
-  using namespace IntervalMapImpl;
-  assert(branched() && "Not at a branched node");
-  assert(level <= this->path.size() && "Bad level");
-
-  // Go up the tree until we can go right.
-  unsigned h = level;
-  while (h && pathOffset(h - 1) == pathNode(h - 1).size() - 1)
-    --h;
-
-  // We are at the last leaf node, no right sibling.
-  if (!h && rootOffset == map->rootSize - 1)
-    return NodeRef();
-
-  // NR is the subtree containing our right sibling.
-  NodeRef NR = h ?
-    pathNode(h - 1).subtree(pathOffset(h - 1) + 1) :
-    map->rootBranch().subtree(rootOffset + 1);
-
-  // Keep left all the way down.
-  for (; h != level; ++h)
-    NR = NR.subtree(0);
-  return NR;
-}
-
-// treeIncrement - Move to the beginning of the next leaf node.
-template <typename KeyT, typename ValT, unsigned N, typename Traits>
-void IntervalMap<KeyT, ValT, N, Traits>::
-const_iterator::treeIncrement() {
-  assert(branched() && "treeIncrement is not for small maps");
-  assert(path.size() == map->height && "inconsistent iterator");
-  do path.pop_back();
-  while (!path.empty() && path.back().second == path.back().first.size() - 1);
-  if (path.empty()) {
-    ++rootOffset;
-    if (!valid())
-      return;
-  } else
-    ++path.back().second;
-  pathFillLeft();
-}
-
-// treeDecrement - Move to the end of the previous leaf node.
-template <typename KeyT, typename ValT, unsigned N, typename Traits>
-void IntervalMap<KeyT, ValT, N, Traits>::
-const_iterator::treeDecrement() {
-  assert(branched() && "treeDecrement is not for small maps");
-  if (valid()) {
-    assert(path.size() == map->height && "inconsistent iterator");
-    do path.pop_back();
-    while (!path.empty() && path.back().second == 0);
-  }
-  if (path.empty()) {
-    assert(rootOffset && "cannot treeDecrement() on begin()");
-    --rootOffset;
-  } else
-    --path.back().second;
-  pathFillRight();
+  path.push(NR, NR.get<Leaf>().safeFind(0, x));
 }
 
 // treeFind - Find in a branched tree.
 template <typename KeyT, typename ValT, unsigned N, typename Traits>
 void IntervalMap<KeyT, ValT, N, Traits>::
 const_iterator::treeFind(KeyT x) {
-  path.clear();
-  rootOffset = map->rootBranch().findFrom(0, map->rootSize, x);
+  setRoot(map->rootBranch().findFrom(0, map->rootSize, x));
   if (valid())
     pathFillFind(x);
 }
@@ -1440,46 +1512,6 @@ const_iterator::treeFind(KeyT x) {
 //---                                iterator                             ----//
 //===----------------------------------------------------------------------===//
 
-namespace IntervalMapImpl {
-
-  /// distribute - Compute a new distribution of node elements after an overflow
-  /// or underflow. Reserve space for a new element at Position, and compute the
-  /// node that will hold Position after redistributing node elements.
-  ///
-  /// It is required that
-  ///
-  ///   Elements == sum(CurSize), and
-  ///   Elements + Grow <= Nodes * Capacity.
-  ///
-  /// NewSize[] will be filled in such that:
-  ///
-  ///   sum(NewSize) == Elements, and
-  ///   NewSize[i] <= Capacity.
-  ///
-  /// The returned index is the node where Position will go, so:
-  ///
-  ///   sum(NewSize[0..idx-1]) <= Position
-  ///   sum(NewSize[0..idx])   >= Position
-  ///
-  /// The last equality, sum(NewSize[0..idx]) == Position, can only happen when
-  /// Grow is set and NewSize[idx] == Capacity-1. The index points to the node
-  /// before the one holding the Position'th element where there is room for an
-  /// insertion.
-  ///
-  /// @param Nodes    The number of nodes.
-  /// @param Elements Total elements in all nodes.
-  /// @param Capacity The capacity of each node.
-  /// @param CurSize  Array[Nodes] of current node sizes, or NULL.
-  /// @param NewSize  Array[Nodes] to receive the new node sizes.
-  /// @param Position Insert position.
-  /// @param Grow     Reserve space for a new element at Position.
-  /// @return         (node, offset) for Position.
-  IdxPair distribute(unsigned Nodes, unsigned Elements, unsigned Capacity,
-                     const unsigned *CurSize, unsigned NewSize[],
-                     unsigned Position, bool Grow);
-
-}
-
 template <typename KeyT, typename ValT, unsigned N, typename Traits>
 class IntervalMap<KeyT, ValT, N, Traits>::iterator : public const_iterator {
   friend class IntervalMap;
@@ -1487,10 +1519,9 @@ class IntervalMap<KeyT, ValT, N, Traits>::iterator : public const_iterator {
 
   explicit iterator(IntervalMap &map) : const_iterator(map) {}
 
-  void setNodeSize(unsigned Level, unsigned Size);
   void setNodeStop(unsigned Level, KeyT Stop);
-  void insertNode(unsigned Level, IntervalMapImpl::NodeRef Node, KeyT Stop);
-  void overflowLeaf();
+  bool insertNode(unsigned Level, IntervalMapImpl::NodeRef Node, KeyT Stop);
+  template <typename NodeT> bool overflow(unsigned Level);
   void treeInsert(KeyT a, KeyT b, ValT y);
 
 public:
@@ -1499,67 +1530,72 @@ public:
 
 };
 
-/// setNodeSize - Set the size of the node at path[level], updating both path
-/// and the real tree.
-/// @param level 0 is just below the root, map->height - 1 for the leaves.
-/// @param size  New node size.
-template <typename KeyT, typename ValT, unsigned N, typename Traits>
-void IntervalMap<KeyT, ValT, N, Traits>::
-iterator::setNodeSize(unsigned Level, unsigned Size) {
-  this->pathNode(Level).setSize(Size);
-  if (Level)
-    this->pathNode(Level-1).subtree(this->pathOffset(Level-1)).setSize(Size);
-  else
-    this->map->rootBranch().subtree(this->rootOffset).setSize(Size);
-}
-
 /// setNodeStop - Update the stop key of the current node at level and above.
 template <typename KeyT, typename ValT, unsigned N, typename Traits>
 void IntervalMap<KeyT, ValT, N, Traits>::
 iterator::setNodeStop(unsigned Level, KeyT Stop) {
-  while (Level--) {
-    this->pathNode(Level).template get<Branch>()
-      .stop(this->pathOffset(Level)) = Stop;
-    if (this->pathOffset(Level) != this->pathNode(Level).size() - 1)
+  // There are no references to the root node, so nothing to update.
+  if (!Level)
+    return;
+  IntervalMapImpl::Path &P = this->path;
+  // Update nodes pointing to the current node.
+  while (--Level) {
+    P.node<Branch>(Level).stop(P.offset(Level)) = Stop;
+    if (!P.atLastBranch(Level))
       return;
   }
-  this->map->rootBranch().stop(this->rootOffset) = Stop;
+  // Update root separately since it has a different layout.
+  P.node<RootBranch>(Level).stop(P.offset(Level)) = Stop;
 }
 
 /// insertNode - insert a node before the current path at level.
 /// Leave the current path pointing at the new node.
+/// @param Level path index of the node to be inserted.
+/// @param Node The node to be inserted.
+/// @param Stop The last index in the new node.
+/// @return True if the tree height was increased.
 template <typename KeyT, typename ValT, unsigned N, typename Traits>
-void IntervalMap<KeyT, ValT, N, Traits>::
+bool IntervalMap<KeyT, ValT, N, Traits>::
 iterator::insertNode(unsigned Level, IntervalMapImpl::NodeRef Node, KeyT Stop) {
-  if (!Level) {
+  assert(Level && "Cannot insert next to the root");
+  bool SplitRoot = false;
+  IntervalMap &IM = *this->map;
+  IntervalMapImpl::Path &P = this->path;
+
+  if (Level == 1) {
     // Insert into the root branch node.
-    IntervalMap &IM = *this->map;
     if (IM.rootSize < RootBranch::Capacity) {
-      IM.rootBranch().insert(this->rootOffset, IM.rootSize, Node, Stop);
-      ++IM.rootSize;
-      return;
+      IM.rootBranch().insert(P.offset(0), IM.rootSize, Node, Stop);
+      P.setSize(0, ++IM.rootSize);
+      P.reset(Level);
+      return SplitRoot;
     }
 
     // We need to split the root while keeping our position.
-    IdxPair Offset = IM.splitRoot(this->rootOffset);
-    this->rootOffset = Offset.first;
-    this->path.insert(this->path.begin(),std::make_pair(
-      this->map->rootBranch().subtree(Offset.first), Offset.second));
-    Level = 1;
+    SplitRoot = true;
+    IdxPair Offset = IM.splitRoot(P.offset(0));
+    P.replaceRoot(&IM.rootBranch(), IM.rootSize, Offset);
+
+    // Fall through to insert at the new higher level.
+    ++Level;
   }
 
   // When inserting before end(), make sure we have a valid path.
-  if (!this->valid()) {
-    this->treeDecrement();
-    ++this->pathOffset(Level-1);
-  }
+  P.legalizeForInsert(--Level);
 
-  // Insert into the branch node at level-1.
-  IntervalMapImpl::NodeRef NR = this->pathNode(Level-1);
-  unsigned Offset = this->pathOffset(Level-1);
-  assert(NR.size() < Branch::Capacity && "Branch overflow");
-  NR.get<Branch>().insert(Offset, NR.size(), Node, Stop);
-  setNodeSize(Level - 1, NR.size() + 1);
+  // Insert into the branch node at Level-1.
+  if (P.size(Level) == Branch::Capacity) {
+    // Branch node is full, handle handle the overflow.
+    assert(!SplitRoot && "Cannot overflow after splitting the root");
+    SplitRoot = overflow<Branch>(Level);
+    Level += SplitRoot;
+  }
+  P.node<Branch>(Level).insert(P.offset(Level), P.size(Level), Node, Stop);
+  P.setSize(Level, P.size(Level) + 1);
+  if (P.atLastBranch(Level))
+    setNodeStop(Level, Stop);
+  P.reset(Level + 1);
+  return SplitRoot;
 }
 
 // insert
@@ -1568,18 +1604,24 @@ void IntervalMap<KeyT, ValT, N, Traits>::
 iterator::insert(KeyT a, KeyT b, ValT y) {
   if (this->branched())
     return treeInsert(a, b, y);
-  IdxPair IP = this->map->rootLeaf().insertFrom(this->rootOffset,
-                                                this->map->rootSize,
-                                                a, b, y);
+  IntervalMap &IM = *this->map;
+  IntervalMapImpl::Path &P = this->path;
+
+  // Try simple root leaf insert.
+  IdxPair IP = IM.rootLeaf().insertFrom(P.leafOffset(), IM.rootSize, a, b, y);
+
+  // Was the root node insert successful?
   if (IP.second <= RootLeaf::Capacity) {
-    this->rootOffset = IP.first;
-    this->map->rootSize = IP.second;
+    P.leafOffset() = IP.first;
+    P.setSize(0, IM.rootSize = IP.second);
     return;
   }
-  IdxPair Offset = this->map->branchRoot(this->rootOffset);
-  this->rootOffset = Offset.first;
-  this->path.push_back(std::make_pair(
-    this->map->rootBranch().subtree(Offset.first), Offset.second));
+
+  // Root leaf node is full, we must branch.
+  IdxPair Offset = IM.branchRoot(P.leafOffset());
+  P.replaceRoot(&IM.rootBranch(), IM.rootSize, Offset);
+
+  // Now it fits in the new leaf.
   treeInsert(a, b, y);
 }
 
@@ -1587,142 +1629,113 @@ iterator::insert(KeyT a, KeyT b, ValT y) {
 template <typename KeyT, typename ValT, unsigned N, typename Traits>
 void IntervalMap<KeyT, ValT, N, Traits>::
 iterator::treeInsert(KeyT a, KeyT b, ValT y) {
-  if (!this->valid()) {
-    // end() has an empty path. Go back to the last leaf node and use an
-    // invalid offset instead.
-    this->treeDecrement();
-    ++this->treeLeafOffset();
+  IntervalMap &IM = *this->map;
+  IntervalMapImpl::Path &P = this->path;
+
+  P.legalizeForInsert(IM.height);
+  IdxPair IP = P.leaf<Leaf>().insertFrom(P.leafOffset(), P.leafSize(), a, b, y);
+
+  // Leaf insertion unsuccessful? Overflow and try again.
+  if (IP.second > Leaf::Capacity) {
+    overflow<Leaf>(IM.height);
+    IP = P.leaf<Leaf>().insertFrom(P.leafOffset(), P.leafSize(), a, b, y);
+    assert(IP.second <= Leaf::Capacity && "overflow() didn't make room");
   }
-  IdxPair IP = this->treeLeaf().insertFrom(this->treeLeafOffset(),
-                                           this->treeLeafSize(), a, b, y);
-  this->treeLeafOffset() = IP.first;
-  if (IP.second <= Leaf::Capacity) {
-    setNodeSize(this->map->height - 1, IP.second);
-    if (IP.first == IP.second - 1)
-      setNodeStop(this->map->height - 1, this->treeLeaf().stop(IP.first));
-    return;
-  }
-  // Leaf node has no space.
-  overflowLeaf();
-  IP = this->treeLeaf().insertFrom(this->treeLeafOffset(),
-                                   this->treeLeafSize(), a, b, y);
-  this->treeLeafOffset() = IP.first;
-  setNodeSize(this->map->height-1, IP.second);
+
+  // Inserted, update offset and leaf size.
+  P.leafOffset() = IP.first;
+  P.setSize(IM.height, IP.second);
+
+  // Insert was the last node entry, update stops.
   if (IP.first == IP.second - 1)
-    setNodeStop(this->map->height - 1, this->treeLeaf().stop(IP.first));
+    setNodeStop(IM.height, P.leaf<Leaf>().stop(IP.first));
 
   // FIXME: Handle cross-node coalescing.
 }
 
-// overflowLeaf - Distribute entries of the current leaf node evenly among
-// its siblings and ensure that the current node is not full.
-// This may require allocating a new node.
+/// overflow - Distribute entries of the current node evenly among
+/// its siblings and ensure that the current node is not full.
+/// This may require allocating a new node.
+/// @param NodeT The type of node at Level (Leaf or Branch).
+/// @param Level path index of the overflowing node.
+/// @return True when the tree height was changed.
 template <typename KeyT, typename ValT, unsigned N, typename Traits>
-void IntervalMap<KeyT, ValT, N, Traits>::
-iterator::overflowLeaf() {
+template <typename NodeT>
+bool IntervalMap<KeyT, ValT, N, Traits>::
+iterator::overflow(unsigned Level) {
   using namespace IntervalMapImpl;
+  Path &P = this->path;
   unsigned CurSize[4];
-  Leaf *Node[4];
+  NodeT *Node[4];
   unsigned Nodes = 0;
   unsigned Elements = 0;
-  unsigned Offset = this->treeLeafOffset();
+  unsigned Offset = P.offset(Level);
 
   // Do we have a left sibling?
-  NodeRef LeftSib = this->leftSibling(this->map->height-1);
+  NodeRef LeftSib = P.getLeftSibling(Level);
   if (LeftSib) {
     Offset += Elements = CurSize[Nodes] = LeftSib.size();
-    Node[Nodes++] = &LeftSib.get<Leaf>();
+    Node[Nodes++] = &LeftSib.get<NodeT>();
   }
 
-  // Current leaf node.
-  Elements += CurSize[Nodes] = this->treeLeafSize();
-  Node[Nodes++] = &this->treeLeaf();
+  // Current node.
+  Elements += CurSize[Nodes] = P.size(Level);
+  Node[Nodes++] = &P.node<NodeT>(Level);
 
   // Do we have a right sibling?
-  NodeRef RightSib = this->rightSibling(this->map->height-1);
+  NodeRef RightSib = P.getRightSibling(Level);
   if (RightSib) {
     Offset += Elements = CurSize[Nodes] = RightSib.size();
-    Node[Nodes++] = &RightSib.get<Leaf>();
+    Node[Nodes++] = &RightSib.get<NodeT>();
   }
 
   // Do we need to allocate a new node?
   unsigned NewNode = 0;
-  if (Elements + 1 > Nodes * Leaf::Capacity) {
+  if (Elements + 1 > Nodes * NodeT::Capacity) {
     // Insert NewNode at the penultimate position, or after a single node.
     NewNode = Nodes == 1 ? 1 : Nodes - 1;
     CurSize[Nodes] = CurSize[NewNode];
     Node[Nodes] = Node[NewNode];
     CurSize[NewNode] = 0;
-    Node[NewNode] = this->map->allocLeaf();
+    Node[NewNode] = new(this->map->allocator.template Allocate<NodeT>())NodeT();
     ++Nodes;
   }
 
   // Compute the new element distribution.
   unsigned NewSize[4];
-  IdxPair NewOffset = distribute(Nodes, Elements, Leaf::Capacity,
+  IdxPair NewOffset = distribute(Nodes, Elements, NodeT::Capacity,
                                  CurSize, NewSize, Offset, true);
+  adjustSiblingSizes(Node, Nodes, CurSize, NewSize);
 
   // Move current location to the leftmost node.
   if (LeftSib)
-    this->treeDecrement();
-
-  // Move elements right.
-  for (int n = Nodes - 1; n; --n) {
-    if (CurSize[n] == NewSize[n])
-      continue;
-    for (int m = n - 1; m != -1; --m) {
-      int d = Node[n]->adjustFromLeftSib(CurSize[n], *Node[m], CurSize[m],
-                                        NewSize[n] - CurSize[n]);
-      CurSize[m] -= d;
-      CurSize[n] += d;
-      // Keep going if the current node was exhausted.
-      if (CurSize[n] >= NewSize[n])
-          break;
-    }
-  }
-
-  // Move elements left.
-  for (unsigned n = 0; n != Nodes - 1; ++n) {
-    if (CurSize[n] == NewSize[n])
-      continue;
-    for (unsigned m = n + 1; m != Nodes; ++m) {
-      int d = Node[m]->adjustFromLeftSib(CurSize[m], *Node[n], CurSize[n],
-                                        CurSize[n] -  NewSize[n]);
-      CurSize[m] += d;
-      CurSize[n] -= d;
-      // Keep going if the current node was exhausted.
-      if (CurSize[n] >= NewSize[n])
-          break;
-    }
-  }
-
-#ifndef NDEBUG
-  for (unsigned n = 0; n != Nodes; n++)
-    assert(CurSize[n] == NewSize[n] && "Insufficient element shuffle");
-#endif
+    P.moveLeft(Level);
 
   // Elements have been rearranged, now update node sizes and stops.
+  bool SplitRoot = false;
   unsigned Pos = 0;
   for (;;) {
     KeyT Stop = Node[Pos]->stop(NewSize[Pos]-1);
-    if (NewNode && Pos == NewNode)
-      insertNode(this->map->height - 1, NodeRef(Node[Pos], NewSize[Pos]), Stop);
-    else {
-      setNodeSize(this->map->height - 1, NewSize[Pos]);
-      setNodeStop(this->map->height - 1, Stop);
+    if (NewNode && Pos == NewNode) {
+      SplitRoot = insertNode(Level, NodeRef(Node[Pos], NewSize[Pos]), Stop);
+      Level += SplitRoot;
+    } else {
+      P.setSize(Level, NewSize[Pos]);
+      setNodeStop(Level, Stop);
     }
     if (Pos + 1 == Nodes)
       break;
-    this->treeIncrement();
+    P.moveRight(Level);
     ++Pos;
   }
 
   // Where was I? Find NewOffset.
   while(Pos != NewOffset.first) {
-    this->treeDecrement();
+    P.moveLeft(Level);
     --Pos;
   }
-  this->treeLeafOffset() = NewOffset.second;
+  P.offset(Level) = NewOffset.second;
+  return SplitRoot;
 }
 
 } // namespace llvm

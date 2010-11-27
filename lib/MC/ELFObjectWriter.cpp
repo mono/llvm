@@ -718,9 +718,16 @@ const MCSymbol *ELFObjectWriter::SymbolToReloc(const MCAssembler &Asm,
 
   const MCSectionELF &Section =
     static_cast<const MCSectionELF&>(ASymbol.getSection());
+  const SectionKind secKind = Section.getKind();
 
-  if (Section.getKind().isBSS())
+  if (secKind.isBSS())
     return NULL;
+
+  if (secKind.isThreadLocal()) {
+    if (Renamed)
+      return Renamed;
+    return &Symbol;
+  }
 
   MCSymbolRefExpr::VariantKind Kind = Target.getSymA()->getKind();
   const MCSectionELF &Sec2 =

@@ -506,7 +506,11 @@ enum _ {
   argument_out_of_domain              = EDOM,
   bad_address                         = EFAULT,
   bad_file_descriptor                 = EBADF,
+#ifdef EBADMSG
   bad_message                         = EBADMSG,
+#else
+  bad_message                         = EINVAL,
+#endif
   broken_pipe                         = EPIPE,
   connection_aborted                  = ECONNABORTED,
   connection_already_in_progress      = EALREADY,
@@ -536,7 +540,11 @@ enum _ {
   network_unreachable                 = ENETUNREACH,
   no_buffer_space                     = ENOBUFS,
   no_child_process                    = ECHILD,
+#ifdef ENOLINK
   no_link                             = ENOLINK,
+#else
+  no_link                             = EINVAL,
+#endif
   no_lock_available                   = ENOLCK,
 #ifdef ENODATA
   no_message_available                = ENODATA,
@@ -565,7 +573,11 @@ enum _ {
   not_connected                       = ENOTCONN,
   not_enough_memory                   = ENOMEM,
   not_supported                       = ENOTSUP,
+#ifdef ECANCELED
   operation_canceled                  = ECANCELED,
+#else
+  operation_canceled                  = EINVAL,
+#endif
   operation_in_progress               = EINPROGRESS,
   operation_not_permitted             = EPERM,
   operation_not_supported             = EOPNOTSUPP,
@@ -576,7 +588,11 @@ enum _ {
   owner_dead                          = EINVAL,
 #endif
   permission_denied                   = EACCES,
+#ifdef EPROTO
   protocol_error                      = EPROTO,
+#else
+  protocol_error                      = EINVAL,
+#endif
   protocol_not_supported              = EPROTONOSUPPORT,
   read_only_file_system               = EROFS,
   resource_deadlock_would_occur       = EDEADLK,
@@ -805,6 +821,9 @@ inline bool operator!=(const error_condition& _x, const error_condition& _y) {
 
 // This needs to stay here for KillTheDoctor.
 #ifdef LLVM_ON_WIN32
+// FIXME: These two headers really really really need to be removed from here.
+//        Not only is it a violation of System, they define the stupid min and
+//        max macros :(.
 #include <Windows.h>
 #include <WinError.h>
 

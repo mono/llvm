@@ -392,6 +392,17 @@ endif
   LD.Flags += -Wl,--no-relax
 endif
 
+# GNU ld/PECOFF accepts but ignores them below;
+#   --version-script
+#   --export-dynamic
+#   --rpath
+# FIXME: autoconf should be aware of them.
+ifneq (,$(filter $(HOST_OS),Cygwin MingW))
+  HAVE_LINK_VERSION_SCRIPT := 0
+  RPATH :=
+  RDYNAMIC := -Wl,--export-all-symbols
+endif
+
 #--------------------------------------------------------------------
 # Directory locations
 #--------------------------------------------------------------------
@@ -949,11 +960,6 @@ ifdef EXPORTED_SYMBOL_FILE
 # First, set up the native export file, which may differ from the source
 # export file.
 
-# The option --version-script is not effective on GNU ld win32.
-ifneq (,$(filter $(HOST_OS),Cygwin MingW))
-  HAVE_LINK_VERSION_SCRIPT := 0
-endif
-
 ifeq ($(HOST_OS),Darwin)
 # Darwin convention prefixes symbols with underscores.
 NativeExportsFile := $(ObjDir)/$(notdir $(EXPORTED_SYMBOL_FILE)).sed
@@ -1501,31 +1507,31 @@ BC_DEPEND_MOVEFILE = then $(MV) -f "$(ObjDir)/$*.bc.d.tmp" "$(ObjDir)/$*.bc.d"; 
 $(ObjDir)/%.ll: %.cpp $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCXX)
 	$(Echo) "Compiling $*.cpp for $(BuildMode) build (bytecode)"
 	$(Verb) if $(BCCompile.CXX) $(BC_DEPEND_OPTIONS) \
-                              $< -o $(ObjDir)/$*.ll -S -emit-llvm ; \
+			$< -o $(ObjDir)/$*.ll -S -$(LLVMCC_EMITIR_FLAG) ; \
 	        $(BC_DEPEND_MOVEFILE)
 
 $(ObjDir)/%.ll: %.mm $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCXX)
 	$(Echo) "Compiling $*.mm for $(BuildMode) build (bytecode)"
 	$(Verb) if $(BCCompile.CXX) $(BC_DEPEND_OPTIONS) \
-                              $< -o $(ObjDir)/$*.ll -S -emit-llvm ; \
+			$< -o $(ObjDir)/$*.ll -S -$(LLVMCC_EMITIR_FLAG) ; \
 	        $(BC_DEPEND_MOVEFILE)
 
 $(ObjDir)/%.ll: %.cc $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCXX)
 	$(Echo) "Compiling $*.cc for $(BuildMode) build (bytecode)"
 	$(Verb) if $(BCCompile.CXX) $(BC_DEPEND_OPTIONS) \
-                              $< -o $(ObjDir)/$*.ll -S -emit-llvm ; \
+			$< -o $(ObjDir)/$*.ll -S -$(LLVMCC_EMITIR_FLAG) ; \
 	        $(BC_DEPEND_MOVEFILE)
 
 $(ObjDir)/%.ll: %.c $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCC)
 	$(Echo) "Compiling $*.c for $(BuildMode) build (bytecode)"
 	$(Verb) if $(BCCompile.C) $(BC_DEPEND_OPTIONS) \
-                              $< -o $(ObjDir)/$*.ll -S -emit-llvm ; \
+			$< -o $(ObjDir)/$*.ll -S -$(LLVMCC_EMITIR_FLAG) ; \
 	        $(BC_DEPEND_MOVEFILE)
 
 $(ObjDir)/%.ll: %.m $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCC)
 	$(Echo) "Compiling $*.m for $(BuildMode) build (bytecode)"
 	$(Verb) if $(BCCompile.C) $(BC_DEPEND_OPTIONS) \
-                              $< -o $(ObjDir)/$*.ll -S -emit-llvm ; \
+			$< -o $(ObjDir)/$*.ll -S -$(LLVMCC_EMITIR_FLAG) ; \
 	        $(BC_DEPEND_MOVEFILE)
 
 # Provide alternate rule sets if dependencies are disabled
@@ -1553,23 +1559,23 @@ $(ObjDir)/%.o: %.m $(ObjDir)/.dir $(BUILT_SOURCES)
 
 $(ObjDir)/%.ll: %.cpp $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCXX)
 	$(Echo) "Compiling $*.cpp for $(BuildMode) build (bytecode)"
-	$(BCCompile.CXX) $< -o $@ -S -emit-llvm
+	$(BCCompile.CXX) $< -o $@ -S -$(LLVMCC_EMITIR_FLAG)
 
 $(ObjDir)/%.ll: %.mm $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCXX)
 	$(Echo) "Compiling $*.mm for $(BuildMode) build (bytecode)"
-	$(BCCompile.CXX) $< -o $@ -S -emit-llvm
+	$(BCCompile.CXX) $< -o $@ -S -$(LLVMCC_EMITIR_FLAG)
 
 $(ObjDir)/%.ll: %.cc $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCXX)
 	$(Echo) "Compiling $*.cc for $(BuildMode) build (bytecode)"
-	$(BCCompile.CXX) $< -o $@ -S -emit-llvm
+	$(BCCompile.CXX) $< -o $@ -S -$(LLVMCC_EMITIR_FLAG)
 
 $(ObjDir)/%.ll: %.c $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCC)
 	$(Echo) "Compiling $*.c for $(BuildMode) build (bytecode)"
-	$(BCCompile.C) $< -o $@ -S -emit-llvm
+	$(BCCompile.C) $< -o $@ -S -$(LLVMCC_EMITIR_FLAG)
 
 $(ObjDir)/%.ll: %.m $(ObjDir)/.dir $(BUILT_SOURCES) $(LLVMCC)
 	$(Echo) "Compiling $*.m for $(BuildMode) build (bytecode)"
-	$(BCCompile.C) $< -o $@ -S -emit-llvm
+	$(BCCompile.C) $< -o $@ -S -$(LLVMCC_EMITIR_FLAG)
 
 endif
 

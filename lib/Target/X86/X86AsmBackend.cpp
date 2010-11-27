@@ -18,14 +18,13 @@
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
+#include "llvm/Object/MachOFormat.h"
 #include "llvm/Support/ELF.h"
-#include "llvm/Support/MachO.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegistry.h"
 #include "llvm/Target/TargetAsmBackend.h"
 using namespace llvm;
-
 
 static unsigned getFixupKindLog2Size(unsigned Kind) {
   switch (Kind) {
@@ -48,7 +47,7 @@ namespace {
 class X86AsmBackend : public TargetAsmBackend {
 public:
   X86AsmBackend(const Target &T)
-    : TargetAsmBackend(T) {}
+    : TargetAsmBackend() {}
 
   void ApplyFixup(const MCFixup &Fixup, MCDataFragment &DF,
                   uint64_t Value) const {
@@ -211,10 +210,8 @@ void X86AsmBackend::RelaxInstruction(const MCInst &Inst, MCInst &Res) const {
 /// WriteNopData - Write optimal nops to the output file for the \arg Count
 /// bytes.  This returns the number of bytes written.  It may return 0 if
 /// the \arg Count is more than the maximum optimal nops.
-///
-/// FIXME this is X86 32-bit specific and should move to a better place.
 bool X86AsmBackend::WriteNopData(uint64_t Count, MCObjectWriter *OW) const {
-  static const uint8_t Nops[16][16] = {
+  static const uint8_t Nops[10][10] = {
     // nop
     {0x90},
     // xchg %ax,%ax
@@ -235,30 +232,16 @@ bool X86AsmBackend::WriteNopData(uint64_t Count, MCObjectWriter *OW) const {
     {0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
     // nopw %cs:0L(%[re]ax,%[re]ax,1)
     {0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
-    // nopw %cs:0L(%[re]ax,%[re]ax,1)
-    {0x66, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
-    // nopw 0(%[re]ax,%[re]ax,1)
-    // nopw 0(%[re]ax,%[re]ax,1)
-    {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00,
-     0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00},
-    // nopw 0(%[re]ax,%[re]ax,1)
-    // nopl 0L(%[re]ax) */
-    {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00,
-     0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00},
-    // nopl 0L(%[re]ax)
-    // nopl 0L(%[re]ax)
-    {0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00,
-     0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00},
-    // nopl 0L(%[re]ax)
-    // nopl 0L(%[re]ax,%[re]ax,1)
-    {0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00,
-     0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}
   };
 
   // Write an optimal sequence for the first 15 bytes.
-  uint64_t OptimalCount = (Count < 16) ? Count : 15;
-  for (uint64_t i = 0, e = OptimalCount; i != e; i++)
-    OW->Write8(Nops[OptimalCount - 1][i]);
+  const uint64_t OptimalCount = (Count < 16) ? Count : 15;
+  const uint64_t Prefixes = OptimalCount <= 10 ? 0 : OptimalCount - 10;
+  for (uint64_t i = 0, e = Prefixes; i != e; i++)
+    OW->Write8(0x66);
+  const uint64_t Rest = OptimalCount - Prefixes;
+  for (uint64_t i = 0, e = Rest; i != e; i++)
+    OW->Write8(Nops[Rest - 1][i]);
 
   // Finish with single byte nops.
   for (uint64_t i = OptimalCount, e = Count; i != e; ++i)
@@ -376,8 +359,9 @@ public:
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return createMachObjectWriter(OS, /*Is64Bit=*/false, MachO::CPUTypeI386,
-                                  MachO::CPUSubType_I386_ALL,
+    return createMachObjectWriter(OS, /*Is64Bit=*/false,
+                                  object::mach::CTM_i386,
+                                  object::mach::CSX86_ALL,
                                   /*IsLittleEndian=*/true);
   }
 };
@@ -394,8 +378,9 @@ public:
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return createMachObjectWriter(OS, /*Is64Bit=*/true, MachO::CPUTypeX86_64,
-                                  MachO::CPUSubType_I386_ALL,
+    return createMachObjectWriter(OS, /*Is64Bit=*/true,
+                                  object::mach::CTM_x86_64,
+                                  object::mach::CSX86_ALL,
                                   /*IsLittleEndian=*/true);
   }
 

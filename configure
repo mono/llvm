@@ -773,12 +773,12 @@ HAVE_PTHREAD
 HUGE_VAL_SANITY
 MMAP_FILE
 LLVMCC_EMITIR_FLAG
+LLVMCC_DISABLEOPT_FLAGS
 LLVMCC1
 LLVMCC1PLUS
 LLVMGCCDIR
 LLVMGCC_LANGS
 LLVMGCC_DRAGONEGG
-LLVMGCC_DISABLEOPT_FLAGS
 SHLIBEXT
 SHLIBPATH_VAR
 LLVM_PREFIX
@@ -20586,10 +20586,9 @@ if test "${llvm_cv_llvmgcc_dragonegg+set}" = set; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 else
   llvm_cv_llvmgcc_dragonegg="no"
-if test -x "$LLVMGCC" ; then
+if test -n "$LLVMGCC" ; then
   cp /dev/null conftest.c
-  "$LLVMGCC" -fplugin-arg-dragonegg-emit-ir -S -o - conftest.c | \
-  grep 'target datalayout =' > /dev/null 2>&1
+  $LLVMGCC -fplugin-arg-dragonegg-emit-ir -S -o - conftest.c > /dev/null 2>&1
   if test $? -eq 0 ; then
     llvm_cv_llvmgcc_dragonegg="yes"
   fi
@@ -20601,10 +20600,10 @@ echo "${ECHO_T}$llvm_cv_llvmgcc_dragonegg" >&6; }
 
 if test "$llvm_cv_llvmgcc_dragonegg" = "yes" ; then
   LLVMCC_EMITIR_FLAG="-fplugin-arg-dragonegg-emit-ir"
-  LLVMGCC_DISABLEOPT_FLAGS="-fplugin-arg-dragonegg-disable-llvm-optzns"
+  LLVMCC_DISABLEOPT_FLAGS="-fplugin-arg-dragonegg-disable-llvm-optzns"
 else
   LLVMCC_EMITIR_FLAG="-emit-llvm"
-  LLVMGCC_DISABLEOPT_FLAGS="-mllvm -disable-llvm-optzns"
+  LLVMCC_DISABLEOPT_FLAGS="-mllvm -disable-llvm-optzns"
 fi
 
 
@@ -20615,9 +20614,9 @@ if test "${llvm_cv_llvmgcc_sanity+set}" = set; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 else
   llvm_cv_llvmgcc_sanity="no"
-if test -x "$LLVMGCC" ; then
+if test -n "$LLVMGCC" ; then
   cp /dev/null conftest.c
-  "$LLVMGCC" "$LLVMCC_EMITIR_FLAG" -S -o - conftest.c | \
+  $LLVMGCC "$LLVMCC_EMITIR_FLAG" -S -o - conftest.c | \
       grep 'target datalayout =' > /dev/null 2>&1
   if test $? -eq 0 ; then
     llvm_cv_llvmgcc_sanity="yes"
@@ -20631,16 +20630,16 @@ echo "${ECHO_T}$llvm_cv_llvmgcc_sanity" >&6; }
 if test "$llvm_cv_llvmgcc_sanity" = "yes" ; then
   { echo "$as_me:$LINENO: checking llvm-gcc component support" >&5
 echo $ECHO_N "checking llvm-gcc component support... $ECHO_C" >&6; }
-  llvmcc1path=`"$LLVMGCC" --print-prog-name=cc1`
+  llvmcc1path=`$LLVMGCC --print-prog-name=cc1`
   LLVMCC1=$llvmcc1path
 
-  llvmcc1pluspath=`"$LLVMGCC" --print-prog-name=cc1plus`
+  llvmcc1pluspath=`$LLVMGCC --print-prog-name=cc1plus`
   LLVMCC1PLUS=$llvmcc1pluspath
 
   llvmgccdir=`echo "$llvmcc1path" | sed 's,/libexec/.*,,'`
   LLVMGCCDIR=$llvmgccdir
 
-  llvmgcclangs=`"$LLVMGCC" -v --help 2>&1 | grep '^Configured with:' | sed 's/^.*--enable-languages=\([^ ]*\).*/\1/'`
+  llvmgcclangs=`$LLVMGCC -v --help 2>&1 | grep '^Configured with:' | sed 's/^.*--enable-languages=\([^ ]*\).*/\1/'`
   LLVMGCC_LANGS=$llvmgcclangs
 
   LLVMGCC_DRAGONEGG=$llvm_cv_llvmgcc_dragonegg
@@ -21840,12 +21839,12 @@ HAVE_PTHREAD!$HAVE_PTHREAD$ac_delim
 HUGE_VAL_SANITY!$HUGE_VAL_SANITY$ac_delim
 MMAP_FILE!$MMAP_FILE$ac_delim
 LLVMCC_EMITIR_FLAG!$LLVMCC_EMITIR_FLAG$ac_delim
+LLVMCC_DISABLEOPT_FLAGS!$LLVMCC_DISABLEOPT_FLAGS$ac_delim
 LLVMCC1!$LLVMCC1$ac_delim
 LLVMCC1PLUS!$LLVMCC1PLUS$ac_delim
 LLVMGCCDIR!$LLVMGCCDIR$ac_delim
 LLVMGCC_LANGS!$LLVMGCC_LANGS$ac_delim
 LLVMGCC_DRAGONEGG!$LLVMGCC_DRAGONEGG$ac_delim
-LLVMGCC_DISABLEOPT_FLAGS!$LLVMGCC_DISABLEOPT_FLAGS$ac_delim
 SHLIBEXT!$SHLIBEXT$ac_delim
 SHLIBPATH_VAR!$SHLIBPATH_VAR$ac_delim
 LLVM_PREFIX!$LLVM_PREFIX$ac_delim
