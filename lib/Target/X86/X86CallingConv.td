@@ -419,7 +419,7 @@ def CC_X86_32 : CallingConv<[
 // This is the root argument convention for the X86-64 backend.
 def CC_X86_64 : CallingConv<[
   CCIfCC<"CallingConv::GHC", CCDelegateTo<CC_X86_64_GHC>>,
-  CCIfCC<"CallingConv::Mono1", CCDelegateTo<CC_X86_32_Mono1>>,
+  CCIfCC<"CallingConv::Mono1", CCDelegateTo<CC_X86_64_Mono1>>,
 
   // Mingw64 and native Win64 use Win64 CC
   CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
