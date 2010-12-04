@@ -29,7 +29,6 @@ set(LLVM_LINK_COMPONENTS
   BitReader
   AsmParser
   Core
-  System
   Support
   )
 
@@ -109,7 +108,6 @@ endif()
 add_llvm_unittest(VMCore ${VMCoreSources})
 
 set(LLVM_LINK_COMPONENTS
-  System
   Support
   Core
   )
@@ -122,18 +120,11 @@ add_llvm_unittest(Support
   Support/EndianTest.cpp
   Support/LeakDetectorTest.cpp
   Support/MathExtrasTest.cpp
+  Support/Path.cpp
   Support/raw_ostream_test.cpp
   Support/RegexTest.cpp
   Support/SwapByteOrderTest.cpp
+  Support/TimeValue.cpp
   Support/TypeBuilderTest.cpp
   Support/ValueHandleTest.cpp
-  )
-
-set(LLVM_LINK_COMPONENTS
-  System
-  )
-
-add_llvm_unittest(System
-  System/Path.cpp
-  System/TimeValue.cpp
   )

@@ -18,6 +18,7 @@
 #include "ARMAddressingModes.h"
 #include "ARMConstantPoolValue.h"
 #include "InstPrinter/ARMInstPrinter.h"
+#include "ARMAsmPrinter.h"
 #include "ARMMachineFunctionInfo.h"
 #include "ARMTargetMachine.h"
 #include "ARMTargetObjectFile.h"
@@ -26,7 +27,6 @@
 #include "llvm/Module.h"
 #include "llvm/Type.h"
 #include "llvm/Assembly/Writer.h"
-#include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
@@ -53,15 +53,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cctype>
 using namespace llvm;
-
-namespace llvm {
-  namespace ARM {
-    enum DW_ISA {
-      DW_ISA_ARM_thumb = 1,
-      DW_ISA_ARM_arm = 2
-    };
-  }
-}
 
 namespace {
 
@@ -144,91 +135,20 @@ namespace {
     }
   };
 
-  class ARMAsmPrinter : public AsmPrinter {
-
-    /// Subtarget - Keep a pointer to the ARMSubtarget around so that we can
-    /// make the right decision when printing asm code for different targets.
-    const ARMSubtarget *Subtarget;
-
-    /// AFI - Keep a pointer to ARMFunctionInfo for the current
-    /// MachineFunction.
-    ARMFunctionInfo *AFI;
-
-    /// MCP - Keep a pointer to constantpool entries of the current
-    /// MachineFunction.
-    const MachineConstantPool *MCP;
-
-  public:
-    explicit ARMAsmPrinter(TargetMachine &TM, MCStreamer &Streamer)
-      : AsmPrinter(TM, Streamer), AFI(NULL), MCP(NULL) {
-      Subtarget = &TM.getSubtarget<ARMSubtarget>();
-    }
-
-    virtual const char *getPassName() const {
-      return "ARM Assembly Printer";
-    }
-
-    void printOperand(const MachineInstr *MI, int OpNum, raw_ostream &O,
-                      const char *Modifier = 0);
-
-    virtual bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNum,
-                                 unsigned AsmVariant, const char *ExtraCode,
-                                 raw_ostream &O);
-    virtual bool PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNum,
-                                       unsigned AsmVariant,
-                                       const char *ExtraCode, raw_ostream &O);
-
-    void EmitJumpTable(const MachineInstr *MI);
-    void EmitJump2Table(const MachineInstr *MI);
-    virtual void EmitInstruction(const MachineInstr *MI);
-    bool runOnMachineFunction(MachineFunction &F);
-
-    virtual void EmitConstantPool() {} // we emit constant pools customly!
-    virtual void EmitFunctionEntryLabel();
-    void EmitStartOfAsmFile(Module &M);
-    void EmitEndOfAsmFile(Module &M);
-
-  private:
-    // Helpers for EmitStartOfAsmFile() and EmitEndOfAsmFile()
-    void emitAttributes();
-
-    // Helper for ELF .o only
-    void emitARMAttributeSection();
-
-  public:
-    void PrintDebugValueComment(const MachineInstr *MI, raw_ostream &OS);
-
-    MachineLocation getDebugValueLocation(const MachineInstr *MI) const {
-      MachineLocation Location;
-      assert(MI->getNumOperands() == 4 && "Invalid no. of machine operands!");
-      // Frame address.  Currently handles register +- offset only.
-      if (MI->getOperand(0).isReg() && MI->getOperand(1).isImm())
-        Location.set(MI->getOperand(0).getReg(), MI->getOperand(1).getImm());
-      else {
-        DEBUG(dbgs() << "DBG_VALUE instruction ignored! " << *MI << "\n");
-      }
-      return Location;
-    }
-
-    virtual unsigned getISAEncoding() {
-      // ARM/Darwin adds ISA to the DWARF info for each function.
-      if (!Subtarget->isTargetDarwin())
-        return 0;
-      return Subtarget->isThumb() ?
-        llvm::ARM::DW_ISA_ARM_thumb : llvm::ARM::DW_ISA_ARM_arm;
-    }
-
-    MCSymbol *GetARMSetPICJumpTableLabel2(unsigned uid, unsigned uid2,
-                                          const MachineBasicBlock *MBB) const;
-    MCSymbol *GetARMJTIPICJumpTableLabel2(unsigned uid, unsigned uid2) const;
-
-    MCSymbol *GetARMSJLJEHLabel(void) const;
-
-    /// EmitMachineConstantPoolValue - Print a machine constantpool value to
-    /// the .s file.
-    virtual void EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV);
-  };
 } // end of anonymous namespace
+
+MachineLocation ARMAsmPrinter::
+getDebugValueLocation(const MachineInstr *MI) const {
+  MachineLocation Location;
+  assert(MI->getNumOperands() == 4 && "Invalid no. of machine operands!");
+  // Frame address.  Currently handles register +- offset only.
+  if (MI->getOperand(0).isReg() && MI->getOperand(1).isImm())
+    Location.set(MI->getOperand(0).getReg(), MI->getOperand(1).getImm());
+  else {
+    DEBUG(dbgs() << "DBG_VALUE instruction ignored! " << *MI << "\n");
+  }
+  return Location;
+}
 
 void ARMAsmPrinter::EmitFunctionEntryLabel() {
   if (AFI->isThumbFunction()) {
@@ -761,9 +681,9 @@ void ARMAsmPrinter::EmitJump2Table(const MachineInstr *MI) {
   const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
   const std::vector<MachineBasicBlock*> &JTBBs = JT[JTI].MBBs;
   unsigned OffsetWidth = 4;
-  if (MI->getOpcode() == ARM::t2TBB)
+  if (MI->getOpcode() == ARM::t2TBB_JT)
     OffsetWidth = 1;
-  else if (MI->getOpcode() == ARM::t2TBH)
+  else if (MI->getOpcode() == ARM::t2TBH_JT)
     OffsetWidth = 2;
 
   for (unsigned i = 0, e = JTBBs.size(); i != e; ++i) {
@@ -795,11 +715,6 @@ void ARMAsmPrinter::EmitJump2Table(const MachineInstr *MI) {
                                    OutContext);
     OutStreamer.EmitValue(Expr, OffsetWidth);
   }
-
-  // Make sure the instruction that follows TBB is 2-byte aligned.
-  // FIXME: Constant island pass should insert an "ALIGN" instruction instead.
-  if (MI->getOpcode() == ARM::t2TBB)
-    EmitAlignment(1);
 }
 
 void ARMAsmPrinter::PrintDebugValueComment(const MachineInstr *MI,
@@ -829,6 +744,100 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
       raw_svector_ostream OS(TmpStr);
       PrintDebugValueComment(MI, OS);
       OutStreamer.EmitRawText(StringRef(OS.str()));
+    }
+    return;
+  }
+  case ARM::LEApcrel: {
+    // FIXME: Need to also handle globals and externals
+    assert (MI->getOperand(1).isCPI());
+    unsigned LabelId = MI->getOperand(1).getIndex();
+    MCSymbol *Sym = GetCPISymbol(LabelId);
+    const MCExpr *SymbolExpr = MCSymbolRefExpr::Create(Sym, OutContext);
+    MCInst TmpInst;
+    TmpInst.setOpcode(ARM::ADR);
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    TmpInst.addOperand(MCOperand::CreateExpr(SymbolExpr));
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  case ARM::LEApcrelJT: {
+    unsigned JTI = MI->getOperand(1).getIndex();
+    unsigned Id = MI->getOperand(2).getImm();
+    MCSymbol *JTISymbol = GetARMJTIPICJumpTableLabel2(JTI, Id);
+    const MCExpr *SymbolExpr = MCSymbolRefExpr::Create(JTISymbol, OutContext);
+    MCInst TmpInst;
+    TmpInst.setOpcode(ARM::ADR);
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    TmpInst.addOperand(MCOperand::CreateExpr(SymbolExpr));
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  case ARM::MOVPCRX: {
+    MCInst TmpInst;
+    TmpInst.setOpcode(ARM::MOVr);
+    TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    // Add 's' bit operand (always reg0 for this)
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  case ARM::BXr9_CALL:
+  case ARM::BX_CALL: {
+    {
+      MCInst TmpInst;
+      TmpInst.setOpcode(ARM::MOVr);
+      TmpInst.addOperand(MCOperand::CreateReg(ARM::LR));
+      TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+      // Add predicate operands.
+      TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+      TmpInst.addOperand(MCOperand::CreateReg(0));
+      // Add 's' bit operand (always reg0 for this)
+      TmpInst.addOperand(MCOperand::CreateReg(0));
+      OutStreamer.EmitInstruction(TmpInst);
+    }
+    {
+      MCInst TmpInst;
+      TmpInst.setOpcode(ARM::BX);
+      TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+      OutStreamer.EmitInstruction(TmpInst);
+    }
+    return;
+  }
+  case ARM::BMOVPCRXr9_CALL:
+  case ARM::BMOVPCRX_CALL: {
+    {
+      MCInst TmpInst;
+      TmpInst.setOpcode(ARM::MOVr);
+      TmpInst.addOperand(MCOperand::CreateReg(ARM::LR));
+      TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+      // Add predicate operands.
+      TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+      TmpInst.addOperand(MCOperand::CreateReg(0));
+      // Add 's' bit operand (always reg0 for this)
+      TmpInst.addOperand(MCOperand::CreateReg(0));
+      OutStreamer.EmitInstruction(TmpInst);
+    }
+    {
+      MCInst TmpInst;
+      TmpInst.setOpcode(ARM::MOVr);
+      TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+      TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+      // Add predicate operands.
+      TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+      TmpInst.addOperand(MCOperand::CreateReg(0));
+      // Add 's' bit operand (always reg0 for this)
+      TmpInst.addOperand(MCOperand::CreateReg(0));
+      OutStreamer.EmitInstruction(TmpInst);
     }
     return;
   }
@@ -945,44 +954,118 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
 
     return;
   }
-  case ARM::t2TBB:
-  case ARM::t2TBH:
   case ARM::t2BR_JT: {
     // Lower and emit the instruction itself, then the jump table following it.
     MCInst TmpInst;
-    // FIXME: The branch instruction is really a pseudo. We should xform it
-    // explicitly.
-    LowerARMMachineInstrToMCInst(MI, TmpInst, *this);
+    TmpInst.setOpcode(ARM::tMOVgpr2gpr);
+    TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
     OutStreamer.EmitInstruction(TmpInst);
+    // Output the data for the jump table itself
+    EmitJump2Table(MI);
+    return;
+  }
+  case ARM::t2TBB_JT: {
+    // Lower and emit the instruction itself, then the jump table following it.
+    MCInst TmpInst;
+
+    TmpInst.setOpcode(ARM::t2TBB);
+    TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
+    // Output the data for the jump table itself
+    EmitJump2Table(MI);
+    // Make sure the next instruction is 2-byte aligned.
+    EmitAlignment(1);
+    return;
+  }
+  case ARM::t2TBH_JT: {
+    // Lower and emit the instruction itself, then the jump table following it.
+    MCInst TmpInst;
+
+    TmpInst.setOpcode(ARM::t2TBH);
+    TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
+    // Output the data for the jump table itself
     EmitJump2Table(MI);
     return;
   }
   case ARM::tBR_JTr:
-  case ARM::BR_JTr:
+  case ARM::BR_JTr: {
+    // Lower and emit the instruction itself, then the jump table following it.
+    // mov pc, target
+    MCInst TmpInst;
+    unsigned Opc = MI->getOpcode() == ARM::BR_JTr ?
+      ARM::MOVr : ARM::tMOVgpr2gpr;
+    TmpInst.setOpcode(Opc);
+    TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    // Add 's' bit operand (always reg0 for this)
+    if (Opc == ARM::MOVr)
+      TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
+
+    // Make sure the Thumb jump table is 4-byte aligned.
+    if (Opc == ARM::tMOVr)
+      EmitAlignment(2);
+
+    // Output the data for the jump table itself
+    EmitJumpTable(MI);
+    return;
+  }
   case ARM::BR_JTm: {
     // Lower and emit the instruction itself, then the jump table following it.
+    // ldr pc, target
     MCInst TmpInst;
-    // FIXME: The branch instruction is really a pseudo. We should xform it
-    // explicitly.
-    LowerARMMachineInstrToMCInst(MI, TmpInst, *this);
+    if (MI->getOperand(1).getReg() == 0) {
+      // literal offset
+      TmpInst.setOpcode(ARM::LDRi12);
+      TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+      TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+      TmpInst.addOperand(MCOperand::CreateImm(MI->getOperand(2).getImm()));
+    } else {
+      TmpInst.setOpcode(ARM::LDRrs);
+      TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+      TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+      TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(1).getReg()));
+      TmpInst.addOperand(MCOperand::CreateImm(0));
+    }
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
     OutStreamer.EmitInstruction(TmpInst);
+
+    // Output the data for the jump table itself
     EmitJumpTable(MI);
     return;
   }
   case ARM::BR_JTadd: {
     // Lower and emit the instruction itself, then the jump table following it.
     // add pc, target, idx
-    MCInst AddInst;
-    AddInst.setOpcode(ARM::ADDrr);
-    AddInst.addOperand(MCOperand::CreateReg(ARM::PC));
-    AddInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
-    AddInst.addOperand(MCOperand::CreateReg(MI->getOperand(1).getReg()));
+    MCInst TmpInst;
+    TmpInst.setOpcode(ARM::ADDrr);
+    TmpInst.addOperand(MCOperand::CreateReg(ARM::PC));
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(1).getReg()));
     // Add predicate operands.
-    AddInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
-    AddInst.addOperand(MCOperand::CreateReg(0));
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
     // Add 's' bit operand (always reg0 for this)
-    AddInst.addOperand(MCOperand::CreateReg(0));
-    OutStreamer.EmitInstruction(AddInst);
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
 
     // Output the data for the jump table itself
     EmitJumpTable(MI);
@@ -1215,7 +1298,7 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     {
       MCInst TmpInst;
-      TmpInst.setOpcode(ARM::BRIND);
+      TmpInst.setOpcode(ARM::BX);
       TmpInst.addOperand(MCOperand::CreateReg(ScratchReg));
       // Predicate.
       TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));

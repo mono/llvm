@@ -1248,13 +1248,7 @@ static bool DisassembleThumb2LdStDual(MCInst &MI, unsigned Opcode,
   return true;
 }
 
-// PC-based defined for Codegen, which do not get decoded by design:
-//
-// t2TBB, t2TBH: Rm immDontCare immDontCare
-//
-// Generic version defined for disassembly:
-//
-// t2TBBgen, t2TBHgen: Rn Rm Pred-Imm Pred-CCR
+// t2TBB, t2TBH: Rn Rm Pred-Imm Pred-CCR
 static bool DisassembleThumb2TB(MCInst &MI, unsigned Opcode,
     uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
@@ -1717,11 +1711,11 @@ static inline bool Thumb2PreloadOpcode(unsigned Opcode) {
   switch (Opcode) {
   default:
     return false;
-  case ARM::t2PLDi12:   case ARM::t2PLDi8:   case ARM::t2PLDpci:
+  case ARM::t2PLDi12:   case ARM::t2PLDi8:
   case ARM::t2PLDs:
-  case ARM::t2PLDWi12:  case ARM::t2PLDWi8:  case ARM::t2PLDWpci:
+  case ARM::t2PLDWi12:  case ARM::t2PLDWi8:
   case ARM::t2PLDWs:
-  case ARM::t2PLIi12:   case ARM::t2PLIi8:   case ARM::t2PLIpci:
+  case ARM::t2PLIi12:   case ARM::t2PLIi8:
   case ARM::t2PLIs:
     return true;
   }
@@ -1758,8 +1752,7 @@ static bool DisassembleThumb2PreLoad(MCInst &MI, unsigned Opcode, uint32_t insn,
            && !OpInfo[OpIdx].isOptionalDef()
            && "Pure imm operand expected");
     int Offset = 0;
-    if (Opcode == ARM::t2PLDpci || Opcode == ARM::t2PLDWpci ||
-             Opcode == ARM::t2PLIpci) {
+    if (slice(insn, 19, 16) == 0xFF) {
       bool Negative = slice(insn, 23, 23) == 0;
       unsigned Imm12 = getImm12(insn);
       Offset = Negative ? -1 - Imm12 : 1 * Imm12;      
@@ -2125,7 +2118,7 @@ static bool DisassembleThumb2(uint16_t op1, uint16_t op2, uint16_t op,
         return DisassembleThumb2LdStDual(MI, Opcode, insn, NumOps, NumOpsAdded,
                                          B);
       }
-      if (Opcode == ARM::t2TBBgen || Opcode == ARM::t2TBHgen) {
+      if (Opcode == ARM::t2TBB || Opcode == ARM::t2TBH) {
         // Table branch.
         return DisassembleThumb2TB(MI, Opcode, insn, NumOps, NumOpsAdded, B);
       }

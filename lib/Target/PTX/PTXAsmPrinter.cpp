@@ -27,11 +27,20 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetRegistry.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
+
+static cl::opt<std::string>
+OptPTXVersion("ptx-version", cl::desc("Set PTX version"),
+           cl::init("1.4"));
+
+static cl::opt<std::string>
+OptPTXTarget("ptx-target", cl::desc("Set GPU target (comma-separated list)"),
+           cl::init("sm_10"));
 
 namespace {
 class PTXAsmPrinter : public AsmPrinter {
@@ -41,6 +50,8 @@ public:
 
   const char *getPassName() const { return "PTX Assembly Printer"; }
 
+  virtual void EmitStartOfAsmFile(Module &M);
+
   virtual bool runOnMachineFunction(MachineFunction &MF);
 
   virtual void EmitFunctionBodyStart();
@@ -49,6 +60,8 @@ public:
   virtual void EmitInstruction(const MachineInstr *MI);
 
   void printOperand(const MachineInstr *MI, int opNum, raw_ostream &OS);
+  void printMemOperand(const MachineInstr *MI, int opNum, raw_ostream &OS,
+                       const char *Modifier = 0);
 
   // autogen'd.
   void printInstruction(const MachineInstr *MI, raw_ostream &OS);
@@ -61,7 +74,7 @@ private:
 
 static const char PARAM_PREFIX[] = "__param_";
 
-static const char *getRegisterTypeName(unsigned RegNo){
+static const char *getRegisterTypeName(unsigned RegNo) {
 #define TEST_REGCLS(cls, clsstr) \
   if (PTX::cls ## RegisterClass->contains(RegNo)) return # clsstr;
   TEST_REGCLS(RRegs32, s32);
@@ -72,8 +85,7 @@ static const char *getRegisterTypeName(unsigned RegNo){
   return NULL;
 }
 
-static const char *getInstructionTypeName(const MachineInstr *MI)
-{
+static const char *getInstructionTypeName(const MachineInstr *MI) {
   for (int i = 0, e = MI->getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = MI->getOperand(i);
     if (MO.getType() == MachineOperand::MO_Register)
@@ -82,6 +94,13 @@ static const char *getInstructionTypeName(const MachineInstr *MI)
 
   llvm_unreachable("No reg operand found in instruction!");
   return NULL;
+}
+
+void PTXAsmPrinter::EmitStartOfAsmFile(Module &M)
+{
+  OutStreamer.EmitRawText(Twine("\t.version " + OptPTXVersion));
+  OutStreamer.EmitRawText(Twine("\t.target " + OptPTXTarget));
+  OutStreamer.AddBlankLine();
 }
 
 bool PTXAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
@@ -111,21 +130,22 @@ void PTXAsmPrinter::EmitFunctionBodyStart() {
 }
 
 void PTXAsmPrinter::EmitInstruction(const MachineInstr *MI) {
-  SmallString<128> sstr;
-  raw_svector_ostream OS(sstr);
+  std::string str;
+  str.reserve(64);
+
+  // Write instruction to str
+  raw_string_ostream OS(str);
   printInstruction(MI, OS);
   OS << ';';
+  OS.flush();
 
   // Replace "%type" if found
-  StringRef strref = OS.str();
   size_t pos;
-  if ((pos = strref.find("%type")) == StringRef::npos) {
-    OutStreamer.EmitRawText(strref);
-    return;
-  }
-  std::string str = strref;
-  str.replace(pos, /*strlen("%type")==*/5, getInstructionTypeName(MI));
-  OutStreamer.EmitRawText(StringRef(str));
+  if ((pos = str.find("%type")) != std::string::npos)
+    str.replace(pos, /*strlen("%type")==*/5, getInstructionTypeName(MI));
+
+  StringRef strref = StringRef(str);
+  OutStreamer.EmitRawText(strref);
 }
 
 void PTXAsmPrinter::printOperand(const MachineInstr *MI, int opNum,
@@ -143,6 +163,17 @@ void PTXAsmPrinter::printOperand(const MachineInstr *MI, int opNum,
       OS << (int) MO.getImm();
       break;
   }
+}
+
+void PTXAsmPrinter::printMemOperand(const MachineInstr *MI, int opNum,
+                                    raw_ostream &OS, const char *Modifier) {
+  printOperand(MI, opNum, OS);
+
+  if (MI->getOperand(opNum+1).isImm() && MI->getOperand(opNum+1).getImm() == 0)
+    return; // don't print "+0"
+
+  OS << "+";
+  printOperand(MI, opNum+1, OS);
 }
 
 void PTXAsmPrinter::EmitFunctionDeclaration() {

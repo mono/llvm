@@ -336,8 +336,7 @@ bool MCAssembler::EvaluateFixup(const MCObjectWriter &Writer,
   return IsResolved;
 }
 
-uint64_t MCAssembler::ComputeFragmentSize(MCAsmLayout &Layout,
-                                          const MCFragment &F,
+uint64_t MCAssembler::ComputeFragmentSize(const MCFragment &F,
                                           uint64_t SectionAddress,
                                           uint64_t FragmentOffset) const {
   switch (F.getKind()) {
@@ -410,7 +409,7 @@ void MCAsmLayout::LayoutFragment(MCFragment *F) {
 
   // Compute fragment offset and size.
   F->Offset = Address - StartAddress;
-  F->EffectiveSize = getAssembler().ComputeFragmentSize(*this, *F, StartAddress,
+  F->EffectiveSize = getAssembler().ComputeFragmentSize(*F, StartAddress,
                                                         F->Offset);
   LastValidFragment = F;
 
@@ -617,26 +616,6 @@ void MCAssembler::WriteSectionData(const MCSectionData *SD,
     WriteFragmentData(*this, Layout, *it, OW);
 
   assert(OW->getStream().tell() - Start == Layout.getSectionFileSize(SD));
-}
-
-void MCAssembler::AddSectionToTheEnd(const MCObjectWriter &Writer,
-                                     MCSectionData &SD, MCAsmLayout &Layout) {
-  // Create dummy fragments and assign section ordinals.
-  unsigned SectionIndex = size();
-  SD.setOrdinal(SectionIndex);
-
-  // Assign layout order indices to sections and fragments.
-  const MCFragment &Last = *Layout.getSectionOrder().back()->rbegin();
-  unsigned FragmentIndex = Last.getLayoutOrder() + 1;
-
-  SD.setLayoutOrder(Layout.getSectionOrder().size());
-  for (MCSectionData::iterator it2 = SD.begin(),
-         ie2 = SD.end(); it2 != ie2; ++it2) {
-    it2->setLayoutOrder(FragmentIndex++);
-  }
-  Layout.getSectionOrder().push_back(&SD);
-
-  Layout.LayoutSection(&SD);
 }
 
 void MCAssembler::Finish(MCObjectWriter *Writer) {

@@ -197,128 +197,6 @@ ARMBaseInstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
   return NewMIs[0];
 }
 
-void
-ARMBaseInstrInfo::emitPushInst(MachineBasicBlock &MBB, 
-                MachineBasicBlock::iterator MI,
-                const std::vector<CalleeSavedInfo> &CSI, unsigned Opc,
-                bool(*Func)(unsigned, bool)) const {
-  MachineFunction &MF = *MBB.getParent();
-  DebugLoc DL;
-  if (MI != MBB.end()) DL = MI->getDebugLoc();
-
-  MachineInstrBuilder MIB = BuildMI(MF, DL, get(Opc));
-  MIB.addReg(ARM::SP, getDefRegState(true));
-  MIB.addReg(ARM::SP);
-  AddDefaultPred(MIB);
-  bool NumRegs = false;
-  for (unsigned i = CSI.size(); i != 0; --i) {
-    unsigned Reg = CSI[i-1].getReg();
-    if (!(Func)(Reg, Subtarget.isTargetDarwin())) continue;
-    
-    // Add the callee-saved register as live-in unless it's LR and
-    // @llvm.returnaddress is called. If LR is returned for @llvm.returnaddress
-    // then it's already added to the function and entry block live-in sets.
-    bool isKill = true;
-    if (Reg == ARM::LR) {
-      if (MF.getFrameInfo()->isReturnAddressTaken() &&
-          MF.getRegInfo().isLiveIn(Reg))
-        isKill = false;
-    }
-
-    if (isKill)
-      MBB.addLiveIn(Reg);
-    
-    NumRegs = true;
-    MIB.addReg(Reg, getKillRegState(isKill));
-  }
-  
-  // It's illegal to emit push instruction without operands.
-  if (NumRegs)
-    MBB.insert(MI, &*MIB);
-  else
-    MF.DeleteMachineInstr(MIB);        
-}
-
-bool
-ARMBaseInstrInfo::spillCalleeSavedRegisters(MachineBasicBlock &MBB,
-                                        MachineBasicBlock::iterator MI,
-                                        const std::vector<CalleeSavedInfo> &CSI,
-                                        const TargetRegisterInfo *TRI) const {
-  if (CSI.empty())
-    return false;
-
-  MachineFunction &MF = *MBB.getParent();
-  ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
-  DebugLoc DL = MI->getDebugLoc();
-  
-  unsigned PushOpc = AFI->isThumbFunction() ? ARM::t2STMDB_UPD : ARM::STMDB_UPD;
-  unsigned FltOpc = ARM::VSTMDDB_UPD;
-  emitPushInst(MBB, MI, CSI, PushOpc, &isARMArea1Register);
-  emitPushInst(MBB, MI, CSI, PushOpc, &isARMArea2Register);
-  emitPushInst(MBB, MI, CSI, FltOpc, &isARMArea3Register);
-
-  return true;
-}
-
-void
-ARMBaseInstrInfo::emitPopInst(MachineBasicBlock &MBB, 
-                MachineBasicBlock::iterator MI,
-                const std::vector<CalleeSavedInfo> &CSI, unsigned Opc,
-                bool isVarArg, bool(*Func)(unsigned, bool)) const {
-  
-  MachineFunction &MF = *MBB.getParent();
-  ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
-  DebugLoc DL = MI->getDebugLoc();
-  
-  MachineInstrBuilder MIB = BuildMI(MF, DL, get(Opc));
-  MIB.addReg(ARM::SP, getDefRegState(true));
-  MIB.addReg(ARM::SP);
-  AddDefaultPred(MIB);
-  bool NumRegs = false;
-  for (unsigned i = CSI.size(); i != 0; --i) {
-    unsigned Reg = CSI[i-1].getReg();
-    if (!(Func)(Reg, Subtarget.isTargetDarwin())) continue;
-
-    if (Reg == ARM::LR && !isVarArg) {
-      Reg = ARM::PC;
-      unsigned Opc = AFI->isThumbFunction() ? ARM::t2LDMIA_RET : ARM::LDMIA_RET;
-      (*MIB).setDesc(get(Opc));
-      MI = MBB.erase(MI);
-    }
-
-    MIB.addReg(Reg, RegState::Define);
-    NumRegs = true;
-  }
-    
-  // It's illegal to emit pop instruction without operands.
-  if (NumRegs)
-    MBB.insert(MI, &*MIB);
-  else
-    MF.DeleteMachineInstr(MIB);
-}
-
-bool
-ARMBaseInstrInfo::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
-                                        MachineBasicBlock::iterator MI,
-                                        const std::vector<CalleeSavedInfo> &CSI,
-                                        const TargetRegisterInfo *TRI) const {
-  if (CSI.empty())
-    return false;
-  
-  MachineFunction &MF = *MBB.getParent();
-  ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
-  bool isVarArg = AFI->getVarArgsRegSaveSize() > 0;
-  DebugLoc DL = MI->getDebugLoc();
-  
-  unsigned PopOpc = AFI->isThumbFunction() ? ARM::t2LDMIA_UPD : ARM::LDMIA_UPD;
-  unsigned FltOpc = ARM::VLDMDIA_UPD;
-  emitPopInst(MBB, MI, CSI, FltOpc, isVarArg, &isARMArea3Register);
-  emitPopInst(MBB, MI, CSI, PopOpc, isVarArg, &isARMArea2Register);
-  emitPopInst(MBB, MI, CSI, PopOpc, isVarArg, &isARMArea1Register);
-
-  return true;
-}
-
 
 // Branch analysis.
 bool
@@ -640,13 +518,13 @@ unsigned ARMBaseInstrInfo::GetInstSizeInBytes(const MachineInstr *MI) const {
     case ARM::BR_JTadd:
     case ARM::tBR_JTr:
     case ARM::t2BR_JT:
-    case ARM::t2TBB:
-    case ARM::t2TBH: {
+    case ARM::t2TBB_JT:
+    case ARM::t2TBH_JT: {
       // These are jumptable branches, i.e. a branch followed by an inlined
       // jumptable. The size is 4 + 4 * number of entries. For TBB, each
       // entry is one byte; TBH two byte each.
-      unsigned EntrySize = (Opc == ARM::t2TBB)
-        ? 1 : ((Opc == ARM::t2TBH) ? 2 : 4);
+      unsigned EntrySize = (Opc == ARM::t2TBB_JT)
+        ? 1 : ((Opc == ARM::t2TBH_JT) ? 2 : 4);
       unsigned NumOps = TID.getNumOperands();
       MachineOperand JTOP =
         MI->getOperand(NumOps - (TID.isPredicable() ? 3 : 2));
@@ -664,7 +542,7 @@ unsigned ARMBaseInstrInfo::GetInstSizeInBytes(const MachineInstr *MI) const {
       // alignment issue.
       unsigned InstSize = (Opc == ARM::tBR_JTr || Opc == ARM::t2BR_JT) ? 2 : 4;
       unsigned NumEntries = getNumJTEntries(JT, JTI);
-      if (Opc == ARM::t2TBB && (NumEntries & 1))
+      if (Opc == ARM::t2TBB_JT && (NumEntries & 1))
         // Make sure the instruction that follows TBB is 2-byte aligned.
         // FIXME: Constant island pass should insert an "ALIGN" instruction
         // instead.

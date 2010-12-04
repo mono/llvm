@@ -244,8 +244,7 @@ let Defs = [EAX, ECX, EDX, FP0, FP1, FP2, FP3, FP4, FP5, FP6, ST0,
             XMM8, XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15, EFLAGS],
     Uses = [ESP] in
 def TLS_addr32 : I<0, Pseudo, (outs), (ins i32mem:$sym),
-                  "leal\t$sym, %eax; "
-                  "call\t___tls_get_addr@PLT",
+                  "# TLS_addr32",
                   [(X86tlsaddr tls32addr:$sym)]>,
                   Requires<[In32BitMode]>;
 
@@ -259,11 +258,7 @@ let Defs = [RAX, RCX, RDX, RSI, RDI, R8, R9, R10, R11,
             XMM8, XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15, EFLAGS],
     Uses = [RSP] in
 def TLS_addr64 : I<0, Pseudo, (outs), (ins i64mem:$sym),
-                   ".byte\t0x66; "
-                   "leaq\t$sym(%rip), %rdi; "
-                   ".word\t0x6666; "
-                   "rex64; "
-                   "call\t__tls_get_addr@PLT",
+                   "# TLS_addr64",
                   [(X86tlsaddr tls64addr:$sym)]>,
                   Requires<[In64BitMode]>;
 

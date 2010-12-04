@@ -68,14 +68,10 @@ public:
   virtual void EmitTBSSSymbol(const MCSection *Section, MCSymbol *Symbol,
                               uint64_t Size, unsigned ByteAlignment);
   virtual void EmitBytes(StringRef Data, unsigned AddrSpace);
-  virtual void EmitValue(const MCExpr *Value, unsigned Size,
-                         unsigned AddrSpace);
-  virtual void EmitGPRel32Value(const MCExpr *Value);
   virtual void EmitValueToAlignment(unsigned ByteAlignment, int64_t Value,
                                    unsigned ValueSize, unsigned MaxBytesToEmit);
   virtual void EmitCodeAlignment(unsigned ByteAlignment,
                                  unsigned MaxBytesToEmit);
-  virtual void EmitValueToOffset(const MCExpr *Offset, unsigned char Value);
   virtual void EmitFileDirective(StringRef Filename);
   virtual void EmitInstruction(const MCInst &Instruction);
   virtual void Finish();
@@ -177,25 +173,8 @@ void WinCOFFStreamer::InitSections() {
 }
 
 void WinCOFFStreamer::EmitLabel(MCSymbol *Symbol) {
-  // TODO: This is copied almost exactly from the MachOStreamer. Consider
-  // merging into MCObjectStreamer?
   assert(Symbol->isUndefined() && "Cannot define a symbol twice!");
-  assert(!Symbol->isVariable() && "Cannot emit a variable symbol!");
-  assert(CurSection && "Cannot emit before setting section!");
-
-  Symbol->setSection(*CurSection);
-
-  MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
-
-  // FIXME: This is wasteful, we don't necessarily need to create a data
-  // fragment. Instead, we should mark the symbol as pointing into the data
-  // fragment if it exists, otherwise we should just queue the label and set its
-  // fragment pointer when we emit the next fragment.
-  MCDataFragment *DF = getOrCreateDataFragment();
-
-  assert(!SD.getFragment() && "Unexpected fragment on symbol data!");
-  SD.setFragment(DF);
-  SD.setOffset(DF->getContents().size());
+  MCObjectStreamer::EmitLabel(Symbol);
 }
 
 void WinCOFFStreamer::EmitAssemblerFlag(MCAssemblerFlag Flag) {
@@ -346,32 +325,6 @@ void WinCOFFStreamer::EmitBytes(StringRef Data, unsigned AddrSpace) {
   getOrCreateDataFragment()->getContents().append(Data.begin(), Data.end());
 }
 
-void WinCOFFStreamer::EmitValue(const MCExpr *Value, unsigned Size,
-                                unsigned AddrSpace) {
-  assert(AddrSpace == 0 && "Address space must be 0!");
-
-  // TODO: This is copied exactly from the MachOStreamer. Consider merging into
-  // MCObjectStreamer?
-  MCDataFragment *DF = getOrCreateDataFragment();
-
-  // Avoid fixups when possible.
-  int64_t AbsValue;
-  if (AddValueSymbols(Value)->EvaluateAsAbsolute(AbsValue)) {
-    // FIXME: Endianness assumption.
-    for (unsigned i = 0; i != Size; ++i)
-      DF->getContents().push_back(uint8_t(AbsValue >> (i * 8)));
-  } else {
-    DF->addFixup(MCFixup::Create(DF->getContents().size(),
-                                 AddValueSymbols(Value),
-                                 MCFixup::getKindForSize(Size)));
-    DF->getContents().resize(DF->getContents().size() + Size, 0);
-  }
-}
-
-void WinCOFFStreamer::EmitGPRel32Value(const MCExpr *Value) {
-  llvm_unreachable("not implemented");
-}
-
 void WinCOFFStreamer::EmitValueToAlignment(unsigned ByteAlignment,
                                            int64_t Value,
                                            unsigned ValueSize,
@@ -401,11 +354,6 @@ void WinCOFFStreamer::EmitCodeAlignment(unsigned ByteAlignment,
   // Update the maximum alignment on the current section if necessary.
   if (ByteAlignment > getCurrentSectionData()->getAlignment())
     getCurrentSectionData()->setAlignment(ByteAlignment);
-}
-
-void WinCOFFStreamer::EmitValueToOffset(const MCExpr *Offset,
-                                        unsigned char Value) {
-  llvm_unreachable("not implemented");
 }
 
 void WinCOFFStreamer::EmitFileDirective(StringRef Filename) {

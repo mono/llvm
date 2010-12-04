@@ -67,6 +67,8 @@ void ARMInstPrinter::printInst(const MCInst *MI, raw_ostream &O) {
       MI->getOperand(0).getReg() == ARM::SP) {
     O << '\t' << "push";
     printPredicateOperand(MI, 2, O);
+    if (Opcode == ARM::t2STMDB_UPD)
+      O << ".w";
     O << '\t';
     printRegisterList(MI, 4, O);
     return;
@@ -77,6 +79,8 @@ void ARMInstPrinter::printInst(const MCInst *MI, raw_ostream &O) {
       MI->getOperand(0).getReg() == ARM::SP) {
     O << '\t' << "pop";
     printPredicateOperand(MI, 2, O);
+    if (Opcode == ARM::t2LDMIA_UPD)
+      O << ".w";
     O << '\t';
     printRegisterList(MI, 4, O);
     return;
@@ -526,14 +530,6 @@ void ARMInstPrinter::printThumbAddrModeSPOperand(const MCInst *MI, unsigned Op,
   if (unsigned ImmOffs = MO2.getImm())
     O << ", #" << ImmOffs*4;
   O << "]";
-}
-
-void ARMInstPrinter::printTBAddrMode(const MCInst *MI, unsigned OpNum,
-                                     raw_ostream &O) {
-  O << "[pc, " << getRegisterName(MI->getOperand(OpNum).getReg());
-  if (MI->getOpcode() == ARM::t2TBH)
-    O << ", lsl #1";
-  O << ']';
 }
 
 // Constant shifts t2_so_reg is a 2-operand unit corresponding to the Thumb2

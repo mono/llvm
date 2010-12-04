@@ -319,7 +319,7 @@ AC_SUBST(LINKALL,$llvm_cv_link_all_option)
 AC_SUBST(NOLINKALL,$llvm_cv_no_link_all_option)
 
 dnl Set the "LLVM_ON_*" variables based on llvm_cv_platform_type
-dnl This is used by lib/System to determine the basic kind of implementation
+dnl This is used by lib/Support to determine the basic kind of implementation
 dnl to use.
 case $llvm_cv_platform_type in
   Unix)
@@ -1321,9 +1321,17 @@ if test "$llvm_cv_enable_libffi" = "yes" ; then
   AC_CHECK_HEADERS([ffi.h ffi/ffi.h])
 fi
 
-dnl Try to find Darwin specific crash reporting library.
+dnl Try to find Darwin specific crash reporting libraries.
 AC_CHECK_HEADERS([CrashReporterClient.h])
 
+dnl Try to find Darwin specific crash reporting global.
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[const char *__crashreporter_info__;]], [[]])],[darwin_crashreport = yes],[darwin_crashreport = no])
+AC_MSG_RESULT($darwin_crashreport)
+if test "x$darwin_crashreport = xyes"
+then
+  AC_DEFINE([HAVE_CRASHREPORTER_INFO],[1],
+            [Define if __crashreporter_info__ exists.])
+fi
 dnl===-----------------------------------------------------------------------===
 dnl===
 dnl=== SECTION 7: Check for types and structures
@@ -1625,7 +1633,7 @@ AC_CONFIG_FILES([include/llvm/Config/Targets.def])
 AC_CONFIG_FILES([include/llvm/Config/AsmPrinters.def])
 AC_CONFIG_FILES([include/llvm/Config/AsmParsers.def])
 AC_CONFIG_FILES([include/llvm/Config/Disassemblers.def])
-AC_CONFIG_HEADERS([include/llvm/System/DataTypes.h])
+AC_CONFIG_HEADERS([include/llvm/Support/DataTypes.h])
 
 dnl Configure the makefile's configuration data
 AC_CONFIG_FILES([Makefile.config])

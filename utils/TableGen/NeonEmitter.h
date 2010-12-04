@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This tablegen backend is responsible for emitting arm_neon.h, which includes
-// a declaration and definition of each function specified by the ARM NEON 
+// a declaration and definition of each function specified by the ARM NEON
 // compiler interface.  See ARM document DUI0348B.
 //
 //===----------------------------------------------------------------------===//
@@ -31,6 +31,9 @@ enum OpKind {
   OpMulN,
   OpMlaN,
   OpMlsN,
+  OpMulLane,
+  OpMlaLane,
+  OpMlsLane,
   OpEq,
   OpGe,
   OpLe,
@@ -56,19 +59,19 @@ enum OpKind {
 
 enum ClassKind {
   ClassNone,
-  ClassI,
-  ClassS,
-  ClassW,
-  ClassB
+  ClassI,           // generic integer instruction, e.g., "i8" suffix
+  ClassS,           // signed/unsigned/poly, e.g., "s8", "u8" or "p8" suffix
+  ClassW,           // width-specific instruction, e.g., "8" suffix
+  ClassB            // bitcast arguments with enum argument to specify type
 };
 
 namespace llvm {
-  
+
   class NeonEmitter : public TableGenBackend {
     RecordKeeper &Records;
     StringMap<OpKind> OpMap;
     DenseMap<Record*, ClassKind> ClassMap;
-    
+
   public:
     NeonEmitter(RecordKeeper &R) : Records(R) {
       OpMap["OP_NONE"]  = OpNone;
@@ -80,6 +83,9 @@ namespace llvm {
       OpMap["OP_MUL_N"] = OpMulN;
       OpMap["OP_MLA_N"] = OpMlaN;
       OpMap["OP_MLS_N"] = OpMlsN;
+      OpMap["OP_MUL_LN"]= OpMulLane;
+      OpMap["OP_MLA_LN"]= OpMlaLane;
+      OpMap["OP_MLS_LN"]= OpMlsLane;
       OpMap["OP_EQ"]    = OpEq;
       OpMap["OP_GE"]    = OpGe;
       OpMap["OP_LE"]    = OpLe;
@@ -109,14 +115,14 @@ namespace llvm {
       ClassMap[II] = ClassI;
       ClassMap[WI] = ClassW;
     }
-    
+
     // run - Emit arm_neon.h.inc
     void run(raw_ostream &o);
 
     // runHeader - Emit all the __builtin prototypes used in arm_neon.h
     void runHeader(raw_ostream &o);
   };
-  
+
 } // End llvm namespace
 
 #endif

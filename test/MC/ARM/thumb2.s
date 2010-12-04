@@ -101,4 +101,64 @@
 @ CHECK: dmb	ish                     @ encoding: [0x5b,0x8f,0xbf,0xf3]
   dmb	ish
 
-  
+@ CHECK: str.w	r0, [r1, #4092]         @ encoding: [0xfc,0x0f,0xc1,0xf8]
+  str.w	r0, [r1, #4092]
+@ CHECK: str	r0, [r1, #-128]         @ encoding: [0x80,0x0c,0x41,0xf8]
+  str	r0, [r1, #-128]
+@ CHECK: str.w	r0, [r1, r2, lsl #2]    @ encoding: [0x22,0x00,0x41,0xf8
+  str.w	r0, [r1, r2, lsl #2]
+
+@ CHECK: ldr.w	r0, [r0, #4092]         @ encoding: [0xfc,0x0f,0xd0,0xf8]
+  ldr.w	r0, [r0, #4092]
+@ CHECK: ldr	r0, [r0, #-128]         @ encoding: [0x80,0x0c,0x50,0xf8]
+  ldr	r0, [r0, #-128]
+@ CHECK: ldr.w	r0, [r0, r1, lsl #2]    @ encoding: [0x21,0x00,0x50,0xf8]
+  ldr.w	r0, [r0, r1, lsl #2]
+
+@ CHECK: str	r1, [r0, #16]!          @ encoding: [0x10,0x1f,0x40,0xf8]
+  str	r1, [r0, #16]!
+@ CHECK: strh	r1, [r0, #8]!           @ encoding: [0x08,0x1f,0x20,0xf8]
+  strh	r1, [r0, #8]!
+@ CHECK: strh	r2, [r0], #-4           @ encoding: [0x04,0x29,0x20,0xf8]
+  strh	r2, [r0], #-4
+@ CHECK: str	r2, [r0], #-4           @ encoding: [0x04,0x29,0x40,0xf8]
+  str	r2, [r0], #-4
+
+@ CHECK: ldr	r2, [r0, #16]!          @ encoding: [0x10,0x2f,0x50,0xf8]
+  ldr	r2, [r0, #16]!
+@ CHECK: ldr	r2, [r0, #-64]!         @ encoding: [0x40,0x2d,0x50,0xf8]
+  ldr	r2, [r0, #-64]!
+@ CHECK: ldrsb	r2, [r0, #4]!           @ encoding: [0x04,0x2f,0x10,0xf9]
+  ldrsb	r2, [r0, #4]!
+
+@ CHECK: strb.w	r0, [r1, #4092]         @ encoding: [0xfc,0x0f,0x81,0xf8]
+  strb.w	r0, [r1, #4092]
+@ CHECK: strb	r0, [r1, #-128]         @ encoding: [0x80,0x0c,0x01,0xf8]
+  strb	r0, [r1, #-128]
+@ CHECK: strb.w	r0, [r1, r2, lsl #2]    @ encoding: [0x22,0x00,0x01,0xf8]
+  strb.w	r0, [r1, r2, lsl #2]
+@ CHECK: strh.w	r0, [r1, #4092]         @ encoding: [0xfc,0x0f,0xa1,0xf8]
+  strh.w	r0, [r1, #4092]
+@ CHECK: strh	r0, [r1, #-128]         @ encoding: [0x80,0x0c,0x21,0xf8]
+  strh	r0, [r1, #-128]
+@ CHECK: strh	r0, [r1, #-128]         @ encoding: [0x80,0x0c,0x21,0xf8]
+  strh	r0, [r1, #-128]
+@ CHECK: strh.w	r0, [r1, r2, lsl #2]    @ encoding: [0x22,0x00,0x21,0xf8]
+  strh.w	r0, [r1, r2, lsl #2]
+
+@ CHECK: ldrb	r0, [r0, #-1]           @ encoding: [0x01,0x0c,0x10,0xf8]
+  ldrb	r0, [r0, #-1]
+@ CHECK: ldrb	r0, [r0, #-128]         @ encoding: [0x80,0x0c,0x10,0xf8]
+  ldrb	r0, [r0, #-128]
+@ CHECK: ldrb.w	r0, [r0, r1, lsl #2]    @ encoding: [0x21,0x00,0x10,0xf8]
+  ldrb.w	r0, [r0, r1, lsl #2]
+@ CHECK: ldrh.w	r0, [r0, #2046]         @ encoding: [0xfe,0x07,0xb0,0xf8]
+  ldrh.w	r0, [r0, #2046]
+@ CHECK: ldrh	r0, [r0, #-128]         @ encoding: [0x80,0x0c,0x30,0xf8]
+  ldrh	r0, [r0, #-128]
+@ CHECK: ldrh.w	r0, [r0, r1, lsl #2]    @ encoding: [0x21,0x00,0x30,0xf8]
+  ldrh.w	r0, [r0, r1, lsl #2]
+@ CHECK: ldrsb.w	r0, [r0]                @ encoding: [0x00,0x00,0x90,0xf9]
+  ldrsb.w	r0, [r0]
+@ CHECK: ldrsh.w	r0, [r0]                @ encoding: [0x00,0x00,0xb0,0xf9]
+  ldrsh.w	r0, [r0]

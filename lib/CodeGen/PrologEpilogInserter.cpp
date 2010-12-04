@@ -65,6 +65,8 @@ FunctionPass *llvm::createPrologEpilogCodeInserter() { return new PEI(); }
 bool PEI::runOnMachineFunction(MachineFunction &Fn) {
   const Function* F = Fn.getFunction();
   const TargetRegisterInfo *TRI = Fn.getTarget().getRegisterInfo();
+  const TargetFrameInfo *TFI = Fn.getTarget().getFrameInfo();
+
   RS = TRI->requiresRegisterScavenging(Fn) ? new RegScavenger() : NULL;
   FrameIndexVirtualScavenging = TRI->requiresFrameIndexScavenging(Fn);
 
@@ -75,7 +77,7 @@ bool PEI::runOnMachineFunction(MachineFunction &Fn) {
 
   // Allow the target machine to make some adjustments to the function
   // e.g. UsedPhysRegs before calculateCalleeSavedRegisters.
-  TRI->processFunctionBeforeCalleeSavedScan(Fn, RS);
+  TFI->processFunctionBeforeCalleeSavedScan(Fn, RS);
 
   // Scan the function for modified callee saved registers and insert spill code
   // for any callee saved registers that are modified.
@@ -95,7 +97,7 @@ bool PEI::runOnMachineFunction(MachineFunction &Fn) {
 
   // Allow the target machine to make final modifications to the function
   // before the frame layout is finalized.
-  TRI->processFunctionBeforeFrameFinalized(Fn);
+  TFI->processFunctionBeforeFrameFinalized(Fn);
 
   // Calculate actual frame offsets for all abstract stack objects...
   calculateFrameObjectOffsets(Fn);
@@ -295,13 +297,14 @@ void PEI::insertCSRSpillsAndRestores(MachineFunction &Fn) {
     return;
 
   const TargetInstrInfo &TII = *Fn.getTarget().getInstrInfo();
+  const TargetFrameInfo *TFI = Fn.getTarget().getFrameInfo();
   const TargetRegisterInfo *TRI = Fn.getTarget().getRegisterInfo();
   MachineBasicBlock::iterator I;
 
   if (! ShrinkWrapThisFunction) {
     // Spill using target interface.
     I = EntryBlock->begin();
-    if (!TII.spillCalleeSavedRegisters(*EntryBlock, I, CSI, TRI)) {
+    if (!TFI->spillCalleeSavedRegisters(*EntryBlock, I, CSI, TRI)) {
       for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
         // Add the callee-saved register as live-in.
         // It's killed at the spill.
@@ -333,7 +336,7 @@ void PEI::insertCSRSpillsAndRestores(MachineFunction &Fn) {
 
       // Restore all registers immediately before the return and any
       // terminators that preceed it.
-      if (!TII.restoreCalleeSavedRegisters(*MBB, I, CSI, TRI)) {
+      if (!TFI->restoreCalleeSavedRegisters(*MBB, I, CSI, TRI)) {
         for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
           unsigned Reg = CSI[i].getReg();
           const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);

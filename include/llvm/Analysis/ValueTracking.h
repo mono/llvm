@@ -15,7 +15,7 @@
 #ifndef LLVM_ANALYSIS_VALUETRACKING_H
 #define LLVM_ANALYSIS_VALUETRACKING_H
 
-#include "llvm/System/DataTypes.h"
+#include "llvm/Support/DataTypes.h"
 #include <string>
 
 namespace llvm {
@@ -95,6 +95,17 @@ namespace llvm {
                                   Instruction *InsertBefore = 0) {
     const unsigned Idxs[1] = { Idx };
     return FindInsertedValue(V, &Idxs[0], &Idxs[1], InsertBefore);
+  }
+  
+  /// GetPointerBaseWithConstantOffset - Analyze the specified pointer to see if
+  /// it can be expressed as a base pointer plus a constant offset.  Return the
+  /// base and offset to the caller.
+  Value *GetPointerBaseWithConstantOffset(Value *Ptr, int64_t &Offset,
+                                          const TargetData &TD);
+  static inline const Value *
+  GetPointerBaseWithConstantOffset(const Value *Ptr, int64_t &Offset,
+                                   const TargetData &TD) {
+    return GetPointerBaseWithConstantOffset(const_cast<Value*>(Ptr), Offset,TD);
   }
   
   /// GetConstantStringInfo - This function computes the length of a

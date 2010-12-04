@@ -1543,8 +1543,9 @@ protected:
   TARGET_NAME_t TargetName;
 };
 
-bool ARMDecoderEmitter::ARMDEBackend::populateInstruction(
-    const CodeGenInstruction &CGI, TARGET_NAME_t TN) {
+bool ARMDecoderEmitter::
+ARMDEBackend::populateInstruction(const CodeGenInstruction &CGI,
+                                  TARGET_NAME_t TN) {
   const Record &Def = *CGI.TheDef;
   const StringRef Name = Def.getName();
   uint8_t Form = getByteField(Def, "Form");
@@ -1570,10 +1571,6 @@ bool ARMDecoderEmitter::ARMDEBackend::populateInstruction(
         Name.find("CMNz") != std::string::npos */)
       return false;
 
-    // Ignore pseudo instructions.
-    if (Name == "BXr9" || Name == "BMOVPCRX" || Name == "BMOVPCRXr9")
-      return false;
-
     // Tail calls are other patterns that generate existing instructions.
     if (Name == "TCRETURNdi" || Name == "TCRETURNdiND" ||
         Name == "TCRETURNri" || Name == "TCRETURNriND" ||
@@ -1581,11 +1578,6 @@ bool ARMDecoderEmitter::ARMDEBackend::populateInstruction(
         Name == "TAILJMPdND" || Name == "TAILJMPdNDt" ||
         Name == "TAILJMPr"  || Name == "TAILJMPrND" ||
         Name == "MOVr_TC")
-      return false;
-
-    // VLDMQ/VSTMQ can be handled with the more generic VLDMD/VSTMD.
-    if (Name == "VLDMQ" || Name == "VLDMQ_UPD" ||
-        Name == "VSTMQ" || Name == "VSTMQ_UPD")
       return false;
 
     //
@@ -1718,10 +1710,6 @@ bool ARMDecoderEmitter::ARMDEBackend::populateInstruction(
     if (Name == "t2LDRDpci")
       return false;
 
-    // Ignore t2TBB, t2TBH and prefer the generic t2TBBgen, t2TBHgen.
-    if (Name == "t2TBB" || Name == "t2TBH")
-      return false;
-
     // Resolve conflicts:
     //
     //   tBfar conflicts with tBLr9
@@ -1729,7 +1717,6 @@ bool ARMDecoderEmitter::ARMDEBackend::populateInstruction(
     //   tPOP_RET/t2LDMIA_RET conflict with tPOP/t2LDM (ditto)
     //   tMOVCCi conflicts with tMOVi8
     //   tMOVCCr conflicts with tMOVgpr2gpr
-    //   tBR_JTr conflicts with tBRIND
     //   tSpill conflicts with tSTRspi
     //   tLDRcp conflicts with tLDRspi
     //   tRestore conflicts with tLDRspi
@@ -1740,7 +1727,7 @@ bool ARMDecoderEmitter::ARMDEBackend::populateInstruction(
         Name == "tCMPzhir" || /* Name == "t2CMNzrr" || Name == "t2CMNzrs" ||
         Name == "t2CMNzri" || */ Name == "t2CMPzrr" || Name == "t2CMPzrs" ||
         Name == "t2CMPzri" || Name == "tPOP_RET" || Name == "t2LDMIA_RET" ||
-        Name == "tMOVCCi" || Name == "tMOVCCr" || Name == "tBR_JTr" ||
+        Name == "tMOVCCi" || Name == "tMOVCCr" ||
         Name == "tSpill" || Name == "tLDRcp" || Name == "tRestore" ||
         Name == "t2LEApcrelJT" || Name == "t2MOVCCi16")
       return false;
@@ -1826,7 +1813,7 @@ void ARMDecoderEmitter::ARMDEBackend::emit(raw_ostream &o) {
     assert(0 && "Unreachable code!");
   }
 
-  o << "#include \"llvm/System/DataTypes.h\"\n";
+  o << "#include \"llvm/Support/DataTypes.h\"\n";
   o << "#include <assert.h>\n";
   o << '\n';
   o << "namespace llvm {\n\n";

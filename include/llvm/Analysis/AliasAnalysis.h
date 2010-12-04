@@ -49,6 +49,7 @@ class TargetData;
 class Pass;
 class AnalysisUsage;
 class MemTransferInst;
+class MemIntrinsic;
 
 class AliasAnalysis {
 protected:
@@ -107,8 +108,7 @@ public:
     /// the location, or null if there is no known unique tag.
     const MDNode *TBAATag;
 
-    explicit Location(const Value *P = 0,
-                      uint64_t S = UnknownSize,
+    explicit Location(const Value *P = 0, uint64_t S = UnknownSize,
                       const MDNode *N = 0)
       : Ptr(P), Size(S), TBAATag(N) {}
 
@@ -137,7 +137,7 @@ public:
   Location getLocation(const StoreInst *SI);
   Location getLocation(const VAArgInst *VI);
   static Location getLocationForSource(const MemTransferInst *MTI);
-  static Location getLocationForDest(const MemTransferInst *MTI);
+  static Location getLocationForDest(const MemIntrinsic *MI);
 
   /// Alias analysis result - Either we know for sure that it does not alias, we
   /// know for sure it must alias, or we don't know anything: The two pointers

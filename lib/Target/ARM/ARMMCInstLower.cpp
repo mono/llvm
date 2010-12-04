@@ -13,7 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ARM.h"
-#include "llvm/CodeGen/AsmPrinter.h"
+#include "ARMAsmPrinter.h"
 #include "llvm/Constants.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/MC/MCExpr.h"
@@ -23,7 +23,7 @@ using namespace llvm;
 
 
 static MCOperand GetSymbolRef(const MachineOperand &MO, const MCSymbol *Symbol,
-                              AsmPrinter &Printer) {
+                              ARMAsmPrinter &Printer) {
   MCContext &Ctx = Printer.OutContext;
   const MCExpr *Expr;
   switch (MO.getTargetFlags()) {
@@ -41,17 +41,17 @@ static MCOperand GetSymbolRef(const MachineOperand &MO, const MCSymbol *Symbol,
     Expr = MCSymbolRefExpr::Create(Symbol, MCSymbolRefExpr::VK_ARM_PLT, Ctx);
     break;
   }
-  
+
   if (!MO.isJTI() && MO.getOffset())
     Expr = MCBinaryExpr::CreateAdd(Expr,
                                    MCConstantExpr::Create(MO.getOffset(), Ctx),
                                    Ctx);
   return MCOperand::CreateExpr(Expr);
-  
+
 }
 
 void llvm::LowerARMMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
-                                        AsmPrinter &AP) {
+                                        ARMAsmPrinter &AP) {
   OutMI.setOpcode(MI->getOpcode());
 
   for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
@@ -79,7 +79,7 @@ void llvm::LowerARMMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
       MCOp = GetSymbolRef(MO, AP.Mang->getSymbol(MO.getGlobal()), AP);
       break;
     case MachineOperand::MO_ExternalSymbol:
-      MCOp = GetSymbolRef(MO, 
+      MCOp = GetSymbolRef(MO,
                           AP.GetExternalSymbolSymbol(MO.getSymbolName()), AP);
       break;
     case MachineOperand::MO_JumpTableIndex:

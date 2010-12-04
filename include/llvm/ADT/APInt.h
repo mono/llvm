@@ -275,12 +275,6 @@ public:
   ///  objects, into FoldingSets.
   void Profile(FoldingSetNodeID& id) const;
 
-  /// @brief Used by the Bitcode serializer to emit APInts to Bitcode.
-  void Emit(Serializer& S) const;
-
-  /// @brief Used by the Bitcode deserializer to deserialize APInts.
-  void Read(Deserializer& D);
-
   /// @}
   /// @name Value Tests
   /// @{
@@ -385,12 +379,17 @@ public:
   /// @{
   /// @brief Gets maximum unsigned value of APInt for specific bit width.
   static APInt getMaxValue(unsigned numBits) {
-    return APInt(numBits, 0).set();
+    APInt API(numBits, 0);
+    API.setAllBits();
+    return API;
   }
 
   /// @brief Gets maximum signed value of APInt for a specific bit width.
   static APInt getSignedMaxValue(unsigned numBits) {
-    return APInt(numBits, 0).set().clear(numBits - 1);
+    APInt API(numBits, 0);
+    API.setAllBits();
+    API.clearBit(numBits - 1);
+    return API;
   }
 
   /// @brief Gets minimum unsigned value of APInt for a specific bit width.
@@ -400,7 +399,9 @@ public:
 
   /// @brief Gets minimum signed value of APInt for a specific bit width.
   static APInt getSignedMinValue(unsigned numBits) {
-    return APInt(numBits, 0).set(numBits - 1);
+    APInt API(numBits, 0);
+    API.setBit(numBits - 1);
+    return API;
   }
 
   /// getSignBit - This is just a wrapper function of getSignedMinValue(), and
@@ -413,7 +414,9 @@ public:
   /// @returns the all-ones value for an APInt of the specified bit-width.
   /// @brief Get the all-ones value.
   static APInt getAllOnesValue(unsigned numBits) {
-    return APInt(numBits, 0).set();
+    APInt API(numBits, 0);
+    API.setAllBits();
+    return API;
   }
 
   /// @returns the '0' value for an APInt of the specified bit-width.
@@ -530,7 +533,7 @@ public:
   /// @brief Unary bitwise complement operator.
   APInt operator~() const {
     APInt Result(*this);
-    Result.flip();
+    Result.flipAllBits();
     return Result;
   }
 
@@ -1041,51 +1044,49 @@ public:
   /// @name Bit Manipulation Operators
   /// @{
   /// @brief Set every bit to 1.
-  APInt &set() {
-    if (isSingleWord()) {
+  void setAllBits() {
+    if (isSingleWord())
       VAL = -1ULL;
-      return clearUnusedBits();
+    else {
+      // Set all the bits in all the words.
+      for (unsigned i = 0; i < getNumWords(); ++i)
+	pVal[i] = -1ULL;
     }
-
-    // Set all the bits in all the words.
-    for (unsigned i = 0; i < getNumWords(); ++i)
-      pVal[i] = -1ULL;
     // Clear the unused ones
-    return clearUnusedBits();
+    clearUnusedBits();
   }
 
   /// Set the given bit to 1 whose position is given as "bitPosition".
   /// @brief Set a given bit to 1.
-  APInt &set(unsigned bitPosition);
+  void setBit(unsigned bitPosition);
 
   /// @brief Set every bit to 0.
-  APInt &clear() {
+  void clearAllBits() {
     if (isSingleWord())
       VAL = 0;
     else
       memset(pVal, 0, getNumWords() * APINT_WORD_SIZE);
-    return *this;
   }
 
   /// Set the given bit to 0 whose position is given as "bitPosition".
   /// @brief Set a given bit to 0.
-  APInt &clear(unsigned bitPosition);
+  void clearBit(unsigned bitPosition);
 
   /// @brief Toggle every bit to its opposite value.
-  APInt &flip() {
-    if (isSingleWord()) {
+  void flipAllBits() {
+    if (isSingleWord())
       VAL ^= -1ULL;
-      return clearUnusedBits();
+    else {
+      for (unsigned i = 0; i < getNumWords(); ++i)
+        pVal[i] ^= -1ULL;
     }
-    for (unsigned i = 0; i < getNumWords(); ++i)
-      pVal[i] ^= -1ULL;
-    return clearUnusedBits();
+    clearUnusedBits();
   }
 
   /// Toggle a given bit to its opposite value whose position is given
   /// as "bitPosition".
   /// @brief Toggles a given bit to its opposite value.
-  APInt& flip(unsigned bitPosition);
+  void flipBit(unsigned bitPosition);
 
   /// @}
   /// @name Value Characterization Functions
@@ -1293,37 +1294,27 @@ public:
   }
 
   /// The conversion does not do a translation from double to integer, it just
-  /// re-interprets the bits of the double. Note that it is valid to do this on
-  /// any bit width but bits from V may get truncated.
+  /// re-interprets the bits of the double.
   /// @brief Converts a double to APInt bits.
-  APInt& doubleToBits(double V) {
+  static APInt doubleToBits(double V) {
     union {
       uint64_t I;
       double D;
     } T;
     T.D = V;
-    if (isSingleWord())
-      VAL = T.I;
-    else
-      pVal[0] = T.I;
-    return clearUnusedBits();
+    return APInt(sizeof T * CHAR_BIT, T.I);
   }
 
   /// The conversion does not do a translation from float to integer, it just
-  /// re-interprets the bits of the float. Note that it is valid to do this on
-  /// any bit width but bits from V may get truncated.
+  /// re-interprets the bits of the float.
   /// @brief Converts a float to APInt bits.
-  APInt& floatToBits(float V) {
+  static APInt floatToBits(float V) {
     union {
       unsigned I;
       float F;
     } T;
     T.F = V;
-    if (isSingleWord())
-      VAL = T.I;
-    else
-      pVal[0] = T.I;
-    return clearUnusedBits();
+    return APInt(sizeof T * CHAR_BIT, T.I);
   }
 
   /// @}

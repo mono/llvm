@@ -44,6 +44,8 @@ class MCAsmStreamer : public MCStreamer {
   unsigned IsVerboseAsm : 1;
   unsigned ShowInst : 1;
 
+  bool needsSet(const MCExpr *Value);
+
 public:
   MCAsmStreamer(MCContext &Context, formatted_raw_ostream &os,
                 bool isLittleEndian, bool isVerboseAsm,
@@ -121,6 +123,9 @@ public:
 
   virtual void EmitAssignment(MCSymbol *Symbol, const MCExpr *Value);
   virtual void EmitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol);
+  virtual void EmitDwarfAdvanceLineAddr(int64_t LineDelta,
+                                        const MCSymbol *LastLabel,
+                                        const MCSymbol *Label);
 
   virtual void EmitSymbolAttribute(MCSymbol *Symbol, MCSymbolAttr Attribute);
 
@@ -148,8 +153,8 @@ public:
   virtual void EmitBytes(StringRef Data, unsigned AddrSpace);
 
   virtual void EmitValue(const MCExpr *Value, unsigned Size,unsigned AddrSpace);
-
-  virtual void EmitIntValue(uint64_t Value, unsigned Size, unsigned AddrSpace);
+  virtual void EmitIntValue(uint64_t Value, unsigned Size,
+                            unsigned AddrSpace = 0);
 
   virtual void EmitULEB128Value(const MCExpr *Value, unsigned AddrSpace = 0);
 
@@ -297,6 +302,12 @@ void MCAsmStreamer::EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
 void MCAsmStreamer::EmitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol) {
   OS << ".weakref " << *Alias << ", " << *Symbol;
   EmitEOL();
+}
+
+void MCAsmStreamer::EmitDwarfAdvanceLineAddr(int64_t LineDelta,
+                                             const MCSymbol *LastLabel,
+                                             const MCSymbol *Label) {
+  EmitDwarfSetLineAddr(LineDelta, Label, PointerSize);
 }
 
 void MCAsmStreamer::EmitSymbolAttribute(MCSymbol *Symbol,
@@ -496,34 +507,35 @@ void MCAsmStreamer::EmitBytes(StringRef Data, unsigned AddrSpace) {
   EmitEOL();
 }
 
-/// EmitIntValue - Special case of EmitValue that avoids the client having
-/// to pass in a MCExpr for constant integers.
 void MCAsmStreamer::EmitIntValue(uint64_t Value, unsigned Size,
                                  unsigned AddrSpace) {
-  assert(CurSection && "Cannot emit contents before setting section!");
-  const char *Directive = 0;
-  switch (Size) {
-  default: break;
-  case 1: Directive = MAI.getData8bitsDirective(AddrSpace); break;
-  case 2: Directive = MAI.getData16bitsDirective(AddrSpace); break;
-  case 4: Directive = MAI.getData32bitsDirective(AddrSpace); break;
-  case 8:
-    Directive = MAI.getData64bitsDirective(AddrSpace);
-    // If the target doesn't support 64-bit data, emit as two 32-bit halves.
-    if (Directive) break;
-    if (isLittleEndian()) {
-      EmitIntValue((uint32_t)(Value >> 0 ), 4, AddrSpace);
-      EmitIntValue((uint32_t)(Value >> 32), 4, AddrSpace);
-    } else {
-      EmitIntValue((uint32_t)(Value >> 32), 4, AddrSpace);
-      EmitIntValue((uint32_t)(Value >> 0 ), 4, AddrSpace);
-    }
-    return;
-  }
+  EmitValue(MCConstantExpr::Create(Value, getContext()), Size, AddrSpace);
+}
 
-  assert(Directive && "Invalid size for machine code value!");
-  OS << Directive << truncateToSize(Value, Size);
-  EmitEOL();
+static bool hasSymbolDifference(const MCExpr *Value) {
+  switch (Value->getKind()) {
+  case MCExpr::Target: llvm_unreachable("Can't handle target exprs yet!");
+  case MCExpr::Constant:
+  case MCExpr::SymbolRef:
+    return false;
+  case MCExpr::Unary:
+    return hasSymbolDifference(cast<MCUnaryExpr>(Value)->getSubExpr());
+  case MCExpr::Binary: {
+    const MCBinaryExpr *BE = cast<MCBinaryExpr>(Value);
+    if (BE->getOpcode() == MCBinaryExpr::Sub &&
+	BE->getLHS()->getKind() == MCExpr::SymbolRef &&
+	BE->getRHS()->getKind() == MCExpr::SymbolRef)
+      return true;
+    return hasSymbolDifference(BE->getLHS()) ||
+      hasSymbolDifference(BE->getRHS());
+  }
+  }
+  llvm_unreachable("Switch covers all cases");
+}
+
+bool MCAsmStreamer::needsSet(const MCExpr *Value) {
+  return getContext().getAsmInfo().needsSetToChangeDiffSize() &&
+    hasSymbolDifference(Value);
 }
 
 void MCAsmStreamer::EmitValue(const MCExpr *Value, unsigned Size,
@@ -535,10 +547,32 @@ void MCAsmStreamer::EmitValue(const MCExpr *Value, unsigned Size,
   case 1: Directive = MAI.getData8bitsDirective(AddrSpace); break;
   case 2: Directive = MAI.getData16bitsDirective(AddrSpace); break;
   case 4: Directive = MAI.getData32bitsDirective(AddrSpace); break;
-  case 8: Directive = MAI.getData64bitsDirective(AddrSpace); break;
+  case 8:
+    Directive = MAI.getData64bitsDirective(AddrSpace);
+    // If the target doesn't support 64-bit data, emit as two 32-bit halves.
+    if (Directive) break;
+    int64_t IntValue;
+    if (!Value->EvaluateAsAbsolute(IntValue))
+      report_fatal_error("Don't know how to emit this value.");
+    if (isLittleEndian()) {
+      EmitIntValue((uint32_t)(IntValue >> 0 ), 4, AddrSpace);
+      EmitIntValue((uint32_t)(IntValue >> 32), 4, AddrSpace);
+    } else {
+      EmitIntValue((uint32_t)(IntValue >> 32), 4, AddrSpace);
+      EmitIntValue((uint32_t)(IntValue >> 0 ), 4, AddrSpace);
+    }
+    return;
   }
 
   assert(Directive && "Invalid size for machine code value!");
+  if (needsSet(Value)) {
+    MCSymbol *SetLabel = getContext().CreateTempSymbol();
+    EmitAssignment(SetLabel, Value);
+    OS << Directive << *SetLabel;
+    EmitEOL();
+    return;
+  }
+
   OS << Directive << *Value;
   EmitEOL();
 }
@@ -546,10 +580,7 @@ void MCAsmStreamer::EmitValue(const MCExpr *Value, unsigned Size,
 void MCAsmStreamer::EmitULEB128Value(const MCExpr *Value, unsigned AddrSpace) {
   int64_t IntValue;
   if (Value->EvaluateAsAbsolute(IntValue)) {
-    SmallString<32> Tmp;
-    raw_svector_ostream OSE(Tmp);
-    MCObjectWriter::EncodeULEB128(IntValue, OSE);
-    EmitBytes(OSE.str(), AddrSpace);
+    EmitULEB128IntValue(IntValue, AddrSpace);
     return;
   }
   assert(MAI.hasLEB128() && "Cannot print a .uleb");
@@ -560,10 +591,7 @@ void MCAsmStreamer::EmitULEB128Value(const MCExpr *Value, unsigned AddrSpace) {
 void MCAsmStreamer::EmitSLEB128Value(const MCExpr *Value, unsigned AddrSpace) {
   int64_t IntValue;
   if (Value->EvaluateAsAbsolute(IntValue)) {
-    SmallString<32> Tmp;
-    raw_svector_ostream OSE(Tmp);
-    MCObjectWriter::EncodeSLEB128(IntValue, OSE);
-    EmitBytes(OSE.str(), AddrSpace);
+    EmitSLEB128IntValue(IntValue, AddrSpace);
     return;
   }
   assert(MAI.hasLEB128() && "Cannot print a .sleb");
@@ -894,10 +922,8 @@ void MCAsmStreamer::EmitRawText(StringRef String) {
 
 void MCAsmStreamer::Finish() {
   // Dump out the dwarf file & directory tables and line tables.
-  if (getContext().hasDwarfFiles() && TLOF) {
-    MCDwarfFileTable::Emit(this, TLOF->getDwarfLineSection(), NULL,
-                           PointerSize);
-  }
+  if (getContext().hasDwarfFiles() && TLOF)
+    MCDwarfFileTable::Emit(this, TLOF->getDwarfLineSection());
 }
 
 MCStreamer *llvm::createAsmStreamer(MCContext &Context,

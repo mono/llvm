@@ -800,7 +800,7 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1, [A9_MUX0], 0>,
                                InstrStage<1, [A9_DRegsN],   0, Required>,
                                InstrStage<9, [A9_DRegsVFP], 0, Reserved>,
-                               InstrStage<3, [A9_NPipe], 1>,
+                               InstrStage<3, [A9_NPipe], 0>,
                                InstrStage<3, [A9_LSUnit]>],
                               [4, 1, 1, 1]>,
   //
@@ -809,9 +809,27 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1, [A9_MUX0], 0>,
                                InstrStage<1, [A9_DRegsN],   0, Required>,
                                InstrStage<9, [A9_DRegsVFP], 0, Reserved>,
-                               InstrStage<3, [A9_NPipe], 1>,
+                               InstrStage<3, [A9_NPipe], 0>,
                                InstrStage<3, [A9_LSUnit]>],
                               [4, 2, 1, 1, 1, 1]>,
+  //
+  // VLD1dup
+  InstrItinData<IIC_VLD1dup,  [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
+                               InstrStage<1, [A9_MUX0], 0>,
+                               InstrStage<1, [A9_DRegsN],   0, Required>,
+                               InstrStage<8, [A9_DRegsVFP], 0, Reserved>,
+                               InstrStage<2, [A9_NPipe], 0>,
+                               InstrStage<2, [A9_LSUnit]>],
+                              [3, 1]>,
+  //
+  // VLD1dupu
+  InstrItinData<IIC_VLD1dupu, [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
+                               InstrStage<1, [A9_MUX0], 0>,
+                               InstrStage<1, [A9_DRegsN],   0, Required>,
+                               InstrStage<8, [A9_DRegsVFP], 0, Reserved>,
+                               InstrStage<2, [A9_NPipe], 0>,
+                               InstrStage<2, [A9_LSUnit]>],
+                              [3, 2, 1, 1]>,
   //
   // VLD2
   InstrItinData<IIC_VLD2,     [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
@@ -869,6 +887,24 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<3, [A9_LSUnit]>],
                               [4, 4, 2, 1, 1, 1, 1, 1]>,
   //
+  // VLD2dup
+  InstrItinData<IIC_VLD2dup,  [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
+                               InstrStage<1, [A9_MUX0], 0>,
+                               InstrStage<1, [A9_DRegsN],   0, Required>,
+                               InstrStage<8, [A9_DRegsVFP], 0, Reserved>,
+                               InstrStage<2, [A9_NPipe], 0>,
+                               InstrStage<2, [A9_LSUnit]>],
+                              [3, 3, 1]>,
+  //
+  // VLD2dupu
+  InstrItinData<IIC_VLD2dupu, [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
+                               InstrStage<1, [A9_MUX0], 0>,
+                               InstrStage<1, [A9_DRegsN],   0, Required>,
+                               InstrStage<8, [A9_DRegsVFP], 0, Reserved>,
+                               InstrStage<2, [A9_NPipe], 0>,
+                               InstrStage<2, [A9_LSUnit]>],
+                              [3, 3, 2, 1, 1]>,
+  //
   // VLD3
   InstrItinData<IIC_VLD3,     [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
                                InstrStage<1, [A9_MUX0], 0>,
@@ -905,6 +941,24 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<5, [A9_LSUnit]>],
                               [5, 5, 6, 2, 1, 1, 1, 1, 1, 2]>,
   //
+  // VLD3dup
+  InstrItinData<IIC_VLD3dup,  [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
+                               InstrStage<1, [A9_MUX0], 0>,
+                               InstrStage<1, [A9_DRegsN],   0, Required>,
+                               InstrStage<9, [A9_DRegsVFP], 0, Reserved>,
+                               InstrStage<3, [A9_NPipe], 0>,
+                               InstrStage<3, [A9_LSUnit]>],
+                              [3, 3, 4, 1]>,
+  //
+  // VLD3dupu
+  InstrItinData<IIC_VLD3dupu, [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
+                               InstrStage<1, [A9_MUX0], 0>,
+                               InstrStage<1, [A9_DRegsN],   0, Required>,
+                               InstrStage<9, [A9_DRegsVFP], 0, Reserved>,
+                               InstrStage<3, [A9_NPipe], 0>,
+                               InstrStage<3, [A9_LSUnit]>],
+                              [3, 3, 4, 2, 1, 1]>,
+  //
   // VLD4
   InstrItinData<IIC_VLD4,     [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
                                InstrStage<1, [A9_MUX0], 0>,
@@ -940,6 +994,24 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<5, [A9_NPipe], 0>,
                                InstrStage<5, [A9_LSUnit]>],
                               [5, 5, 6, 6, 2, 1, 1, 1, 1, 1, 2, 2]>,
+  //
+  // VLD4dup
+  InstrItinData<IIC_VLD4dup,  [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
+                               InstrStage<1, [A9_MUX0], 0>,
+                               InstrStage<1, [A9_DRegsN],   0, Required>,
+                               InstrStage<9, [A9_DRegsVFP], 0, Reserved>,
+                               InstrStage<3, [A9_NPipe], 0>,
+                               InstrStage<3, [A9_LSUnit]>],
+                              [3, 3, 4, 4, 1]>,
+  //
+  // VLD4dupu
+  InstrItinData<IIC_VLD4dupu, [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
+                               InstrStage<1, [A9_MUX0], 0>,
+                               InstrStage<1, [A9_DRegsN],   0, Required>,
+                               InstrStage<9, [A9_DRegsVFP], 0, Reserved>,
+                               InstrStage<3, [A9_NPipe], 0>,
+                               InstrStage<3, [A9_LSUnit]>],
+                              [3, 3, 4, 4, 2, 1, 1]>,
   //
   // VST1
   InstrItinData<IIC_VST1,     [InstrStage<1, [A9_Issue0, A9_Issue1], 0>,
@@ -1018,7 +1090,7 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1, [A9_MUX0], 0>,
                                InstrStage<1, [A9_DRegsN],   0, Required>,
                                InstrStage<2, [A9_DRegsVFP], 0, Reserved>,
-                               InstrStage<2, [A9_NPipe], 1>,
+                               InstrStage<2, [A9_NPipe], 0>,
                                InstrStage<2, [A9_LSUnit]>],
                               [1, 1, 1]>,
   //
@@ -1027,7 +1099,7 @@ def CortexA9Itineraries : ProcessorItineraries<
                                InstrStage<1, [A9_MUX0], 0>,
                                InstrStage<1, [A9_DRegsN],   0, Required>,
                                InstrStage<3, [A9_DRegsVFP], 0, Reserved>,
-                               InstrStage<3, [A9_NPipe], 1>,
+                               InstrStage<3, [A9_NPipe], 0>,
                                InstrStage<3, [A9_LSUnit]>],
                               [2, 1, 1, 1, 1]>,
   //

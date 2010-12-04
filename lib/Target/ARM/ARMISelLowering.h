@@ -172,7 +172,12 @@ namespace llvm {
       // Vector OR with immediate
       VORRIMM,
       // Vector AND with NOT of immediate
-      VBICIMM
+      VBICIMM,
+
+      // Vector load N-element structure to all lanes:
+      VLD2DUP = ISD::FIRST_TARGET_MEMORY_OPCODE,
+      VLD3DUP,
+      VLD4DUP
     };
   }
 
@@ -415,6 +420,8 @@ namespace llvm {
                   const SmallVectorImpl<ISD::OutputArg> &Outs,
                   const SmallVectorImpl<SDValue> &OutVals,
                   DebugLoc dl, SelectionDAG &DAG) const;
+
+    virtual bool isUsedByReturnOnly(SDNode *N) const;
 
     SDValue getARMCmp(SDValue LHS, SDValue RHS, ISD::CondCode CC,
                       SDValue &ARMcc, SelectionDAG &DAG, DebugLoc dl) const;

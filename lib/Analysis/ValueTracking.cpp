@@ -69,14 +69,14 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
   // Null and aggregate-zero are all-zeros.
   if (isa<ConstantPointerNull>(V) ||
       isa<ConstantAggregateZero>(V)) {
-    KnownOne.clear();
+    KnownOne.clearAllBits();
     KnownZero = Mask;
     return;
   }
   // Handle a constant vector by taking the intersection of the known bits of
   // each element.
   if (ConstantVector *CV = dyn_cast<ConstantVector>(V)) {
-    KnownZero.set(); KnownOne.set();
+    KnownZero.setAllBits(); KnownOne.setAllBits();
     for (unsigned i = 0, e = CV->getNumOperands(); i != e; ++i) {
       APInt KnownZero2(BitWidth, 0), KnownOne2(BitWidth, 0);
       ComputeMaskedBits(CV->getOperand(i), Mask, KnownZero2, KnownOne2,
@@ -103,15 +103,15 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
       KnownZero = Mask & APInt::getLowBitsSet(BitWidth,
                                               CountTrailingZeros_32(Align));
     else
-      KnownZero.clear();
-    KnownOne.clear();
+      KnownZero.clearAllBits();
+    KnownOne.clearAllBits();
     return;
   }
   // A weak GlobalAlias is totally unknown. A non-weak GlobalAlias has
   // the bits of its aliasee.
   if (GlobalAlias *GA = dyn_cast<GlobalAlias>(V)) {
     if (GA->mayBeOverridden()) {
-      KnownZero.clear(); KnownOne.clear();
+      KnownZero.clearAllBits(); KnownOne.clearAllBits();
     } else {
       ComputeMaskedBits(GA->getAliasee(), Mask, KnownZero, KnownOne,
                         TD, Depth+1);
@@ -119,7 +119,7 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
     return;
   }
 
-  KnownZero.clear(); KnownOne.clear();   // Start out not knowing anything.
+  KnownZero.clearAllBits(); KnownOne.clearAllBits();   // Start out not knowing anything.
 
   if (Depth == MaxDepth || Mask == 0)
     return;  // Limit search depth.
@@ -185,7 +185,7 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
     // Also compute a conserative estimate for high known-0 bits.
     // More trickiness is possible, but this is sufficient for the
     // interesting case of alignment computation.
-    KnownOne.clear();
+    KnownOne.clearAllBits();
     unsigned TrailZ = KnownZero.countTrailingOnes() +
                       KnownZero2.countTrailingOnes();
     unsigned LeadZ =  std::max(KnownZero.countLeadingOnes() +
@@ -208,8 +208,8 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
                       AllOnes, KnownZero2, KnownOne2, TD, Depth+1);
     unsigned LeadZ = KnownZero2.countLeadingOnes();
 
-    KnownOne2.clear();
-    KnownZero2.clear();
+    KnownOne2.clearAllBits();
+    KnownZero2.clearAllBits();
     ComputeMaskedBits(I->getOperand(1),
                       AllOnes, KnownZero2, KnownOne2, TD, Depth+1);
     unsigned RHSUnknownLeadingOnes = KnownOne2.countLeadingZeros();
@@ -474,7 +474,7 @@ void llvm::ComputeMaskedBits(Value *V, const APInt &Mask,
 
     unsigned Leaders = std::max(KnownZero.countLeadingOnes(),
                                 KnownZero2.countLeadingOnes());
-    KnownOne.clear();
+    KnownOne.clearAllBits();
     KnownZero = APInt::getHighBitsSet(BitWidth, Leaders) & Mask;
     break;
   }
@@ -875,8 +875,9 @@ bool llvm::ComputeMultiple(Value *V, unsigned Base, Value *&Multiple,
       // Turn Op0 << Op1 into Op0 * 2^Op1
       APInt Op1Int = Op1CI->getValue();
       uint64_t BitToSet = Op1Int.getLimitedValue(Op1Int.getBitWidth() - 1);
-      Op1 = ConstantInt::get(V->getContext(), 
-                             APInt(Op1Int.getBitWidth(), 0).set(BitToSet));
+      APInt API(Op1Int.getBitWidth(), 0);
+      API.setBit(BitToSet);
+      Op1 = ConstantInt::get(V->getContext(), API);
     }
 
     Value *Mul0 = NULL;
@@ -1158,6 +1159,47 @@ Value *llvm::FindInsertedValue(Value *V, const unsigned *idx_begin,
   // or load instruction)
   return 0;
 }
+
+/// GetPointerBaseWithConstantOffset - Analyze the specified pointer to see if
+/// it can be expressed as a base pointer plus a constant offset.  Return the
+/// base and offset to the caller.
+Value *llvm::GetPointerBaseWithConstantOffset(Value *Ptr, int64_t &Offset,
+                                              const TargetData &TD) {
+  Operator *PtrOp = dyn_cast<Operator>(Ptr);
+  if (PtrOp == 0) return Ptr;
+  
+  // Just look through bitcasts.
+  if (PtrOp->getOpcode() == Instruction::BitCast)
+    return GetPointerBaseWithConstantOffset(PtrOp->getOperand(0), Offset, TD);
+  
+  // If this is a GEP with constant indices, we can look through it.
+  GEPOperator *GEP = dyn_cast<GEPOperator>(PtrOp);
+  if (GEP == 0 || !GEP->hasAllConstantIndices()) return Ptr;
+  
+  gep_type_iterator GTI = gep_type_begin(GEP);
+  for (User::op_iterator I = GEP->idx_begin(), E = GEP->idx_end(); I != E;
+       ++I, ++GTI) {
+    ConstantInt *OpC = cast<ConstantInt>(*I);
+    if (OpC->isZero()) continue;
+    
+    // Handle a struct and array indices which add their offset to the pointer.
+    if (const StructType *STy = dyn_cast<StructType>(*GTI)) {
+      Offset += TD.getStructLayout(STy)->getElementOffset(OpC->getZExtValue());
+    } else {
+      uint64_t Size = TD.getTypeAllocSize(GTI.getIndexedType());
+      Offset += OpC->getSExtValue()*Size;
+    }
+  }
+  
+  // Re-sign extend from the pointer size if needed to get overflow edge cases
+  // right.
+  unsigned PtrSize = TD.getPointerSizeInBits();
+  if (PtrSize < 64)
+    Offset = (Offset << (64-PtrSize)) >> (64-PtrSize);
+  
+  return GetPointerBaseWithConstantOffset(GEP->getPointerOperand(), Offset, TD);
+}
+
 
 /// GetConstantStringInfo - This function computes the length of a
 /// null-terminated C string pointed to by V.  If successful, it returns true

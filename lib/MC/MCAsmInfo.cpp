@@ -13,7 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCAsmInfo.h"
-#include "llvm/System/DataTypes.h"
+#include "llvm/Support/DataTypes.h"
 #include <cctype>
 #include <cstring>
 using namespace llvm;
@@ -23,6 +23,7 @@ MCAsmInfo::MCAsmInfo() {
   HasMachoZeroFillDirective = false;
   HasMachoTBSSDirective = false;
   HasStaticCtorDtorReferenceInStaticMode = false;
+  LinkerRequiresNonEmptyDwarfLines = false;
   MaxInstLength = 4;
   PCSymbol = "$";
   SeparatorChar = ';';
@@ -53,6 +54,7 @@ MCAsmInfo::MCAsmInfo() {
   GPRel32Directive = 0;
   GlobalDirective = "\t.globl\t";
   HasSetDirective = true;
+  NeedsSetToChangeDiffSize = false;
   HasLCOMMDirective = false;
   COMMDirectiveAlignmentIsInBytes = true;
   HasDotTypeDotSizeDirective = true;

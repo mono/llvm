@@ -27,6 +27,20 @@ This process created the file `CMakeCache.txt' and the directory `CMakeFiles'.
 Please delete them.")
 endif()
 
+# Run-time build mode; It is used for unittests.
+if(MSVC_IDE)
+  # Expect "$(Configuration)", "$(OutDir)", etc.
+  # It is expanded by msbuild or similar.
+  set(RUNTIME_BUILD_MODE "${CMAKE_CFG_INTDIR}")
+elseif(NOT CMAKE_BUILD_TYPE STREQUAL "")
+  # Expect "Release" "Debug", etc.
+  # Or unittests could not run.
+  set(RUNTIME_BUILD_MODE ${CMAKE_BUILD_TYPE})
+else()
+  # It might be "."
+  set(RUNTIME_BUILD_MODE "${CMAKE_CFG_INTDIR}")
+endif()
+
 string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
 
 set(LLVM_MAIN_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR})
@@ -262,7 +276,7 @@ endif( MSVC )
 include_directories( ${LLVM_BINARY_DIR}/include ${LLVM_MAIN_INCLUDE_DIR})
 
 if( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
-   SET(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-include llvm/System/Solaris.h")
+   SET(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-include llvm/Support/Solaris.h")
 endif( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
 
 include(AddLLVM)
@@ -278,9 +292,8 @@ if( MINGW )
 endif()
 
 add_subdirectory(lib/Support)
-add_subdirectory(lib/System)
 
-# Everything else depends on Support and System:
+# Everything else depends on Support:
 set(LLVM_COMMON_DEPENDS ${LLVM_COMMON_DEPENDS} ${LLVM_LIBS} )
 
 set(LLVM_TABLEGEN "tblgen" CACHE
@@ -332,7 +345,7 @@ foreach(t ${LLVM_TARGETS_TO_BUILD})
   set( td ${LLVM_MAIN_SRC_DIR}/lib/Target/${t} )
   file(GLOB asmp_file "${td}/*AsmPrinter.cpp")
   if( asmp_file )
-    set(LLVM_ENUM_ASM_PRINTERS 
+    set(LLVM_ENUM_ASM_PRINTERS
       "${LLVM_ENUM_ASM_PRINTERS}LLVM_ASM_PRINTER(${t})\n")
   endif()
   if( EXISTS ${td}/InstPrinter/CMakeLists.txt )
@@ -340,7 +353,7 @@ foreach(t ${LLVM_TARGETS_TO_BUILD})
   endif()
   if( EXISTS ${td}/AsmParser/CMakeLists.txt )
     add_subdirectory(lib/Target/${t}/AsmParser)
-    set(LLVM_ENUM_ASM_PARSERS 
+    set(LLVM_ENUM_ASM_PARSERS
       "${LLVM_ENUM_ASM_PARSERS}LLVM_ASM_PARSER(${t})\n")
   endif()
   if( EXISTS ${td}/Disassembler/CMakeLists.txt )

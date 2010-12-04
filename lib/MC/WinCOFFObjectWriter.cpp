@@ -31,7 +31,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#include "llvm/System/TimeValue.h"
+#include "llvm/Support/TimeValue.h"
 
 #include "../Target/X86/X86FixupKinds.h"
 
@@ -689,7 +689,7 @@ void WinCOFFObjectWriter::RecordRelocation(const MCAssembler &Asm,
   Reloc.Data.VirtualAddress += Fixup.getOffset();
 
   switch ((unsigned)Fixup.getKind()) {
-  case X86::reloc_pcrel_4byte:
+  case FK_PCRel_4:
   case X86::reloc_riprel_4byte:
   case X86::reloc_riprel_4byte_movq_load:
     Reloc.Data.Type = Is64Bit ? COFF::IMAGE_REL_AMD64_REL32

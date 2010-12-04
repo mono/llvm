@@ -1338,6 +1338,28 @@ X86TargetLowering::LowerReturn(SDValue Chain,
                      MVT::Other, &RetOps[0], RetOps.size());
 }
 
+bool X86TargetLowering::isUsedByReturnOnly(SDNode *N) const {
+  if (N->getNumValues() != 1)
+    return false;
+  if (!N->hasNUsesOfValue(1, 0))
+    return false;
+
+  SDNode *Copy = *N->use_begin();
+  if (Copy->getOpcode() != ISD::CopyToReg &&
+      Copy->getOpcode() != ISD::FP_EXTEND)
+    return false;
+
+  bool HasRet = false;
+  for (SDNode::use_iterator UI = Copy->use_begin(), UE = Copy->use_end();
+       UI != UE; ++UI) {
+    if (UI->getOpcode() != X86ISD::RET_FLAG)
+      return false;
+    HasRet = true;
+  }
+
+  return HasRet;
+}
+
 /// LowerCallResult - Lower the result values of a call into the
 /// appropriate copies out of appropriate physical registers.
 ///
@@ -2153,8 +2175,8 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   } else if (ExternalSymbolSDNode *S = dyn_cast<ExternalSymbolSDNode>(Callee)) {
     unsigned char OpFlags = 0;
 
-    // On ELF targets, in either X86-64 or X86-32 mode, direct calls to external
-    // symbols should go through the PLT.
+    // On ELF targets, in either X86-64 or X86-32 mode, direct calls to
+    // external symbols should go through the PLT.
     if (Subtarget->isTargetELF() &&
         getTargetMachine().getRelocationModel() == Reloc::PIC_) {
       OpFlags = X86II::MO_PLT;
@@ -9416,15 +9438,12 @@ X86TargetLowering::EmitAtomicMinMaxWithCustomInserter(MachineInstr *mInstr,
 MachineBasicBlock *
 X86TargetLowering::EmitPCMP(MachineInstr *MI, MachineBasicBlock *BB,
                             unsigned numArgs, bool memArg) const {
-
   assert((Subtarget->hasSSE42() || Subtarget->hasAVX()) &&
          "Target must have SSE4.2 or AVX features enabled");
 
   DebugLoc dl = MI->getDebugLoc();
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
-
   unsigned Opc;
-
   if (!Subtarget->hasAVX()) {
     if (memArg)
       Opc = numArgs == 3 ? X86::PCMPISTRM128rm : X86::PCMPESTRM128rm;
@@ -9437,20 +9456,59 @@ X86TargetLowering::EmitPCMP(MachineInstr *MI, MachineBasicBlock *BB,
       Opc = numArgs == 3 ? X86::VPCMPISTRM128rr : X86::VPCMPESTRM128rr;
   }
 
-  MachineInstrBuilder MIB = BuildMI(BB, dl, TII->get(Opc));
-
+  MachineInstrBuilder MIB = BuildMI(*BB, MI, dl, TII->get(Opc));
   for (unsigned i = 0; i < numArgs; ++i) {
     MachineOperand &Op = MI->getOperand(i+1);
-
     if (!(Op.isReg() && Op.isImplicit()))
       MIB.addOperand(Op);
   }
-
-  BuildMI(BB, dl, TII->get(X86::MOVAPSrr), MI->getOperand(0).getReg())
+  BuildMI(*BB, MI, dl, TII->get(X86::MOVAPSrr), MI->getOperand(0).getReg())
     .addReg(X86::XMM0);
 
   MI->eraseFromParent();
+  return BB;
+}
 
+MachineBasicBlock *
+X86TargetLowering::EmitMonitor(MachineInstr *MI, MachineBasicBlock *BB) const {
+  DebugLoc dl = MI->getDebugLoc();
+  const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
+  
+  // Address into RAX/EAX, other two args into ECX, EDX.
+  unsigned MemOpc = Subtarget->is64Bit() ? X86::LEA64r : X86::LEA32r;
+  unsigned MemReg = Subtarget->is64Bit() ? X86::RAX : X86::EAX;
+  MachineInstrBuilder MIB = BuildMI(*BB, MI, dl, TII->get(MemOpc), MemReg);
+  for (int i = 0; i < X86::AddrNumOperands; ++i)
+    MIB.addOperand(MI->getOperand(i));
+  
+  unsigned ValOps = X86::AddrNumOperands;
+  BuildMI(*BB, MI, dl, TII->get(TargetOpcode::COPY), X86::ECX)
+    .addReg(MI->getOperand(ValOps).getReg());
+  BuildMI(*BB, MI, dl, TII->get(TargetOpcode::COPY), X86::EDX)
+    .addReg(MI->getOperand(ValOps+1).getReg());
+
+  // The instruction doesn't actually take any operands though.
+  BuildMI(*BB, MI, dl, TII->get(X86::MONITORrrr));
+  
+  MI->eraseFromParent(); // The pseudo is gone now.
+  return BB;
+}
+
+MachineBasicBlock *
+X86TargetLowering::EmitMwait(MachineInstr *MI, MachineBasicBlock *BB) const {
+  DebugLoc dl = MI->getDebugLoc();
+  const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
+  
+  // First arg in ECX, the second in EAX.
+  BuildMI(*BB, MI, dl, TII->get(TargetOpcode::COPY), X86::ECX)
+    .addReg(MI->getOperand(0).getReg());
+  BuildMI(*BB, MI, dl, TII->get(TargetOpcode::COPY), X86::EAX)
+    .addReg(MI->getOperand(1).getReg());
+    
+  // The instruction doesn't actually take any operands though.
+  BuildMI(*BB, MI, dl, TII->get(X86::MWAITrr));
+  
+  MI->eraseFromParent(); // The pseudo is gone now.
   return BB;
 }
 
@@ -10052,6 +10110,12 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   case X86::PCMPESTRM128MEM:
   case X86::VPCMPESTRM128MEM:
     return EmitPCMP(MI, BB, 5, true /* in mem */);
+
+    // Thread synchronization.
+  case X86::MONITOR:
+    return EmitMonitor(MI, BB);  
+  case X86::MWAIT:
+    return EmitMwait(MI, BB);
 
     // Atomic Lowering.
   case X86::ATOMAND32:

@@ -712,10 +712,17 @@ void X86FrameInfo::emitEpilogue(MachineFunction &MF,
 
     // Jump to label or value in register.
     if (RetOpcode == X86::TCRETURNdi || RetOpcode == X86::TCRETURNdi64) {
-      BuildMI(MBB, MBBI, DL, TII.get((RetOpcode == X86::TCRETURNdi)
-                                     ? X86::TAILJMPd : X86::TAILJMPd64)).
-        addGlobalAddress(JumpTarget.getGlobal(), JumpTarget.getOffset(),
-                         JumpTarget.getTargetFlags());
+      MachineInstrBuilder MIB =
+        BuildMI(MBB, MBBI, DL, TII.get((RetOpcode == X86::TCRETURNdi)
+                                       ? X86::TAILJMPd : X86::TAILJMPd64));
+      if (JumpTarget.isGlobal())
+        MIB.addGlobalAddress(JumpTarget.getGlobal(), JumpTarget.getOffset(),
+                             JumpTarget.getTargetFlags());
+      else {
+        assert(JumpTarget.isSymbol());
+        MIB.addExternalSymbol(JumpTarget.getSymbolName(),
+                              JumpTarget.getTargetFlags());
+      }
     } else if (RetOpcode == X86::TCRETURNmi || RetOpcode == X86::TCRETURNmi64) {
       MachineInstrBuilder MIB =
         BuildMI(MBB, MBBI, DL, TII.get((RetOpcode == X86::TCRETURNmi)
@@ -798,4 +805,116 @@ int X86FrameInfo::getFrameIndexOffset(const MachineFunction &MF, int FI) const {
   }
 
   return Offset;
+}
+
+bool X86FrameInfo::spillCalleeSavedRegisters(MachineBasicBlock &MBB,
+                                             MachineBasicBlock::iterator MI,
+                                        const std::vector<CalleeSavedInfo> &CSI,
+                                          const TargetRegisterInfo *TRI) const {
+  if (CSI.empty())
+    return false;
+
+  DebugLoc DL = MBB.findDebugLoc(MI);
+
+  MachineFunction &MF = *MBB.getParent();
+
+  bool isWin64 = STI.isTargetWin64();
+  unsigned SlotSize = STI.is64Bit() ? 8 : 4;
+  unsigned FPReg = TRI->getFrameRegister(MF);
+  unsigned CalleeFrameSize = 0;
+
+  const TargetInstrInfo &TII = *MF.getTarget().getInstrInfo();
+  X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
+
+  unsigned Opc = STI.is64Bit() ? X86::PUSH64r : X86::PUSH32r;
+  for (unsigned i = CSI.size(); i != 0; --i) {
+    unsigned Reg = CSI[i-1].getReg();
+    // Add the callee-saved register as live-in. It's killed at the spill.
+    MBB.addLiveIn(Reg);
+    if (Reg == FPReg)
+      // X86RegisterInfo::emitPrologue will handle spilling of frame register.
+      continue;
+    if (!X86::VR128RegClass.contains(Reg) && !isWin64) {
+      CalleeFrameSize += SlotSize;
+      BuildMI(MBB, MI, DL, TII.get(Opc)).addReg(Reg, RegState::Kill);
+    } else {
+      const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
+      TII.storeRegToStackSlot(MBB, MI, Reg, true, CSI[i-1].getFrameIdx(),
+                              RC, TRI);
+    }
+  }
+
+  X86FI->setCalleeSavedFrameSize(CalleeFrameSize);
+  return true;
+}
+
+bool X86FrameInfo::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
+                                               MachineBasicBlock::iterator MI,
+                                        const std::vector<CalleeSavedInfo> &CSI,
+                                          const TargetRegisterInfo *TRI) const {
+  if (CSI.empty())
+    return false;
+
+  DebugLoc DL = MBB.findDebugLoc(MI);
+
+  MachineFunction &MF = *MBB.getParent();
+  const TargetInstrInfo &TII = *MF.getTarget().getInstrInfo();
+  unsigned FPReg = TRI->getFrameRegister(MF);
+  bool isWin64 = STI.isTargetWin64();
+  unsigned Opc = STI.is64Bit() ? X86::POP64r : X86::POP32r;
+  for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+    unsigned Reg = CSI[i].getReg();
+    if (Reg == FPReg)
+      // X86RegisterInfo::emitEpilogue will handle restoring of frame register.
+      continue;
+    if (!X86::VR128RegClass.contains(Reg) && !isWin64) {
+      BuildMI(MBB, MI, DL, TII.get(Opc), Reg);
+    } else {
+      const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
+      TII.loadRegFromStackSlot(MBB, MI, Reg, CSI[i].getFrameIdx(),
+                               RC, TRI);
+    }
+  }
+  return true;
+}
+
+void
+X86FrameInfo::processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
+                                                   RegScavenger *RS) const {
+  MachineFrameInfo *MFI = MF.getFrameInfo();
+  const X86RegisterInfo *RegInfo = TM.getRegisterInfo();
+  unsigned SlotSize = RegInfo->getSlotSize();
+
+  X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
+  int32_t TailCallReturnAddrDelta = X86FI->getTCReturnAddrDelta();
+
+  if (TailCallReturnAddrDelta < 0) {
+    // create RETURNADDR area
+    //   arg
+    //   arg
+    //   RETADDR
+    //   { ...
+    //     RETADDR area
+    //     ...
+    //   }
+    //   [EBP]
+    MFI->CreateFixedObject(-TailCallReturnAddrDelta,
+                           (-1U*SlotSize)+TailCallReturnAddrDelta, true);
+  }
+
+  if (hasFP(MF)) {
+    assert((TailCallReturnAddrDelta <= 0) &&
+           "The Delta should always be zero or negative");
+    const TargetFrameInfo &TFI = *MF.getTarget().getFrameInfo();
+
+    // Create a frame entry for the EBP register that must be saved.
+    int FrameIdx = MFI->CreateFixedObject(SlotSize,
+                                          -(int)SlotSize +
+                                          TFI.getOffsetOfLocalArea() +
+                                          TailCallReturnAddrDelta,
+                                          true);
+    assert(FrameIdx == MFI->getObjectIndexBegin() &&
+           "Slot for EBP register must be last in order to be found!");
+    FrameIdx = 0;
+  }
 }

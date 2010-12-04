@@ -112,6 +112,13 @@ namespace {
 }
 
 static const NEONLdStTableEntry NEONLdStTable[] = {
+{ ARM::VLD1DUPq16Pseudo,     ARM::VLD1DUPq16,     true, false, SingleSpc, 2, 4},
+{ ARM::VLD1DUPq16Pseudo_UPD, ARM::VLD1DUPq16_UPD, true, true,  SingleSpc, 2, 4},
+{ ARM::VLD1DUPq32Pseudo,     ARM::VLD1DUPq32,     true, false, SingleSpc, 2, 2},
+{ ARM::VLD1DUPq32Pseudo_UPD, ARM::VLD1DUPq32_UPD, true, true,  SingleSpc, 2, 2},
+{ ARM::VLD1DUPq8Pseudo,      ARM::VLD1DUPq8,      true, false, SingleSpc, 2, 8},
+{ ARM::VLD1DUPq8Pseudo_UPD,  ARM::VLD1DUPq8_UPD,  true, true,  SingleSpc, 2, 8},
+
 { ARM::VLD1LNq16Pseudo,     ARM::VLD1LNd16,     true, false, EvenDblSpc, 1, 4 },
 { ARM::VLD1LNq16Pseudo_UPD, ARM::VLD1LNd16_UPD, true, true,  EvenDblSpc, 1, 4 },
 { ARM::VLD1LNq32Pseudo,     ARM::VLD1LNd32,     true, false, EvenDblSpc, 1, 2 },
@@ -132,6 +139,13 @@ static const NEONLdStTableEntry NEONLdStTable[] = {
 { ARM::VLD1q64Pseudo_UPD,   ARM::VLD1q64_UPD,  true,  true,  SingleSpc,  2, 1 },
 { ARM::VLD1q8Pseudo,        ARM::VLD1q8,       true,  false, SingleSpc,  2, 8 },
 { ARM::VLD1q8Pseudo_UPD,    ARM::VLD1q8_UPD,   true,  true,  SingleSpc,  2, 8 },
+
+{ ARM::VLD2DUPd16Pseudo,     ARM::VLD2DUPd16,     true, false, SingleSpc, 2, 4},
+{ ARM::VLD2DUPd16Pseudo_UPD, ARM::VLD2DUPd16_UPD, true, true,  SingleSpc, 2, 4},
+{ ARM::VLD2DUPd32Pseudo,     ARM::VLD2DUPd32,     true, false, SingleSpc, 2, 2},
+{ ARM::VLD2DUPd32Pseudo_UPD, ARM::VLD2DUPd32_UPD, true, true,  SingleSpc, 2, 2},
+{ ARM::VLD2DUPd8Pseudo,      ARM::VLD2DUPd8,      true, false, SingleSpc, 2, 8},
+{ ARM::VLD2DUPd8Pseudo_UPD,  ARM::VLD2DUPd8_UPD,  true, true,  SingleSpc, 2, 8},
 
 { ARM::VLD2LNd16Pseudo,     ARM::VLD2LNd16,     true, false, SingleSpc,  2, 4 },
 { ARM::VLD2LNd16Pseudo_UPD, ARM::VLD2LNd16_UPD, true, true,  SingleSpc,  2, 4 },
@@ -158,6 +172,13 @@ static const NEONLdStTableEntry NEONLdStTable[] = {
 { ARM::VLD2q8Pseudo,        ARM::VLD2q8,       true,  false, SingleSpc,  4, 8 },
 { ARM::VLD2q8Pseudo_UPD,    ARM::VLD2q8_UPD,   true,  true,  SingleSpc,  4, 8 },
 
+{ ARM::VLD3DUPd16Pseudo,     ARM::VLD3DUPd16,     true, false, SingleSpc, 3, 4},
+{ ARM::VLD3DUPd16Pseudo_UPD, ARM::VLD3DUPd16_UPD, true, true,  SingleSpc, 3, 4},
+{ ARM::VLD3DUPd32Pseudo,     ARM::VLD3DUPd32,     true, false, SingleSpc, 3, 2},
+{ ARM::VLD3DUPd32Pseudo_UPD, ARM::VLD3DUPd32_UPD, true, true,  SingleSpc, 3, 2},
+{ ARM::VLD3DUPd8Pseudo,      ARM::VLD3DUPd8,      true, false, SingleSpc, 3, 8},
+{ ARM::VLD3DUPd8Pseudo_UPD,  ARM::VLD3DUPd8_UPD,  true, true,  SingleSpc, 3, 8},
+
 { ARM::VLD3LNd16Pseudo,     ARM::VLD3LNd16,     true, false, SingleSpc,  3, 4 },
 { ARM::VLD3LNd16Pseudo_UPD, ARM::VLD3LNd16_UPD, true, true,  SingleSpc,  3, 4 },
 { ARM::VLD3LNd32Pseudo,     ARM::VLD3LNd32,     true, false, SingleSpc,  3, 2 },
@@ -182,6 +203,13 @@ static const NEONLdStTableEntry NEONLdStTable[] = {
 { ARM::VLD3q32oddPseudo_UPD, ARM::VLD3q32_UPD, true,  true,  OddDblSpc,  3, 2 },
 { ARM::VLD3q8Pseudo_UPD,     ARM::VLD3q8_UPD,  true,  true,  EvenDblSpc, 3, 8 },
 { ARM::VLD3q8oddPseudo_UPD,  ARM::VLD3q8_UPD,  true,  true,  OddDblSpc,  3, 8 },
+
+{ ARM::VLD4DUPd16Pseudo,     ARM::VLD4DUPd16,     true, false, SingleSpc, 4, 4},
+{ ARM::VLD4DUPd16Pseudo_UPD, ARM::VLD4DUPd16_UPD, true, true,  SingleSpc, 4, 4},
+{ ARM::VLD4DUPd32Pseudo,     ARM::VLD4DUPd32,     true, false, SingleSpc, 4, 2},
+{ ARM::VLD4DUPd32Pseudo_UPD, ARM::VLD4DUPd32_UPD, true, true,  SingleSpc, 4, 2},
+{ ARM::VLD4DUPd8Pseudo,      ARM::VLD4DUPd8,      true, false, SingleSpc, 4, 8},
+{ ARM::VLD4DUPd8Pseudo_UPD,  ARM::VLD4DUPd8_UPD,  true, true,  SingleSpc, 4, 8},
 
 { ARM::VLD4LNd16Pseudo,     ARM::VLD4LNd16,     true, false, SingleSpc,  4, 4 },
 { ARM::VLD4LNd16Pseudo_UPD, ARM::VLD4LNd16_UPD, true, true,  SingleSpc,  4, 4 },
@@ -727,13 +755,14 @@ bool ARMExpandPseudo::ExpandMBB(MachineBasicBlock &MBB) {
         break;
       }
 
+      bool isThumb =
+        (Opcode == ARM::t2MOVi32imm || Opcode == ARM::t2MOVCCi32imm);
+
       LO16 = BuildMI(MBB, MBBI, MI.getDebugLoc(),
-                     TII->get(Opcode == ARM::MOVi32imm ?
-                              ARM::MOVi16 : ARM::t2MOVi16),
+                     TII->get(isThumb ? ARM::t2MOVi16 : ARM::MOVi16),
                      DstReg);
       HI16 = BuildMI(MBB, MBBI, MI.getDebugLoc(),
-                     TII->get(Opcode == ARM::MOVi32imm ?
-                              ARM::MOVTi16 : ARM::t2MOVTi16))
+                     TII->get(isThumb ? ARM::t2MOVTi16 : ARM::MOVTi16))
         .addReg(DstReg, RegState::Define | getDeadRegState(DstIsDead))
         .addReg(DstReg);
 
@@ -920,6 +949,30 @@ bool ARMExpandPseudo::ExpandMBB(MachineBasicBlock &MBB) {
     case ARM::VLD4q8oddPseudo_UPD:
     case ARM::VLD4q16oddPseudo_UPD:
     case ARM::VLD4q32oddPseudo_UPD:
+    case ARM::VLD1DUPq8Pseudo:
+    case ARM::VLD1DUPq16Pseudo:
+    case ARM::VLD1DUPq32Pseudo:
+    case ARM::VLD1DUPq8Pseudo_UPD:
+    case ARM::VLD1DUPq16Pseudo_UPD:
+    case ARM::VLD1DUPq32Pseudo_UPD:
+    case ARM::VLD2DUPd8Pseudo:
+    case ARM::VLD2DUPd16Pseudo:
+    case ARM::VLD2DUPd32Pseudo:
+    case ARM::VLD2DUPd8Pseudo_UPD:
+    case ARM::VLD2DUPd16Pseudo_UPD:
+    case ARM::VLD2DUPd32Pseudo_UPD:
+    case ARM::VLD3DUPd8Pseudo:
+    case ARM::VLD3DUPd16Pseudo:
+    case ARM::VLD3DUPd32Pseudo:
+    case ARM::VLD3DUPd8Pseudo_UPD:
+    case ARM::VLD3DUPd16Pseudo_UPD:
+    case ARM::VLD3DUPd32Pseudo_UPD:
+    case ARM::VLD4DUPd8Pseudo:
+    case ARM::VLD4DUPd16Pseudo:
+    case ARM::VLD4DUPd32Pseudo:
+    case ARM::VLD4DUPd8Pseudo_UPD:
+    case ARM::VLD4DUPd16Pseudo_UPD:
+    case ARM::VLD4DUPd32Pseudo_UPD:
       ExpandVLD(MBBI);
       break;
 

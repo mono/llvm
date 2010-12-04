@@ -222,15 +222,29 @@ public:
     if (!isMemory() || Mem.OffsetIsReg || Mem.OffsetRegShifted ||
         Mem.Writeback || Mem.Negative)
       return false;
+
     // If there is an offset expression, make sure it's valid.
-    if (!Mem.Offset)
-      return true;
+    if (!Mem.Offset) return true;
+
     const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(Mem.Offset);
-    if (!CE)
-      return false;
+    if (!CE) return false;
+
     // The offset must be a multiple of 4 in the range 0-1020.
     int64_t Value = CE->getValue();
     return ((Value & 0x3) == 0 && Value <= 1020 && Value >= -1020);
+  }
+  bool isMemModeThumb() const {
+    if (!isMemory() || (!Mem.OffsetIsReg && !Mem.Offset) || Mem.Writeback)
+      return false;
+
+    if (!Mem.Offset) return true;
+
+    const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(Mem.Offset);
+    if (!CE) return false;
+
+    // The offset must be a multiple of 4 in the range 0-124.
+    uint64_t Value = CE->getValue();
+    return ((Value & 0x3) == 0 && Value <= 124);
   }
 
   void addExpr(MCInst &Inst, const MCExpr *Expr) const {
@@ -299,6 +313,21 @@ public:
                                                                -Offset)));
     } else {
       Inst.addOperand(MCOperand::CreateImm(0));
+    }
+  }
+
+  void addMemModeThumbOperands(MCInst &Inst, unsigned N) const {
+    assert(N == 3 && isMemModeThumb() && "Invalid number of operands!");
+    Inst.addOperand(MCOperand::CreateReg(Mem.BaseRegNum));
+
+    if (Mem.Offset) {
+      const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(Mem.Offset);
+      assert(CE && "Non-constant mode offset operand!");
+      Inst.addOperand(MCOperand::CreateImm(CE->getValue()));
+      Inst.addOperand(MCOperand::CreateReg(0));
+    } else {
+      Inst.addOperand(MCOperand::CreateImm(0));
+      Inst.addOperand(MCOperand::CreateReg(Mem.OffsetRegNum));
     }
   }
 
@@ -521,7 +550,7 @@ ParseRegisterList(SmallVectorImpl<MCParsedAsmOperand*> &Operands) {
 
   SMLoc E = RCurlyTok.getLoc();
   Parser.Lex(); // Eat right curly brace token.
- 
+
   // Verify the register list.
   SmallVectorImpl<std::pair<unsigned, SMLoc> >::const_iterator
     RI = Registers.begin(), RE = Registers.end();
@@ -592,8 +621,8 @@ ParseMemory(SmallVectorImpl<MCParsedAsmOperand*> &Operands) {
     int OffsetRegNum;
     bool OffsetRegShifted;
     enum ShiftType ShiftType;
-    const MCExpr *ShiftAmount;
-    const MCExpr *Offset;
+    const MCExpr *ShiftAmount = 0;
+    const MCExpr *Offset = 0;
     if (ParseMemoryOffsetReg(Negative, OffsetRegShifted, ShiftType, ShiftAmount,
                              Offset, OffsetIsReg, OffsetRegNum, E))
       return true;
@@ -605,7 +634,7 @@ ParseMemory(SmallVectorImpl<MCParsedAsmOperand*> &Operands) {
     E = RBracTok.getLoc();
     Parser.Lex(); // Eat right bracket token.
 
-    
+
     const AsmToken &ExclaimTok = Parser.getTok();
     ARMOperand *WBOp = 0;
     if (ExclaimTok.is(AsmToken::Exclaim)) {
@@ -634,12 +663,12 @@ ParseMemory(SmallVectorImpl<MCParsedAsmOperand*> &Operands) {
 
     int OffsetRegNum = 0;
     bool OffsetRegShifted = false;
-    enum ShiftType ShiftType;
-    const MCExpr *ShiftAmount;
+    enum ShiftType ShiftType = Lsl;
+    const MCExpr *ShiftAmount = 0;
     const MCExpr *Offset = 0;
 
     const AsmToken &NextTok = Parser.getTok();
-    
+
     if (NextTok.isNot(AsmToken::EndOfStatement)) {
       Postindexed = true;
       Writeback = true;

@@ -805,6 +805,8 @@ namespace llvm {
                   const SmallVectorImpl<SDValue> &OutVals,
                   DebugLoc dl, SelectionDAG &DAG) const;
 
+    virtual bool isUsedByReturnOnly(SDNode *N) const;
+
     virtual bool
       CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
                      const SmallVectorImpl<ISD::OutputArg> &Outs,
@@ -820,6 +822,13 @@ namespace llvm {
     /// in memory or not.
     MachineBasicBlock *EmitPCMP(MachineInstr *BInstr, MachineBasicBlock *BB,
                                 unsigned argNum, bool inMem) const;
+
+    /// Utility functions to emit monitor and mwait instructions. These
+    /// need to make sure that the arguments to the intrinsic are in the
+    /// correct registers.
+    MachineBasicBlock *EmitMonitor(MachineInstr *MI,
+                                   MachineBasicBlock *BB) const;
+    MachineBasicBlock *EmitMwait(MachineInstr *MI, MachineBasicBlock *BB) const;
 
     /// Utility function to emit atomic bitwise operations (and, or, xor).
     /// It takes the bitwise instruction to expand, the associated machine basic
@@ -869,6 +878,9 @@ namespace llvm {
                                               MachineBasicBlock *BB) const;
 
     MachineBasicBlock *EmitLoweredTLSCall(MachineInstr *MI,
+                                          MachineBasicBlock *BB) const;
+
+    MachineBasicBlock *emitLoweredTLSAddr(MachineInstr *MI,
                                           MachineBasicBlock *BB) const;
 
     /// Emit nodes that will be selected as "test Op0,Op0", or something

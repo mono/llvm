@@ -30,29 +30,55 @@ raw_ostream &MCStreamer::GetCommentOS() {
   return nulls();
 }
 
+void MCStreamer::EmitDwarfSetLineAddr(int64_t LineDelta,
+                                      const MCSymbol *Label, int PointerSize) {
+  // emit the sequence to set the address
+  EmitIntValue(dwarf::DW_LNS_extended_op, 1);
+  EmitULEB128IntValue(PointerSize + 1);
+  EmitIntValue(dwarf::DW_LNE_set_address, 1);
+  EmitSymbolValue(Label, PointerSize);
+
+  // emit the sequence for the LineDelta (from 1) and a zero address delta.
+  MCDwarfLineAddr::Emit(this, LineDelta, 0);
+}
 
 /// EmitIntValue - Special case of EmitValue that avoids the client having to
 /// pass in a MCExpr for constant integers.
 void MCStreamer::EmitIntValue(uint64_t Value, unsigned Size,
                               unsigned AddrSpace) {
-  EmitValue(MCConstantExpr::Create(Value, getContext()), Size, AddrSpace);
+  assert(Size <= 8);
+  char buf[8];
+  // FIXME: Endianness assumption.
+  for (unsigned i = 0; i != Size; ++i)
+    buf[i] = uint8_t(Value >> (i * 8));
+  EmitBytes(StringRef(buf, Size), AddrSpace);
 }
 
 /// EmitULEB128Value - Special case of EmitULEB128Value that avoids the
 /// client having to pass in a MCExpr for constant integers.
 void MCStreamer::EmitULEB128IntValue(uint64_t Value, unsigned AddrSpace) {
-  EmitULEB128Value(MCConstantExpr::Create(Value, getContext()), AddrSpace);
+  SmallString<32> Tmp;
+  raw_svector_ostream OSE(Tmp);
+  MCObjectWriter::EncodeULEB128(Value, OSE);
+  EmitBytes(OSE.str(), AddrSpace);
 }
 
 /// EmitSLEB128Value - Special case of EmitSLEB128Value that avoids the
 /// client having to pass in a MCExpr for constant integers.
 void MCStreamer::EmitSLEB128IntValue(int64_t Value, unsigned AddrSpace) {
-  EmitSLEB128Value(MCConstantExpr::Create(Value, getContext()), AddrSpace);
+  SmallString<32> Tmp;
+  raw_svector_ostream OSE(Tmp);
+  MCObjectWriter::EncodeSLEB128(Value, OSE);
+  EmitBytes(OSE.str(), AddrSpace);
 }
 
 void MCStreamer::EmitSymbolValue(const MCSymbol *Sym, unsigned Size,
                                  unsigned AddrSpace) {
   EmitValue(MCSymbolRefExpr::Create(Sym, getContext()), Size, AddrSpace);
+}
+
+void MCStreamer::EmitGPRel32Value(const MCExpr *Value) {
+  report_fatal_error("unsupported directive in streamer");
 }
 
 /// EmitFill - Emit NumBytes bytes worth of the value specified by

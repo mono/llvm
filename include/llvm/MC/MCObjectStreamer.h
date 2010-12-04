@@ -33,7 +33,6 @@ class MCObjectStreamer : public MCStreamer {
   MCAssembler *Assembler;
   MCSectionData *CurSectionData;
 
-  virtual void EmitInstToFragment(const MCInst &Inst) = 0;
   virtual void EmitInstToData(const MCInst &Inst) = 0;
 
 protected:
@@ -60,11 +59,18 @@ public:
   /// @name MCStreamer Interface
   /// @{
 
+  virtual void EmitLabel(MCSymbol *Symbol);
+  virtual void EmitValue(const MCExpr *Value, unsigned Size,unsigned AddrSpace);
   virtual void EmitULEB128Value(const MCExpr *Value, unsigned AddrSpace = 0);
   virtual void EmitSLEB128Value(const MCExpr *Value, unsigned AddrSpace = 0);
   virtual void EmitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol);
   virtual void SwitchSection(const MCSection *Section);
   virtual void EmitInstruction(const MCInst &Inst);
+  virtual void EmitInstToFragment(const MCInst &Inst);
+  virtual void EmitValueToOffset(const MCExpr *Offset, unsigned char Value);
+  virtual void EmitDwarfAdvanceLineAddr(int64_t LineDelta,
+                                        const MCSymbol *LastLabel,
+                                        const MCSymbol *Label);
   virtual void Finish();
 
   /// @}

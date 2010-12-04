@@ -14,7 +14,7 @@
 #ifndef LLVM_MC_MCSTREAMER_H
 #define LLVM_MC_MCSTREAMER_H
 
-#include "llvm/System/DataTypes.h"
+#include "llvm/Support/DataTypes.h"
 #include "llvm/MC/MCDirectives.h"
 
 namespace llvm {
@@ -258,23 +258,23 @@ namespace llvm {
 
     /// EmitULEB128Value - Special case of EmitULEB128Value that avoids the
     /// client having to pass in a MCExpr for constant integers.
-    virtual void EmitULEB128IntValue(uint64_t Value, unsigned AddrSpace = 0);
+    void EmitULEB128IntValue(uint64_t Value, unsigned AddrSpace = 0);
 
     /// EmitSLEB128Value - Special case of EmitSLEB128Value that avoids the
     /// client having to pass in a MCExpr for constant integers.
-    virtual void EmitSLEB128IntValue(int64_t Value, unsigned AddrSpace = 0);
+    void EmitSLEB128IntValue(int64_t Value, unsigned AddrSpace = 0);
 
     /// EmitSymbolValue - Special case of EmitValue that avoids the client
     /// having to pass in a MCExpr for MCSymbols.
-    virtual void EmitSymbolValue(const MCSymbol *Sym, unsigned Size,
-                                 unsigned AddrSpace = 0);
+    void EmitSymbolValue(const MCSymbol *Sym, unsigned Size,
+                         unsigned AddrSpace = 0);
 
     /// EmitGPRel32Value - Emit the expression @p Value into the output as a
     /// gprel32 (32-bit GP relative) value.
     ///
     /// This is used to implement assembler directives such as .gprel32 on
     /// targets that support them.
-    virtual void EmitGPRel32Value(const MCExpr *Value) = 0;
+    virtual void EmitGPRel32Value(const MCExpr *Value);
 
     /// EmitFill - Emit NumBytes bytes worth of the value specified by
     /// FillValue.  This implements directives such as '.space'.
@@ -351,6 +351,13 @@ namespace llvm {
                                        unsigned Column, unsigned Flags,
                                        unsigned Isa,
                                        unsigned Discriminator);
+
+    virtual void EmitDwarfAdvanceLineAddr(int64_t LineDelta,
+                                          const MCSymbol *LastLabel,
+                                          const MCSymbol *Label) = 0;
+
+    void EmitDwarfSetLineAddr(int64_t LineDelta, const MCSymbol *Label,
+                              int PointerSize);
 
     virtual bool EmitCFIStartProc();
     virtual bool EmitCFIEndProc();

@@ -22,6 +22,8 @@
 #ifndef LLVM_OBJECT_MACHOFORMAT_H
 #define LLVM_OBJECT_MACHOFORMAT_H
 
+#include "llvm/Support/DataTypes.h"
+
 namespace llvm {
 namespace object {
 
@@ -83,13 +85,6 @@ namespace mach {
 
 /// Format information for Mach object files.
 namespace macho {
-  /// \brief Constants for header magic field.
-  enum HeaderMagic {
-    HM_Object32 = 0xFEEDFACE,  ///< 32-bit mach object file
-    HM_Object64 = 0xFEEDFACF,  ///< 64-bit mach object file
-    HM_Universal = 0xCAFEBABE  ///< Universal object file
-  };
-
   /// \brief Constants for structure sizes.
   enum StructureSizes {
     Header32Size = 28,
@@ -105,6 +100,29 @@ namespace macho {
     RelocationInfoSize = 8
   };
 
+  /// \brief Constants for header magic field.
+  enum HeaderMagic {
+    HM_Object32 = 0xFEEDFACE,  ///< 32-bit mach object file
+    HM_Object64 = 0xFEEDFACF,  ///< 64-bit mach object file
+    HM_Universal = 0xCAFEBABE  ///< Universal object file
+  };
+
+  /// \brief Header common to all Mach object files.
+  struct Header {
+    uint32_t Magic;
+    uint32_t CPUType;
+    uint32_t CPUSubtype;
+    uint32_t FileType;
+    uint32_t NumLoadCommands;
+    uint32_t SizeOfLoadCommands;
+    uint32_t Flags;
+  };
+
+  /// \brief Extended header for 64-bit object files.
+  struct Header64Ext {
+    uint32_t Reserved;
+  };
+
   // See <mach-o/loader.h>.
   enum HeaderFileType {
     HFT_Object = 0x1
@@ -118,8 +136,157 @@ namespace macho {
     LCT_Segment = 0x1,
     LCT_Symtab = 0x2,
     LCT_Dysymtab = 0xb,
-    LCT_Segment64 = 0x19
+    LCT_Segment64 = 0x19,
+    LCT_UUID = 0x1b
   };
+
+  /// \brief Load command structure.
+  struct LoadCommand {
+    uint32_t Type;
+    uint32_t Size;
+  };
+
+  /// @name Load Command Structures
+  /// @{
+
+  struct SegmentLoadCommand {
+    uint32_t Type;
+    uint32_t Size;
+    char Name[16];
+    uint32_t VMAddress;
+    uint32_t VMSize;
+    uint32_t FileOffset;
+    uint32_t FileSize;
+    uint32_t MaxVMProtection;
+    uint32_t InitialVMProtection;
+    uint32_t NumSections;
+    uint32_t Flags;
+  };
+
+  struct Segment64LoadCommand {
+    uint32_t Type;
+    uint32_t Size;
+    char Name[16];
+    uint64_t VMAddress;
+    uint64_t VMSize;
+    uint64_t FileOffset;
+    uint64_t FileSize;
+    uint32_t MaxVMProtection;
+    uint32_t InitialVMProtection;
+    uint32_t NumSections;
+    uint32_t Flags;
+  };
+
+  struct SymtabLoadCommand {
+    uint32_t Type;
+    uint32_t Size;
+    uint32_t SymbolTableOffset;
+    uint32_t NumSymbolTableEntries;
+    uint32_t StringTableOffset;
+    uint32_t StringTableSize;
+  };
+
+  struct DysymtabLoadCommand {
+    uint32_t Type;
+    uint32_t Size;
+
+    uint32_t LocalSymbolIndex;
+    uint32_t NumLocalSymbols;
+
+    uint32_t ExternalSymbolsIndex;
+    uint32_t NumExternalSymbols;
+
+    uint32_t UndefinedSymbolsIndex;
+    uint32_t NumUndefinedSymbols;
+
+    uint32_t TOCOffset;
+    uint32_t NumTOCEntries;
+
+    uint32_t ModuleTableOffset;
+    uint32_t NumModuleTableEntries;
+
+    uint32_t ReferenceSymbolTableOffset;
+    uint32_t NumReferencedSymbolTableEntries;
+
+    uint32_t IndirectSymbolTableOffset;
+    uint32_t NumIndirectSymbolTableEntries;
+
+    uint32_t ExternalRelocationTableOffset;
+    uint32_t NumExternalRelocationTableEntries;
+
+    uint32_t LocalRelocationTableOffset;
+    uint32_t NumLocalRelocationTableEntries;
+  };
+
+  /// @}
+  /// @name Section Data
+  /// @{
+
+  struct Section {
+    char Name[16];
+    char SegmentName[16];
+    uint32_t Address;
+    uint32_t Size;
+    uint32_t Offset;
+    uint32_t Align;
+    uint32_t RelocationTableOffset;
+    uint32_t NumRelocationTableEntries;
+    uint32_t Flags;
+    uint32_t Reserved1;
+    uint32_t Reserved2;
+  };
+  struct Section64 {
+    char Name[16];
+    char SegmentName[16];
+    uint64_t Address;
+    uint64_t Size;
+    uint32_t Offset;
+    uint32_t Align;
+    uint32_t RelocationTableOffset;
+    uint32_t NumRelocationTableEntries;
+    uint32_t Flags;
+    uint32_t Reserved1;
+    uint32_t Reserved2;
+    uint32_t Reserved3;
+  };
+
+  /// @}
+  /// @name Symbol Table Entries
+  /// @{
+
+  struct SymbolTableEntry {
+    uint32_t StringIndex;
+    uint8_t Type;
+    uint8_t SectionIndex;
+    uint16_t Flags;
+    uint32_t Value;
+  };
+  struct Symbol64TableEntry {
+    uint32_t StringIndex;
+    uint8_t Type;
+    uint8_t SectionIndex;
+    uint16_t Flags;
+    uint64_t Value;
+  };
+
+  /// @}
+  /// @name Indirect Symbol Table
+  /// @{
+
+  struct IndirectSymbolTableEntry {
+    uint32_t Index;
+  };
+
+  /// @}
+  /// @name Relocation Data
+  /// @{
+
+  struct RelocationEntry {
+    uint32_t Word0;
+    uint32_t Word1;
+  };
+
+  /// @}
 
   // See <mach-o/nlist.h>.
   enum SymbolTypeType {

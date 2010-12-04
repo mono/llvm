@@ -51,6 +51,11 @@ namespace llvm {
     /// emitted in Static relocation model.
     bool HasStaticCtorDtorReferenceInStaticMode;  // Default is false.
 
+    /// LinkerRequiresNonEmptyDwarfLines - True if the linker has a bug and
+    /// requires that the debug_line section be of a minimum size. In practice
+    /// such a linker requires a non empty line sequence if a file is present.
+    bool LinkerRequiresNonEmptyDwarfLines; // Default to false.
+
     /// MaxInstLength - This is the maximum possible length of an instruction,
     /// which is needed to compute the size of an inline asm.
     unsigned MaxInstLength;                  // Defaults to 4.
@@ -192,6 +197,13 @@ namespace llvm {
     /// HasSetDirective - True if the assembler supports the .set directive.
     bool HasSetDirective;                    // Defaults to true.
 
+    /// NeedsSetToChangeDiffSize - True if the assembler requires that we do
+    /// Lc = a - b
+    /// .long Lc
+    /// instead of doing
+    /// .long a - b
+    bool NeedsSetToChangeDiffSize;           // Defaults to false.
+
     /// HasLCOMMDirective - This is true if the target supports the .lcomm
     /// directive.
     bool HasLCOMMDirective;                  // Defaults to false.
@@ -322,6 +334,9 @@ namespace llvm {
     bool hasStaticCtorDtorReferenceInStaticMode() const {
       return HasStaticCtorDtorReferenceInStaticMode;
     }
+    bool getLinkerRequiresNonEmptyDwarfLines() const {
+      return LinkerRequiresNonEmptyDwarfLines;
+    }
     unsigned getMaxInstLength() const {
       return MaxInstLength;
     }
@@ -392,6 +407,7 @@ namespace llvm {
       return ExternDirective;
     }
     bool hasSetDirective() const { return HasSetDirective; }
+    bool needsSetToChangeDiffSize() const { return NeedsSetToChangeDiffSize; }
     bool hasLCOMMDirective() const { return HasLCOMMDirective; }
     bool hasDotTypeDotSizeDirective() const {return HasDotTypeDotSizeDirective;}
     bool getCOMMDirectiveAlignmentIsInBytes() const {

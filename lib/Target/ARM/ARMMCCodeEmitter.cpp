@@ -45,10 +45,13 @@ public:
 
   const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const {
     const static MCFixupKindInfo Infos[] = {
-      // name                     offset  bits  flags
-      { "fixup_arm_pcrel_12",     2,      12,   MCFixupKindInfo::FKF_IsPCRel },
-      { "fixup_arm_vfp_pcrel_12", 3,      8,    MCFixupKindInfo::FKF_IsPCRel },
-      { "fixup_arm_branch",       1,      24,   MCFixupKindInfo::FKF_IsPCRel },
+      // name                       off   bits  flags
+      { "fixup_arm_ldst_pcrel_12",  1,    24,   MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_arm_pcrel_10",       1,    24,   MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_arm_adr_pcrel_12",   1,    24,   MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_arm_branch",         1,    24,   MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_arm_movt_hi16",      0,    16,   0 },
+      { "fixup_arm_movw_lo16",      0,    16,   0 },
     };
 
     if (Kind < FirstTargetFixupKind)
@@ -83,10 +86,21 @@ public:
   uint32_t getBranchTargetOpValue(const MCInst &MI, unsigned OpIdx,
                                   SmallVectorImpl<MCFixup> &Fixups) const;
 
+  /// getAdrLabelOpValue - Return encoding info for 12-bit immediate
+  /// ADR label target.
+  uint32_t getAdrLabelOpValue(const MCInst &MI, unsigned OpIdx,
+                              SmallVectorImpl<MCFixup> &Fixups) const;
+
   /// getAddrModeImm12OpValue - Return encoding info for 'reg +/- imm12'
   /// operand.
   uint32_t getAddrModeImm12OpValue(const MCInst &MI, unsigned OpIdx,
                                    SmallVectorImpl<MCFixup> &Fixups) const;
+
+  /// getT2AddrModeImm8s4OpValue - Return encoding info for 'reg +/- imm8<<2'
+  /// operand.
+  uint32_t getT2AddrModeImm8s4OpValue(const MCInst &MI, unsigned OpIdx,
+                                   SmallVectorImpl<MCFixup> &Fixups) const;
+
 
   /// getLdStSORegOpValue - Return encoding info for 'reg +/- reg shop imm'
   /// operand as needed by load/store instructions.
@@ -136,6 +150,18 @@ public:
   uint32_t getAddrMode3OpValue(const MCInst &MI, unsigned OpIdx,
                                SmallVectorImpl<MCFixup> &Fixups) const;
 
+  /// getAddrModeS4OpValue - Return encoding for t_addrmode_s4 operands.
+  uint32_t getAddrModeS4OpValue(const MCInst &MI, unsigned OpIdx,
+                                SmallVectorImpl<MCFixup> &Fixups) const;
+
+  /// getAddrModeS2OpValue - Return encoding for t_addrmode_s2 operands.
+  uint32_t getAddrModeS2OpValue(const MCInst &MI, unsigned OpIdx,
+                                SmallVectorImpl<MCFixup> &Fixups) const;
+
+  /// getAddrModeS1OpValue - Return encoding for t_addrmode_s1 operands.
+  uint32_t getAddrModeS1OpValue(const MCInst &MI, unsigned OpIdx,
+                                SmallVectorImpl<MCFixup> &Fixups) const;
+
   /// getAddrMode5OpValue - Return encoding info for 'reg +/- imm8' operand.
   uint32_t getAddrMode5OpValue(const MCInst &MI, unsigned OpIdx,
                                SmallVectorImpl<MCFixup> &Fixups) const;
@@ -173,6 +199,15 @@ public:
     return Encoded;
   }
 
+  unsigned getT2AddrModeSORegOpValue(const MCInst &MI, unsigned OpNum,
+    SmallVectorImpl<MCFixup> &Fixups) const;
+  unsigned getT2AddrModeImm8OpValue(const MCInst &MI, unsigned OpNum,
+    SmallVectorImpl<MCFixup> &Fixups) const;
+  unsigned getT2AddrModeImm8OffsetOpValue(const MCInst &MI, unsigned OpNum,
+    SmallVectorImpl<MCFixup> &Fixups) const;
+  unsigned getT2AddrModeImm12OffsetOpValue(const MCInst &MI, unsigned OpNum,
+    SmallVectorImpl<MCFixup> &Fixups) const;
+
   /// getSORegOpValue - Return an encoded so_reg shifted register value.
   unsigned getSORegOpValue(const MCInst &MI, unsigned Op,
                            SmallVectorImpl<MCFixup> &Fixups) const;
@@ -207,15 +242,20 @@ public:
                                   SmallVectorImpl<MCFixup> &Fixups) const;
   unsigned getAddrMode6AddressOpValue(const MCInst &MI, unsigned Op,
                                       SmallVectorImpl<MCFixup> &Fixups) const;
+  unsigned getAddrMode6DupAddressOpValue(const MCInst &MI, unsigned Op,
+                                        SmallVectorImpl<MCFixup> &Fixups) const;
   unsigned getAddrMode6OffsetOpValue(const MCInst &MI, unsigned Op,
                                      SmallVectorImpl<MCFixup> &Fixups) const;
 
   unsigned NEONThumb2DataIPostEncoder(const MCInst &MI,
                                       unsigned EncodedValue) const;
   unsigned NEONThumb2LoadStorePostEncoder(const MCInst &MI,
-                                      unsigned EncodedValue) const;
+                                          unsigned EncodedValue) const;
   unsigned NEONThumb2DupPostEncoder(const MCInst &MI,
-                                      unsigned EncodedValue) const;
+                                    unsigned EncodedValue) const;
+
+  unsigned VFPThumb2PostEncoder(const MCInst &MI,
+                                unsigned EncodedValue) const;
 
   void EmitByte(unsigned char C, raw_ostream &OS) const {
     OS << (char)C;
@@ -288,7 +328,16 @@ unsigned ARMMCCodeEmitter::NEONThumb2DupPostEncoder(const MCInst &MI,
   return EncodedValue;
 }
 
-
+/// VFPThumb2PostEncoder - Post-process encoded VFP instructions and rewrite
+/// them to their Thumb2 form if we are currently in Thumb2 mode.
+unsigned ARMMCCodeEmitter::
+VFPThumb2PostEncoder(const MCInst &MI, unsigned EncodedValue) const {
+  if (TM.getSubtarget<ARMSubtarget>().isThumb2()) {
+    EncodedValue &= 0x0FFFFFFF;
+    EncodedValue |= 0xE0000000;
+  }
+  return EncodedValue;
+}
 
 /// getMachineOpValue - Return binary encoding of operand. If the machine
 /// operand requires relocation, record the relocation and return zero.
@@ -299,7 +348,7 @@ getMachineOpValue(const MCInst &MI, const MCOperand &MO,
     unsigned Reg = MO.getReg();
     unsigned RegNo = getARMRegisterNumbering(Reg);
 
-    // Q registers are encodes as 2x their register number.
+    // Q registers are encoded as 2x their register number.
     switch (Reg) {
     default:
       return RegNo;
@@ -364,6 +413,20 @@ getBranchTargetOpValue(const MCInst &MI, unsigned OpIdx,
   return 0;
 }
 
+/// getAdrLabelOpValue - Return encoding info for 12-bit immediate
+/// ADR label target.
+uint32_t ARMMCCodeEmitter::
+getAdrLabelOpValue(const MCInst &MI, unsigned OpIdx,
+                   SmallVectorImpl<MCFixup> &Fixups) const {
+  const MCOperand &MO = MI.getOperand(OpIdx);
+  assert (MO.isExpr() && "Unexpected adr target type!");
+  const MCExpr *Expr = MO.getExpr();
+  MCFixupKind Kind = MCFixupKind(ARM::fixup_arm_adr_pcrel_12);
+  Fixups.push_back(MCFixup::Create(0, Expr, Kind));
+  // All of the information is in the fixup.
+  return 0;
+}
+
 /// getAddrModeImm12OpValue - Return encoding info for 'reg +/- imm12' operand.
 uint32_t ARMMCCodeEmitter::
 getAddrModeImm12OpValue(const MCInst &MI, unsigned OpIdx,
@@ -378,10 +441,11 @@ getAddrModeImm12OpValue(const MCInst &MI, unsigned OpIdx,
   if (!MO.isReg()) {
     Reg = getARMRegisterNumbering(ARM::PC);   // Rn is PC.
     Imm12 = 0;
+    isAdd = false ; // 'U' bit is set as part of the fixup.
 
     assert(MO.isExpr() && "Unexpected machine operand type!");
     const MCExpr *Expr = MO.getExpr();
-    MCFixupKind Kind = MCFixupKind(ARM::fixup_arm_pcrel_12);
+    MCFixupKind Kind = MCFixupKind(ARM::fixup_arm_ldst_pcrel_12);
     Fixups.push_back(MCFixup::Create(0, Expr, Kind));
 
     ++MCNumCPRelocations;
@@ -393,6 +457,40 @@ getAddrModeImm12OpValue(const MCInst &MI, unsigned OpIdx,
   if (isAdd)
     Binary |= (1 << 12);
   Binary |= (Reg << 13);
+  return Binary;
+}
+
+/// getT2AddrModeImm8s4OpValue - Return encoding info for
+/// 'reg +/- imm8<<2' operand.
+uint32_t ARMMCCodeEmitter::
+getT2AddrModeImm8s4OpValue(const MCInst &MI, unsigned OpIdx,
+                        SmallVectorImpl<MCFixup> &Fixups) const {
+  // {17-13} = reg
+  // {12}    = (U)nsigned (add == '1', sub == '0')
+  // {11-0}  = imm8
+  unsigned Reg, Imm8;
+  bool isAdd = true;
+  // If The first operand isn't a register, we have a label reference.
+  const MCOperand &MO = MI.getOperand(OpIdx);
+  if (!MO.isReg()) {
+    Reg = getARMRegisterNumbering(ARM::PC);   // Rn is PC.
+    Imm8 = 0;
+    isAdd = false ; // 'U' bit is set as part of the fixup.
+
+    assert(MO.isExpr() && "Unexpected machine operand type!");
+    const MCExpr *Expr = MO.getExpr();
+    MCFixupKind Kind = MCFixupKind(ARM::fixup_arm_pcrel_10);
+    Fixups.push_back(MCFixup::Create(0, Expr, Kind));
+
+    ++MCNumCPRelocations;
+  } else
+    isAdd = EncodeAddrModeOpValues(MI, OpIdx, Reg, Imm8, Fixups);
+
+  uint32_t Binary = (Imm8 >> 2) & 0xff;
+  // Immediate is always encoded as positive. The 'U' bit controls add vs sub.
+  if (isAdd)
+    Binary |= (1 << 9);
+  Binary |= (Reg << 9);
   return Binary;
 }
 
@@ -529,7 +627,51 @@ getAddrMode3OpValue(const MCInst &MI, unsigned OpIdx,
   return (Rn << 9) | Imm8 | (isAdd << 8) | (isImm << 13);
 }
 
-/// getAddrMode5OpValue - Return encoding info for 'reg +/- imm12' operand.
+/// getAddrModeSOpValue - Encode the t_addrmode_s# operands.
+static unsigned getAddrModeSOpValue(const MCInst &MI, unsigned OpIdx,
+                                    unsigned Scale) {
+  // [Rn, Rm]
+  //   {5-3} = Rm
+  //   {2-0} = Rn
+  //
+  // [Rn, #imm]
+  //   {7-3} = imm5
+  //   {2-0} = Rn
+  const MCOperand &MO = MI.getOperand(OpIdx);
+  const MCOperand &MO1 = MI.getOperand(OpIdx + 1);
+  const MCOperand &MO2 = MI.getOperand(OpIdx + 2);
+  unsigned Rn = getARMRegisterNumbering(MO.getReg());
+  unsigned Imm5 = (MO1.getImm() / Scale) & 0x1f;
+
+  if (MO2.getReg() != 0)
+    // Is an immediate.
+    Imm5 = getARMRegisterNumbering(MO2.getReg());
+
+  return (Imm5 << 3) | Rn;
+}
+
+/// getAddrModeS4OpValue - Return encoding for t_addrmode_s4 operands.
+uint32_t ARMMCCodeEmitter::
+getAddrModeS4OpValue(const MCInst &MI, unsigned OpIdx,
+                     SmallVectorImpl<MCFixup> &) const {
+  return getAddrModeSOpValue(MI, OpIdx, 4);
+}
+
+/// getAddrModeS2OpValue - Return encoding for t_addrmode_s2 operands.
+uint32_t ARMMCCodeEmitter::
+getAddrModeS2OpValue(const MCInst &MI, unsigned OpIdx,
+                     SmallVectorImpl<MCFixup> &) const {
+  return getAddrModeSOpValue(MI, OpIdx, 2);
+}
+
+/// getAddrModeS1OpValue - Return encoding for t_addrmode_s1 operands.
+uint32_t ARMMCCodeEmitter::
+getAddrModeS1OpValue(const MCInst &MI, unsigned OpIdx,
+                     SmallVectorImpl<MCFixup> &) const {
+  return getAddrModeSOpValue(MI, OpIdx, 1);
+}
+
+/// getAddrMode5OpValue - Return encoding info for 'reg +/- imm10' operand.
 uint32_t ARMMCCodeEmitter::
 getAddrMode5OpValue(const MCInst &MI, unsigned OpIdx,
                     SmallVectorImpl<MCFixup> &Fixups) const {
@@ -537,24 +679,28 @@ getAddrMode5OpValue(const MCInst &MI, unsigned OpIdx,
   // {8}    = (U)nsigned (add == '1', sub == '0')
   // {7-0}  = imm8
   unsigned Reg, Imm8;
+  bool isAdd;
   // If The first operand isn't a register, we have a label reference.
   const MCOperand &MO = MI.getOperand(OpIdx);
   if (!MO.isReg()) {
     Reg = getARMRegisterNumbering(ARM::PC);   // Rn is PC.
     Imm8 = 0;
+    isAdd = false; // 'U' bit is handled as part of the fixup.
 
     assert(MO.isExpr() && "Unexpected machine operand type!");
     const MCExpr *Expr = MO.getExpr();
-    MCFixupKind Kind = MCFixupKind(ARM::fixup_arm_vfp_pcrel_12);
+    MCFixupKind Kind = MCFixupKind(ARM::fixup_arm_pcrel_10);
     Fixups.push_back(MCFixup::Create(0, Expr, Kind));
 
     ++MCNumCPRelocations;
-  } else
+  } else {
     EncodeAddrModeOpValues(MI, OpIdx, Reg, Imm8, Fixups);
+    isAdd = ARM_AM::getAM5Op(Imm8) == ARM_AM::add;
+  }
 
   uint32_t Binary = ARM_AM::getAM5Offset(Imm8);
   // Immediate is always encoded as positive. The 'U' bit controls add vs sub.
-  if (ARM_AM::getAM5Op(Imm8) == ARM_AM::add)
+  if (isAdd)
     Binary |= (1 << 8);
   Binary |= (Reg << 9);
   return Binary;
@@ -630,6 +776,77 @@ getSORegOpValue(const MCInst &MI, unsigned OpIdx,
 
   // Encode shift_imm bit[11:7].
   return Binary | ARM_AM::getSORegOffset(MO2.getImm()) << 7;
+}
+
+unsigned ARMMCCodeEmitter::
+getT2AddrModeSORegOpValue(const MCInst &MI, unsigned OpNum,
+                SmallVectorImpl<MCFixup> &Fixups) const {
+  const MCOperand &MO1 = MI.getOperand(OpNum);
+  const MCOperand &MO2 = MI.getOperand(OpNum+1);
+  const MCOperand &MO3 = MI.getOperand(OpNum+2);                 
+  
+  // Encoded as [Rn, Rm, imm].
+  // FIXME: Needs fixup support.
+  unsigned Value = getARMRegisterNumbering(MO1.getReg());
+  Value <<= 4;
+  Value |= getARMRegisterNumbering(MO2.getReg());
+  Value <<= 2;
+  Value |= MO3.getImm();
+  
+  return Value;
+}
+
+unsigned ARMMCCodeEmitter::
+getT2AddrModeImm8OpValue(const MCInst &MI, unsigned OpNum,
+                         SmallVectorImpl<MCFixup> &Fixups) const {
+  const MCOperand &MO1 = MI.getOperand(OpNum);
+  const MCOperand &MO2 = MI.getOperand(OpNum+1);
+
+  // FIXME: Needs fixup support.
+  unsigned Value = getARMRegisterNumbering(MO1.getReg());
+  
+  // Even though the immediate is 8 bits long, we need 9 bits in order
+  // to represent the (inverse of the) sign bit.
+  Value <<= 9;
+  int32_t tmp = (int32_t)MO2.getImm();
+  if (tmp < 0)
+    tmp = abs(tmp);
+  else
+    Value |= 256; // Set the ADD bit
+  Value |= tmp & 255;
+  return Value;
+}
+
+unsigned ARMMCCodeEmitter::
+getT2AddrModeImm8OffsetOpValue(const MCInst &MI, unsigned OpNum,
+                         SmallVectorImpl<MCFixup> &Fixups) const {
+  const MCOperand &MO1 = MI.getOperand(OpNum);
+
+  // FIXME: Needs fixup support.
+  unsigned Value = 0;
+  int32_t tmp = (int32_t)MO1.getImm();
+  if (tmp < 0)
+    tmp = abs(tmp);
+  else
+    Value |= 256; // Set the ADD bit
+  Value |= tmp & 255;
+  return Value;
+}
+
+unsigned ARMMCCodeEmitter::
+getT2AddrModeImm12OffsetOpValue(const MCInst &MI, unsigned OpNum,
+                         SmallVectorImpl<MCFixup> &Fixups) const {
+  const MCOperand &MO1 = MI.getOperand(OpNum);
+
+  // FIXME: Needs fixup support.
+  unsigned Value = 0;
+  int32_t tmp = (int32_t)MO1.getImm();
+  if (tmp < 0)
+    tmp = abs(tmp);
+  else
+    Value |= 4096; // Set the ADD bit
+  Value |= tmp & 4095;
+  return Value;
 }
 
 unsigned ARMMCCodeEmitter::
@@ -720,6 +937,8 @@ getRegisterListOpValue(const MCInst &MI, unsigned Op,
   return Binary;
 }
 
+/// getAddrMode6AddressOpValue - Encode an addrmode6 register number along
+/// with the alignment operand.
 unsigned ARMMCCodeEmitter::
 getAddrMode6AddressOpValue(const MCInst &MI, unsigned Op,
                            SmallVectorImpl<MCFixup> &Fixups) const {
@@ -741,6 +960,30 @@ getAddrMode6AddressOpValue(const MCInst &MI, unsigned Op,
   return RegNo | (Align << 4);
 }
 
+/// getAddrMode6DupAddressOpValue - Encode an addrmode6 register number and
+/// alignment operand for use in VLD-dup instructions.  This is the same as
+/// getAddrMode6AddressOpValue except for the alignment encoding, which is
+/// different for VLD4-dup.
+unsigned ARMMCCodeEmitter::
+getAddrMode6DupAddressOpValue(const MCInst &MI, unsigned Op,
+                              SmallVectorImpl<MCFixup> &Fixups) const {
+  const MCOperand &Reg = MI.getOperand(Op);
+  const MCOperand &Imm = MI.getOperand(Op + 1);
+
+  unsigned RegNo = getARMRegisterNumbering(Reg.getReg());
+  unsigned Align = 0;
+
+  switch (Imm.getImm()) {
+  default: break;
+  case 2:
+  case 4:
+  case 8:  Align = 0x01; break;
+  case 16: Align = 0x03; break;
+  }
+
+  return RegNo | (Align << 4);
+}
+
 unsigned ARMMCCodeEmitter::
 getAddrMode6OffsetOpValue(const MCInst &MI, unsigned Op,
                           SmallVectorImpl<MCFixup> &Fixups) const {
@@ -752,6 +995,7 @@ getAddrMode6OffsetOpValue(const MCInst &MI, unsigned Op,
 void ARMMCCodeEmitter::
 EncodeInstruction(const MCInst &MI, raw_ostream &OS,
                   SmallVectorImpl<MCFixup> &Fixups) const {
+  const ARMSubtarget &Subtarget = TM.getSubtarget<ARMSubtarget>();
   // Pseudo instructions don't get encoded.
   const TargetInstrDesc &Desc = TII.get(MI.getOpcode());
   uint64_t TSFlags = Desc.TSFlags;
@@ -764,7 +1008,14 @@ EncodeInstruction(const MCInst &MI, raw_ostream &OS,
   case ARMII::Size2Bytes: Size = 2; break;
   case ARMII::Size4Bytes: Size = 4; break;
   }
-  EmitConstant(getBinaryCodeForInstr(MI, Fixups), Size, OS);
+  uint32_t Binary = getBinaryCodeForInstr(MI, Fixups);
+  // Thumb 32-bit wide instructions need to be have the high order halfword
+  // emitted first.
+  if (Subtarget.isThumb() && Size == 4) {
+    EmitConstant(Binary >> 16, 2, OS);
+    EmitConstant(Binary & 0xffff, 2, OS);
+  } else
+    EmitConstant(Binary, Size, OS);
   ++MCNumEmitted;  // Keep track of the # of mi's emitted.
 }
 

@@ -827,7 +827,11 @@ const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
   case ARMISD::FMAX:          return "ARMISD::FMAX";
   case ARMISD::FMIN:          return "ARMISD::FMIN";
   case ARMISD::BFI:           return "ARMISD::BFI";
-  case ARMISD::VORRIMM:        return "ARMISD::VORRIMM";
+  case ARMISD::VORRIMM:       return "ARMISD::VORRIMM";
+  case ARMISD::VBICIMM:       return "ARMISD::VBICIMM";
+  case ARMISD::VLD2DUP:       return "ARMISD::VLD2DUP";
+  case ARMISD::VLD3DUP:       return "ARMISD::VLD3DUP";
+  case ARMISD::VLD4DUP:       return "ARMISD::VLD4DUP";
   }
 }
 
@@ -1525,30 +1529,13 @@ ARMTargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
   // whether LR is going to be used.  Probably the right approach is to
   // generate the tail call here and turn it back into CALL/RET in
   // emitEpilogue if LR is used.
-  if (Subtarget->isThumb1Only())
-    return false;
-
-  // For the moment, we can only do this to functions defined in this
-  // compilation, or to indirect calls.  A Thumb B to an ARM function,
-  // or vice versa, is not easily fixed up in the linker unlike BL.
-  // (We could do this by loading the address of the callee into a register;
-  // that is an extra instruction over the direct call and burns a register
-  // as well, so is not likely to be a win.)
-
-  // It might be safe to remove this restriction on non-Darwin.
 
   // Thumb1 PIC calls to external symbols use BX, so they can be tail calls,
   // but we need to make sure there are enough registers; the only valid
   // registers are the 4 used for parameters.  We don't currently do this
   // case.
-  if (isa<ExternalSymbolSDNode>(Callee))
-      return false;
-
-  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
-    const GlobalValue *GV = G->getGlobal();
-    if (GV->isDeclaration() || GV->isWeakForLinker())
-      return false;
-  }
+  if (Subtarget->isThumb1Only())
+    return false;
 
   // If the calling conventions do not match, then we'd better make sure the
   // results are returned in the same way as what the caller expects.
@@ -1724,6 +1711,61 @@ ARMTargetLowering::LowerReturn(SDValue Chain,
     result = DAG.getNode(ARMISD::RET_FLAG, dl, MVT::Other, Chain);
 
   return result;
+}
+
+bool ARMTargetLowering::isUsedByReturnOnly(SDNode *N) const {
+  if (N->getNumValues() != 1)
+    return false;
+  if (!N->hasNUsesOfValue(1, 0))
+    return false;
+
+  unsigned NumCopies = 0;
+  SDNode* Copies[2];
+  SDNode *Use = *N->use_begin();
+  if (Use->getOpcode() == ISD::CopyToReg) {
+    Copies[NumCopies++] = Use;
+  } else if (Use->getOpcode() == ARMISD::VMOVRRD) {
+    // f64 returned in a pair of GPRs.
+    for (SDNode::use_iterator UI = Use->use_begin(), UE = Use->use_end();
+         UI != UE; ++UI) {
+      if (UI->getOpcode() != ISD::CopyToReg)
+        return false;
+      Copies[UI.getUse().getResNo()] = *UI;
+      ++NumCopies;
+    }
+  } else if (Use->getOpcode() == ISD::BITCAST) {
+    // f32 returned in a single GPR.
+    if (!Use->hasNUsesOfValue(1, 0))
+      return false;
+    Use = *Use->use_begin();
+    if (Use->getOpcode() != ISD::CopyToReg || !Use->hasNUsesOfValue(1, 0))
+      return false;
+    Copies[NumCopies++] = Use;
+  } else {
+    return false;
+  }
+
+  if (NumCopies != 1 && NumCopies != 2)
+    return false;
+
+  bool HasRet = false;
+  for (unsigned i = 0; i < NumCopies; ++i) {
+    SDNode *Copy = Copies[i];
+    for (SDNode::use_iterator UI = Copy->use_begin(), UE = Copy->use_end();
+         UI != UE; ++UI) {
+      if (UI->getOpcode() == ISD::CopyToReg) {
+        SDNode *Use = *UI;
+        if (Use == Copies[0] || Use == Copies[1])
+          continue;
+        return false;
+      }
+      if (UI->getOpcode() != ARMISD::RET_FLAG)
+        return false;
+      HasRet = true;
+    }
+  }
+
+  return HasRet;
 }
 
 // ConstantPool, JumpTable, GlobalAddress, and ExternalSymbol are lowered as
@@ -4845,15 +4887,100 @@ static SDValue PerformVECTOR_SHUFFLECombine(SDNode *N, SelectionDAG &DAG) {
                               DAG.getUNDEF(VT), NewMask.data());
 }
 
+/// CombineVLDDUP - For a VDUPLANE node N, check if its source operand is a
+/// vldN-lane (N > 1) intrinsic, and if all the other uses of that intrinsic
+/// are also VDUPLANEs.  If so, combine them to a vldN-dup operation and
+/// return true.
+static bool CombineVLDDUP(SDNode *N, TargetLowering::DAGCombinerInfo &DCI) {
+  SelectionDAG &DAG = DCI.DAG;
+  EVT VT = N->getValueType(0);
+  // vldN-dup instructions only support 64-bit vectors for N > 1.
+  if (!VT.is64BitVector())
+    return false;
+
+  // Check if the VDUPLANE operand is a vldN-dup intrinsic.
+  SDNode *VLD = N->getOperand(0).getNode();
+  if (VLD->getOpcode() != ISD::INTRINSIC_W_CHAIN)
+    return false;
+  unsigned NumVecs = 0;
+  unsigned NewOpc = 0;
+  unsigned IntNo = cast<ConstantSDNode>(VLD->getOperand(1))->getZExtValue();
+  if (IntNo == Intrinsic::arm_neon_vld2lane) {
+    NumVecs = 2;
+    NewOpc = ARMISD::VLD2DUP;
+  } else if (IntNo == Intrinsic::arm_neon_vld3lane) {
+    NumVecs = 3;
+    NewOpc = ARMISD::VLD3DUP;
+  } else if (IntNo == Intrinsic::arm_neon_vld4lane) {
+    NumVecs = 4;
+    NewOpc = ARMISD::VLD4DUP;
+  } else {
+    return false;
+  }
+
+  // First check that all the vldN-lane uses are VDUPLANEs and that the lane
+  // numbers match the load.
+  unsigned VLDLaneNo =
+    cast<ConstantSDNode>(VLD->getOperand(NumVecs+3))->getZExtValue();
+  for (SDNode::use_iterator UI = VLD->use_begin(), UE = VLD->use_end();
+       UI != UE; ++UI) {
+    // Ignore uses of the chain result.
+    if (UI.getUse().getResNo() == NumVecs)
+      continue;
+    SDNode *User = *UI;
+    if (User->getOpcode() != ARMISD::VDUPLANE ||
+        VLDLaneNo != cast<ConstantSDNode>(User->getOperand(1))->getZExtValue())
+      return false;
+  }
+
+  // Create the vldN-dup node.
+  EVT Tys[5];
+  unsigned n;
+  for (n = 0; n < NumVecs; ++n)
+    Tys[n] = VT;
+  Tys[n] = MVT::Other;
+  SDVTList SDTys = DAG.getVTList(Tys, NumVecs+1);
+  SDValue Ops[] = { VLD->getOperand(0), VLD->getOperand(2) };
+  MemIntrinsicSDNode *VLDMemInt = cast<MemIntrinsicSDNode>(VLD);
+  SDValue VLDDup = DAG.getMemIntrinsicNode(NewOpc, VLD->getDebugLoc(), SDTys,
+                                           Ops, 2, VLDMemInt->getMemoryVT(),
+                                           VLDMemInt->getMemOperand());
+
+  // Update the uses.
+  for (SDNode::use_iterator UI = VLD->use_begin(), UE = VLD->use_end();
+       UI != UE; ++UI) {
+    unsigned ResNo = UI.getUse().getResNo();
+    // Ignore uses of the chain result.
+    if (ResNo == NumVecs)
+      continue;
+    SDNode *User = *UI;
+    DCI.CombineTo(User, SDValue(VLDDup.getNode(), ResNo));
+  }
+
+  // Now the vldN-lane intrinsic is dead except for its chain result.
+  // Update uses of the chain.
+  std::vector<SDValue> VLDDupResults;
+  for (unsigned n = 0; n < NumVecs; ++n)
+    VLDDupResults.push_back(SDValue(VLDDup.getNode(), n));
+  VLDDupResults.push_back(SDValue(VLDDup.getNode(), NumVecs));
+  DCI.CombineTo(VLD, VLDDupResults);
+
+  return true;
+}
+
 /// PerformVDUPLANECombine - Target-specific dag combine xforms for
 /// ARMISD::VDUPLANE.
-static SDValue PerformVDUPLANECombine(SDNode *N, SelectionDAG &DAG) {
-  // If the source is already a VMOVIMM or VMVNIMM splat, the VDUPLANE is
-  // redundant.
+static SDValue PerformVDUPLANECombine(SDNode *N,
+                                      TargetLowering::DAGCombinerInfo &DCI) {
   SDValue Op = N->getOperand(0);
-  EVT VT = N->getValueType(0);
 
-  // Ignore bit_converts.
+  // If the source is a vldN-lane (N > 1) intrinsic, and all the other uses
+  // of that intrinsic are also VDUPLANEs, combine them to a vldN-dup operation.
+  if (CombineVLDDUP(N, DCI))
+    return SDValue(N, 0);
+
+  // If the source is already a VMOVIMM or VMVNIMM splat, the VDUPLANE is
+  // redundant.  Ignore bit_converts for now; element sizes are checked below.
   while (Op.getOpcode() == ISD::BITCAST)
     Op = Op.getOperand(0);
   if (Op.getOpcode() != ARMISD::VMOVIMM && Op.getOpcode() != ARMISD::VMVNIMM)
@@ -4866,10 +4993,11 @@ static SDValue PerformVDUPLANECombine(SDNode *N, SelectionDAG &DAG) {
   unsigned EltBits;
   if (ARM_AM::decodeNEONModImm(Imm, EltBits) == 0)
     EltSize = 8;
+  EVT VT = N->getValueType(0);
   if (EltSize > VT.getVectorElementType().getSizeInBits())
     return SDValue();
 
-  return DAG.getNode(ISD::BITCAST, N->getDebugLoc(), VT, Op);
+  return DCI.DAG.getNode(ISD::BITCAST, N->getDebugLoc(), VT, Op);
 }
 
 /// getVShiftImm - Check if this is a valid build_vector for the immediate
@@ -5257,7 +5385,7 @@ SDValue ARMTargetLowering::PerformDAGCombine(SDNode *N,
   case ARMISD::VMOVDRR: return PerformVMOVDRRCombine(N, DCI.DAG);
   case ISD::BUILD_VECTOR: return PerformBUILD_VECTORCombine(N, DCI.DAG);
   case ISD::VECTOR_SHUFFLE: return PerformVECTOR_SHUFFLECombine(N, DCI.DAG);
-  case ARMISD::VDUPLANE: return PerformVDUPLANECombine(N, DCI.DAG);
+  case ARMISD::VDUPLANE: return PerformVDUPLANECombine(N, DCI);
   case ISD::INTRINSIC_WO_CHAIN: return PerformIntrinsicCombine(N, DCI.DAG);
   case ISD::SHL:
   case ISD::SRA:

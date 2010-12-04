@@ -33,7 +33,7 @@
 #ifndef LLVM_C_CORE_H
 #define LLVM_C_CORE_H
 
-#include "llvm/System/DataTypes.h"
+#include "llvm/Support/DataTypes.h"
 
 #ifdef __cplusplus
 
@@ -329,6 +329,9 @@ void LLVMDumpModule(LLVMModuleRef M);
 
 /** See Module::setModuleInlineAsm. */
 void LLVMSetModuleInlineAsm(LLVMModuleRef M, const char *Asm);
+
+/** See Module::getContext. */
+LLVMContextRef LLVMGetModuleContext(LLVMModuleRef M);
 
 /*===-- Types -------------------------------------------------------------===*/
 

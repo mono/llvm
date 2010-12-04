@@ -40,9 +40,9 @@
 #include "llvm/Support/StandardPasses.h"
 #include "llvm/Support/SystemUtils.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include "llvm/System/Host.h"
-#include "llvm/System/Program.h"
-#include "llvm/System/Signals.h"
+#include "llvm/Support/Host.h"
+#include "llvm/Support/Program.h"
+#include "llvm/Support/Signals.h"
 #include "llvm/Config/config.h"
 #include <cstdlib>
 #include <unistd.h>
@@ -209,7 +209,7 @@ const void* LTOCodeGenerator::compile(size_t* length, std::string& errMsg)
     
     // make unique temp .o file to put generated object file
     sys::PathWithStatus uniqueObjPath("lto-llvm.o");
-    if ( uniqueObjPath.createTemporaryFileOnDisk(true, &errMsg) ) {
+    if ( uniqueObjPath.createTemporaryFileOnDisk(false, &errMsg) ) {
         uniqueAsmPath.eraseFromDisk();
         return NULL;
     }

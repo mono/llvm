@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCStreamer.h"
@@ -117,21 +118,6 @@ static inline const MCExpr *MakeStartMinusEndExpr(MCStreamer *MCOS,
   return Res3;
 }
 
-// 
-// This emits an "absolute" address used in the start of a dwarf line number
-// table.  This will result in a relocatation entry for the address.
-//
-static inline void EmitDwarfSetAddress(MCStreamer *MCOS,
-                                       MCSymbol *Symbol,
-                                       int PointerSize) {
-  MCOS->EmitIntValue(dwarf::DW_LNS_extended_op, 1);
-
-  MCOS->EmitULEB128IntValue(PointerSize + 1);
-
-  MCOS->EmitIntValue(dwarf::DW_LNE_set_address, 1);
-  MCOS->EmitSymbolValue(Symbol, PointerSize);
-}
-
 //
 // This emits the Dwarf line table for the specified section from the entries
 // in the LineSection.
@@ -139,9 +125,7 @@ static inline void EmitDwarfSetAddress(MCStreamer *MCOS,
 static inline void EmitDwarfLineTable(MCStreamer *MCOS,
                                       const MCSection *Section,
                                       const MCLineSection *LineSection,
-                                      const MCSection *DwarfLineSection,
-                                      MCSectionData *DLS,
-                                      int PointerSize) {
+                                      const MCSection *DwarfLineSection) {
   unsigned FileNum = 1;
   unsigned LastLine = 1;
   unsigned Column = 0;
@@ -186,19 +170,7 @@ static inline void EmitDwarfLineTable(MCStreamer *MCOS,
     // At this point we want to emit/create the sequence to encode the delta in
     // line numbers and the increment of the address from the previous Label
     // and the current Label.
-    if (LastLabel == NULL || DLS == NULL) {
-      // emit the sequence to set the address
-      EmitDwarfSetAddress(MCOS, Label, PointerSize);
-      // emit the sequence for the LineDelta (from 1) and a zero address delta.
-      MCDwarfLineAddr::Emit(MCOS, LineDelta, 0);
-    }
-    else {
-      // Create an expression for the address delta from the LastLabel and
-      // this Label (plus 0).
-      const MCExpr *AddrDelta = MakeStartMinusEndExpr(MCOS, LastLabel, Label,0);
-      // Create a Dwarf Line fragment for the LineDelta and AddrDelta.
-      new MCDwarfLineAddrFragment(LineDelta, *AddrDelta, DLS);
-    }
+    MCOS->EmitDwarfAdvanceLineAddr(LineDelta, LastLabel, Label);
 
     LastLine = it->getLine();
     LastLabel = Label;
@@ -220,28 +192,14 @@ static inline void EmitDwarfLineTable(MCStreamer *MCOS,
   // Switch back the the dwarf line section.
   MCOS->SwitchSection(DwarfLineSection);
 
-  if (DLS == NULL) {
-    // emit the sequence to set the address
-    EmitDwarfSetAddress(MCOS, SectionEnd, PointerSize);
-    // emit the sequence for the LineDelta (from 1) and a zero address delta.
-    MCDwarfLineAddr::Emit(MCOS, INT64_MAX, 0);
-  } else {
-    // Create an expression for the address delta from the LastLabel and this
-    // SectionEnd label.
-    const MCExpr *AddrDelta = MakeStartMinusEndExpr(MCOS, LastLabel, SectionEnd,
-                                                    0);
-    // Create a Dwarf Line fragment for the LineDelta and AddrDelta.
-    new MCDwarfLineAddrFragment(INT64_MAX, *AddrDelta, DLS);
-  }
+  MCOS->EmitDwarfAdvanceLineAddr(INT64_MAX, LastLabel, SectionEnd);
 }
 
 //
 // This emits the Dwarf file and the line tables.
 //
 void MCDwarfFileTable::Emit(MCStreamer *MCOS,
-                            const MCSection *DwarfLineSection,
-                            MCSectionData *DLS,
-                            int PointerSize) {
+                            const MCSection *DwarfLineSection) {
   // Switch to the section where the table will be emitted into.
   MCOS->SwitchSection(DwarfLineSection);
 
@@ -255,8 +213,15 @@ void MCDwarfFileTable::Emit(MCStreamer *MCOS,
 
   // The first 4 bytes is the total length of the information for this
   // compilation unit (not including these 4 bytes for the length).
-  MCOS->EmitValue(MakeStartMinusEndExpr(MCOS, LineStartSym, LineEndSym, 4),
-                  4, 0);
+  // FIXME: We create the dummy TotalLength variable because LineEndSym points
+  // to the end of the section and the darwin assembler doesn't consider that
+  // difference an assembly time constant. It might be better for this to be
+  // proected by a flag.
+  MCSymbol *TotalLength = MCOS->getContext().CreateTempSymbol();
+  MCOS->EmitAssignment(TotalLength,
+		       MakeStartMinusEndExpr(MCOS, LineStartSym, LineEndSym,
+					     4));
+  MCOS->EmitSymbolValue(TotalLength, 4, 0);
 
   // Next 2 bytes is the Version, which is Dwarf 2.
   MCOS->EmitIntValue(2, 2);
@@ -331,12 +296,23 @@ void MCDwarfFileTable::Emit(MCStreamer *MCOS,
        ++it) {
     const MCSection *Sec = *it;
     const MCLineSection *Line = MCLineSections.lookup(Sec);
-    EmitDwarfLineTable(MCOS, Sec, Line, DwarfLineSection, DLS,
-                       PointerSize);
+    EmitDwarfLineTable(MCOS, Sec, Line, DwarfLineSection);
 
     // Now delete the MCLineSections that were created in MCLineEntry::Make()
     // and used to emit the line table.
     delete Line;
+  }
+
+  if (MCOS->getContext().getAsmInfo().getLinkerRequiresNonEmptyDwarfLines()
+      && MCLineSectionOrder.begin() == MCLineSectionOrder.end()) {
+    // The darwin9 linker has a bug (see PR8715). For for 32-bit architectures
+    // it requires:  
+    // total_length >= prologue_length + 10
+    // We are 4 bytes short, since we have total_length = 51 and
+    // prologue_length = 45
+
+    // The regular end_sequence should be sufficient.
+    MCDwarfLineAddr::Emit(MCOS, INT64_MAX, 0);
   }
 
   // This is the end of the section, so set the value of the symbol at the end

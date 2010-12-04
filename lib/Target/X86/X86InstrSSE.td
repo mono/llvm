@@ -180,6 +180,12 @@ def : Pat<(v4f32 (scalar_to_vector FR32:$src)),
 // Implicitly promote a 64-bit scalar to a vector.
 def : Pat<(v2f64 (scalar_to_vector FR64:$src)),
           (INSERT_SUBREG (v2f64 (IMPLICIT_DEF)), FR64:$src, sub_sd)>;
+// Implicitly promote a 32-bit scalar to a vector.
+def : Pat<(v8f32 (scalar_to_vector FR32:$src)),
+          (INSERT_SUBREG (v8f32 (IMPLICIT_DEF)), FR32:$src, sub_ss)>;
+// Implicitly promote a 64-bit scalar to a vector.
+def : Pat<(v4f64 (scalar_to_vector FR64:$src)),
+          (INSERT_SUBREG (v4f64 (IMPLICIT_DEF)), FR64:$src, sub_sd)>;
 
 let AddedComplexity = 20 in {
 // MOVSSrm zeros the high parts of the register; represent this
@@ -3640,10 +3646,19 @@ def : Pat<(v16i8 (palign:$src3 VR128:$src1, VR128:$src2)),
 //===---------------------------------------------------------------------===//
 
 // Thread synchronization
-def MONITOR : I<0x01, MRM_C8, (outs), (ins), "monitor",
-                [(int_x86_sse3_monitor EAX, ECX, EDX)]>,TB, Requires<[HasSSE3]>;
-def MWAIT   : I<0x01, MRM_C9, (outs), (ins), "mwait",
-                [(int_x86_sse3_mwait ECX, EAX)]>, TB, Requires<[HasSSE3]>;
+let usesCustomInserter = 1 in {
+def MONITOR : PseudoI<(outs), (ins i32mem:$src1, GR32:$src2, GR32:$src3),
+                [(int_x86_sse3_monitor addr:$src1, GR32:$src2, GR32:$src3)]>;
+def MWAIT : PseudoI<(outs), (ins GR32:$src1, GR32:$src2),
+                [(int_x86_sse3_mwait GR32:$src1, GR32:$src2)]>;
+}
+
+let Uses = [EAX, ECX, EDX] in
+def MONITORrrr : I<0x01, MRM_C8, (outs), (ins), "monitor", []>, TB,
+                 Requires<[HasSSE3]>;
+let Uses = [ECX, EAX] in
+def MWAITrr   : I<0x01, MRM_C9, (outs), (ins), "mwait", []>, TB,
+                Requires<[HasSSE3]>;
 
 //===---------------------------------------------------------------------===//
 // Non-Instruction Patterns
@@ -4896,12 +4911,12 @@ def : Pat<(v2i64 (X86pcmpgtq VR128:$src1, (memop addr:$src2))),
 
 // Packed Compare Implicit Length Strings, Return Mask
 multiclass pseudo_pcmpistrm<string asm> {
-  def REG : Ii8<0, Pseudo, (outs VR128:$dst),
-    (ins VR128:$src1, VR128:$src2, i8imm:$src3), !strconcat(asm, "rr PSEUDO"),
+  def REG : PseudoI<(outs VR128:$dst),
+                    (ins VR128:$src1, VR128:$src2, i8imm:$src3),
     [(set VR128:$dst, (int_x86_sse42_pcmpistrm128 VR128:$src1, VR128:$src2,
                                                   imm:$src3))]>;
-  def MEM : Ii8<0, Pseudo, (outs VR128:$dst),
-    (ins VR128:$src1, i128mem:$src2, i8imm:$src3), !strconcat(asm, "rm PSEUDO"),
+  def MEM : PseudoI<(outs VR128:$dst),
+                    (ins VR128:$src1, i128mem:$src2, i8imm:$src3),
     [(set VR128:$dst, (int_x86_sse42_pcmpistrm128
                        VR128:$src1, (load addr:$src2), imm:$src3))]>;
 }
@@ -4932,12 +4947,12 @@ let Defs = [XMM0, EFLAGS] in {
 
 // Packed Compare Explicit Length Strings, Return Mask
 multiclass pseudo_pcmpestrm<string asm> {
-  def REG : Ii8<0, Pseudo, (outs VR128:$dst),
-    (ins VR128:$src1, VR128:$src3, i8imm:$src5), !strconcat(asm, "rr PSEUDO"),
+  def REG : PseudoI<(outs VR128:$dst),
+                    (ins VR128:$src1, VR128:$src3, i8imm:$src5),
     [(set VR128:$dst, (int_x86_sse42_pcmpestrm128
                        VR128:$src1, EAX, VR128:$src3, EDX, imm:$src5))]>;
-  def MEM : Ii8<0, Pseudo, (outs VR128:$dst),
-    (ins VR128:$src1, i128mem:$src3, i8imm:$src5), !strconcat(asm, "rm PSEUDO"),
+  def MEM : PseudoI<(outs VR128:$dst),
+                    (ins VR128:$src1, i128mem:$src3, i8imm:$src5),
     [(set VR128:$dst, (int_x86_sse42_pcmpestrm128
                        VR128:$src1, EAX, (load addr:$src3), EDX, imm:$src5))]>;
 }

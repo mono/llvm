@@ -143,6 +143,7 @@ site.exp: FORCE
 	@echo 'set llvmgcc_langs "$(LLVMGCC_LANGS)"' >> site.tmp
 	@echo 'set llvmtoolsdir "$(ToolDir)"' >>site.tmp
 	@echo 'set llvmlibsdir "$(LibDir)"' >>site.tmp
+	@echo 'set llvmshlibdir "$(SharedLibDir)"' >>site.tmp
 	@echo 'set llvm_bindings "$(BINDINGS_TO_BUILD)"' >> site.tmp
 	@echo 'set srcroot "$(LLVM_SRC_ROOT)"' >>site.tmp
 	@echo 'set objroot "$(LLVM_OBJ_ROOT)"' >>site.tmp
@@ -176,6 +177,7 @@ lit.site.cfg: site.exp
 	     -e "s#@LLVM_BINARY_DIR@#$(LLVM_OBJ_ROOT)#g" \
 	     -e "s#@LLVM_TOOLS_DIR@#$(ToolDir)#g" \
 	     -e "s#@LLVMGCCDIR@#$(LLVMGCCDIR)#g" \
+	     -e "s#@ENABLE_SHARED@#$(ENABLE_SHARED)#g" \
 	     $(PROJ_SRC_DIR)/lit.site.cfg.in > $@
 
 Unit/lit.site.cfg: $(PROJ_OBJ_DIR)/Unit/.dir FORCE
@@ -186,6 +188,7 @@ Unit/lit.site.cfg: $(PROJ_OBJ_DIR)/Unit/.dir FORCE
 	     -e "s#@LLVMGCCDIR@#$(LLVMGCCDIR)#g" \
 	     -e "s#@LLVM_BUILD_MODE@#$(BuildMode)#g" \
 	     -e "s#@ENABLE_SHARED@#$(ENABLE_SHARED)#g" \
+	     -e "s#@SHLIBDIR@#$(SharedLibDir)#g" \
 	     -e "s#@SHLIBPATH_VAR@#$(SHLIBPATH_VAR)#g" \
 	     $(PROJ_SRC_DIR)/Unit/lit.site.cfg.in > $@
 
