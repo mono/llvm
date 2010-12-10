@@ -24,16 +24,34 @@
 enum OpKind {
   OpNone,
   OpAdd,
+  OpAddl,
+  OpAddw,
   OpSub,
+  OpSubl,
+  OpSubw,
   OpMul,
+  OpMull,
   OpMla,
+  OpMlal,
   OpMls,
+  OpMlsl,
   OpMulN,
+  OpMullN,
   OpMlaN,
   OpMlsN,
+  OpMlalN,
+  OpMlslN,
   OpMulLane,
+  OpMullLane,
   OpMlaLane,
   OpMlsLane,
+  OpMlalLane,
+  OpMlslLane,
+  OpQDMullLane,
+  OpQDMlalLane,
+  OpQDMlslLane,
+  OpQDMulhLane,
+  OpQRDMulhLane,
   OpEq,
   OpGe,
   OpLe,
@@ -49,12 +67,17 @@ enum OpKind {
   OpCast,
   OpConcat,
   OpDup,
+  OpDupLane,
   OpHi,
   OpLo,
   OpSelect,
   OpRev16,
   OpRev32,
-  OpRev64
+  OpRev64,
+  OpReinterpret,
+  OpAbdl,
+  OpAba,
+  OpAbal
 };
 
 enum ClassKind {
@@ -76,16 +99,34 @@ namespace llvm {
     NeonEmitter(RecordKeeper &R) : Records(R) {
       OpMap["OP_NONE"]  = OpNone;
       OpMap["OP_ADD"]   = OpAdd;
+      OpMap["OP_ADDL"]  = OpAddl;
+      OpMap["OP_ADDW"]  = OpAddw;
       OpMap["OP_SUB"]   = OpSub;
+      OpMap["OP_SUBL"]  = OpSubl;
+      OpMap["OP_SUBW"]  = OpSubw;
       OpMap["OP_MUL"]   = OpMul;
+      OpMap["OP_MULL"]  = OpMull;
       OpMap["OP_MLA"]   = OpMla;
+      OpMap["OP_MLAL"]  = OpMlal;
       OpMap["OP_MLS"]   = OpMls;
+      OpMap["OP_MLSL"]  = OpMlsl;
       OpMap["OP_MUL_N"] = OpMulN;
+      OpMap["OP_MULL_N"]= OpMullN;
       OpMap["OP_MLA_N"] = OpMlaN;
       OpMap["OP_MLS_N"] = OpMlsN;
+      OpMap["OP_MLAL_N"] = OpMlalN;
+      OpMap["OP_MLSL_N"] = OpMlslN;
       OpMap["OP_MUL_LN"]= OpMulLane;
+      OpMap["OP_MULL_LN"] = OpMullLane;
       OpMap["OP_MLA_LN"]= OpMlaLane;
       OpMap["OP_MLS_LN"]= OpMlsLane;
+      OpMap["OP_MLAL_LN"] = OpMlalLane;
+      OpMap["OP_MLSL_LN"] = OpMlslLane;
+      OpMap["OP_QDMULL_LN"] = OpQDMullLane;
+      OpMap["OP_QDMLAL_LN"] = OpQDMlalLane;
+      OpMap["OP_QDMLSL_LN"] = OpQDMlslLane;
+      OpMap["OP_QDMULH_LN"] = OpQDMulhLane;
+      OpMap["OP_QRDMULH_LN"] = OpQRDMulhLane;
       OpMap["OP_EQ"]    = OpEq;
       OpMap["OP_GE"]    = OpGe;
       OpMap["OP_LE"]    = OpLe;
@@ -103,10 +144,15 @@ namespace llvm {
       OpMap["OP_HI"]    = OpHi;
       OpMap["OP_LO"]    = OpLo;
       OpMap["OP_DUP"]   = OpDup;
+      OpMap["OP_DUP_LN"] = OpDupLane;
       OpMap["OP_SEL"]   = OpSelect;
       OpMap["OP_REV16"] = OpRev16;
       OpMap["OP_REV32"] = OpRev32;
       OpMap["OP_REV64"] = OpRev64;
+      OpMap["OP_REINT"] = OpReinterpret;
+      OpMap["OP_ABDL"]  = OpAbdl;
+      OpMap["OP_ABA"]   = OpAba;
+      OpMap["OP_ABAL"]  = OpAbal;
 
       Record *SI = R.getClass("SInst");
       Record *II = R.getClass("IInst");
@@ -121,6 +167,9 @@ namespace llvm {
 
     // runHeader - Emit all the __builtin prototypes used in arm_neon.h
     void runHeader(raw_ostream &o);
+
+  private:
+    void emitIntrinsic(raw_ostream &OS, Record *R);
   };
 
 } // End llvm namespace

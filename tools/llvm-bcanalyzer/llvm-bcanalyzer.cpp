@@ -38,6 +38,7 @@
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/system_error.h"
 #include <cstdio>
 #include <map>
 #include <algorithm>
@@ -60,12 +61,19 @@ NonSymbolic("non-symbolic",
             cl::desc("Emit numberic info in dump even if"
                      " symbolic info is available"));
 
-/// CurStreamType - If we can sniff the flavor of this stream, we can produce
-/// better dump info.
-static enum {
+namespace {
+
+/// CurStreamTypeType - A type for CurStreamType
+enum CurStreamTypeType {
   UnknownBitstream,
   LLVMIRBitstream
-} CurStreamType;
+};
+
+}
+
+/// CurStreamType - If we can sniff the flavor of this stream, we can produce
+/// better dump info.
+static CurStreamTypeType CurStreamType;
 
 
 /// GetBlockName - Return a symbolic block name if known, otherwise return
@@ -473,10 +481,12 @@ static void PrintSize(uint64_t Bits) {
 /// AnalyzeBitcode - Analyze the bitcode file specified by InputFilename.
 static int AnalyzeBitcode() {
   // Read the input file.
-  MemoryBuffer *MemBuf = MemoryBuffer::getFileOrSTDIN(InputFilename.c_str());
+  error_code ec;
+  MemoryBuffer *MemBuf =
+    MemoryBuffer::getFileOrSTDIN(InputFilename.c_str(), ec);
 
   if (MemBuf == 0)
-    return Error("Error reading '" + InputFilename + "'.");
+    return Error("Error reading '" + InputFilename + "': " + ec.message());
 
   if (MemBuf->getBufferSize() & 3)
     return Error("Bitcode stream should be a multiple of 4 bytes in length");

@@ -14,7 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "phielim"
-#include "PHIElimination.h"
+#include "PHIEliminationUtils.h"
 #include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/MachineDominators.h"
@@ -34,6 +34,54 @@
 #include <map>
 using namespace llvm;
 
+namespace {
+  class PHIElimination : public MachineFunctionPass {
+    MachineRegisterInfo *MRI; // Machine register information
+
+  public:
+    static char ID; // Pass identification, replacement for typeid
+    PHIElimination() : MachineFunctionPass(ID) {
+      initializePHIEliminationPass(*PassRegistry::getPassRegistry());
+    }
+
+    virtual bool runOnMachineFunction(MachineFunction &Fn);
+    virtual void getAnalysisUsage(AnalysisUsage &AU) const;
+
+  private:
+    /// EliminatePHINodes - Eliminate phi nodes by inserting copy instructions
+    /// in predecessor basic blocks.
+    ///
+    bool EliminatePHINodes(MachineFunction &MF, MachineBasicBlock &MBB);
+    void LowerAtomicPHINode(MachineBasicBlock &MBB,
+                            MachineBasicBlock::iterator AfterPHIsIt);
+
+    /// analyzePHINodes - Gather information about the PHI nodes in
+    /// here. In particular, we want to map the number of uses of a virtual
+    /// register which is used in a PHI node. We map that to the BB the
+    /// vreg is coming from. This is used later to determine when the vreg
+    /// is killed in the BB.
+    ///
+    void analyzePHINodes(const MachineFunction& Fn);
+
+    /// Split critical edges where necessary for good coalescer performance.
+    bool SplitPHIEdges(MachineFunction &MF, MachineBasicBlock &MBB,
+                       LiveVariables &LV, MachineLoopInfo *MLI);
+
+    typedef std::pair<unsigned, unsigned> BBVRegPair;
+    typedef DenseMap<BBVRegPair, unsigned> VRegPHIUse;
+
+    VRegPHIUse VRegPHIUseCount;
+
+    // Defs of PHI sources which are implicit_def.
+    SmallPtrSet<MachineInstr*, 4> ImpDefs;
+
+    // Map reusable lowered PHI node -> incoming join register.
+    typedef DenseMap<MachineInstr*, unsigned,
+                     MachineInstrExpressionTrait> LoweredPHIMap;
+    LoweredPHIMap LoweredPHIs;
+  };
+}
+
 STATISTIC(NumAtomic, "Number of atomic phis lowered");
 STATISTIC(NumReused, "Number of reused lowered phis");
 
@@ -41,16 +89,16 @@ char PHIElimination::ID = 0;
 INITIALIZE_PASS(PHIElimination, "phi-node-elimination",
                 "Eliminate PHI nodes for register allocation", false, false)
 
-char &llvm::PHIEliminationID = PHIElimination::ID;
+char& llvm::PHIEliminationID = PHIElimination::ID;
 
-void llvm::PHIElimination::getAnalysisUsage(AnalysisUsage &AU) const {
+void PHIElimination::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addPreserved<LiveVariables>();
   AU.addPreserved<MachineDominatorTree>();
   AU.addPreserved<MachineLoopInfo>();
   MachineFunctionPass::getAnalysisUsage(AU);
 }
 
-bool llvm::PHIElimination::runOnMachineFunction(MachineFunction &MF) {
+bool PHIElimination::runOnMachineFunction(MachineFunction &MF) {
   MRI = &MF.getRegInfo();
 
   bool Changed = false;
@@ -93,14 +141,14 @@ bool llvm::PHIElimination::runOnMachineFunction(MachineFunction &MF) {
 /// EliminatePHINodes - Eliminate phi nodes by inserting copy instructions in
 /// predecessor basic blocks.
 ///
-bool llvm::PHIElimination::EliminatePHINodes(MachineFunction &MF,
+bool PHIElimination::EliminatePHINodes(MachineFunction &MF,
                                              MachineBasicBlock &MBB) {
   if (MBB.empty() || !MBB.front().isPHI())
     return false;   // Quick exit for basic blocks without PHIs.
 
   // Get an iterator to the first instruction after the last PHI node (this may
   // also be the end of the basic block).
-  MachineBasicBlock::iterator AfterPHIsIt = SkipPHIsAndLabels(MBB, MBB.begin());
+  MachineBasicBlock::iterator AfterPHIsIt = MBB.SkipPHIsAndLabels(MBB.begin());
 
   while (MBB.front().isPHI())
     LowerAtomicPHINode(MBB, AfterPHIsIt);
@@ -121,58 +169,14 @@ static bool isSourceDefinedByImplicitDef(const MachineInstr *MPhi,
   return true;
 }
 
-// FindCopyInsertPoint - Find a safe place in MBB to insert a copy from SrcReg
-// when following the CFG edge to SuccMBB. This needs to be after any def of
-// SrcReg, but before any subsequent point where control flow might jump out of
-// the basic block.
-MachineBasicBlock::iterator
-llvm::PHIElimination::FindCopyInsertPoint(MachineBasicBlock &MBB,
-                                          MachineBasicBlock &SuccMBB,
-                                          unsigned SrcReg) {
-  // Handle the trivial case trivially.
-  if (MBB.empty())
-    return MBB.begin();
 
-  // Usually, we just want to insert the copy before the first terminator
-  // instruction. However, for the edge going to a landing pad, we must insert
-  // the copy before the call/invoke instruction.
-  if (!SuccMBB.isLandingPad())
-    return MBB.getFirstTerminator();
-
-  // Discover any defs/uses in this basic block.
-  SmallPtrSet<MachineInstr*, 8> DefUsesInMBB;
-  for (MachineRegisterInfo::reg_iterator RI = MRI->reg_begin(SrcReg),
-         RE = MRI->reg_end(); RI != RE; ++RI) {
-    MachineInstr *DefUseMI = &*RI;
-    if (DefUseMI->getParent() == &MBB)
-      DefUsesInMBB.insert(DefUseMI);
-  }
-
-  MachineBasicBlock::iterator InsertPoint;
-  if (DefUsesInMBB.empty()) {
-    // No defs.  Insert the copy at the start of the basic block.
-    InsertPoint = MBB.begin();
-  } else if (DefUsesInMBB.size() == 1) {
-    // Insert the copy immediately after the def/use.
-    InsertPoint = *DefUsesInMBB.begin();
-    ++InsertPoint;
-  } else {
-    // Insert the copy immediately after the last def/use.
-    InsertPoint = MBB.end();
-    while (!DefUsesInMBB.count(&*--InsertPoint)) {}
-    ++InsertPoint;
-  }
-
-  // Make sure the copy goes after any phi nodes however.
-  return SkipPHIsAndLabels(MBB, InsertPoint);
-}
 
 /// LowerAtomicPHINode - Lower the PHI node at the top of the specified block,
 /// under the assuption that it needs to be lowered in a way that supports
 /// atomic execution of PHIs.  This lowering method is always correct all of the
 /// time.
 ///
-void llvm::PHIElimination::LowerAtomicPHINode(
+void PHIElimination::LowerAtomicPHINode(
                                       MachineBasicBlock &MBB,
                                       MachineBasicBlock::iterator AfterPHIsIt) {
   ++NumAtomic;
@@ -294,7 +298,7 @@ void llvm::PHIElimination::LowerAtomicPHINode(
     // Find a safe location to insert the copy, this may be the first terminator
     // in the block (or end()).
     MachineBasicBlock::iterator InsertPos =
-      FindCopyInsertPoint(opBlock, MBB, SrcReg);
+      findPHICopyInsertPoint(&opBlock, &MBB, SrcReg);
 
     // Insert the copy.
     if (!reusedIncoming && IncomingReg)
@@ -371,7 +375,7 @@ void llvm::PHIElimination::LowerAtomicPHINode(
 /// used in a PHI node. We map that to the BB the vreg is coming from. This is
 /// used later to determine when the vreg is killed in the BB.
 ///
-void llvm::PHIElimination::analyzePHINodes(const MachineFunction& MF) {
+void PHIElimination::analyzePHINodes(const MachineFunction& MF) {
   for (MachineFunction::const_iterator I = MF.begin(), E = MF.end();
        I != E; ++I)
     for (MachineBasicBlock::const_iterator BBI = I->begin(), BBE = I->end();
@@ -381,7 +385,7 @@ void llvm::PHIElimination::analyzePHINodes(const MachineFunction& MF) {
                                      BBI->getOperand(i).getReg())];
 }
 
-bool llvm::PHIElimination::SplitPHIEdges(MachineFunction &MF,
+bool PHIElimination::SplitPHIEdges(MachineFunction &MF,
                                          MachineBasicBlock &MBB,
                                          LiveVariables &LV,
                                          MachineLoopInfo *MLI) {

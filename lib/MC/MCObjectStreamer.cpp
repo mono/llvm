@@ -12,18 +12,18 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/TargetAsmBackend.h"
+#include "llvm/Target/TargetAsmInfo.h"
 using namespace llvm;
 
 MCObjectStreamer::MCObjectStreamer(MCContext &Context, TargetAsmBackend &TAB,
-                                   raw_ostream &_OS, MCCodeEmitter *_Emitter,
-                                   bool _PadSectionToAlignment)
+                                   raw_ostream &_OS, MCCodeEmitter *_Emitter)
   : MCStreamer(Context), Assembler(new MCAssembler(Context, TAB,
                                                    *_Emitter,
-                                                   _PadSectionToAlignment,
                                                    _OS)),
     CurSectionData(0)
 {
@@ -76,20 +76,20 @@ const MCExpr *MCObjectStreamer::AddValueSymbols(const MCExpr *Value) {
   return Value;
 }
 
-void MCObjectStreamer::EmitValue(const MCExpr *Value, unsigned Size,
-                                 unsigned AddrSpace) {
+void MCObjectStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
+                                     bool isPCRel, unsigned AddrSpace) {
   assert(AddrSpace == 0 && "Address space must be 0!");
   MCDataFragment *DF = getOrCreateDataFragment();
 
   // Avoid fixups when possible.
   int64_t AbsValue;
-  if (AddValueSymbols(Value)->EvaluateAsAbsolute(AbsValue, &getAssembler())) {
+  if (AddValueSymbols(Value)->EvaluateAsAbsolute(AbsValue, getAssembler())) {
     EmitIntValue(AbsValue, Size, AddrSpace);
     return;
   }
   DF->addFixup(MCFixup::Create(DF->getContents().size(),
                                AddValueSymbols(Value),
-                               MCFixup::getKindForSize(Size, false)));
+                               MCFixup::getKindForSize(Size, isPCRel)));
   DF->getContents().resize(DF->getContents().size() + Size, 0);
 }
 
@@ -114,7 +114,7 @@ void MCObjectStreamer::EmitLabel(MCSymbol *Symbol) {
 void MCObjectStreamer::EmitULEB128Value(const MCExpr *Value,
                                         unsigned AddrSpace) {
   int64_t IntValue;
-  if (Value->EvaluateAsAbsolute(IntValue, &getAssembler())) {
+  if (Value->EvaluateAsAbsolute(IntValue, getAssembler())) {
     EmitULEB128IntValue(IntValue, AddrSpace);
     return;
   }
@@ -124,7 +124,7 @@ void MCObjectStreamer::EmitULEB128Value(const MCExpr *Value,
 void MCObjectStreamer::EmitSLEB128Value(const MCExpr *Value,
                                         unsigned AddrSpace) {
   int64_t IntValue;
-  if (Value->EvaluateAsAbsolute(IntValue, &getAssembler())) {
+  if (Value->EvaluateAsAbsolute(IntValue, getAssembler())) {
     EmitSLEB128IntValue(IntValue, AddrSpace);
     return;
   }
@@ -191,7 +191,7 @@ void MCObjectStreamer::EmitDwarfAdvanceLineAddr(int64_t LineDelta,
                                                 const MCSymbol *LastLabel,
                                                 const MCSymbol *Label) {
   if (!LastLabel) {
-    int PointerSize = getAssembler().getBackend().getPointerSize();
+    int PointerSize = getContext().getTargetAsmInfo().getPointerSize();
     EmitDwarfSetLineAddr(LineDelta, Label, PointerSize);
     return;
   }
@@ -204,7 +204,7 @@ void MCObjectStreamer::EmitDwarfAdvanceLineAddr(int64_t LineDelta,
     MCBinaryExpr::Create(MCBinaryExpr::Sub, LabelRef, LastLabelRef,
                          getContext());
   int64_t Res;
-  if (AddrDelta->EvaluateAsAbsolute(Res, &getAssembler())) {
+  if (AddrDelta->EvaluateAsAbsolute(Res, getAssembler())) {
     MCDwarfLineAddr::Emit(this, LineDelta, Res);
     return;
   }
@@ -217,5 +217,9 @@ void MCObjectStreamer::EmitValueToOffset(const MCExpr *Offset,
 }
 
 void MCObjectStreamer::Finish() {
+  // Dump out the dwarf file & directory tables and line tables.
+  if (getContext().hasDwarfFiles())
+    MCDwarfFileTable::Emit(this);
+
   getAssembler().Finish();
 }

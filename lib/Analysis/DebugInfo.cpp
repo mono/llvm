@@ -288,6 +288,26 @@ void DIType::replaceAllUsesWith(DIDescriptor &D) {
   }
 }
 
+/// replaceAllUsesWith - Replace all uses of debug info referenced by
+/// this descriptor.
+void DIType::replaceAllUsesWith(MDNode *D) {
+  if (!DbgNode)
+    return;
+
+  // Since we use a TrackingVH for the node, its easy for clients to manufacture
+  // legitimate situations where they want to replaceAllUsesWith() on something
+  // which, due to uniquing, has merged with the source. We shield clients from
+  // this detail by allowing a value to be replaced with replaceAllUsesWith()
+  // itself.
+  if (DbgNode != D) {
+    MDNode *Node = const_cast<MDNode*>(DbgNode);
+    const MDNode *DN = D;
+    const Value *V = cast_or_null<Value>(DN);
+    Node->replaceAllUsesWith(const_cast<Value*>(V));
+    MDNode::deleteTemporary(Node);
+  }
+}
+
 /// Verify - Verify that a compile unit is well formed.
 bool DICompileUnit::Verify() const {
   if (!DbgNode)
@@ -308,7 +328,10 @@ bool DIType::Verify() const {
   unsigned Tag = getTag();
   if (!isBasicType() && Tag != dwarf::DW_TAG_const_type &&
       Tag != dwarf::DW_TAG_volatile_type && Tag != dwarf::DW_TAG_pointer_type &&
-      Tag != dwarf::DW_TAG_restrict_type && getFilename().empty())
+      Tag != dwarf::DW_TAG_reference_type && Tag != dwarf::DW_TAG_restrict_type 
+      && Tag != dwarf::DW_TAG_vector_type && Tag != dwarf::DW_TAG_array_type
+      && Tag != dwarf::DW_TAG_enumeration_type 
+      && getFilename().empty())
     return false;
   return true;
 }
@@ -960,7 +983,6 @@ DICompositeType DIFactory::CreateCompositeType(unsigned Tag,
   return DICompositeType(Node);
 }
 
-
 /// CreateTemporaryType - Create a temporary forward-declared type.
 DIType DIFactory::CreateTemporaryType() {
   // Give the temporary MDNode a tag. It doesn't matter what tag we
@@ -972,6 +994,19 @@ DIType DIFactory::CreateTemporaryType() {
   return DIType(Node);
 }
 
+/// CreateTemporaryType - Create a temporary forward-declared type.
+DIType DIFactory::CreateTemporaryType(DIFile F) {
+  // Give the temporary MDNode a tag. It doesn't matter what tag we
+  // use here as long as DIType accepts it.
+  Value *Elts[] = {
+    GetTagConstant(DW_TAG_base_type),
+    F.getCompileUnit(),
+    NULL,
+    F
+  };
+  MDNode *Node = MDNode::getTemporary(VMContext, Elts, array_lengthof(Elts));
+  return DIType(Node);
+}
 
 /// CreateCompositeType - Create a composite type like array, struct, etc.
 DICompositeType DIFactory::CreateCompositeTypeEx(unsigned Tag,

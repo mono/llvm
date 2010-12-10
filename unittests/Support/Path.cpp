@@ -9,6 +9,7 @@
 
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/PathV2.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include "gtest/gtest.h"
 
@@ -82,39 +83,37 @@ TEST(Support, Path) {
     outs() << "]\n";
 #endif
 
-    bool      bres;
-    StringRef sfres;
-    ASSERT_FALSE(path::has_root_path(*i, bres));
-    ASSERT_FALSE(path::root_path(*i, sfres));
-    ASSERT_FALSE(path::has_root_name(*i, bres));
-    ASSERT_FALSE(path::root_name(*i, sfres));
-    ASSERT_FALSE(path::has_root_directory(*i, bres));
-    ASSERT_FALSE(path::root_directory(*i, sfres));
-    ASSERT_FALSE(path::has_parent_path(*i, bres));
-    ASSERT_FALSE(path::parent_path(*i, sfres));
-    ASSERT_FALSE(path::has_filename(*i, bres));
-    ASSERT_FALSE(path::filename(*i, sfres));
-    ASSERT_FALSE(path::has_stem(*i, bres));
-    ASSERT_FALSE(path::stem(*i, sfres));
-    ASSERT_FALSE(path::has_extension(*i, bres));
-    ASSERT_FALSE(path::extension(*i, sfres));
-    ASSERT_FALSE(path::is_absolute(*i, bres));
-    ASSERT_FALSE(path::is_relative(*i, bres));
+    path::has_root_path(*i);
+    path::root_path(*i);
+    path::has_root_name(*i);
+    path::root_name(*i);
+    path::has_root_directory(*i);
+    path::root_directory(*i);
+    path::has_parent_path(*i);
+    path::parent_path(*i);
+    path::has_filename(*i);
+    path::filename(*i);
+    path::has_stem(*i);
+    path::stem(*i);
+    path::has_extension(*i);
+    path::extension(*i);
+    path::is_absolute(*i);
+    path::is_relative(*i);
 
     SmallString<16> temp_store;
     temp_store = *i;
-    ASSERT_FALSE(path::make_absolute(temp_store));
+    ASSERT_FALSE(fs::make_absolute(temp_store));
     temp_store = *i;
-    ASSERT_FALSE(path::remove_filename(temp_store));
+    path::remove_filename(temp_store);
 
     temp_store = *i;
-    ASSERT_FALSE(path::replace_extension(temp_store, "ext"));
+    path::replace_extension(temp_store, "ext");
     StringRef filename(temp_store.begin(), temp_store.size()), stem, ext;
-    ASSERT_FALSE(path::stem(filename, stem));
-    ASSERT_FALSE(path::extension(filename, ext));
+    stem = path::stem(filename);
+    ext  = path::extension(filename);
     EXPECT_EQ(*(--sys::path::end(filename)), (stem + ext).str());
 
-    ASSERT_FALSE(path::native(*i, temp_store));
+    path::native(*i, temp_store);
 
     outs().flush();
   }
@@ -168,6 +167,18 @@ TEST(Support, Path) {
   // Make sure Temp1 doesn't exist.
   ASSERT_FALSE(fs::exists(Twine(TempPath), TempFileExists));
   EXPECT_FALSE(TempFileExists);
+
+  // I've yet to do directory iteration on Unix.
+#ifdef LLVM_ON_WIN32
+  error_code ec;
+  for (fs::directory_iterator i(".", ec), e; i != e; i.increment(ec)) {
+    if (ec) {
+      errs() << ec.message() << '\n';
+      errs().flush();
+      report_fatal_error("Directory iteration failed!");
+    }
+  }
+#endif
 }
 
 } // anonymous namespace

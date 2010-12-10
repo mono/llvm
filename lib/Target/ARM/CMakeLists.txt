@@ -29,6 +29,7 @@ add_llvm_target(ARMCodeGen
   ARMFastISel.cpp
   ARMFrameInfo.cpp
   ARMGlobalMerge.cpp
+  ARMHazardRecognizer.cpp
   ARMISelDAGToDAG.cpp
   ARMISelLowering.cpp
   ARMInstrInfo.cpp
@@ -42,11 +43,11 @@ add_llvm_target(ARMCodeGen
   ARMSubtarget.cpp
   ARMTargetMachine.cpp
   ARMTargetObjectFile.cpp
+  MLxExpansionPass.cpp
   NEONMoveFix.cpp
   Thumb1InstrInfo.cpp
   Thumb1FrameInfo.cpp
   Thumb1RegisterInfo.cpp
-  Thumb2HazardRecognizer.cpp
   Thumb2ITBlockPass.cpp
   Thumb2InstrInfo.cpp
   Thumb2RegisterInfo.cpp

@@ -30,6 +30,11 @@
 using namespace llvm;
 
 namespace {
+  /// This class automatically closes the given file descriptor when it goes out
+  /// of scope. You can take back explicit ownership of the file descriptor by
+  /// calling take(). The destructor does not verify that close was successful.
+  /// Therefore, never allow this class to call close on a file descriptor that
+  /// has been read from or written to.
   struct AutoFD {
     int FileDescriptor;
 
@@ -60,32 +65,34 @@ namespace {
 #endif
     (dir = "/tmp");
 
-    result.set_size(0);
+    result.clear();
     StringRef d(dir);
     result.append(d.begin(), d.end());
-    return make_error_code(errc::success);
+    return success;
   }
 }
 
 namespace llvm {
 namespace sys  {
-namespace path {
+namespace fs {
 
 error_code current_path(SmallVectorImpl<char> &result) {
-  long size = ::pathconf(".", _PC_PATH_MAX);
-  result.reserve(size + 1);
-  result.set_size(size + 1);
+  result.reserve(MAXPATHLEN);
 
-  if (::getcwd(result.data(), result.size()) == 0)
-    return error_code(errno, system_category());
+  while (true) {
+    if (::getcwd(result.data(), result.capacity()) == 0) {
+      // See if there was a real error.
+      if (errno != errc::not_enough_memory)
+        return error_code(errno, system_category());
+      // Otherwise there just wasn't enough space.
+      result.reserve(result.capacity() * 2);
+    } else
+      break;
+  }
 
   result.set_size(strlen(result.data()));
-  return make_error_code(errc::success);
+  return success;
 }
-
-} // end namespace path
-
-namespace fs{
 
 error_code copy_file(const Twine &from, const Twine &to, copy_option copt) {
  // Get arguments.
@@ -143,21 +150,21 @@ error_code copy_file(const Twine &from, const Twine &to, copy_option copt) {
   if (sz_read < 0)
     return error_code(errno, system_category());
 
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code create_directory(const Twine &path, bool &existed) {
   SmallString<128> path_storage;
   StringRef p = path.toNullTerminatedStringRef(path_storage);
 
-  if (::mkdir(p.begin(), 0700) == -1) {
-    if (errno != EEXIST)
+  if (::mkdir(p.begin(), S_IRWXU | S_IRWXG) == -1) {
+    if (errno != errc::file_exists)
       return error_code(errno, system_category());
     existed = true;
   } else
     existed = false;
 
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code create_hard_link(const Twine &to, const Twine &from) {
@@ -170,7 +177,7 @@ error_code create_hard_link(const Twine &to, const Twine &from) {
   if (::link(t.begin(), f.begin()) == -1)
     return error_code(errno, system_category());
 
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code create_symlink(const Twine &to, const Twine &from) {
@@ -183,7 +190,7 @@ error_code create_symlink(const Twine &to, const Twine &from) {
   if (::symlink(t.begin(), f.begin()) == -1)
     return error_code(errno, system_category());
 
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code remove(const Twine &path, bool &existed) {
@@ -191,13 +198,13 @@ error_code remove(const Twine &path, bool &existed) {
   StringRef p = path.toNullTerminatedStringRef(path_storage);
 
   if (::remove(p.begin()) == -1) {
-    if (errno != ENOENT)
+    if (errno != errc::no_such_file_or_directory)
       return error_code(errno, system_category());
     existed = false;
   } else
     existed = true;
 
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code rename(const Twine &from, const Twine &to) {
@@ -210,7 +217,7 @@ error_code rename(const Twine &from, const Twine &to) {
   if (::rename(f.begin(), t.begin()) == -1)
     return error_code(errno, system_category());
 
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code resize_file(const Twine &path, uint64_t size) {
@@ -220,7 +227,7 @@ error_code resize_file(const Twine &path, uint64_t size) {
   if (::truncate(p.begin(), size) == -1)
     return error_code(errno, system_category());
 
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code exists(const Twine &path, bool &result) {
@@ -229,13 +236,13 @@ error_code exists(const Twine &path, bool &result) {
 
   struct stat status;
   if (::stat(p.begin(), &status) == -1) {
-    if (errno != ENOENT)
+    if (errno != errc::no_such_file_or_directory)
       return error_code(errno, system_category());
     result = false;
   } else
     result = true;
 
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code equivalent(const Twine &A, const Twine &B, bool &result) {
@@ -260,7 +267,7 @@ error_code equivalent(const Twine &A, const Twine &B, bool &result) {
       stat_a.st_ino == stat_b.st_ino;
   }
 
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code file_size(const Twine &path, uint64_t &result) {
@@ -271,10 +278,10 @@ error_code file_size(const Twine &path, uint64_t &result) {
   if (::stat(p.begin(), &status) == -1)
     return error_code(errno, system_category());
   if (!S_ISREG(status.st_mode))
-    return error_code(EPERM, system_category());
+    return make_error_code(errc::operation_not_permitted);
 
   result = status.st_size;
-  return make_error_code(errc::success);
+  return success;
 }
 
 error_code status(const Twine &path, file_status &result) {
@@ -317,12 +324,11 @@ error_code unique_file(const Twine &model, int &result_fd,
   Model.c_str();
 
   // Make model absolute by prepending a temp directory if it's not already.
-  bool absolute;
-  if (error_code ec = path::is_absolute(Twine(Model), absolute)) return ec;
+  bool absolute = path::is_absolute(Twine(Model));
   if (!absolute) {
     SmallString<128> TDir;
     if (error_code ec = TempDir(TDir)) return ec;
-    if (error_code ec = path::append(TDir, Twine(Model))) return ec;
+    path::append(TDir, Twine(Model));
     Model.swap(TDir);
   }
 
@@ -359,15 +365,15 @@ rety_open_create:
   int RandomFD = ::open(RandomPath.c_str(), O_RDWR | O_CREAT | O_EXCL, 0600);
   if (RandomFD == -1) {
     // If the file existed, try again, otherwise, error.
-    if (errno == EEXIST)
+    if (errno == errc::file_exists)
       goto retry_random_path;
     // The path prefix doesn't exist.
-    if (errno == ENOENT) {
+    if (errno == errc::no_such_file_or_directory) {
       StringRef p(RandomPath.begin(), RandomPath.size());
       SmallString<64> dir_to_create;
       for (path::const_iterator i = path::begin(p),
                                 e = --path::end(p); i != e; ++i) {
-        if (error_code ec = path::append(dir_to_create, *i)) return ec;
+        path::append(dir_to_create, *i);
         bool Exists;
         if (error_code ec = exists(Twine(dir_to_create), Exists)) return ec;
         if (!Exists) {
@@ -375,7 +381,7 @@ rety_open_create:
           if (i->size() > 2 && (*i)[0] == '/' &&
                                (*i)[1] == '/' &&
                                (*i)[2] != '/')
-            return error_code(ENOENT, system_category());
+            return make_error_code(errc::no_such_file_or_directory);
           if (::mkdir(dir_to_create.c_str(), 0700) == -1)
             return error_code(errno, system_category());
         }
@@ -385,20 +391,21 @@ rety_open_create:
     return error_code(errno, system_category());
   }
 
-    // Make the path absolute.
+   // Make the path absolute.
   char real_path_buff[PATH_MAX + 1];
   if (realpath(RandomPath.c_str(), real_path_buff) == NULL) {
+    int error = errno;
     ::close(RandomFD);
     ::unlink(RandomPath.c_str());
-    return error_code(errno, system_category());
+    return error_code(error, system_category());
   }
 
-  result_path.set_size(0);
+  result_path.clear();
   StringRef d(real_path_buff);
   result_path.append(d.begin(), d.end());
 
   result_fd = RandomFD;
-  return make_error_code(errc::success);
+  return success;
 }
 
 } // end namespace fs

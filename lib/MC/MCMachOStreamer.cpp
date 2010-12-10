@@ -24,6 +24,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetAsmBackend.h"
+#include "llvm/Target/TargetAsmInfo.h"
 
 using namespace llvm;
 
@@ -36,7 +37,7 @@ private:
 public:
   MCMachOStreamer(MCContext &Context, TargetAsmBackend &TAB,
                   raw_ostream &OS, MCCodeEmitter *Emitter)
-    : MCObjectStreamer(Context, TAB, OS, Emitter, true) {}
+    : MCObjectStreamer(Context, TAB, OS, Emitter) {}
 
   /// @name MCStreamer Interface
   /// @{
@@ -124,6 +125,9 @@ void MCMachOStreamer::EmitLabel(MCSymbol *Symbol) {
 }
 
 void MCMachOStreamer::EmitAssemblerFlag(MCAssemblerFlag Flag) {
+  // Let the target do whatever target specific stuff it needs to do.
+  getAssembler().getBackend().HandleAssemblerFlag(Flag);
+  // Do any generic stuff we need to do.
   switch (Flag) {
   case MCAF_SyntaxUnified: return; // no-op here.
   case MCAF_Code16: return; // no-op here.
@@ -351,15 +355,6 @@ void MCMachOStreamer::EmitInstToData(const MCInst &Inst) {
 }
 
 void MCMachOStreamer::Finish() {
-  // Dump out the dwarf file & directory tables and line tables.
-  if (getContext().hasDwarfFiles()) {
-    const MCSection *DwarfLineSection = getContext().getMachOSection("__DWARF",
-                                         "__debug_line",
-                                         MCSectionMachO::S_ATTR_DEBUG,
-                                         0, SectionKind::getDataRelLocal());
-    MCDwarfFileTable::Emit(this, DwarfLineSection);
-  }
-
   // We have to set the fragment atom associations so we can relax properly for
   // Mach-O.
 

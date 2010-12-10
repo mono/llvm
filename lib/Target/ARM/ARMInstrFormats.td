@@ -143,6 +143,11 @@ def CondCodeOperand : AsmOperandClass {
   let SuperClasses = [];
 }
 
+def CCOutOperand : AsmOperandClass {
+  let Name = "CCOut";
+  let SuperClasses = [];
+}
+
 // ARM Predicate operand. Default to 14 = always (AL). Second part is CC
 // register whose default is 0 (no register).
 def pred : PredicateOperand<OtherVT, (ops i32imm, CCR),
@@ -155,12 +160,14 @@ def pred : PredicateOperand<OtherVT, (ops i32imm, CCR),
 def cc_out : OptionalDefOperand<OtherVT, (ops CCR), (ops (i32 zero_reg))> {
   let EncoderMethod = "getCCOutOpValue";
   let PrintMethod = "printSBitModifierOperand";
+  let ParserMatchClass = CCOutOperand;
 }
 
 // Same as cc_out except it defaults to setting CPSR.
 def s_cc_out : OptionalDefOperand<OtherVT, (ops CCR), (ops (i32 CPSR))> {
   let EncoderMethod = "getCCOutOpValue";
   let PrintMethod = "printSBitModifierOperand";
+  let ParserMatchClass = CCOutOperand;
 }
 
 // ARM special operands for disassembly only.
@@ -954,6 +961,9 @@ class Thumb2sI<dag oops, dag iops, AddrMode am, SizeFlagVal sz,
                InstrItinClass itin,
                string opc, string asm, string cstr, list<dag> pattern>
   : InstARM<am, sz, IndexModeNone, ThumbFrm, GenericDomain, cstr, itin> {
+  bits<1> s; // condition-code set flag ('1' if the insn should set the flags)
+  let Inst{20} = s;
+
   let OutOperandList = oops;
   let InOperandList = !con(iops, (ins pred:$p, cc_out:$s));
   let AsmString = !strconcat(opc, "${s}${p}", asm);

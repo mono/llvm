@@ -41,7 +41,6 @@ const char *MipsTargetLowering::getTargetNodeName(unsigned Opcode) const {
     case MipsISD::Lo         : return "MipsISD::Lo";
     case MipsISD::GPRel      : return "MipsISD::GPRel";
     case MipsISD::Ret        : return "MipsISD::Ret";
-    case MipsISD::CMov       : return "MipsISD::CMov";
     case MipsISD::SelectCC   : return "MipsISD::SelectCC";
     case MipsISD::FPSelectCC : return "MipsISD::FPSelectCC";
     case MipsISD::FPBrcond   : return "MipsISD::FPBrcond";
@@ -116,7 +115,10 @@ MipsTargetLowering(MipsTargetMachine &TM)
   setOperationAction(ISD::CTPOP,             MVT::i32,   Expand);
   setOperationAction(ISD::CTTZ,              MVT::i32,   Expand);
   setOperationAction(ISD::ROTL,              MVT::i32,   Expand);
-  setOperationAction(ISD::ROTR,              MVT::i32,   Expand);
+
+  if (!Subtarget->isMips32r2())
+    setOperationAction(ISD::ROTR, MVT::i32,   Expand);
+
   setOperationAction(ISD::SHL_PARTS,         MVT::i32,   Expand);
   setOperationAction(ISD::SRA_PARTS,         MVT::i32,   Expand);
   setOperationAction(ISD::SRL_PARTS,         MVT::i32,   Expand);

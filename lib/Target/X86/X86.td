@@ -23,6 +23,9 @@ include "llvm/Target/Target.td"
 def FeatureCMOV    : SubtargetFeature<"cmov","HasCMov", "true",
                                       "Enable conditional move instructions">;
 
+def FeaturePOPCNT   : SubtargetFeature<"popcnt", "HasPOPCNT", "true",
+                                       "Support POPCNT instruction">;
+
 
 def FeatureMMX     : SubtargetFeature<"mmx","X86SSELevel", "MMX",
                                       "Enable MMX instructions">;
@@ -45,7 +48,7 @@ def FeatureSSE41   : SubtargetFeature<"sse41", "X86SSELevel", "SSE41",
                                       [FeatureSSSE3]>;
 def FeatureSSE42   : SubtargetFeature<"sse42", "X86SSELevel", "SSE42",
                                       "Enable SSE 4.2 instructions",
-                                      [FeatureSSE41]>;
+                                      [FeatureSSE41, FeaturePOPCNT]>;
 def Feature3DNow   : SubtargetFeature<"3dnow", "X863DNowLevel", "ThreeDNow",
                                       "Enable 3DNow! instructions">;
 def Feature3DNowA  : SubtargetFeature<"3dnowa", "X863DNowLevel", "ThreeDNowA",
@@ -63,7 +66,8 @@ def FeatureFastUAMem : SubtargetFeature<"fast-unaligned-mem",
                                         "IsUAMemFast", "true",
                                         "Fast unaligned memory access">;
 def FeatureSSE4A   : SubtargetFeature<"sse4a", "HasSSE4A", "true",
-                                      "Support SSE 4a instructions">;
+                                      "Support SSE 4a instructions",
+                                      [FeaturePOPCNT]>;
 
 def FeatureAVX     : SubtargetFeature<"avx", "HasAVX", "true",
                                       "Enable AVX instructions">;
@@ -112,11 +116,11 @@ def : Proc<"nehalem",         [FeatureSSE42,  Feature64Bit, FeatureSlowBTMem,
                                FeatureFastUAMem]>;
 // Westmere is a similar machine to nehalem with some additional features.
 // Westmere is the corei3/i5/i7 path from nehalem to sandybridge
-def : Proc<"westmere",         [FeatureSSE42,  Feature64Bit, FeatureSlowBTMem,
-                                FeatureFastUAMem, FeatureAES]>;
-// Sandy Bridge does not have FMA
-// FIXME: Wikipedia says it does... it should have AES as well.
-def : Proc<"sandybridge",     [FeatureSSE42,  FeatureAVX,   Feature64Bit]>;
+def : Proc<"westmere",        [FeatureSSE42,  Feature64Bit, FeatureSlowBTMem,
+                               FeatureFastUAMem, FeatureAES, FeatureCLMUL]>;
+// SSE is not listed here since llvm treats AVX as a reimplementation of SSE,
+// rather than a superset.
+def : Proc<"sandybridge",     [FeatureAVX, FeatureAES, FeatureCLMUL, Feature64Bit]>;
 
 def : Proc<"k6",              [FeatureMMX]>;
 def : Proc<"k6-2",            [FeatureMMX,    Feature3DNow]>;

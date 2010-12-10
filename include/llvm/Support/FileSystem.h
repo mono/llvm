@@ -104,6 +104,19 @@ public:
 /// @name Physical Operators
 /// @{
 
+/// @brief Make \a path an absolute path.
+///
+/// Makes \a path absolute using the current directory if it is not already. An
+/// empty \a path will result in the current directory.
+///
+/// /absolute/path   => /absolute/path
+/// relative/../path => <current-directory>/relative/../path
+///
+/// @param path A path that is modified to be an absolute path.
+/// @returns errc::success if \a path has been made absolute, otherwise a
+///          platform specific error_code.
+error_code make_absolute(SmallVectorImpl<char> &path);
+
 /// @brief Copy the file at \a from to the path \a to.
 ///
 /// @param from The path to copy the file from.
@@ -147,6 +160,13 @@ error_code create_hard_link(const Twine &to, const Twine &from);
 /// @returns errc::success if exists(to) && exists(from) && is_symlink(from),
 ///          otherwise a platform specific error_code.
 error_code create_symlink(const Twine &to, const Twine &from);
+
+/// @brief Get the current path.
+///
+/// @param result Holds the current path on return.
+/// @results errc::success if the current path has been stored in result,
+///          otherwise a platform specific error_code.
+error_code current_path(SmallVectorImpl<char> &result);
 
 /// @brief Remove path. Equivalent to POSIX remove().
 ///
@@ -211,11 +231,9 @@ error_code set_execute(const Twine &path, bool value);
 /// @brief Does file exist?
 ///
 /// @param status A file_status previously returned from stat.
-/// @param result Set to true if the file represented by status exists, false if
-///               it does not. Undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code exists(file_status status, bool &result);
+/// @results True if the file represented by status exists, false if it does
+///          not.
+bool exists(file_status status);
 
 /// @brief Does file exist?
 ///
@@ -225,6 +243,17 @@ error_code exists(file_status status, bool &result);
 /// @results errc::success if result has been successfully set, otherwise a
 ///          platform specific error_code.
 error_code exists(const Twine &path, bool &result);
+
+/// @brief Do file_status's represent the same thing?
+///
+/// @param A Input file_status.
+/// @param B Input file_status.
+///
+/// assert(status_known(A) || status_known(B));
+///
+/// @results True if A and B both represent the same file system entity, false
+///          otherwise.
+bool equivalent(file_status A, file_status B);
 
 /// @brief Do paths represent the same thing?
 ///
@@ -246,12 +275,9 @@ error_code file_size(const Twine &path, uint64_t &result);
 
 /// @brief Does status represent a directory?
 ///
-/// @param status A file_status previously returned from stat.
-/// @param result Set to true if the file represented by status is a directory,
-///               false if it is not. Undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code is_directory(file_status status, bool &result);
+/// @param status A file_status previously returned from status.
+/// @results status.type() == file_type::directory_file.
+bool is_directory(file_status status);
 
 /// @brief Is path a directory?
 ///
@@ -273,12 +299,9 @@ error_code is_empty(const Twine &path, bool &result);
 
 /// @brief Does status represent a regular file?
 ///
-/// @param status A file_status previously returned from stat.
-/// @param result Set to true if the file represented by status is a regular
-///               file, false if it is not. Undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code is_regular_file(file_status status, bool &result);
+/// @param status A file_status previously returned from status.
+/// @results status_known(status) && status.type() == file_type::regular_file.
+bool is_regular_file(file_status status);
 
 /// @brief Is path a regular file?
 ///
@@ -289,16 +312,13 @@ error_code is_regular_file(file_status status, bool &result);
 ///          platform specific error_code.
 error_code is_regular_file(const Twine &path, bool &result);
 
-/// @brief Does status represent something that exists but is not a directory,
-///        regular file, or symlink?
+/// @brief Does this status represent something that exists but is not a
+///        directory, regular file, or symlink?
 ///
-/// @param status A file_status previously returned from stat.
-/// @param result Set to true if the file represented by status exists, but is
-///               not a directory, regular file, or a symlink, false if it does
-///               not. Undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code is_other(file_status status, bool &result);
+/// @param status A file_status previously returned from status.
+/// @results exists(s) && !is_regular_file(s) && !is_directory(s) &&
+///          !is_symlink(s)
+bool is_other(file_status status);
 
 /// @brief Is path something that exists but is not a directory,
 ///        regular file, or symlink?
@@ -313,11 +333,8 @@ error_code is_other(const Twine &path, bool &result);
 /// @brief Does status represent a symlink?
 ///
 /// @param status A file_status previously returned from stat.
-/// @param result Set to true if the file represented by status is a symlink,
-///               false if it is not. Undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code is_symlink(file_status status, bool &result);
+/// @param result status.type() == symlink_file.
+bool is_symlink(file_status status);
 
 /// @brief Is path a symlink?
 ///
@@ -369,6 +386,12 @@ error_code disk_space(const Twine &path, space_info &result);
 /// @results errc::success if result has been successfully set, otherwise a
 ///          platform specific error_code.
 error_code status(const Twine &path, file_status &result);
+
+/// @brief Is status available?
+///
+/// @param path Input path.
+/// @results True if status() != status_error.
+bool status_known(file_status s);
 
 /// @brief Is status available?
 ///
@@ -544,19 +567,29 @@ class directory_entry {
 
 public:
   explicit directory_entry(const Twine &path, file_status st = file_status(),
-                                       file_status symlink_st = file_status());
+                                       file_status symlink_st = file_status())
+    : Path(path.str())
+    , Status(st)
+    , SymlinkStatus(symlink_st) {}
+
+  directory_entry() {}
 
   void assign(const Twine &path, file_status st = file_status(),
-                          file_status symlink_st = file_status());
+                          file_status symlink_st = file_status()) {
+    Path = path.str();
+    Status = st;
+    SymlinkStatus = symlink_st;
+  }
+
   void replace_filename(const Twine &filename, file_status st = file_status(),
                               file_status symlink_st = file_status());
 
-  const SmallVectorImpl<char> &path() const;
+  StringRef path() const { return Path; }
   error_code status(file_status &result) const;
   error_code symlink_status(file_status &result) const;
 
-  bool operator==(const directory_entry& rhs) const;
-  bool operator!=(const directory_entry& rhs) const;
+  bool operator==(const directory_entry& rhs) const { return Path == rhs.Path; }
+  bool operator!=(const directory_entry& rhs) const { return !(*this == rhs); }
   bool operator< (const directory_entry& rhs) const;
   bool operator<=(const directory_entry& rhs) const;
   bool operator> (const directory_entry& rhs) const;
@@ -567,16 +600,41 @@ public:
 /// operator++ because we need an error_code. If it's really needed we can make
 /// it call report_fatal_error on error.
 class directory_iterator {
-  // implementation directory iterator status
+  intptr_t IterationHandle;
+  directory_entry CurrentEntry;
+
+  // Platform implementations implement these functions to handle iteration.
+  friend error_code directory_iterator_construct(directory_iterator& it,
+                                                 const StringRef &path);
+  friend error_code directory_iterator_increment(directory_iterator& it);
+  friend error_code directory_iterator_destruct(directory_iterator& it);
 
 public:
-  explicit directory_iterator(const Twine &path, error_code &ec);
+  explicit directory_iterator(const Twine &path, error_code &ec)
+  : IterationHandle(0) {
+    SmallString<128> path_storage;
+    ec = directory_iterator_construct(*this, path.toStringRef(path_storage));
+  }
+
+  /// Construct end iterator.
+  directory_iterator() : IterationHandle(0) {}
+
+  ~directory_iterator() {
+    directory_iterator_destruct(*this);
+  }
+
   // No operator++ because we need error_code.
-  directory_iterator &increment(error_code &ec);
+  directory_iterator &increment(error_code &ec) {
+    ec = directory_iterator_increment(*this);
+    return *this;
+  }
 
-  const directory_entry &operator*() const;
-  const directory_entry *operator->() const;
+  const directory_entry &operator*() const { return CurrentEntry; }
+  const directory_entry *operator->() const { return &CurrentEntry; }
 
+  bool operator!=(const directory_iterator &RHS) const {
+    return CurrentEntry != RHS.CurrentEntry;
+  }
   // Other members as required by
   // C++ Std, 24.1.1 Input iterators [input.iterators]
 };

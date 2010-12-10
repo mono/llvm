@@ -16,14 +16,14 @@
 // (and hopefully tells someone about it).
 //
 // This also provides another really hacky method to prevent assert dialog boxes
-// from poping up. When --no-user32 is passed, if any process loads user32.dll,
+// from popping up. When --no-user32 is passed, if any process loads user32.dll,
 // we assume it is trying to call MessageBoxEx and terminate it. The proper way
 // to do this would be to actually set a break point, but there's quite a bit
 // of code involved to get the address of MessageBoxEx in the remote process's
 // address space due to Address space layout randomization (ASLR). This can be
 // added if it's ever actually needed.
 //
-// If the subprocess exits for any reason other than sucessful termination, -1
+// If the subprocess exits for any reason other than successful termination, -1
 // is returned. If the process exits normally the value it returned is returned.
 //
 // I hate Windows.
@@ -164,10 +164,6 @@ namespace {
   typedef ScopedHandle<ThreadHandle>            ThreadScopedHandle;
   typedef ScopedHandle<TokenHandle>             TokenScopedHandle;
   typedef ScopedHandle<FileHandle>              FileScopedHandle;
-
-  error_code get_windows_last_error() {
-    return make_error_code(windows_error(::GetLastError()));
-  }
 }
 
 static error_code GetFileNameFromHandle(HANDLE FileHandle,
@@ -181,7 +177,7 @@ static error_code GetFileNameFromHandle(HANDLE FileHandle,
   Sucess = ::GetFileSizeEx(FileHandle, &FileSize);
 
   if (!Sucess)
-   return get_windows_last_error();
+    return windows_error(::GetLastError());
 
   // Create a file mapping object.
   FileMappingScopedHandle FileMapping(
@@ -193,14 +189,14 @@ static error_code GetFileNameFromHandle(HANDLE FileHandle,
                          NULL));
 
   if (!FileMapping)
-    return get_windows_last_error();
+    return windows_error(::GetLastError());
 
   // Create a file mapping to get the file name.
   MappedViewOfFileScopedHandle MappedFile(
     ::MapViewOfFile(FileMapping, FILE_MAP_READ, 0, 0, 1));
 
   if (!MappedFile)
-    return get_windows_last_error();
+    return windows_error(::GetLastError());
 
   Sucess = ::GetMappedFileNameA(::GetCurrentProcess(),
                                 MappedFile,
@@ -208,7 +204,7 @@ static error_code GetFileNameFromHandle(HANDLE FileHandle,
                                 array_lengthof(Filename) - 1);
 
   if (!Sucess)
-    return get_windows_last_error();
+    return windows_error(::GetLastError());
   else {
     Name = Filename;
     return windows_error::success;
@@ -256,10 +252,10 @@ static std::string FindProgram(const std::string &Program, error_code &ec) {
                                  PathName,
                                  NULL);
     if (length == 0)
-      ec = get_windows_last_error();
+      ec = windows_error(::GetLastError());
     else if (length > array_lengthof(PathName)) {
       // This may have been the file, return with error.
-      ec = error_code(windows_error::buffer_overflow);
+      ec = windows_error::buffer_overflow;
       break;
     } else {
       // We found the path! Return it.
@@ -279,7 +275,7 @@ static error_code EnableDebugPrivileges() {
                                     TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
                                     &TokenHandle);
   if (!success)
-    return error_code(::GetLastError(), system_category());
+    return windows_error(::GetLastError());
 
   TokenScopedHandle Token(TokenHandle);
   TOKEN_PRIVILEGES  TokenPrivileges;
@@ -289,7 +285,7 @@ static error_code EnableDebugPrivileges() {
                                     SE_DEBUG_NAME,
                                     &LocallyUniqueID);
   if (!success)
-    return error_code(::GetLastError(), system_category());
+    return windows_error(::GetLastError());
 
   TokenPrivileges.PrivilegeCount = 1;
   TokenPrivileges.Privileges[0].Luid = LocallyUniqueID;
@@ -303,7 +299,7 @@ static error_code EnableDebugPrivileges() {
                                     NULL);
   // The value of success is basically useless. Either way we are just returning
   // the value of ::GetLastError().
-  return error_code(::GetLastError(), system_category());
+  return windows_error(::GetLastError());
 }
 
 static StringRef ExceptionCodeToString(DWORD ExceptionCode) {
@@ -387,7 +383,7 @@ int main(int argc, char **argv) {
   StartupInfo.cb = sizeof(StartupInfo);
   std::memset(&ProcessInfo, 0, sizeof(ProcessInfo));
 
-  // Set error mode to not display any message boxes. The child process inherets
+  // Set error mode to not display any message boxes. The child process inherits
   // this.
   ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
   ::_set_error_mode(_OUT_TO_STDERR);
@@ -404,7 +400,7 @@ int main(int argc, char **argv) {
                                   &ProcessInfo);
   if (!success) {
     errs() << ToolName << ": Failed to run program: '" << ProgramToRun
-           << "': " << error_code(::GetLastError(), system_category()).message()
+           << "': " << error_code(windows_error(::GetLastError())).message()
            << '\n';
     return -1;
   }
@@ -432,7 +428,7 @@ int main(int argc, char **argv) {
                                   &KernelTime,
                                   &UserTime);
       if (!success) {
-        ec = error_code(::GetLastError(), system_category());
+        ec = windows_error(::GetLastError());
 
         errs() << ToolName << ": Failed to get process times: "
                << ec.message() << '\n';
@@ -442,7 +438,7 @@ int main(int argc, char **argv) {
       a.HighPart = KernelTime.dwHighDateTime;
       b.LowPart = UserTime.dwLowDateTime;
       b.HighPart = UserTime.dwHighDateTime;
-      // Convert 100-nanosecond units to miliseconds.
+      // Convert 100-nanosecond units to milliseconds.
       uint64_t TotalTimeMiliseconds = (a.QuadPart + b.QuadPart) / 10000;
       // Handle the case where the process has been running for more than 49
       // days.
@@ -467,9 +463,9 @@ int main(int argc, char **argv) {
     success = WaitForDebugEvent(&DebugEvent, TimeLeft);
 
     if (!success) {
-      ec = error_code(::GetLastError(), system_category());
+      ec = windows_error(::GetLastError());
 
-      if (ec == error_condition(errc::timed_out)) {
+      if (ec == errc::timed_out) {
         errs() << ToolName << ": Process timed out.\n";
         ::TerminateProcess(ProcessInfo.hProcess, -1);
         // Otherwise other stuff starts failing...
@@ -494,7 +490,7 @@ int main(int argc, char **argv) {
         if (TraceExecution)
           errs() << ToolName << ": Debug Event: EXIT_PROCESS_DEBUG_EVENT\n";
 
-        // If this is the process we origionally created, exit with its exit
+        // If this is the process we originally created, exit with its exit
         // code.
         if (DebugEvent.dwProcessId == ProcessInfo.dwProcessId)
           return DebugEvent.u.ExitProcess.dwExitCode;
@@ -534,7 +530,7 @@ int main(int argc, char **argv) {
           errs() << ToolName << ": user32.dll loaded!\n";
           errs().indent(ToolName.size())
                  << ": This probably means that assert was called. Closing "
-                    "program to prevent message box from poping up.\n";
+                    "program to prevent message box from popping up.\n";
           dwContinueStatus = DBG_CONTINUE;
           ::TerminateProcess(ProcessIDToHandle[DebugEvent.dwProcessId], -1);
           return -1;
@@ -586,7 +582,7 @@ int main(int argc, char **argv) {
                                  DebugEvent.dwThreadId,
                                  dwContinueStatus);
     if (!success) {
-      ec = error_code(::GetLastError(), system_category());
+      ec = windows_error(::GetLastError());
       errs() << ToolName << ": Failed to continue debugging program: '"
              << ProgramToRun << "': " << ec.message() << '\n';
       return -1;

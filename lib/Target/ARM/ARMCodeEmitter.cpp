@@ -171,6 +171,12 @@ namespace {
       const { return 0; }
     unsigned getAdrLabelOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
+    unsigned getThumbBLTargetOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
+    unsigned getThumbBLXTargetOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
+    unsigned getThumbCBTargetOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
     unsigned getBranchTargetOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
     unsigned getCCOutOpValue(const MachineInstr &MI, unsigned Op)
@@ -245,11 +251,11 @@ namespace {
       const { return 0;}
     uint32_t getAddrMode3OpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
-    uint32_t getAddrModeS4OpValue(const MachineInstr &MI, unsigned Op)
+    uint32_t getAddrModeThumbSPOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
-    uint32_t getAddrModeS2OpValue(const MachineInstr &MI, unsigned Op)
+    uint32_t getAddrModeSOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
-    uint32_t getAddrModeS1OpValue(const MachineInstr &MI, unsigned Op)
+    uint32_t getAddrModePCOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
     uint32_t getAddrMode5OpValue(const MachineInstr &MI, unsigned Op) const {
       // {17-13} = reg

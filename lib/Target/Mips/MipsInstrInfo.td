@@ -52,9 +52,6 @@ def callseq_end   : SDNode<"ISD::CALLSEQ_END", SDT_MipsCallSeqEnd,
 // Select Condition Code
 def MipsSelectCC  : SDNode<"MipsISD::SelectCC", SDT_MipsSelectCC>;
 
-// Conditional Move
-def MipsCMov      : SDNode<"MipsISD::CMov", SDT_MipsCMov>;
-
 //===----------------------------------------------------------------------===//
 // Mips Instruction Predicate Definitions.
 //===----------------------------------------------------------------------===//
@@ -63,6 +60,7 @@ def HasBitCount : Predicate<"Subtarget.hasBitCount()">;
 def HasSwap     : Predicate<"Subtarget.hasSwap()">;
 def HasCondMov  : Predicate<"Subtarget.hasCondMov()">;
 def IsMips32    : Predicate<"Subtarget.isMips32()">;
+def IsMips32r2  : Predicate<"Subtarget.isMips32r2()">;
 
 //===----------------------------------------------------------------------===//
 // Mips Operand, Complex Patterns and Transformations Definitions.
@@ -171,16 +169,21 @@ class LogicNOR<bits<6> op, bits<6> func, string instr_asm>:
      [(set CPURegs:$dst, (not (or CPURegs:$b, CPURegs:$c)))], IIAlu>;
 
 // Shifts
-let rt = 0 in
-class LogicR_shift_imm<bits<6> func, string instr_asm, SDNode OpNode>:
+class LogicR_shift_rotate_imm<bits<6> func, bits<5> _rs, string instr_asm, 
+                              SDNode OpNode>:
   FR<0x00, func, (outs CPURegs:$dst), (ins CPURegs:$b, shamt:$c),
      !strconcat(instr_asm, "\t$dst, $b, $c"),
-     [(set CPURegs:$dst, (OpNode CPURegs:$b, immZExt5:$c))], IIAlu>;
+     [(set CPURegs:$dst, (OpNode CPURegs:$b, immZExt5:$c))], IIAlu> {
+  let rs = _rs;
+}
 
-class LogicR_shift_reg<bits<6> func, string instr_asm, SDNode OpNode>:
-  FR<0x00, func, (outs CPURegs:$dst), (ins CPURegs:$b, CPURegs:$c),
+class LogicR_shift_rotate_reg<bits<6> func, bits<5> _shamt, string instr_asm, 
+                              SDNode OpNode>:
+  FR<0x00, func, (outs CPURegs:$dst), (ins CPURegs:$c, CPURegs:$b),
      !strconcat(instr_asm, "\t$dst, $b, $c"),
-     [(set CPURegs:$dst, (OpNode CPURegs:$b, CPURegs:$c))], IIAlu>;
+     [(set CPURegs:$dst, (OpNode CPURegs:$b, CPURegs:$c))], IIAlu> {
+  let shamt = _shamt;
+}
 
 // Load Upper Imediate
 class LoadUpper<bits<6> op, string instr_asm>:
@@ -306,8 +309,7 @@ class ByteSwap<bits<6> func, string instr_asm>:
 class CondMov<bits<6> func, string instr_asm, PatLeaf MovCode>:
   FR<0x00, func, (outs CPURegs:$dst), (ins CPURegs:$F, CPURegs:$T,
      CPURegs:$cond), !strconcat(instr_asm, "\t$dst, $T, $cond"),
-     [(set CPURegs:$dst, (MipsCMov CPURegs:$F, CPURegs:$T,
-                          CPURegs:$cond, MovCode))], NoItinerary>;
+     [], NoItinerary>;
 
 //===----------------------------------------------------------------------===//
 // Pseudo instructions
@@ -380,12 +382,18 @@ def XOR     : LogicR<0x26, "xor", xor>;
 def NOR     : LogicNOR<0x00, 0x27, "nor">;
 
 /// Shift Instructions
-def SLL     : LogicR_shift_imm<0x00, "sll", shl>;
-def SRL     : LogicR_shift_imm<0x02, "srl", srl>;
-def SRA     : LogicR_shift_imm<0x03, "sra", sra>;
-def SLLV    : LogicR_shift_reg<0x04, "sllv", shl>;
-def SRLV    : LogicR_shift_reg<0x06, "srlv", srl>;
-def SRAV    : LogicR_shift_reg<0x07, "srav", sra>;
+def SLL     : LogicR_shift_rotate_imm<0x00, 0x00, "sll", shl>;
+def SRL     : LogicR_shift_rotate_imm<0x02, 0x00, "srl", srl>;
+def SRA     : LogicR_shift_rotate_imm<0x03, 0x00, "sra", sra>;
+def SLLV    : LogicR_shift_rotate_reg<0x04, 0x00, "sllv", shl>;
+def SRLV    : LogicR_shift_rotate_reg<0x06, 0x00, "srlv", srl>;
+def SRAV    : LogicR_shift_rotate_reg<0x07, 0x00, "srav", sra>;
+
+// Rotate Instructions
+let Predicates = [IsMips32r2] in {
+    def ROTR    : LogicR_shift_rotate_imm<0x02, 0x01, "rotr", rotr>;
+    def ROTRV   : LogicR_shift_rotate_reg<0x06, 0x01, "rotrv", rotr>;
+}
 
 /// Load and Store Instructions
 def LB      : LoadM<0x20, "lb",  sextloadi8>;
@@ -596,6 +604,12 @@ def : Pat<(select (setne CPURegs:$lhs, CPURegs:$rhs), CPURegs:$T, CPURegs:$F),
 
 def : Pat<(select CPURegs:$cond, CPURegs:$T, CPURegs:$F),
           (MOVN CPURegs:$F, CPURegs:$T, CPURegs:$cond)>;
+
+// select patterns with got access
+def : Pat<(select (setne CPURegs:$lhs, CPURegs:$rhs),
+                  (i32 tglobaladdr:$T), CPURegs:$F),
+          (MOVN CPURegs:$F, (ADDiu GP, tglobaladdr:$T),
+                (XOR CPURegs:$lhs, CPURegs:$rhs))>;
 
 // setcc patterns
 def : Pat<(seteq CPURegs:$lhs, CPURegs:$rhs),

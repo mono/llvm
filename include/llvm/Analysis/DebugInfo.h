@@ -288,6 +288,7 @@ namespace llvm {
     /// replaceAllUsesWith - Replace all uses of debug info referenced by
     /// this descriptor.
     void replaceAllUsesWith(DIDescriptor &D);
+    void replaceAllUsesWith(MDNode *D);
 
     /// print - print type.
     void print(raw_ostream &OS) const;
@@ -715,6 +716,7 @@ namespace llvm {
 
     /// CreateTemporaryType - Create a temporary forward-declared type.
     DIType CreateTemporaryType();
+    DIType CreateTemporaryType(DIFile F);
 
     /// CreateArtificialType - Create a new DIType with "artificial" flag set.
     DIType CreateArtificialType(DIType Ty);

@@ -68,9 +68,7 @@ namespace {
     //FIXME: Disable CMN, as CCodes are backwards from compare expectations
     //{ ARM::t2CMNrr, ARM::tCMN,    0,             0,   0,    1,   0,  2,0, 0 },
     { ARM::t2CMPri, ARM::tCMPi8,  0,             8,   0,    1,   0,  2,0, 0 },
-    { ARM::t2CMPrr, ARM::tCMPhir, 0,             0,   0,    0,   0,  2,0, 0 },
-    { ARM::t2CMPzri,ARM::tCMPzi8, 0,             8,   0,    1,   0,  2,0, 0 },
-    { ARM::t2CMPzrr,ARM::tCMPzhir,0,             0,   0,    0,   0,  2,0, 1 },
+    { ARM::t2CMPrr, ARM::tCMPhir, 0,             0,   0,    0,   0,  2,0, 1 },
     { ARM::t2EORrr, 0,            ARM::tEOR,     0,   0,    0,   1,  0,0, 0 },
     // FIXME: adr.n immediate offset must be multiple of 4.
     //{ ARM::t2LEApcrelJT,ARM::tLEApcrelJT, 0,     0,   0,    1,   0,  1,0, 0 },
@@ -236,7 +234,7 @@ static bool VerifyLowRegs(MachineInstr *MI) {
   unsigned Opc = MI->getOpcode();
   bool isPCOk = (Opc == ARM::t2LDMIA_RET || Opc == ARM::t2LDMIA     ||
                  Opc == ARM::t2LDMDB     || Opc == ARM::t2LDMIA_UPD ||
-                 Opc == ARM::t2LDMDB_UPD);
+                 Opc == ARM::t2LDMDB_UPD || Opc == ARM::t2LDRi12);
   bool isLROk = (Opc == ARM::t2STMIA_UPD || Opc == ARM::t2STMDB_UPD);
   bool isSPOk = isPCOk || isLROk || (Opc == ARM::t2ADDrSPi);
   for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
@@ -270,10 +268,12 @@ Thumb2SizeReduce::ReduceLoadStore(MachineBasicBlock &MBB, MachineInstr *MI,
     return false;
 
   unsigned Scale = 1;
+  bool HasBaseReg = true;
   bool HasImmOffset = false;
   bool HasShift = false;
   bool HasOffReg = true;
   bool isLdStMul = false;
+  bool InsertImmOffset = true;
   unsigned Opc = Entry.NarrowOpc1;
   unsigned OpNum = 3; // First 'rest' of operands.
   uint8_t  ImmLimit = Entry.Imm1Limit;
@@ -290,17 +290,50 @@ Thumb2SizeReduce::ReduceLoadStore(MachineBasicBlock &MBB, MachineInstr *MI,
       HasOffReg = false;
     }
     Scale = 4;
-    HasImmOffset = true;
+    if (MI->getOperand(2).isImm())
+      HasImmOffset = true;
+    else {
+      if (Entry.WideOpc == ARM::t2LDRi12) {
+        Opc = ARM::tLDRpci;
+        OpNum = 2;
+      }
+      HasImmOffset = false;
+      InsertImmOffset = false;
+      HasBaseReg = false;
+      HasOffReg = false;
+    }
     break;
   }
   case ARM::t2LDRBi12:
   case ARM::t2STRBi12:
-    HasImmOffset = true;
+    if (MI->getOperand(2).isImm())
+      HasImmOffset = true;
+    else {
+      if (Entry.WideOpc == ARM::t2LDRBi12) {
+        Opc = ARM::tLDRpci;
+        OpNum = 2;
+      }
+      HasImmOffset = false;
+      InsertImmOffset = false;
+      HasBaseReg = false;
+      HasOffReg = false;
+    }
     break;
   case ARM::t2LDRHi12:
   case ARM::t2STRHi12:
     Scale = 2;
-    HasImmOffset = true;
+    if (MI->getOperand(2).isImm())
+      HasImmOffset = true;
+    else {
+      if (Entry.WideOpc == ARM::t2LDRHi12) {
+        Opc = ARM::tLDRpci;
+        OpNum = 2;
+      }
+      HasImmOffset = false;
+      InsertImmOffset = false;
+      HasBaseReg = false;
+      HasOffReg = false;
+    }
     break;
   case ARM::t2LDRs:
   case ARM::t2LDRBs:
@@ -388,8 +421,9 @@ Thumb2SizeReduce::ReduceLoadStore(MachineBasicBlock &MBB, MachineInstr *MI,
   DebugLoc dl = MI->getDebugLoc();
   MachineInstrBuilder MIB = BuildMI(MBB, *MI, dl, TII->get(Opc));
   if (!isLdStMul) {
-    MIB.addOperand(MI->getOperand(0)).addOperand(MI->getOperand(1));
-    if (Opc != ARM::tLDRSB && Opc != ARM::tLDRSH) {
+    MIB.addOperand(MI->getOperand(0));
+    if (HasBaseReg) MIB.addOperand(MI->getOperand(1));
+    if (InsertImmOffset && Opc != ARM::tLDRSB && Opc != ARM::tLDRSH) {
       // tLDRSB and tLDRSH do not have an immediate offset field. On the other
       // hand, it must have an offset register.
       // FIXME: Remove this special case.
@@ -457,14 +491,14 @@ Thumb2SizeReduce::ReduceSpecial(MachineBasicBlock &MBB, MachineInstr *MI,
     if (MI->getOperand(1).isImm())
       return ReduceToNarrow(MBB, MI, Entry, LiveCPSR);
     break;
-  case ARM::t2CMPzrr: {
+  case ARM::t2CMPrr: {
     // Try to reduce to the lo-reg only version first. Why there are two
     // versions of the instruction is a mystery.
     // It would be nice to just have two entries in the master table that
     // are prioritized, but the table assumes a unique entry for each
     // source insn opcode. So for now, we hack a local entry record to use.
     static const ReduceEntry NarrowEntry =
-      { ARM::t2CMPzrr,ARM::tCMPzr, 0, 0, 0, 1, 1,2, 0, 1 };
+      { ARM::t2CMPrr,ARM::tCMPr, 0, 0, 0, 1, 1,2, 0, 1 };
     if (ReduceToNarrow(MBB, MI, NarrowEntry, LiveCPSR))
       return true;
     return ReduceToNarrow(MBB, MI, Entry, LiveCPSR);

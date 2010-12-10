@@ -63,8 +63,8 @@ static Value *isBytewiseValue(Value *V) {
       while (Val.getBitWidth() != 8) {
         unsigned NextWidth = Val.getBitWidth()/2;
         Val2  = Val.lshr(NextWidth);
-        Val2.trunc(Val.getBitWidth()/2);
-        Val.trunc(Val.getBitWidth()/2);
+        Val2 = Val2.trunc(Val.getBitWidth()/2);
+        Val = Val.trunc(Val.getBitWidth()/2);
 
         // If the top/bottom halves aren't the same, reject it.
         if (Val != Val2)
@@ -675,6 +675,14 @@ bool MemCpyOpt::processMemCpyMemCpyDependence(MemCpyInst *M, MemCpyInst *MDep,
   if (M->getSource() != MDep->getDest() || MDep->isVolatile())
     return false;
   
+  // If dep instruction is reading from our current input, then it is a noop
+  // transfer and substituting the input won't change this instruction.  Just
+  // ignore the input and let someone else zap MDep.  This handles cases like:
+  //    memcpy(a <- a)
+  //    memcpy(b <- a)
+  if (M->getSource() == MDep->getSource())
+    return false;
+  
   // Second, the length of the memcpy's must be the same, or the preceeding one
   // must be larger than the following one.
   ConstantInt *C1 = dyn_cast<ConstantInt>(MDep->getLength());
@@ -754,6 +762,14 @@ bool MemCpyOpt::processMemCpy(MemCpyInst *M) {
   ConstantInt *CopySize = dyn_cast<ConstantInt>(M->getLength());
   if (CopySize == 0 || M->isVolatile()) return false;
 
+  // If the source and destination of the memcpy are the same, then zap it.
+  if (M->getSource() == M->getDest()) {
+    MD->removeInstruction(M);
+    M->eraseFromParent();
+    return false;
+  }
+  
+  
   // The are two possible optimizations we can do for memcpy:
   //   a) memcpy-memcpy xform which exposes redundance for DSE.
   //   b) call-memcpy xform for return slot optimization.
@@ -765,10 +781,11 @@ bool MemCpyOpt::processMemCpy(MemCpyInst *M) {
     return processMemCpyMemCpyDependence(M, MDep, CopySize->getZExtValue());
     
   if (CallInst *C = dyn_cast<CallInst>(DepInfo.getInst())) {
-    bool changed = performCallSlotOptzn(M, M->getDest(), M->getSource(),
-                                        CopySize->getZExtValue(), C);
-    if (changed) M->eraseFromParent();
-    return changed;
+    if (performCallSlotOptzn(M, M->getDest(), M->getSource(),
+                             CopySize->getZExtValue(), C)) {
+      M->eraseFromParent();
+      return true;
+    }
   }
   return false;
 }

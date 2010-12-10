@@ -182,7 +182,17 @@ public:
                  const Value *V2, uint64_t V2Size) {
     return isNoAlias(Location(V1, V1Size), Location(V2, V2Size));
   }
+  
+  /// isMustAlias - A convenience wrapper.
+  bool isMustAlias(const Location &LocA, const Location &LocB) {
+    return alias(LocA, LocB) == MustAlias;
+  }
 
+  /// isMustAlias - A convenience wrapper.
+  bool isMustAlias(const Value *V1, const Value *V2) {
+    return alias(V1, 1, V2, 1) == MustAlias;
+  }
+  
   /// pointsToConstantMemory - If the specified memory location is
   /// known to be constant, return true. If OrLocal is true and the
   /// specified memory location is known to be "local" (derived from

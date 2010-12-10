@@ -35,6 +35,12 @@ def SDTBinaryArithWithFlags : SDTypeProfile<2, 2,
                                             [SDTCisSameAs<0, 2>,
                                              SDTCisSameAs<0, 3>,
                                              SDTCisInt<0>, SDTCisVT<1, i32>]>;
+// RES1, RES2, FLAGS = op LHS, RHS
+def SDT2ResultBinaryArithWithFlags : SDTypeProfile<3, 2,
+                                            [SDTCisSameAs<0, 1>,
+                                             SDTCisSameAs<0, 2>,
+                                             SDTCisSameAs<0, 3>,
+                                             SDTCisInt<0>, SDTCisVT<1, i32>]>;
 def SDTX86BrCond  : SDTypeProfile<0, 3,
                                   [SDTCisVT<0, OtherVT>,
                                    SDTCisVT<1, i8>, SDTCisVT<2, i32>]>;
@@ -78,7 +84,7 @@ def SDTX86Wrapper : SDTypeProfile<1, 1, [SDTCisSameAs<0, 1>, SDTCisPtrTy<0>]>;
 
 def SDT_X86TLSADDR : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
 
-def SDT_X86TLSCALL : SDTypeProfile<0, 1, [SDTCisPtrTy<0>]>;
+def SDT_X86TLSCALL : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
 
 def SDT_X86EHRET : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
 
@@ -188,7 +194,7 @@ def X86add_flag  : SDNode<"X86ISD::ADD",  SDTBinaryArithWithFlags,
 def X86sub_flag  : SDNode<"X86ISD::SUB",  SDTBinaryArithWithFlags>;
 def X86smul_flag : SDNode<"X86ISD::SMUL", SDTBinaryArithWithFlags,
                           [SDNPCommutative]>;
-def X86umul_flag : SDNode<"X86ISD::UMUL", SDTUnaryArithWithFlags,
+def X86umul_flag : SDNode<"X86ISD::UMUL", SDT2ResultBinaryArithWithFlags,
                           [SDNPCommutative]>;
 
 def X86inc_flag  : SDNode<"X86ISD::INC",  SDTUnaryArithWithFlags>;
@@ -206,7 +212,7 @@ def X86WinAlloca : SDNode<"X86ISD::WIN_ALLOCA", SDTX86Void,
                           [SDNPHasChain, SDNPInFlag, SDNPOutFlag]>;
 
 def X86TLSCall : SDNode<"X86ISD::TLSCALL", SDT_X86TLSCALL,
-                        []>;
+                        [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;
 
 //===----------------------------------------------------------------------===//
 // X86 Operand Definitions.
@@ -394,26 +400,26 @@ def tls64addr : ComplexPattern<i64, 5, "SelectTLSADDRAddr",
 def HasCMov      : Predicate<"Subtarget->hasCMov()">;
 def NoCMov       : Predicate<"!Subtarget->hasCMov()">;
 
-// FIXME: temporary hack to let codegen assert or generate poor code in case
-// no AVX version of the desired intructions is present, this is better for
-// incremental dev (without fallbacks it's easier to spot what's missing)
-def HasMMX       : Predicate<"Subtarget->hasMMX() && !Subtarget->hasAVX()">;
+def HasMMX       : Predicate<"Subtarget->hasMMX()">;
 def Has3DNow     : Predicate<"Subtarget->has3DNow()">;
 def Has3DNowA    : Predicate<"Subtarget->has3DNowA()">;
-def HasSSE1      : Predicate<"Subtarget->hasSSE1() && !Subtarget->hasAVX()">;
-def HasSSE2      : Predicate<"Subtarget->hasSSE2() && !Subtarget->hasAVX()">;
-def HasSSE3      : Predicate<"Subtarget->hasSSE3() && !Subtarget->hasAVX()">;
-def HasSSSE3     : Predicate<"Subtarget->hasSSSE3() && !Subtarget->hasAVX()">;
-def HasSSE41     : Predicate<"Subtarget->hasSSE41() && !Subtarget->hasAVX()">;
-def HasSSE42     : Predicate<"Subtarget->hasSSE42() && !Subtarget->hasAVX()">;
-def HasSSE4A     : Predicate<"Subtarget->hasSSE4A() && !Subtarget->hasAVX()">;
+def HasSSE1      : Predicate<"Subtarget->hasSSE1()">;
+def HasSSE2      : Predicate<"Subtarget->hasSSE2()">;
+def HasSSE3      : Predicate<"Subtarget->hasSSE3()">;
+def HasSSSE3     : Predicate<"Subtarget->hasSSSE3()">;
+def HasSSE41     : Predicate<"Subtarget->hasSSE41()">;
+def HasSSE42     : Predicate<"Subtarget->hasSSE42()">;
+def HasSSE4A     : Predicate<"Subtarget->hasSSE4A()">;
 
 def HasAVX       : Predicate<"Subtarget->hasAVX()">;
+def HasXMMInt    : Predicate<"Subtarget->hasXMMInt()">;
+
+def HasAES       : Predicate<"Subtarget->hasAES()">;
 def HasCLMUL     : Predicate<"Subtarget->hasCLMUL()">;
 def HasFMA3      : Predicate<"Subtarget->hasFMA3()">;
 def HasFMA4      : Predicate<"Subtarget->hasFMA4()">;
-def FPStackf32   : Predicate<"!Subtarget->hasSSE1()">;
-def FPStackf64   : Predicate<"!Subtarget->hasSSE2()">;
+def FPStackf32   : Predicate<"!Subtarget->hasXMM()">;
+def FPStackf64   : Predicate<"!Subtarget->hasXMMInt()">;
 def In32BitMode  : Predicate<"!Subtarget->is64Bit()">, AssemblerPredicate;
 def In64BitMode  : Predicate<"Subtarget->is64Bit()">, AssemblerPredicate;
 def IsWin64      : Predicate<"Subtarget->isTargetWin64()">;
@@ -430,7 +436,6 @@ def OptForSize   : Predicate<"OptForSize">;
 def OptForSpeed  : Predicate<"!OptForSize">;
 def FastBTMem    : Predicate<"!Subtarget->isBTMemSlow()">;
 def CallImmAddr  : Predicate<"Subtarget->IsLegalToCallImmediateAddr(TM)">;
-def HasAES       : Predicate<"Subtarget->hasAES()">;
 
 //===----------------------------------------------------------------------===//
 // X86 Instruction Format Definitions.

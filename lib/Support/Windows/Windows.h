@@ -58,3 +58,60 @@ public:
     return *this;
   }
 };
+
+template <class HandleType, uintptr_t InvalidHandle,
+          class DeleterType, DeleterType D>
+class ScopedHandle {
+  HandleType Handle;
+
+public:
+  ScopedHandle() : Handle(InvalidHandle) {}
+  ScopedHandle(HandleType handle) : Handle(handle) {}
+
+  ~ScopedHandle() {
+    if (Handle != HandleType(InvalidHandle))
+      D(Handle);
+  }
+
+  HandleType take() {
+    HandleType temp = Handle;
+    Handle = HandleType(InvalidHandle);
+    return temp;
+  }
+
+  operator HandleType() const { return Handle; }
+
+  ScopedHandle &operator=(HandleType handle) {
+    Handle = handle;
+    return *this;
+  }
+
+  typedef void (*unspecified_bool_type)();
+  static void unspecified_bool_true() {}
+
+  // True if Handle is valid.
+  operator unspecified_bool_type() const {
+    return Handle == HandleType(InvalidHandle) ? 0 : unspecified_bool_true;
+  }
+
+  bool operator!() const {
+    return Handle == HandleType(InvalidHandle);
+  }
+};
+
+typedef ScopedHandle<HANDLE, uintptr_t(-1),
+                      BOOL (WINAPI*)(HANDLE), ::FindClose>
+  ScopedFindHandle;
+
+namespace llvm {
+template <class T>
+class SmallVectorImpl;
+
+template <class T>
+typename SmallVectorImpl<T>::const_pointer
+c_str(SmallVectorImpl<T> &str) {
+  str.push_back(0);
+  str.pop_back();
+  return str.data();
+}
+} // end namespace llvm.

@@ -74,6 +74,18 @@ def t_imm_s4 : Operand<i32> {
 
 // Define Thumb specific addressing modes.
 
+def t_cbtarget : Operand<i32> {
+  let EncoderMethod = "getThumbCBTargetOpValue";
+}
+
+def t_bltarget : Operand<i32> {
+  let EncoderMethod = "getThumbBLTargetOpValue";
+}
+
+def t_blxtarget : Operand<i32> {
+  let EncoderMethod = "getThumbBLXTargetOpValue";
+}
+
 def MemModeThumbAsmOperand : AsmOperandClass {
   let Name = "MemModeThumb";
   let SuperClasses = [];
@@ -92,7 +104,7 @@ def t_addrmode_rr : Operand<i32>,
 //
 def t_addrmode_s4 : Operand<i32>,
                     ComplexPattern<i32, 3, "SelectThumbAddrModeS4", []> {
-  let EncoderMethod = "getAddrModeS4OpValue";
+  let EncoderMethod = "getAddrModeSOpValue";
   let PrintMethod = "printThumbAddrModeS4Operand";
   let MIOperandInfo = (ops tGPR:$base, i32imm:$offsimm, tGPR:$offsreg);
   let ParserMatchClass = MemModeThumbAsmOperand;
@@ -103,7 +115,7 @@ def t_addrmode_s4 : Operand<i32>,
 //
 def t_addrmode_s2 : Operand<i32>,
                     ComplexPattern<i32, 3, "SelectThumbAddrModeS2", []> {
-  let EncoderMethod = "getAddrModeS2OpValue";
+  let EncoderMethod = "getAddrModeSOpValue";
   let PrintMethod = "printThumbAddrModeS2Operand";
   let MIOperandInfo = (ops tGPR:$base, i32imm:$offsimm, tGPR:$offsreg);
   let ParserMatchClass = MemModeThumbAsmOperand;
@@ -114,7 +126,7 @@ def t_addrmode_s2 : Operand<i32>,
 //
 def t_addrmode_s1 : Operand<i32>,
                     ComplexPattern<i32, 3, "SelectThumbAddrModeS1", []> {
-  let EncoderMethod = "getAddrModeS1OpValue";
+  let EncoderMethod = "getAddrModeSOpValue";
   let PrintMethod = "printThumbAddrModeS1Operand";
   let MIOperandInfo = (ops tGPR:$base, i32imm:$offsimm, tGPR:$offsreg);
   let ParserMatchClass = MemModeThumbAsmOperand;
@@ -124,8 +136,16 @@ def t_addrmode_s1 : Operand<i32>,
 //
 def t_addrmode_sp : Operand<i32>,
                     ComplexPattern<i32, 2, "SelectThumbAddrModeSP", []> {
+  let EncoderMethod = "getAddrModeThumbSPOpValue";
   let PrintMethod = "printThumbAddrModeSPOperand";
   let MIOperandInfo = (ops GPR:$base, i32imm:$offsimm);
+  let ParserMatchClass = MemModeThumbAsmOperand;
+}
+
+// t_addrmode_pc := <label> => pc + imm8 * 4
+//
+def t_addrmode_pc : Operand<i32> {
+  let EncoderMethod = "getAddrModePCOpValue";
   let ParserMatchClass = MemModeThumbAsmOperand;
 }
 
@@ -366,22 +386,29 @@ let isCall = 1,
   Uses = [SP] in {
   // Also used for Thumb2
   def tBL  : TIx2<0b11110, 0b11, 1,
-                  (outs), (ins i32imm:$func, variable_ops), IIC_Br,
+                  (outs), (ins t_bltarget:$func, variable_ops), IIC_Br,
                   "bl\t$func",
                   [(ARMtcall tglobaladdr:$func)]>,
              Requires<[IsThumb, IsNotDarwin]> {
+    bits<21> func;
+    let Inst{25-16} = func{20-11};
     let Inst{13} = 1;
     let Inst{11} = 1;
+    let Inst{10-0} = func{10-0};
   }
 
   // ARMv5T and above, also used for Thumb2
   def tBLXi : TIx2<0b11110, 0b11, 0,
-                   (outs), (ins i32imm:$func, variable_ops), IIC_Br,
+                   (outs), (ins t_blxtarget:$func, variable_ops), IIC_Br,
                    "blx\t$func",
                    [(ARMcall tglobaladdr:$func)]>,
               Requires<[IsThumb, HasV5T, IsNotDarwin]> {
+    bits<21> func;
+    let Inst{25-16} = func{20-11};
     let Inst{13} = 1;
     let Inst{11} = 1;
+    let Inst{10-1} = func{10-1};
+    let Inst{0} = 0; // func{0} is assumed zero
   }
 
   // Also used for Thumb2
@@ -412,23 +439,29 @@ let isCall = 1,
   Uses = [R7, SP] in {
   // Also used for Thumb2
   def tBLr9 : TIx2<0b11110, 0b11, 1,
-                   (outs), (ins pred:$p, i32imm:$func, variable_ops), IIC_Br,
-                   "bl${p}\t$func",
+                   (outs), (ins pred:$p, t_bltarget:$func, variable_ops),
+                   IIC_Br, "bl${p}\t$func",
                    [(ARMtcall tglobaladdr:$func)]>,
               Requires<[IsThumb, IsDarwin]> {
-    let Inst{13}    = 1;
-    let Inst{11}    = 1;
+    bits<21> func;
+    let Inst{25-16} = func{20-11};
+    let Inst{13} = 1;
+    let Inst{11} = 1;
+    let Inst{10-0} = func{10-0};
   }
 
   // ARMv5T and above, also used for Thumb2
   def tBLXi_r9 : TIx2<0b11110, 0b11, 0,
-                      (outs), (ins pred:$p, i32imm:$func, variable_ops),
-                      IIC_Br,
-                      "blx${p}\t$func",
+                      (outs), (ins pred:$p, t_blxtarget:$func, variable_ops),
+                      IIC_Br, "blx${p}\t$func",
                       [(ARMcall tglobaladdr:$func)]>,
                  Requires<[IsThumb, HasV5T, IsDarwin]> {
+    bits<21> func;
+    let Inst{25-16} = func{20-11};
     let Inst{13} = 1;
     let Inst{11} = 1;
+    let Inst{10-1} = func{10-1};
+    let Inst{0} = 0; // func{0} is assumed zero
   }
 
   // Also used for Thumb2
@@ -485,7 +518,7 @@ let isBranch = 1, isTerminator = 1 in
 
 // Compare and branch on zero / non-zero
 let isBranch = 1, isTerminator = 1 in {
-  def tCBZ  : T1I<(outs), (ins tGPR:$Rn, brtarget:$target), IIC_Br,
+  def tCBZ  : T1I<(outs), (ins tGPR:$Rn, t_cbtarget:$target), IIC_Br,
                   "cbz\t$Rn, $target", []>,
               T1Misc<{0,0,?,1,?,?,?}> {
     // A8.6.27
@@ -496,7 +529,7 @@ let isBranch = 1, isTerminator = 1 in {
     let Inst{2-0} = Rn;
   }
 
-  def tCBNZ : T1I<(outs), (ins tGPR:$cmp, brtarget:$target), IIC_Br,
+  def tCBNZ : T1I<(outs), (ins tGPR:$cmp, t_cbtarget:$target), IIC_Br,
                   "cbnz\t$cmp, $target", []>,
               T1Misc<{1,0,?,1,?,?,?}> {
     // A8.6.27
@@ -538,7 +571,7 @@ def tLDR :                      // A8.6.60
                  "ldr", "\t$Rt, $addr",
                  [(set tGPR:$Rt, (load t_addrmode_s4:$addr))]>;
 
-def tLDRi:                      // A8.6.57
+def tLDRi :                     // A8.6.57
   T1pILdStEncodeImm<0b0110, 1, (outs tGPR:$Rt), (ins t_addrmode_s4:$addr),
                     AddrModeT1_4, IIC_iLoad_r,
                     "ldr", "\t$Rt, $addr",
@@ -562,7 +595,7 @@ def tLDRH :                     // A8.6.76
                  "ldrh", "\t$dst, $addr",
                  [(set tGPR:$dst, (zextloadi16 t_addrmode_s2:$addr))]>;
 
-def tLDRHi:                     // A8.6.73
+def tLDRHi :                    // A8.6.73
   T1pILdStEncodeImm<0b1000, 1, (outs tGPR:$Rt), (ins t_addrmode_s2:$addr),
                     AddrModeT1_2, IIC_iLoad_bh_r,
                     "ldrh", "\t$Rt, $addr",
@@ -583,14 +616,20 @@ def tLDRSH :                    // A8.6.84
                  [(set tGPR:$dst, (sextloadi16 t_addrmode_rr:$addr))]>;
 
 let canFoldAsLoad = 1 in
-def tLDRspi : T1pIs<(outs tGPR:$dst), (ins t_addrmode_sp:$addr), IIC_iLoad_i,
-                  "ldr", "\t$dst, $addr",
-                  [(set tGPR:$dst, (load t_addrmode_sp:$addr))]>,
-              T1LdStSP<{1,?,?}>;
+def tLDRspi : T1pIs<(outs tGPR:$Rt), (ins t_addrmode_sp:$addr), IIC_iLoad_i,
+                  "ldr", "\t$Rt, $addr",
+                  [(set tGPR:$Rt, (load t_addrmode_sp:$addr))]>,
+              T1LdStSP<{1,?,?}> {
+  bits<3> Rt;
+  bits<8> addr;
+  let Inst{10-8} = Rt;
+  let Inst{7-0} = addr;
+}
 
 // Special instruction for restore. It cannot clobber condition register
 // when it's expanded by eliminateCallFramePseudoInstr().
 let canFoldAsLoad = 1, mayLoad = 1, neverHasSideEffects = 1 in
+// FIXME: Pseudo for tLDRspi
 def tRestore : T1pIs<(outs tGPR:$dst), (ins t_addrmode_sp:$addr), IIC_iLoad_i,
                     "ldr", "\t$dst, $addr", []>,
                T1LdStSP<{1,?,?}>;
@@ -598,22 +637,29 @@ def tRestore : T1pIs<(outs tGPR:$dst), (ins t_addrmode_sp:$addr), IIC_iLoad_i,
 // Load tconstpool
 // FIXME: Use ldr.n to work around a Darwin assembler bug.
 let canFoldAsLoad = 1, isReMaterializable = 1 in
-def tLDRpci : T1pIs<(outs tGPR:$Rt), (ins i32imm:$addr), IIC_iLoad_i,
+def tLDRpci : T1pIs<(outs tGPR:$Rt), (ins t_addrmode_pc:$addr), IIC_iLoad_i,
                   "ldr", ".n\t$Rt, $addr",
                   [(set tGPR:$Rt, (load (ARMWrapper tconstpool:$addr)))]>,
               T1Encoding<{0,1,0,0,1,?}> {
   // A6.2 & A8.6.59
   bits<3> Rt;
+  bits<8> addr;
   let Inst{10-8} = Rt;
-  // FIXME: Finish for the addr.
+  let Inst{7-0}  = addr;
 }
 
 // Special LDR for loads from non-pc-relative constpools.
 let canFoldAsLoad = 1, mayLoad = 1, neverHasSideEffects = 1,
     isReMaterializable = 1 in
-def tLDRcp  : T1pIs<(outs tGPR:$dst), (ins i32imm:$addr), IIC_iLoad_i,
-                  "ldr", "\t$dst, $addr", []>,
-              T1LdStSP<{1,?,?}>;
+def tLDRcp  : T1pIs<(outs tGPR:$Rt), (ins i32imm:$addr), IIC_iLoad_i,
+                  "ldr", "\t$Rt, $addr", []>,
+              T1LdStSP<{1,?,?}> {
+  // A6.2 & A8.6.57 T2
+  bits<3> Rt;
+  bits<8> addr;
+  let Inst{10-8} = Rt;
+  let Inst{7-0}  = addr;
+}
 
 def tSTR :                      // A8.6.194
   T1pILdStEncode<0b000, (outs), (ins tGPR:$src, t_addrmode_s4:$addr),
@@ -651,14 +697,20 @@ def tSTRHi :                    // A8.6.205
                     "strh", "\t$Rt, $addr",
                     []>;
 
-def tSTRspi : T1pIs<(outs), (ins tGPR:$src, t_addrmode_sp:$addr), IIC_iStore_i,
-                   "str", "\t$src, $addr",
-                   [(store tGPR:$src, t_addrmode_sp:$addr)]>,
-              T1LdStSP<{0,?,?}>;
+def tSTRspi : T1pIs<(outs), (ins tGPR:$Rt, t_addrmode_sp:$addr), IIC_iStore_i,
+                   "str", "\t$Rt, $addr",
+                   [(store tGPR:$Rt, t_addrmode_sp:$addr)]>,
+              T1LdStSP<{0,?,?}> {
+  bits<3> Rt;
+  bits<8> addr;
+  let Inst{10-8} = Rt;
+  let Inst{7-0} = addr;
+}
 
 let mayStore = 1, neverHasSideEffects = 1 in
 // Special instruction for spill. It cannot clobber condition register when it's
 // expanded by eliminateCallFramePseudoInstr().
+// FIXME: Pseudo for tSTRspi
 def tSpill : T1pIs<(outs), (ins tGPR:$src, t_addrmode_sp:$addr), IIC_iStore_i,
                   "str", "\t$src, $addr", []>,
              T1LdStSP<{0,?,?}>;
@@ -903,27 +955,12 @@ def tCMPi8 : T1pI<(outs), (ins tGPR:$Rn, i32imm:$imm8), IIC_iCMPi,
   let Inst{7-0}  = imm8;
 }
 
-def tCMPzi8 : T1pI<(outs), (ins tGPR:$Rn, i32imm:$imm8), IIC_iCMPi,
-                  "cmp", "\t$Rn, $imm8",
-                  [(ARMcmpZ tGPR:$Rn, imm0_255:$imm8)]>,
-              T1General<{1,0,1,?,?}> {
-  // A8.6.35
-  bits<3> Rn;
-  let Inst{10-8} = Rn;
-  let Inst{7-0}  = 0x00;
-}
-
 // CMP register
 def tCMPr :                     // A8.6.36 T1
   T1pIDPEncode<0b1010, (outs), (ins tGPR:$Rn, tGPR:$Rm),
                IIC_iCMPr,
                "cmp", "\t$Rn, $Rm",
                [(ARMcmp tGPR:$Rn, tGPR:$Rm)]>;
-
-def tCMPzr :                    // A8.6.36 T1
-  T1pIDPEncode<0b1010, (outs), (ins tGPR:$Rn, tGPR:$Rm), IIC_iCMPr,
-               "cmp", "\t$Rn, $Rm",
-               [(ARMcmpZ tGPR:$Rn, tGPR:$Rm)]>;
 
 def tCMPhir : T1pI<(outs), (ins GPR:$Rn, GPR:$Rm), IIC_iCMPr,
                    "cmp", "\t$Rn, $Rm", []>,
@@ -935,17 +972,6 @@ def tCMPhir : T1pI<(outs), (ins GPR:$Rn, GPR:$Rm), IIC_iCMPr,
   let Inst{6-3} = Rm;
   let Inst{2-0} = Rn{2-0};
 }
-def tCMPzhir : T1pI<(outs), (ins GPR:$Rn, GPR:$Rm), IIC_iCMPr,
-                    "cmp", "\t$Rn, $Rm", []>,
-               T1Special<{0,1,?,?}> {
-  // A8.6.36 T2
-  bits<4> Rm;
-  bits<4> Rn;
-  let Inst{7}   = Rn{3};
-  let Inst{6-3} = Rm;
-  let Inst{2-0} = Rn{2-0};
-}
-
 } // isCompare = 1, Defs = [CPSR]
 
 
@@ -1300,6 +1326,12 @@ def tInt_eh_sjlj_longjmp : XI<(outs), (ins GPR:$src, GPR:$scratch),
 //===----------------------------------------------------------------------===//
 // Non-Instruction Patterns
 //
+
+// Comparisons
+def : T1Pat<(ARMcmpZ tGPR:$Rn, imm0_255:$imm8),
+            (tCMPi8  tGPR:$Rn, imm0_255:$imm8)>;
+def : T1Pat<(ARMcmpZ tGPR:$Rn, tGPR:$Rm),
+            (tCMPr   tGPR:$Rn, tGPR:$Rm)>;
 
 // Add with carry
 def : T1Pat<(addc   tGPR:$lhs, imm0_7:$rhs),

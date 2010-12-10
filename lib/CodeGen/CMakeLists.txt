@@ -50,9 +50,10 @@ add_llvm_library(LLVMCodeGen
   OcamlGC.cpp
   OptimizePHIs.cpp
   PHIElimination.cpp
+  PHIEliminationUtils.cpp
   Passes.cpp
   PeepholeOptimizer.cpp
-  PostRAHazardRecognizer.cpp
+  ScoreboardHazardRecognizer.cpp
   PostRASchedulerList.cpp
   PreAllocSplitting.cpp
   ProcessImplicitDefs.cpp
@@ -60,6 +61,7 @@ add_llvm_library(LLVMCodeGen
   PseudoSourceValue.cpp
   RegAllocBasic.cpp
   RegAllocFast.cpp
+  RegAllocGreedy.cpp
   RegAllocLinearScan.cpp
   RegAllocPBQP.cpp
   RegisterCoalescer.cpp

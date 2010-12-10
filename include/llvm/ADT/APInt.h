@@ -296,7 +296,7 @@ public:
   /// @returns true if this APInt is positive.
   /// @brief Determine if this APInt Value is positive.
   bool isStrictlyPositive() const {
-    return isNonNegative() && (*this) != 0;
+    return isNonNegative() && !!*this;
   }
 
   /// This checks to see if the value has all bits of the APInt are set or not.
@@ -324,15 +324,14 @@ public:
   /// value for the APInt's bit width.
   /// @brief Determine if this is the smallest unsigned value.
   bool isMinValue() const {
-    return countPopulation() == 0;
+    return !*this;
   }
 
   /// This checks to see if the value of this APInt is the minimum signed
   /// value for the APInt's bit width.
   /// @brief Determine if this is the smallest signed value.
   bool isMinSignedValue() const {
-    return BitWidth == 1 ? VAL == 1 :
-                           isNegative() && countPopulation() == 1;
+    return BitWidth == 1 ? VAL == 1 : isNegative() && isPowerOf2();
   }
 
   /// @brief Check if this APInt has an N-bits unsigned integer value.
@@ -343,9 +342,7 @@ public:
 
     if (isSingleWord())
       return isUIntN(N, VAL);
-    APInt Tmp(N, getNumWords(), pVal);
-    Tmp.zext(getBitWidth());
-    return Tmp == (*this);
+    return APInt(N, getNumWords(), pVal).zext(getBitWidth()) == (*this);
   }
 
   /// @brief Check if this APInt has an N-bits signed integer value.
@@ -355,7 +352,11 @@ public:
   }
 
   /// @returns true if the argument APInt value is a power of two > 0.
-  bool isPowerOf2() const;
+  bool isPowerOf2() const {
+    if (isSingleWord())
+      return isPowerOf2_64(VAL);
+    return countPopulationSlowCase() == 1;
+  }
 
   /// isSignBit - Return true if this is the value returned by getSignBit.
   bool isSignBit() const { return isMinSignedValue(); }
@@ -363,7 +364,7 @@ public:
   /// This converts the APInt to a boolean value as a test against zero.
   /// @brief Boolean conversion function.
   bool getBoolValue() const {
-    return *this != 0;
+    return !!*this;
   }
 
   /// getLimitedValue - If this value is smaller than the specified limit,
@@ -379,15 +380,12 @@ public:
   /// @{
   /// @brief Gets maximum unsigned value of APInt for specific bit width.
   static APInt getMaxValue(unsigned numBits) {
-    APInt API(numBits, 0);
-    API.setAllBits();
-    return API;
+    return getAllOnesValue(numBits);
   }
 
   /// @brief Gets maximum signed value of APInt for a specific bit width.
   static APInt getSignedMaxValue(unsigned numBits) {
-    APInt API(numBits, 0);
-    API.setAllBits();
+    APInt API = getAllOnesValue(numBits);
     API.clearBit(numBits - 1);
     return API;
   }
@@ -414,9 +412,7 @@ public:
   /// @returns the all-ones value for an APInt of the specified bit-width.
   /// @brief Get the all-ones value.
   static APInt getAllOnesValue(unsigned numBits) {
-    APInt API(numBits, 0);
-    API.setAllBits();
-    return API;
+    return APInt(numBits, -1ULL, true);
   }
 
   /// @returns the '0' value for an APInt of the specified bit-width.
@@ -1015,30 +1011,30 @@ public:
   /// Truncate the APInt to a specified width. It is an error to specify a width
   /// that is greater than or equal to the current width.
   /// @brief Truncate to new width.
-  APInt &trunc(unsigned width);
+  APInt trunc(unsigned width) const;
 
   /// This operation sign extends the APInt to a new width. If the high order
   /// bit is set, the fill on the left will be done with 1 bits, otherwise zero.
   /// It is an error to specify a width that is less than or equal to the
   /// current width.
   /// @brief Sign extend to a new width.
-  APInt &sext(unsigned width);
+  APInt sext(unsigned width) const;
 
   /// This operation zero extends the APInt to a new width. The high order bits
   /// are filled with 0 bits.  It is an error to specify a width that is less
   /// than or equal to the current width.
   /// @brief Zero extend to a new width.
-  APInt &zext(unsigned width);
+  APInt zext(unsigned width) const;
 
   /// Make this APInt have the bit width given by \p width. The value is sign
   /// extended, truncated, or left alone to make it that width.
   /// @brief Sign extend or truncate to width
-  APInt &sextOrTrunc(unsigned width);
+  APInt sextOrTrunc(unsigned width) const;
 
   /// Make this APInt have the bit width given by \p width. The value is zero
   /// extended, truncated, or left alone to make it that width.
   /// @brief Zero extend or truncate to width
-  APInt &zextOrTrunc(unsigned width);
+  APInt zextOrTrunc(unsigned width) const;
 
   /// @}
   /// @name Bit Manipulation Operators

@@ -908,11 +908,8 @@ void SelectionDAGBuilder::resolveDanglingDebugInfo(const Value *V,
                               Val.getResNo(), Offset, dl, DbgSDNodeOrder);
         DAG.AddDbgValue(SDV, Val.getNode(), false);
       }
-    } else {
-      SDV = DAG.getDbgValue(Variable, UndefValue::get(V->getType()),
-                            Offset, dl, SDNodeOrder);
-      DAG.AddDbgValue(SDV, 0, false);
-    }
+    } else 
+      DEBUG(dbgs() << "Dropping debug info for " << DI);
     DanglingDebugInfoMap[V] = DanglingDebugInfo();
   }
 }
@@ -1991,9 +1988,8 @@ static inline bool areJTsAllowed(const TargetLowering &TLI) {
 }
 
 static APInt ComputeRange(const APInt &First, const APInt &Last) {
-  APInt LastExt(Last), FirstExt(First);
   uint32_t BitWidth = std::max(Last.getBitWidth(), First.getBitWidth()) + 1;
-  LastExt.sext(BitWidth); FirstExt.sext(BitWidth);
+  APInt LastExt = Last.sext(BitWidth), FirstExt = First.sext(BitWidth);
   return (LastExt - FirstExt + 1ULL);
 }
 
@@ -4320,10 +4316,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     // Check if address has undef value.
     if (isa<UndefValue>(Address) ||
         (Address->use_empty() && !isa<Argument>(Address))) {
-      SDDbgValue*SDV =
-        DAG.getDbgValue(Variable, UndefValue::get(Address->getType()),
-                        0, dl, SDNodeOrder);
-      DAG.AddDbgValue(SDV, 0, false);
+      DEBUG(dbgs() << "Dropping debug info for " << DI);
       return 0;
     }
 
@@ -4346,16 +4339,20 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
           // Byval parameter.  We have a frame index at this point.
           SDV = DAG.getDbgValue(Variable, FINode->getIndex(),
                                 0, dl, SDNodeOrder);
-        else
+        else {
           // Can't do anything with other non-AI cases yet.  This might be a
           // parameter of a callee function that got inlined, for example.
+          DEBUG(dbgs() << "Dropping debug info for " << DI);
           return 0;
+        }
       } else if (AI)
         SDV = DAG.getDbgValue(Variable, N.getNode(), N.getResNo(),
                               0, dl, SDNodeOrder);
-      else
+      else {
         // Can't do anything with other non-AI cases yet.
+        DEBUG(dbgs() << "Dropping debug info for " << DI);
         return 0;
+      }
       DAG.AddDbgValue(SDV, N.getNode(), isParameter);
     } else {
       // If Address is an argument then try to emit its dbg value using
@@ -4375,10 +4372,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
             }
           }
         }
-        // Otherwise add undef to help track missing debug info.
-        SDV = DAG.getDbgValue(Variable, UndefValue::get(Address->getType()),
-                              0, dl, SDNodeOrder);
-        DAG.AddDbgValue(SDV, 0, false);
+        DEBUG(dbgs() << "Dropping debug info for " << DI);
       }
     }
     return 0;
@@ -4423,10 +4417,8 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
         DanglingDebugInfoMap[V] = DDI;
       } else {
         // We may expand this to cover more cases.  One case where we have no
-        // data available is an unreferenced parameter; we need this fallback.
-        SDV = DAG.getDbgValue(Variable, UndefValue::get(V->getType()),
-                              Offset, dl, SDNodeOrder);
-        DAG.AddDbgValue(SDV, 0, false);
+        // data available is an unreferenced parameter.
+        DEBUG(dbgs() << "Dropping debug info for " << DI);
       }
     }
 

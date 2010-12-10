@@ -38,7 +38,6 @@ STATISTIC(FragmentLayouts, "Number of fragment layouts");
 STATISTIC(ObjectBytes, "Number of emitted object file bytes");
 STATISTIC(RelaxationSteps, "Number of assembler layout and relaxation steps");
 STATISTIC(RelaxedInstructions, "Number of relaxed instructions");
-STATISTIC(SectionLayouts, "Number of section layouts");
 }
 }
 
@@ -50,7 +49,7 @@ STATISTIC(SectionLayouts, "Number of section layouts");
 /* *** */
 
 MCAsmLayout::MCAsmLayout(MCAssembler &Asm)
-  : Assembler(Asm), LastValidFragment(0)
+  : Assembler(Asm), LastValidFragment()
  {
   // Compute the section layout order. Virtual sections must go last.
   for (MCAssembler::iterator it = Asm.begin(), ie = Asm.end(); it != ie; ++it)
@@ -61,21 +60,13 @@ MCAsmLayout::MCAsmLayout(MCAssembler &Asm)
       SectionOrder.push_back(&*it);
 }
 
-bool MCAsmLayout::isSectionUpToDate(const MCSectionData *SD) const {
-  // The first section is always up-to-date.
-  unsigned Index = SD->getLayoutOrder();
-  if (!Index)
-    return true;
-
-  // Otherwise, sections are always implicitly computed when the preceeding
-  // fragment is layed out.
-  const MCSectionData *Prev = getSectionOrder()[Index - 1];
-  return isFragmentUpToDate(&(Prev->getFragmentList().back()));
-}
-
 bool MCAsmLayout::isFragmentUpToDate(const MCFragment *F) const {
-  return (LastValidFragment &&
-          F->getLayoutOrder() <= LastValidFragment->getLayoutOrder());
+  const MCSectionData &SD = *F->getParent();
+  const MCFragment *LastValid = LastValidFragment.lookup(&SD);
+  if (!LastValid)
+    return false;
+  assert(LastValid->getParent() == F->getParent());
+  return F->getLayoutOrder() <= LastValid->getLayoutOrder();
 }
 
 void MCAsmLayout::Invalidate(MCFragment *F) {
@@ -85,73 +76,24 @@ void MCAsmLayout::Invalidate(MCFragment *F) {
 
   // Otherwise, reset the last valid fragment to the predecessor of the
   // invalidated fragment.
-  LastValidFragment = F->getPrevNode();
-  if (!LastValidFragment) {
-    unsigned Index = F->getParent()->getLayoutOrder();
-    if (Index != 0) {
-      MCSectionData *Prev = getSectionOrder()[Index - 1];
-      LastValidFragment = &(Prev->getFragmentList().back());
-    }
-  }
+  const MCSectionData &SD = *F->getParent();
+  LastValidFragment[&SD] = F->getPrevNode();
 }
 
 void MCAsmLayout::EnsureValid(const MCFragment *F) const {
+  MCSectionData &SD = *F->getParent();
+
+  MCFragment *Cur = LastValidFragment[&SD];
+  if (!Cur)
+    Cur = &*SD.begin();
+  else
+    Cur = Cur->getNextNode();
+
   // Advance the layout position until the fragment is up-to-date.
   while (!isFragmentUpToDate(F)) {
-    // Advance to the next fragment.
-    MCFragment *Cur = LastValidFragment;
-    if (Cur)
-      Cur = Cur->getNextNode();
-    if (!Cur) {
-      unsigned NextIndex = 0;
-      if (LastValidFragment)
-        NextIndex = LastValidFragment->getParent()->getLayoutOrder() + 1;
-      Cur = SectionOrder[NextIndex]->begin();
-    }
-
     const_cast<MCAsmLayout*>(this)->LayoutFragment(Cur);
+    Cur = Cur->getNextNode();
   }
-}
-
-void MCAsmLayout::ReplaceFragment(MCFragment *Src, MCFragment *Dst) {
-  MCSectionData *SD = Src->getParent();
-
-  // Insert Dst immediately before Src
-  SD->getFragmentList().insert(Src, Dst);
-
-  // Set the data fragment's layout data.
-  Dst->setParent(Src->getParent());
-  Dst->setAtom(Src->getAtom());
-  Dst->setLayoutOrder(Src->getLayoutOrder());
-
-  if (LastValidFragment == Src)
-    LastValidFragment = Dst;
-
-  Dst->Offset = Src->Offset;
-  Dst->EffectiveSize = Src->EffectiveSize;
-
-  // Remove Src, but don't delete it yet.
-  SD->getFragmentList().remove(Src);
-}
-
-void MCAsmLayout::CoalesceFragments(MCFragment *Src, MCFragment *Dst) {
-  assert(Src->getPrevNode() == Dst);
-
-  if (isFragmentUpToDate(Src)) {
-    if (LastValidFragment == Src)
-      LastValidFragment = Dst;
-    Dst->EffectiveSize += Src->EffectiveSize;
-  } else {
-    // We don't know the effective size of Src, so we have to invalidate Dst.
-    Invalidate(Dst);
-  }
-  // Remove Src, but don't delete it yet.
-  Src->getParent()->getFragmentList().remove(Src);
-}
-
-uint64_t MCAsmLayout::getFragmentAddress(const MCFragment *F) const {
-  assert(F->getParent() && "Missing section()!");
-  return getSectionAddress(F->getParent()) + getFragmentOffset(F);
 }
 
 uint64_t MCAsmLayout::getFragmentEffectiveSize(const MCFragment *F) const {
@@ -166,15 +108,9 @@ uint64_t MCAsmLayout::getFragmentOffset(const MCFragment *F) const {
   return F->Offset;
 }
 
-uint64_t MCAsmLayout::getSymbolAddress(const MCSymbolData *SD) const {
-  assert(SD->getFragment() && "Invalid getAddress() on undefined symbol!");
-  return getFragmentAddress(SD->getFragment()) + SD->getOffset();
-}
-
-uint64_t MCAsmLayout::getSectionAddress(const MCSectionData *SD) const {
-  EnsureValid(SD->begin());
-  assert(SD->Address != ~UINT64_C(0) && "Address not set!");
-  return SD->Address;
+uint64_t MCAsmLayout::getSymbolOffset(const MCSymbolData *SD) const {
+  assert(SD->getFragment() && "Invalid getOffset() on undefined symbol!");
+  return getFragmentOffset(SD->getFragment()) + SD->getOffset();
 }
 
 uint64_t MCAsmLayout::getSectionAddressSize(const MCSectionData *SD) const {
@@ -190,17 +126,6 @@ uint64_t MCAsmLayout::getSectionFileSize(const MCSectionData *SD) const {
 
   // Otherwise, the file size is the same as the address space size.
   return getSectionAddressSize(SD);
-}
-
-uint64_t MCAsmLayout::getSectionSize(const MCSectionData *SD) const {
-  // The logical size is the address space size minus any tail padding.
-  uint64_t Size = getSectionAddressSize(SD);
-  const MCAlignFragment *AF =
-    dyn_cast<MCAlignFragment>(&(SD->getFragmentList().back()));
-  if (AF && AF->hasOnlyAlignAddress())
-    Size -= getFragmentEffectiveSize(AF);
-
-  return Size;
 }
 
 /* *** */
@@ -225,8 +150,8 @@ MCSectionData::MCSectionData() : Section(0) {}
 
 MCSectionData::MCSectionData(const MCSection &_Section, MCAssembler *A)
   : Section(&_Section),
+    Ordinal(~UINT32_C(0)),
     Alignment(1),
-    Address(~UINT64_C(0)),
     HasInstructions(false)
 {
   if (A)
@@ -251,11 +176,9 @@ MCSymbolData::MCSymbolData(const MCSymbol &_Symbol, MCFragment *_Fragment,
 /* *** */
 
 MCAssembler::MCAssembler(MCContext &_Context, TargetAsmBackend &_Backend,
-                         MCCodeEmitter &_Emitter, bool _PadSectionToAlignment,
-                         raw_ostream &_OS)
+                         MCCodeEmitter &_Emitter, raw_ostream &_OS)
   : Context(_Context), Backend(_Backend), Emitter(_Emitter),
-    OS(_OS), RelaxAll(false), SubsectionsViaSymbols(false),
-    PadSectionToAlignment(_PadSectionToAlignment)
+    OS(_OS), RelaxAll(false), SubsectionsViaSymbols(false)
 {
 }
 
@@ -315,14 +238,14 @@ bool MCAssembler::EvaluateFixup(const MCObjectWriter &Writer,
   if (const MCSymbolRefExpr *A = Target.getSymA()) {
     const MCSymbol &Sym = A->getSymbol().AliasedSymbol();
     if (Sym.isDefined())
-      Value += Layout.getSymbolAddress(&getSymbolData(Sym));
+      Value += Layout.getSymbolOffset(&getSymbolData(Sym));
     else
       IsResolved = false;
   }
   if (const MCSymbolRefExpr *B = Target.getSymB()) {
     const MCSymbol &Sym = B->getSymbol().AliasedSymbol();
     if (Sym.isDefined())
-      Value -= Layout.getSymbolAddress(&getSymbolData(Sym));
+      Value -= Layout.getSymbolOffset(&getSymbolData(Sym));
     else
       IsResolved = false;
   }
@@ -330,14 +253,20 @@ bool MCAssembler::EvaluateFixup(const MCObjectWriter &Writer,
   if (IsResolved)
     IsResolved = Writer.IsFixupFullyResolved(*this, Target, IsPCRel, DF);
 
-  if (IsPCRel)
-    Value -= Layout.getFragmentAddress(DF) + Fixup.getOffset();
+  if (IsPCRel) {
+    bool ShouldAlignPC = Emitter.getFixupKindInfo(
+                        Fixup.getKind()).Flags & MCFixupKindInfo::FKF_IsAligned;
+    // PC should be aligned to a 4-byte value.
+    if (ShouldAlignPC)
+      Value -= Layout.getFragmentOffset(DF) + (Fixup.getOffset() & ~0x3);
+    else
+      Value -= Layout.getFragmentOffset(DF) + Fixup.getOffset();
+  }
 
   return IsResolved;
 }
 
 uint64_t MCAssembler::ComputeFragmentSize(const MCFragment &F,
-                                          uint64_t SectionAddress,
                                           uint64_t FragmentOffset) const {
   switch (F.getKind()) {
   case MCFragment::FT_Data:
@@ -348,16 +277,12 @@ uint64_t MCAssembler::ComputeFragmentSize(const MCFragment &F,
     return cast<MCInstFragment>(F).getInstSize();
 
   case MCFragment::FT_LEB:
-    return cast<MCLEBFragment>(F).getSize();
+    return cast<MCLEBFragment>(F).getContents().size();
 
   case MCFragment::FT_Align: {
     const MCAlignFragment &AF = cast<MCAlignFragment>(F);
 
-    assert((!AF.hasOnlyAlignAddress() || !AF.getNextNode()) &&
-           "Invalid OnlyAlignAddress bit, not the last fragment!");
-
-    uint64_t Size = OffsetToAlignment(SectionAddress + FragmentOffset,
-                                      AF.getAlignment());
+    uint64_t Size = OffsetToAlignment(FragmentOffset, AF.getAlignment());
 
     // Honor MaxBytesToEmit.
     if (Size > AF.getMaxBytesToEmit())
@@ -370,19 +295,11 @@ uint64_t MCAssembler::ComputeFragmentSize(const MCFragment &F,
     return cast<MCOrgFragment>(F).getSize();
 
   case MCFragment::FT_Dwarf:
-    return cast<MCDwarfLineAddrFragment>(F).getSize();
+    return cast<MCDwarfLineAddrFragment>(F).getContents().size();
   }
 
   assert(0 && "invalid fragment kind");
   return 0;
-}
-
-void MCAsmLayout::LayoutFile() {
-  // Initialize the first section and set the valid fragment layout point. All
-  // actual layout computations are done lazily.
-  LastValidFragment = 0;
-  if (!getSectionOrder().empty())
-    getSectionOrder().front()->Address = 0;
 }
 
 void MCAsmLayout::LayoutFragment(MCFragment *F) {
@@ -390,10 +307,6 @@ void MCAsmLayout::LayoutFragment(MCFragment *F) {
 
   // We should never try to recompute something which is up-to-date.
   assert(!isFragmentUpToDate(F) && "Attempt to recompute up-to-date fragment!");
-  // We should never try to compute the fragment layout if the section isn't
-  // up-to-date.
-  assert(isSectionUpToDate(F->getParent()) &&
-         "Attempt to compute fragment before it's section!");
   // We should never try to compute the fragment layout if it's predecessor
   // isn't up-to-date.
   assert((!Prev || isFragmentUpToDate(Prev)) &&
@@ -401,43 +314,14 @@ void MCAsmLayout::LayoutFragment(MCFragment *F) {
 
   ++stats::FragmentLayouts;
 
-  // Compute the fragment start address.
-  uint64_t StartAddress = F->getParent()->Address;
-  uint64_t Address = StartAddress;
-  if (Prev)
-    Address += Prev->Offset + Prev->EffectiveSize;
-
   // Compute fragment offset and size.
-  F->Offset = Address - StartAddress;
-  F->EffectiveSize = getAssembler().ComputeFragmentSize(*F, StartAddress,
-                                                        F->Offset);
-  LastValidFragment = F;
+  uint64_t Offset = 0;
+  if (Prev)
+    Offset += Prev->Offset + Prev->EffectiveSize;
 
-  // If this is the last fragment in a section, update the next section address.
-  if (!F->getNextNode()) {
-    unsigned NextIndex = F->getParent()->getLayoutOrder() + 1;
-    if (NextIndex != getSectionOrder().size())
-      LayoutSection(getSectionOrder()[NextIndex]);
-  }
-}
-
-void MCAsmLayout::LayoutSection(MCSectionData *SD) {
-  unsigned SectionOrderIndex = SD->getLayoutOrder();
-
-  ++stats::SectionLayouts;
-
-  // Compute the section start address.
-  uint64_t StartAddress = 0;
-  if (SectionOrderIndex) {
-    MCSectionData *Prev = getSectionOrder()[SectionOrderIndex - 1];
-    StartAddress = getSectionAddress(Prev) + getSectionAddressSize(Prev);
-  }
-
-  // Honor the section alignment requirements.
-  StartAddress = RoundUpToAlignment(StartAddress, SD->getAlignment());
-
-  // Set the section address.
-  SD->Address = StartAddress;
+  F->Offset = Offset;
+  F->EffectiveSize = getAssembler().ComputeFragmentSize(*F, F->Offset);
+  LastValidFragment[F->getParent()] = F;
 }
 
 /// WriteFragmentData - Write the \arg F data to the output file.
@@ -516,26 +400,15 @@ static void WriteFragmentData(const MCAssembler &Asm, const MCAsmLayout &Layout,
     break;
   }
 
-  case MCFragment::FT_Inst:
-    llvm_unreachable("unexpected inst fragment after lowering");
+  case MCFragment::FT_Inst: {
+    MCInstFragment &IF = cast<MCInstFragment>(F);
+    OW->WriteBytes(StringRef(IF.getCode().begin(), IF.getCode().size()));
     break;
+  }
 
   case MCFragment::FT_LEB: {
     MCLEBFragment &LF = cast<MCLEBFragment>(F);
-
-    // FIXME: It is probably better if we don't call EvaluateAsAbsolute in
-    // here.
-    int64_t Value;
-    bool IsAbs = LF.getValue().EvaluateAsAbsolute(Value, &Layout);
-    assert(IsAbs);
-    (void) IsAbs;
-    SmallString<32> Tmp;
-    raw_svector_ostream OSE(Tmp);
-    if (LF.isSigned())
-      MCObjectWriter::EncodeSLEB128(Value, OSE);
-    else
-      MCObjectWriter::EncodeULEB128(Value, OSE);
-    OW->WriteBytes(OSE.str());
+    OW->WriteBytes(LF.getContents().str());
     break;
   }
 
@@ -550,15 +423,7 @@ static void WriteFragmentData(const MCAssembler &Asm, const MCAsmLayout &Layout,
 
   case MCFragment::FT_Dwarf: {
     const MCDwarfLineAddrFragment &OF = cast<MCDwarfLineAddrFragment>(F);
-
-    // The AddrDelta is really unsigned and it can only increase.
-    int64_t AddrDelta;
-    OF.getAddrDelta().EvaluateAsAbsolute(AddrDelta, &Layout);
-
-    int64_t LineDelta;
-    LineDelta = OF.getLineDelta();
-
-    MCDwarfLineAddr::Write(OW, LineDelta, (uint64_t)AddrDelta);
+    OW->WriteBytes(OF.getContents().str());
     break;
   }
   }
@@ -615,8 +480,25 @@ void MCAssembler::WriteSectionData(const MCSectionData *SD,
          ie = SD->end(); it != ie; ++it)
     WriteFragmentData(*this, Layout, *it, OW);
 
-  assert(OW->getStream().tell() - Start == Layout.getSectionFileSize(SD));
+  assert(OW->getStream().tell() - Start == Layout.getSectionAddressSize(SD));
 }
+
+
+uint64_t MCAssembler::HandleFixup(MCObjectWriter &Writer,
+                              const MCAsmLayout &Layout,
+                              MCFragment &F,
+                              const MCFixup &Fixup) {
+   // Evaluate the fixup.
+   MCValue Target;
+   uint64_t FixedValue;
+   if (!EvaluateFixup(Writer, Layout, Fixup, &F, Target, FixedValue)) {
+     // The fixup was unresolved, we need a relocation. Inform the object
+     // writer of the relocation, and give it an opportunity to adjust the
+     // fixup value if need be.
+     Writer.RecordRelocation(*this, Layout, &F, Fixup, Target, FixedValue);
+   }
+   return FixedValue;
+ }
 
 void MCAssembler::Finish(MCObjectWriter *Writer) {
   DEBUG_WITH_TYPE("mc-dump", {
@@ -626,29 +508,7 @@ void MCAssembler::Finish(MCObjectWriter *Writer) {
   // Create the layout object.
   MCAsmLayout Layout(*this);
 
-  // Insert additional align fragments for concrete sections to explicitly pad
-  // the previous section to match their alignment requirements. This is for
-  // 'gas' compatibility, it shouldn't strictly be necessary.
-  if (PadSectionToAlignment) {
-    for (unsigned i = 1, e = Layout.getSectionOrder().size(); i < e; ++i) {
-      MCSectionData *SD = Layout.getSectionOrder()[i];
 
-      // Ignore sections without alignment requirements.
-      unsigned Align = SD->getAlignment();
-      if (Align <= 1)
-        continue;
-
-      // Ignore virtual sections, they don't cause file size modifications.
-      if (SD->getSection().isVirtualSection())
-        continue;
-
-      // Otherwise, create a new align fragment at the end of the previous
-      // section.
-      MCAlignFragment *AF = new MCAlignFragment(Align, 0, 1, Align,
-                                                Layout.getSectionOrder()[i - 1]);
-      AF->setOnlyAlignAddress(true);
-    }
-  }
 
   // Create dummy fragments and assign section ordinals.
   unsigned SectionIndex = 0;
@@ -662,11 +522,11 @@ void MCAssembler::Finish(MCObjectWriter *Writer) {
   }
 
   // Assign layout order indices to sections and fragments.
-  unsigned FragmentIndex = 0;
   for (unsigned i = 0, e = Layout.getSectionOrder().size(); i != e; ++i) {
     MCSectionData *SD = Layout.getSectionOrder()[i];
     SD->setLayoutOrder(i);
 
+    unsigned FragmentIndex = 0;
     for (MCSectionData::iterator it2 = SD->begin(),
            ie2 = SD->end(); it2 != ie2; ++it2)
       it2->setLayoutOrder(FragmentIndex++);
@@ -700,31 +560,31 @@ void MCAssembler::Finish(MCObjectWriter *Writer) {
 
   // Allow the object writer a chance to perform post-layout binding (for
   // example, to set the index fields in the symbol data).
-  Writer->ExecutePostLayoutBinding(*this);
+  Writer->ExecutePostLayoutBinding(*this, Layout);
 
   // Evaluate and apply the fixups, generating relocation entries as necessary.
   for (MCAssembler::iterator it = begin(), ie = end(); it != ie; ++it) {
     for (MCSectionData::iterator it2 = it->begin(),
            ie2 = it->end(); it2 != ie2; ++it2) {
       MCDataFragment *DF = dyn_cast<MCDataFragment>(it2);
-      if (!DF)
-        continue;
-
-      for (MCDataFragment::fixup_iterator it3 = DF->fixup_begin(),
-             ie3 = DF->fixup_end(); it3 != ie3; ++it3) {
-        MCFixup &Fixup = *it3;
-
-        // Evaluate the fixup.
-        MCValue Target;
-        uint64_t FixedValue;
-        if (!EvaluateFixup(*Writer, Layout, Fixup, DF, Target, FixedValue)) {
-          // The fixup was unresolved, we need a relocation. Inform the object
-          // writer of the relocation, and give it an opportunity to adjust the
-          // fixup value if need be.
-          Writer->RecordRelocation(*this, Layout, DF, Fixup, Target,FixedValue);
+      if (DF) {
+        for (MCDataFragment::fixup_iterator it3 = DF->fixup_begin(),
+               ie3 = DF->fixup_end(); it3 != ie3; ++it3) {
+          MCFixup &Fixup = *it3;
+          uint64_t FixedValue = HandleFixup(*Writer, Layout, *DF, Fixup);
+          getBackend().ApplyFixup(Fixup, DF->getContents().data(),
+                                  DF->getContents().size(), FixedValue);
         }
-
-        getBackend().ApplyFixup(Fixup, *DF, FixedValue);
+      }
+      MCInstFragment *IF = dyn_cast<MCInstFragment>(it2);
+      if (IF) {
+        for (MCInstFragment::fixup_iterator it3 = IF->fixup_begin(),
+               ie3 = IF->fixup_end(); it3 != ie3; ++it3) {
+          MCFixup &Fixup = *it3;
+          uint64_t FixedValue = HandleFixup(*Writer, Layout, *IF, Fixup);
+          getBackend().ApplyFixup(Fixup, IF->getCode().data(),
+                                  IF->getCode().size(), FixedValue);
+        }
       }
     }
   }
@@ -812,7 +672,7 @@ bool MCAssembler::RelaxOrg(const MCObjectWriter &Writer,
                            MCAsmLayout &Layout,
                            MCOrgFragment &OF) {
   int64_t TargetLocation;
-  if (!OF.getOffset().EvaluateAsAbsolute(TargetLocation, &Layout))
+  if (!OF.getOffset().EvaluateAsAbsolute(TargetLocation, Layout))
     report_fatal_error("expected assembly-time absolute expression");
 
   // FIXME: We need a way to communicate this error.
@@ -830,37 +690,39 @@ bool MCAssembler::RelaxOrg(const MCObjectWriter &Writer,
 bool MCAssembler::RelaxLEB(const MCObjectWriter &Writer,
                            MCAsmLayout &Layout,
                            MCLEBFragment &LF) {
-  int64_t Value;
-  LF.getValue().EvaluateAsAbsolute(Value, &Layout);
-  SmallString<32> Tmp;
-  raw_svector_ostream OSE(Tmp);
+  int64_t Value = 0;
+  uint64_t OldSize = LF.getContents().size();
+  LF.getValue().EvaluateAsAbsolute(Value, Layout);
+  SmallString<8> &Data = LF.getContents();
+  Data.clear();
+  raw_svector_ostream OSE(Data);
   if (LF.isSigned())
     MCObjectWriter::EncodeSLEB128(Value, OSE);
   else
     MCObjectWriter::EncodeULEB128(Value, OSE);
-  uint64_t OldSize = LF.getSize();
-  LF.setSize(OSE.GetNumBytesInBuffer());
-  return OldSize != LF.getSize();
+  OSE.flush();
+  return OldSize != LF.getContents().size();
 }
 
 bool MCAssembler::RelaxDwarfLineAddr(const MCObjectWriter &Writer,
 				     MCAsmLayout &Layout,
 				     MCDwarfLineAddrFragment &DF) {
-  int64_t AddrDelta;
-  DF.getAddrDelta().EvaluateAsAbsolute(AddrDelta, &Layout);
+  int64_t AddrDelta = 0;
+  uint64_t OldSize = DF.getContents().size();
+  DF.getAddrDelta().EvaluateAsAbsolute(AddrDelta, Layout);
   int64_t LineDelta;
   LineDelta = DF.getLineDelta();
-  uint64_t OldSize = DF.getSize();
-  DF.setSize(MCDwarfLineAddr::ComputeSize(LineDelta, AddrDelta));
-  return OldSize != DF.getSize();  
+  SmallString<8> &Data = DF.getContents();
+  Data.clear();
+  raw_svector_ostream OSE(Data);
+  MCDwarfLineAddr::Encode(LineDelta, AddrDelta, OSE);
+  OSE.flush();
+  return OldSize != Data.size();
 }
 
 bool MCAssembler::LayoutOnce(const MCObjectWriter &Writer,
                              MCAsmLayout &Layout) {
   ++stats::RelaxationSteps;
-
-  // Layout the sections in order.
-  Layout.LayoutFile();
 
   // Scan for fragments that need relaxation.
   bool WasRelaxed = false;
@@ -899,67 +761,10 @@ bool MCAssembler::LayoutOnce(const MCObjectWriter &Writer,
   return WasRelaxed;
 }
 
-static void LowerInstFragment(MCInstFragment *IF,
-                              MCDataFragment *DF) {
-
-  uint64_t DataOffset = DF->getContents().size();
-
-  // Copy in the data
-  DF->getContents().append(IF->getCode().begin(), IF->getCode().end());
-
-  // Adjust the fixup offsets and add them to the data fragment.
-  for (unsigned i = 0, e = IF->getFixups().size(); i != e; ++i) {
-    MCFixup &F = IF->getFixups()[i];
-    F.setOffset(DataOffset + F.getOffset());
-    DF->getFixups().push_back(F);
-  }
-}
-
 void MCAssembler::FinishLayout(MCAsmLayout &Layout) {
-  // Lower out any instruction fragments, to simplify the fixup application and
-  // output.
-  //
-  // FIXME-PERF: We don't have to do this, but the assumption is that it is
-  // cheap (we will mostly end up eliminating fragments and appending on to data
-  // fragments), so the extra complexity downstream isn't worth it. Evaluate
-  // this assumption.
-  unsigned FragmentIndex = 0;
-  for (unsigned i = 0, e = Layout.getSectionOrder().size(); i != e; ++i) {
-    MCSectionData &SD = *Layout.getSectionOrder()[i];
-    MCDataFragment *CurDF = NULL;
-
-    for (MCSectionData::iterator it2 = SD.begin(),
-           ie2 = SD.end(); it2 != ie2; ++it2) {
-      switch (it2->getKind()) {
-      default:
-        CurDF = NULL;
-        break;
-      case MCFragment::FT_Data:
-        CurDF = cast<MCDataFragment>(it2);
-        break;
-      case MCFragment::FT_Inst: {
-        MCInstFragment *IF = cast<MCInstFragment>(it2);
-        // Use the existing data fragment if possible.
-        if (CurDF && CurDF->getAtom() == IF->getAtom()) {
-          Layout.CoalesceFragments(IF, CurDF);
-        } else {
-          // Otherwise, create a new data fragment.
-          CurDF = new MCDataFragment();
-          Layout.ReplaceFragment(IF, CurDF);
-        }
-
-        // Lower the Instruction Fragment
-        LowerInstFragment(IF, CurDF);
-
-        // Delete the instruction fragment and update the iterator.
-        delete IF;
-        it2 = CurDF;
-        break;
-      }
-      }
-      // Since we may have merged fragments, fix the layout order.
-      it2->setLayoutOrder(FragmentIndex++);
-    }
+  // The layout is done. Mark every fragment as valid.
+  for (unsigned int i = 0, n = Layout.getSectionOrder().size(); i != n; ++i) {
+    Layout.getFragmentOffset(&*Layout.getSectionOrder()[i]->rbegin());
   }
 }
 
@@ -998,8 +803,6 @@ void MCFragment::dump() {
     const MCAlignFragment *AF = cast<MCAlignFragment>(this);
     if (AF->hasEmitNops())
       OS << " (emit nops)";
-    if (AF->hasOnlyAlignAddress())
-      OS << " (only align section)";
     OS << "\n       ";
     OS << " Alignment:" << AF->getAlignment()
        << " Value:" << AF->getValue() << " ValueSize:" << AF->getValueSize()
@@ -1069,8 +872,7 @@ void MCSectionData::dump() {
   raw_ostream &OS = llvm::errs();
 
   OS << "<MCSectionData";
-  OS << " Alignment:" << getAlignment() << " Address:" << Address
-     << " Fragments:[\n      ";
+  OS << " Alignment:" << getAlignment() << " Fragments:[\n      ";
   for (iterator it = begin(), ie = end(); it != ie; ++it) {
     if (it != begin()) OS << ",\n      ";
     it->dump();

@@ -1053,7 +1053,7 @@ AC_PATH_PROG(BZIP2, [bzip2])
 AC_PATH_PROG(CAT, [cat])
 AC_PATH_PROG(DOXYGEN, [doxygen])
 AC_PATH_PROG(GROFF, [groff])
-AC_PATH_PROG(GZIP, [gzip])
+AC_PATH_PROG(GZIPBIN, [gzip])
 AC_PATH_PROG(POD2HTML, [pod2html])
 AC_PATH_PROG(POD2MAN, [pod2man])
 AC_PATH_PROG(PDFROFF, [pdfroff])
@@ -1156,10 +1156,10 @@ then
   AC_MSG_ERROR([gcc|icc required but not found])
 fi
 
-dnl Ensure that compilation tools are GCC; we use GCC specific extensions
+dnl Ensure that compilation tools are compatible with GCC extensions
 if test "$GXX" != "yes" && test "$IXX" != "yes"
 then
-  AC_MSG_ERROR([g++|icc required but not found])
+  AC_MSG_ERROR([g++|clang++|icc required but not found])
 fi
 
 dnl Verify that GCC is version 3.0 or higher
@@ -1325,13 +1325,21 @@ dnl Try to find Darwin specific crash reporting libraries.
 AC_CHECK_HEADERS([CrashReporterClient.h])
 
 dnl Try to find Darwin specific crash reporting global.
-AC_LINK_IFELSE([AC_LANG_PROGRAM([[const char *__crashreporter_info__;]], [[]])],[darwin_crashreport = yes],[darwin_crashreport = no])
-AC_MSG_RESULT($darwin_crashreport)
-if test "x$darwin_crashreport = xyes"
-then
-  AC_DEFINE([HAVE_CRASHREPORTER_INFO],[1],
-            [Define if __crashreporter_info__ exists.])
-fi
+AC_MSG_CHECKING([__crashreporter_info__])
+AC_LINK_IFELSE(
+  AC_LANG_SOURCE(
+    [[extern const char *__crashreporter_info__;
+      int main() {
+        __crashreporter_info__ = "test";
+        return 0;
+      }
+    ]]),
+  AC_MSG_RESULT(yes)
+  AC_DEFINE(HAVE_CRASHREPORTER_INFO, 1, Can use __crashreporter_info__),
+  AC_MSG_RESULT(no)
+  AC_DEFINE(HAVE_CRASHREPORTER_INFO, 0,
+            Define if __crashreporter_info__ exists.))
+
 dnl===-----------------------------------------------------------------------===
 dnl===
 dnl=== SECTION 7: Check for types and structures

@@ -190,7 +190,7 @@ namespace macho {
     uint32_t Type;
     uint32_t Size;
 
-    uint32_t LocalSymbolIndex;
+    uint32_t LocalSymbolsIndex;
     uint32_t NumLocalSymbols;
 
     uint32_t ExternalSymbolsIndex;
@@ -338,6 +338,18 @@ namespace macho {
     RIT_X86_64_Signed2    = 7,
     RIT_X86_64_Signed4    = 8,
     RIT_X86_64_TLV        = 9
+  };
+
+  /// ARM also has its own relocation types.
+  enum RelocationInfoTypeARM {
+    RIT_ARM_Vanilla = 0,
+    RIT_ARM_Pair = 1,
+    RIT_ARM_Difference = 2,
+    RIT_ARM_LocalDifference = 3,
+    RIT_ARM_PreboundLazyPointer =4,
+    RIT_ARM_Branch24Bit = 5,
+    RIT_ARM_ThumbBranch22Bit = 6,
+    RIT_ARM_ThumbBranch32Bit = 7
   };
 
 } // end namespace macho

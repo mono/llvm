@@ -58,12 +58,14 @@ public:
                                             RegScavenger *RS) const;
 
  private:
-  void emitPopInst(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
-                   const std::vector<CalleeSavedInfo> &CSI, unsigned Opc,
-                   bool isVarArg, bool(*Func)(unsigned, bool)) const;
   void emitPushInst(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
-                    const std::vector<CalleeSavedInfo> &CSI, unsigned Opc,
+                    const std::vector<CalleeSavedInfo> &CSI, unsigned StmOpc,
+                    unsigned StrOpc, bool NoGap,
                     bool(*Func)(unsigned, bool)) const;
+  void emitPopInst(MachineBasicBlock &MBB, MachineBasicBlock::iterator MI,
+                   const std::vector<CalleeSavedInfo> &CSI, unsigned LdmOpc,
+                   unsigned LdrOpc, bool isVarArg, bool NoGap,
+                   bool(*Func)(unsigned, bool)) const;
 };
 
 } // End llvm namespace

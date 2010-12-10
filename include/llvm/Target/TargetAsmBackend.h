@@ -10,10 +10,10 @@
 #ifndef LLVM_TARGET_TARGETASMBACKEND_H
 #define LLVM_TARGET_TARGETASMBACKEND_H
 
+#include "llvm/MC/MCDirectives.h"
 #include "llvm/Support/DataTypes.h"
 
 namespace llvm {
-class MCDataFragment;
 class MCFixup;
 class MCInst;
 class MCObjectFormat;
@@ -21,7 +21,6 @@ class MCObjectWriter;
 class MCSection;
 template<typename T>
 class SmallVectorImpl;
-class Target;
 class raw_ostream;
 
 /// TargetAsmBackend - Generic interface to target specific assembler backends.
@@ -81,13 +80,10 @@ public:
     return true;
   }
 
-  /// getPointerSize - Get the pointer size in bytes.
-  virtual unsigned getPointerSize() const = 0;
-
   /// ApplyFixup - Apply the \arg Value for given \arg Fixup into the provided
   /// data fragment, at the offset specified by the fixup and following the
   /// fixup kind as appropriate.
-  virtual void ApplyFixup(const MCFixup &Fixup, MCDataFragment &Fragment,
+  virtual void ApplyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                           uint64_t Value) const = 0;
 
   /// MayNeedRelaxation - Check whether the given instruction may need
@@ -110,6 +106,10 @@ public:
   ///
   /// \return - True on success.
   virtual bool WriteNopData(uint64_t Count, MCObjectWriter *OW) const = 0;
+
+  /// HandleAssemblerFlag - Handle any target-specific assembler flags.
+  /// By default, do nothing.
+  virtual void HandleAssemblerFlag(MCAssemblerFlag Flag) {}
 };
 
 } // End llvm namespace

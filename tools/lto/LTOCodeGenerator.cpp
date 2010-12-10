@@ -43,6 +43,7 @@
 #include "llvm/Support/Host.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/system_error.h"
 #include "llvm/Config/config.h"
 #include <cstdlib>
 #include <unistd.h>
@@ -184,7 +185,7 @@ const void* LTOCodeGenerator::compile(size_t* length, std::string& errMsg)
 {
     // make unique temp .s file to put generated assembly code
     sys::Path uniqueAsmPath("lto-llvm.s");
-    if ( uniqueAsmPath.createTemporaryFileOnDisk(true, &errMsg) )
+    if ( uniqueAsmPath.createTemporaryFileOnDisk(false, &errMsg) )
         return NULL;
     sys::RemoveFileOnSignal(uniqueAsmPath);
        
@@ -221,9 +222,12 @@ const void* LTOCodeGenerator::compile(size_t* length, std::string& errMsg)
     if ( !asmResult ) {
         // remove old buffer if compile() called twice
         delete _nativeObjectFile;
-        
+
         // read .o file into memory buffer
-        _nativeObjectFile = MemoryBuffer::getFile(uniqueObjStr.c_str(),&errMsg);
+        error_code ec;
+        _nativeObjectFile = MemoryBuffer::getFile(uniqueObjStr.c_str(), ec);
+        if (ec)
+          errMsg = ec.message();
     }
 
     // remove temp files
@@ -343,7 +347,7 @@ void LTOCodeGenerator::applyScopeRestrictions() {
 
   // mark which symbols can not be internalized 
   if (!_mustPreserveSymbols.empty()) {
-    MCContext Context(*_target->getMCAsmInfo());
+    MCContext Context(*_target->getMCAsmInfo(), NULL);
     Mangler mangler(Context, *_target->getTargetData());
     std::vector<const char*> mustPreserveList;
     for (Module::iterator f = mergedModule->begin(),

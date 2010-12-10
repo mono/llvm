@@ -103,6 +103,7 @@ namespace {
 class ARMOperand : public MCParsedAsmOperand {
   enum KindTy {
     CondCode,
+    CCOut,
     Immediate,
     Memory,
     Register,
@@ -162,6 +163,7 @@ public:
     case Token:
       Tok = o.Tok;
       break;
+    case CCOut:
     case Register:
       Reg = o.Reg;
       break;
@@ -195,7 +197,7 @@ public:
   }
 
   unsigned getReg() const {
-    assert(Kind == Register && "Invalid access!");
+    assert((Kind == Register || Kind == CCOut) && "Invalid access!");
     return Reg.RegNum;
   }
 
@@ -211,6 +213,7 @@ public:
   }
 
   bool isCondCode() const { return Kind == CondCode; }
+  bool isCCOut() const { return Kind == CCOut; }
   bool isImm() const { return Kind == Immediate; }
   bool isReg() const { return Kind == Register; }
   bool isRegList() const { return Kind == RegisterList; }
@@ -260,8 +263,13 @@ public:
   void addCondCodeOperands(MCInst &Inst, unsigned N) const {
     assert(N == 2 && "Invalid number of operands!");
     Inst.addOperand(MCOperand::CreateImm(unsigned(getCondCode())));
-    // FIXME: What belongs here?
-    Inst.addOperand(MCOperand::CreateReg(0));
+    unsigned RegNum = getCondCode() == ARMCC::AL ? 0: ARM::CPSR;
+    Inst.addOperand(MCOperand::CreateReg(RegNum));
+  }
+
+  void addCCOutOperands(MCInst &Inst, unsigned N) const {
+    assert(N == 1 && "Invalid number of operands!");
+    Inst.addOperand(MCOperand::CreateReg(getReg()));
   }
 
   void addRegOperands(MCInst &Inst, unsigned N) const {
@@ -336,6 +344,14 @@ public:
   static ARMOperand *CreateCondCode(ARMCC::CondCodes CC, SMLoc S) {
     ARMOperand *Op = new ARMOperand(CondCode);
     Op->CC.Val = CC;
+    Op->StartLoc = S;
+    Op->EndLoc = S;
+    return Op;
+  }
+
+  static ARMOperand *CreateCCOut(unsigned RegNum, SMLoc S) {
+    ARMOperand *Op = new ARMOperand(CCOut);
+    Op->Reg.RegNum = RegNum;
     Op->StartLoc = S;
     Op->EndLoc = S;
     return Op;
@@ -417,6 +433,9 @@ void ARMOperand::dump(raw_ostream &OS) const {
   switch (Kind) {
   case CondCode:
     OS << ARMCondCodeToString(getCondCode());
+    break;
+  case CCOut:
+    OS << "<ccout " << getReg() << ">";
     break;
   case Immediate:
     getImm()->print(OS);
@@ -855,11 +874,6 @@ bool ARMAsmParser::ParseInstruction(StringRef Name, SMLoc NameLoc,
   // FIXME: We need a way to check whether a prefix supports predication,
   // otherwise we will end up with an ambiguity for instructions that happen to
   // end with a predicate name.
-  // FIXME: Likewise, some arithmetic instructions have an 's' prefix which
-  // indicates to update the condition codes. Those instructions have an
-  // additional immediate operand which encodes the prefix as reg0 or CPSR.
-  // Just checking for a suffix of 's' definitely creates ambiguities; e.g,
-  // the SMMLS instruction.
   unsigned CC = StringSwitch<unsigned>(Head.substr(Head.size()-2))
     .Case("eq", ARMCC::EQ)
     .Case("ne", ARMCC::NE)
@@ -935,7 +949,60 @@ MatchAndEmitInstruction(SMLoc IDLoc,
                         MCStreamer &Out) {
   MCInst Inst;
   unsigned ErrorInfo;
-  switch (MatchInstructionImpl(Operands, Inst, ErrorInfo)) {
+  MatchResultTy MatchResult, MatchResult2;
+  MatchResult = MatchInstructionImpl(Operands, Inst, ErrorInfo);
+  if (MatchResult != Match_Success) {
+    // If we get a Match_InvalidOperand it might be some arithmetic instruction
+    // that does not update the condition codes.  So try adding a CCOut operand
+    // with a value of reg0.
+    if (MatchResult == Match_InvalidOperand) {
+      Operands.insert(Operands.begin() + 1,
+                      ARMOperand::CreateCCOut(0,
+                                  ((ARMOperand*)Operands[0])->getStartLoc()));
+      MatchResult2 = MatchInstructionImpl(Operands, Inst, ErrorInfo);
+      if (MatchResult2 == Match_Success)
+        MatchResult = Match_Success;
+      else {
+        ARMOperand *CCOut = ((ARMOperand*)Operands[1]);
+        Operands.erase(Operands.begin() + 1);
+        delete CCOut;
+      }
+    }
+    // If we get a Match_MnemonicFail it might be some arithmetic instruction
+    // that updates the condition codes if it ends in 's'.  So see if the
+    // mnemonic ends in 's' and if so try removing the 's' and adding a CCOut
+    // operand with a value of CPSR.
+    else if(MatchResult == Match_MnemonicFail) {
+      // Get the instruction mnemonic, which is the first token.
+      StringRef Mnemonic = ((ARMOperand*)Operands[0])->getToken();
+      if (Mnemonic.substr(Mnemonic.size()-1) == "s") {
+        // removed the 's' from the mnemonic for matching.
+        StringRef MnemonicNoS = Mnemonic.slice(0, Mnemonic.size() - 1);
+        SMLoc NameLoc = ((ARMOperand*)Operands[0])->getStartLoc();
+        ARMOperand *OldMnemonic = ((ARMOperand*)Operands[0]);
+        Operands.erase(Operands.begin());
+        delete OldMnemonic;
+        Operands.insert(Operands.begin(),
+                        ARMOperand::CreateToken(MnemonicNoS, NameLoc));
+        Operands.insert(Operands.begin() + 1,
+                        ARMOperand::CreateCCOut(ARM::CPSR, NameLoc));
+        MatchResult2 = MatchInstructionImpl(Operands, Inst, ErrorInfo);
+        if (MatchResult2 == Match_Success)
+          MatchResult = Match_Success;
+        else {
+          ARMOperand *OldMnemonic = ((ARMOperand*)Operands[0]);
+          Operands.erase(Operands.begin());
+          delete OldMnemonic;
+          Operands.insert(Operands.begin(),
+                          ARMOperand::CreateToken(Mnemonic, NameLoc));
+          ARMOperand *CCOut = ((ARMOperand*)Operands[1]);
+          Operands.erase(Operands.begin() + 1);
+          delete CCOut;
+        }
+      }
+    }
+  }
+  switch (MatchResult) {
   case Match_Success:
     Out.EmitInstruction(Inst);
     return false;

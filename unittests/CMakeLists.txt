@@ -1,10 +1,11 @@
-function(add_llvm_unittest test_name)
+function(add_llvm_unittest test_dirname)
+  string(REGEX MATCH "([^/]+)$" test_name ${test_dirname})
   if (CMAKE_BUILD_TYPE)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
-      ${LLVM_BINARY_DIR}/unittests/${test_name}/${CMAKE_BUILD_TYPE})
+      ${LLVM_BINARY_DIR}/unittests/${test_dirname}/${CMAKE_BUILD_TYPE})
   else()
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
-      ${LLVM_BINARY_DIR}/unittests/${test_name})
+      ${LLVM_BINARY_DIR}/unittests/${test_dirname})
   endif()
   if( NOT LLVM_BUILD_TESTS )
     set(EXCLUDE_FROM_ALL ON)
@@ -19,6 +20,10 @@ include_directories(${LLVM_MAIN_SRC_DIR}/utils/unittest/googletest/include)
 add_definitions(-DGTEST_HAS_RTTI=0)
 if (NOT LLVM_ENABLE_THREADS)
   add_definitions(-DGTEST_HAS_PTHREAD=0)
+endif()
+
+if(SUPPORTS_NO_VARIADIC_MACROS_FLAG)
+  add_definitions("-Wno-variadic-macros")
 endif()
 
 set(LLVM_LINK_COMPONENTS
@@ -79,13 +84,13 @@ if(MSVC)
   list(APPEND JITTestsSources ExecutionEngine/JIT/JITTests.def)
 endif()
 
-add_llvm_unittest(JIT ${JITTestsSources})
+add_llvm_unittest(ExecutionEngine/JIT ${JITTestsSources})
 
 if(MINGW)
   set_property(TARGET JITTests PROPERTY LINK_FLAGS -Wl,--export-all-symbols)
 endif()
 
-add_llvm_unittest(Transforms
+add_llvm_unittest(Transforms/Utils
   Transforms/Utils/Cloning.cpp
   )
 

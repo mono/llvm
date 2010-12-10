@@ -8,6 +8,7 @@ beautification by scripts.  The fields are: name (N), email (E), web-address
 (W), PGP key ID and fingerprint (P), description (D), and snail-mail address
 (S).
 
+
 N: Vikram Adve
 E: vadve@cs.uiuc.edu
 W: http://www.cs.uiuc.edu/~vadve/
@@ -328,6 +329,7 @@ D: The `paths' pass
 N: Michael J. Spencer
 E: bigcheesegs@gmail.com
 D: Shepherding Windows COFF support into MC.
+D: Lots of Windows stuff.
 
 N: Reid Spencer
 E: rspencer@reidspencer.com
@@ -358,3 +360,5 @@ D: Bunches of stuff
 N: Bob Wilson
 E: bob.wilson@acm.org
 D: Advanced SIMD (NEON) support in the ARM backend
+
+

@@ -340,7 +340,6 @@ public:
     return Result;
   }
 
-
   void swap(SmallVectorImpl &RHS);
 
   /// append - Add the specified range to the end of the SmallVector.

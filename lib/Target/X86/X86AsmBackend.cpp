@@ -49,14 +49,14 @@ public:
   X86AsmBackend(const Target &T)
     : TargetAsmBackend() {}
 
-  void ApplyFixup(const MCFixup &Fixup, MCDataFragment &DF,
+  void ApplyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                   uint64_t Value) const {
     unsigned Size = 1 << getFixupKindLog2Size(Fixup.getKind());
 
-    assert(Fixup.getOffset() + Size <= DF.getContents().size() &&
+    assert(Fixup.getOffset() + Size <= DataSize &&
            "Invalid fixup offset!");
     for (unsigned i = 0; i != Size; ++i)
-      DF.getContents()[Fixup.getOffset() + i] = uint8_t(Value >> (i * 8));
+      Data[Fixup.getOffset() + i] = uint8_t(Value >> (i * 8));
   }
 
   bool MayNeedRelaxation(const MCInst &Inst) const;
@@ -279,10 +279,6 @@ public:
   ELFX86_32AsmBackend(const Target &T, Triple::OSType OSType)
     : ELFX86AsmBackend(T, OSType) {}
 
-  unsigned getPointerSize() const {
-    return 4;
-  }
-
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
     return createELFObjectWriter(OS, /*Is64Bit=*/false,
                                  OSType, ELF::EM_386,
@@ -295,10 +291,6 @@ class ELFX86_64AsmBackend : public ELFX86AsmBackend {
 public:
   ELFX86_64AsmBackend(const Target &T, Triple::OSType OSType)
     : ELFX86AsmBackend(T, OSType) {}
-
-  unsigned getPointerSize() const {
-    return 8;
-  }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
     return createELFObjectWriter(OS, /*Is64Bit=*/true,
@@ -321,13 +313,6 @@ public:
 
   virtual const MCObjectFormat &getObjectFormat() const {
     return Format;
-  }
-
-  unsigned getPointerSize() const {
-    if (Is64Bit)
-      return 8;
-    else
-      return 4;
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
@@ -354,10 +339,6 @@ public:
   DarwinX86_32AsmBackend(const Target &T)
     : DarwinX86AsmBackend(T) {}
 
-  unsigned getPointerSize() const {
-    return 4;
-  }
-
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
     return createMachObjectWriter(OS, /*Is64Bit=*/false,
                                   object::mach::CTM_i386,
@@ -371,10 +352,6 @@ public:
   DarwinX86_64AsmBackend(const Target &T)
     : DarwinX86AsmBackend(T) {
     HasReliableSymbolDifference = true;
-  }
-
-  unsigned getPointerSize() const {
-    return 8;
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {

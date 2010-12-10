@@ -508,6 +508,14 @@ static std::string GenMacroLocals(const std::string &proto, StringRef typestr) {
   return s;
 }
 
+// Use the vmovl builtin to sign-extend or zero-extend a vector.
+static std::string Extend(StringRef typestr, const std::string &a) {
+  std::string s;
+  s = MangleName("vmovl", typestr, ClassS);
+  s += "(" + a + ")";
+  return s;
+}
+
 static std::string Duplicate(unsigned nElts, StringRef typestr,
                              const std::string &a) {
   std::string s;
@@ -575,8 +583,20 @@ static std::string GenOpString(OpKind op, const std::string &proto,
   case OpAdd:
     s += "__a + __b;";
     break;
+  case OpAddl:
+    s += Extend(typestr, "__a") + " + " + Extend(typestr, "__b") + ";";
+    break;
+  case OpAddw:
+    s += "__a + " + Extend(typestr, "__b") + ";";
+    break;
   case OpSub:
     s += "__a - __b;";
+    break;
+  case OpSubl:
+    s += Extend(typestr, "__a") + " - " + Extend(typestr, "__b") + ";";
+    break;
+  case OpSubw:
+    s += "__a - " + Extend(typestr, "__b") + ";";
     break;
   case OpMulN:
     s += "__a * " + Duplicate(nElts, typestr, "__b") + ";";
@@ -587,6 +607,17 @@ static std::string GenOpString(OpKind op, const std::string &proto,
   case OpMul:
     s += "__a * __b;";
     break;
+  case OpMullN:
+    s += Extend(typestr, "__a") + " * " +
+      Extend(typestr, Duplicate(nElts << (int)quad, typestr, "__b")) + ";";
+    break;
+  case OpMullLane:
+    s += Extend(typestr, "__a") + " * " +
+      Extend(typestr, SplatLane(nElts, "__b", "__c")) + ";";
+    break;
+  case OpMull:
+    s += Extend(typestr, "__a") + " * " + Extend(typestr, "__b") + ";";
+    break;
   case OpMlaN:
     s += "__a + (__b * " + Duplicate(nElts, typestr, "__c") + ");";
     break;
@@ -596,6 +627,18 @@ static std::string GenOpString(OpKind op, const std::string &proto,
   case OpMla:
     s += "__a + (__b * __c);";
     break;
+  case OpMlalN:
+    s += "__a + (" + Extend(typestr, "__b") + " * " +
+      Extend(typestr, Duplicate(nElts, typestr, "__c")) + ");";
+    break;
+  case OpMlalLane:
+    s += "__a + (" + Extend(typestr, "__b") + " * " +
+      Extend(typestr, SplatLane(nElts, "__c", "__d")) + ");";
+    break;
+  case OpMlal:
+    s += "__a + (" + Extend(typestr, "__b") + " * " +
+      Extend(typestr, "__c") + ");";
+    break;
   case OpMlsN:
     s += "__a - (__b * " + Duplicate(nElts, typestr, "__c") + ");";
     break;
@@ -604,6 +647,38 @@ static std::string GenOpString(OpKind op, const std::string &proto,
     break;
   case OpMls:
     s += "__a - (__b * __c);";
+    break;
+  case OpMlslN:
+    s += "__a - (" + Extend(typestr, "__b") + " * " +
+      Extend(typestr, Duplicate(nElts, typestr, "__c")) + ");";
+    break;
+  case OpMlslLane:
+    s += "__a - (" + Extend(typestr, "__b") + " * " +
+      Extend(typestr, SplatLane(nElts, "__c", "__d")) + ");";
+    break;
+  case OpMlsl:
+    s += "__a - (" + Extend(typestr, "__b") + " * " +
+      Extend(typestr, "__c") + ");";
+    break;
+  case OpQDMullLane:
+    s += MangleName("vqdmull", typestr, ClassS) + "(__a, " +
+      SplatLane(nElts, "__b", "__c") + ");";
+    break;
+  case OpQDMlalLane:
+    s += MangleName("vqdmlal", typestr, ClassS) + "(__a, __b, " +
+      SplatLane(nElts, "__c", "__d") + ");";
+    break;
+  case OpQDMlslLane:
+    s += MangleName("vqdmlsl", typestr, ClassS) + "(__a, __b, " +
+      SplatLane(nElts, "__c", "__d") + ");";
+    break;
+  case OpQDMulhLane:
+    s += MangleName("vqdmulh", typestr, ClassS) + "(__a, " +
+      SplatLane(nElts, "__b", "__c") + ");";
+    break;
+  case OpQRDMulhLane:
+    s += MangleName("vqrdmulh", typestr, ClassS) + "(__a, " +
+      SplatLane(nElts, "__b", "__c") + ");";
     break;
   case OpEq:
     s += "(" + ts + ")(__a == __b);";
@@ -657,6 +732,9 @@ static std::string GenOpString(OpKind op, const std::string &proto,
   case OpDup:
     s += Duplicate(nElts, typestr, "__a") + ";";
     break;
+  case OpDupLane:
+    s += SplatLane(nElts, "__a", "__b") + ";";
+    break;
   case OpSelect:
     // ((0 & 1) | (~0 & 2))
     s += "(" + ts + ")";
@@ -687,6 +765,36 @@ static std::string GenOpString(OpKind op, const std::string &proto,
       for (unsigned j = 0; j != DblWordElts; ++j)
         s += ", " + utostr(i - j - 1);
     s += ");";
+    break;
+  }
+  case OpAbdl: {
+    std::string abd = MangleName("vabd", typestr, ClassS) + "(__a, __b)";
+    if (typestr[0] != 'U') {
+      // vabd results are always unsigned and must be zero-extended.
+      std::string utype = "U" + typestr.str();
+      s += "(" + TypeString(proto[0], typestr) + ")";
+      abd = "(" + TypeString('d', utype) + ")" + abd;
+      s += Extend(utype, abd) + ";";
+    } else {
+      s += Extend(typestr, abd) + ";";
+    }
+    break;
+  }
+  case OpAba:
+    s += "__a + " + MangleName("vabd", typestr, ClassS) + "(__b, __c);";
+    break;
+  case OpAbal: {
+    s += "__a + ";
+    std::string abd = MangleName("vabd", typestr, ClassS) + "(__b, __c)";
+    if (typestr[0] != 'U') {
+      // vabd results are always unsigned and must be zero-extended.
+      std::string utype = "U" + typestr.str();
+      s += "(" + TypeString(proto[0], typestr) + ")";
+      abd = "(" + TypeString('d', utype) + ")" + abd;
+      s += Extend(utype, abd) + ";";
+    } else {
+      s += Extend(typestr, abd) + ";";
+    }
     break;
   }
   default:
@@ -897,12 +1005,94 @@ static std::string GenBuiltinDef(const std::string &name,
   return s;
 }
 
+static std::string GenIntrinsic(const std::string &name,
+                                const std::string &proto,
+                                StringRef outTypeStr, StringRef inTypeStr,
+                                OpKind kind, ClassKind classKind) {
+  assert(!proto.empty() && "");
+  bool define = proto.find('i') != std::string::npos;
+  std::string s;
+
+  // static always inline + return type
+  if (define)
+    s += "#define ";
+  else
+    s += "__ai " + TypeString(proto[0], outTypeStr) + " ";
+
+  // Function name with type suffix
+  std::string mangledName = MangleName(name, outTypeStr, ClassS);
+  if (outTypeStr != inTypeStr) {
+    // If the input type is different (e.g., for vreinterpret), append a suffix
+    // for the input type.  String off a "Q" (quad) prefix so that MangleName
+    // does not insert another "q" in the name.
+    unsigned typeStrOff = (inTypeStr[0] == 'Q' ? 1 : 0);
+    StringRef inTypeNoQuad = inTypeStr.substr(typeStrOff);
+    mangledName = MangleName(mangledName, inTypeNoQuad, ClassS);
+  }
+  s += mangledName;
+
+  // Function arguments
+  s += GenArgs(proto, inTypeStr);
+
+  // Definition.
+  if (define) {
+    s += " __extension__ ({ \\\n  ";
+    s += GenMacroLocals(proto, inTypeStr);
+  } else {
+    s += " { \\\n  ";
+  }
+
+  if (kind != OpNone)
+    s += GenOpString(kind, proto, outTypeStr);
+  else
+    s += GenBuiltin(name, proto, outTypeStr, classKind);
+  if (define)
+    s += " })";
+  else
+    s += " }";
+  s += "\n";
+  return s;
+}
+
 /// run - Read the records in arm_neon.td and output arm_neon.h.  arm_neon.h
 /// is comprised of type definitions and function declarations.
 void NeonEmitter::run(raw_ostream &OS) {
-  EmitSourceFileHeader("ARM NEON Header", OS);
-
-  // FIXME: emit license into file?
+  OS << 
+    "/*===---- arm_neon.h - ARM Neon intrinsics ------------------------------"
+    "---===\n"
+    " *\n"
+    " * Permission is hereby granted, free of charge, to any person obtaining "
+    "a copy\n"
+    " * of this software and associated documentation files (the \"Software\"),"
+    " to deal\n"
+    " * in the Software without restriction, including without limitation the "
+    "rights\n"
+    " * to use, copy, modify, merge, publish, distribute, sublicense, "
+    "and/or sell\n"
+    " * copies of the Software, and to permit persons to whom the Software is\n"
+    " * furnished to do so, subject to the following conditions:\n"
+    " *\n"
+    " * The above copyright notice and this permission notice shall be "
+    "included in\n"
+    " * all copies or substantial portions of the Software.\n"
+    " *\n"
+    " * THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, "
+    "EXPRESS OR\n"
+    " * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF "
+    "MERCHANTABILITY,\n"
+    " * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT "
+    "SHALL THE\n"
+    " * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR "
+    "OTHER\n"
+    " * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, "
+    "ARISING FROM,\n"
+    " * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER "
+    "DEALINGS IN\n"
+    " * THE SOFTWARE.\n"
+    " *\n"
+    " *===--------------------------------------------------------------------"
+    "---===\n"
+    " */\n\n";
 
   OS << "#ifndef __ARM_NEON_H\n";
   OS << "#define __ARM_NEON_H\n\n";
@@ -965,65 +1155,62 @@ void NeonEmitter::run(raw_ostream &OS) {
 
   std::vector<Record*> RV = Records.getAllDerivedDefinitions("Inst");
 
-  // Unique the return+pattern types, and assign them.
+  // Emit vmovl and vabd intrinsics first so they can be used by other
+  // intrinsics.  (Some of the saturating multiply instructions are also
+  // used to implement the corresponding "_lane" variants, but tablegen
+  // sorts the records into alphabetical order so that the "_lane" variants
+  // come after the intrinsics they use.)
+  emitIntrinsic(OS, Records.getDef("VMOVL"));
+  emitIntrinsic(OS, Records.getDef("VABD"));
+
   for (unsigned i = 0, e = RV.size(); i != e; ++i) {
     Record *R = RV[i];
-    std::string name = R->getValueAsString("Name");
-    std::string Proto = R->getValueAsString("Prototype");
-    std::string Types = R->getValueAsString("Types");
-
-    SmallVector<StringRef, 16> TypeVec;
-    ParseTypes(R, Types, TypeVec);
-
-    OpKind k = OpMap[R->getValueAsDef("Operand")->getName()];
-
-    bool define = Proto.find('i') != std::string::npos;
-
-    for (unsigned ti = 0, te = TypeVec.size(); ti != te; ++ti) {
-      assert(!Proto.empty() && "");
-
-      // static always inline + return type
-      if (define)
-        OS << "#define";
-      else
-        OS << "__ai " << TypeString(Proto[0], TypeVec[ti]);
-
-      // Function name with type suffix
-      OS << " " << MangleName(name, TypeVec[ti], ClassS);
-
-      // Function arguments
-      OS << GenArgs(Proto, TypeVec[ti]);
-
-      // Definition.
-      if (define) {
-        OS << " __extension__ ({ \\\n  ";
-        OS << GenMacroLocals(Proto, TypeVec[ti]);
-      } else {
-        OS << " { \\\n  ";
-      }
-
-      if (k != OpNone) {
-        OS << GenOpString(k, Proto, TypeVec[ti]);
-      } else {
-        if (R->getSuperClasses().size() < 2)
-          throw TGError(R->getLoc(), "Builtin has no class kind");
-
-        ClassKind ck = ClassMap[R->getSuperClasses()[1]];
-
-        if (ck == ClassNone)
-          throw TGError(R->getLoc(), "Builtin has no class kind");
-        OS << GenBuiltin(name, Proto, TypeVec[ti], ck);
-      }
-      if (define)
-        OS << " })";
-      else
-        OS << " }";
-      OS << "\n";
-    }
-    OS << "\n";
+    if (R->getName() != "VMOVL" && R->getName() != "VABD")
+      emitIntrinsic(OS, R);
   }
+
   OS << "#undef __ai\n\n";
   OS << "#endif /* __ARM_NEON_H */\n";
+}
+
+/// emitIntrinsic - Write out the arm_neon.h header file definitions for the
+/// intrinsics specified by record R.
+void NeonEmitter::emitIntrinsic(raw_ostream &OS, Record *R) {
+  std::string name = R->getValueAsString("Name");
+  std::string Proto = R->getValueAsString("Prototype");
+  std::string Types = R->getValueAsString("Types");
+
+  SmallVector<StringRef, 16> TypeVec;
+  ParseTypes(R, Types, TypeVec);
+
+  OpKind kind = OpMap[R->getValueAsDef("Operand")->getName()];
+
+  ClassKind classKind = ClassNone;
+  if (R->getSuperClasses().size() >= 2)
+    classKind = ClassMap[R->getSuperClasses()[1]];
+  if (classKind == ClassNone && kind == OpNone)
+    throw TGError(R->getLoc(), "Builtin has no class kind");
+
+  for (unsigned ti = 0, te = TypeVec.size(); ti != te; ++ti) {
+    if (kind == OpReinterpret) {
+      bool outQuad = false;
+      bool dummy = false;
+      (void)ClassifyType(TypeVec[ti], outQuad, dummy, dummy);
+      for (unsigned srcti = 0, srcte = TypeVec.size();
+           srcti != srcte; ++srcti) {
+        bool inQuad = false;
+        (void)ClassifyType(TypeVec[srcti], inQuad, dummy, dummy);
+        if (srcti == ti || inQuad != outQuad)
+          continue;
+        OS << GenIntrinsic(name, Proto, TypeVec[ti], TypeVec[srcti],
+                           OpCast, ClassS);
+      }
+    } else {
+      OS << GenIntrinsic(name, Proto, TypeVec[ti], TypeVec[ti],
+                         kind, classKind);
+    }
+  }
+  OS << "\n";
 }
 
 static unsigned RangeFromType(StringRef typestr) {
@@ -1143,12 +1330,12 @@ void NeonEmitter::runHeader(raw_ostream &OS) {
     }
     if (mask)
       OS << "case ARM::BI__builtin_neon_"
-      << MangleName(name, TypeVec[si], ClassB)
-      << ": mask = " << "0x" << utohexstr(mask) << "; break;\n";
+         << MangleName(name, TypeVec[si], ClassB)
+         << ": mask = " << "0x" << utohexstr(mask) << "; break;\n";
     if (qmask)
       OS << "case ARM::BI__builtin_neon_"
-      << MangleName(name, TypeVec[qi], ClassB)
-      << ": mask = " << "0x" << utohexstr(qmask) << "; break;\n";
+         << MangleName(name, TypeVec[qi], ClassB)
+         << ": mask = " << "0x" << utohexstr(qmask) << "; break;\n";
   }
   OS << "#endif\n\n";
 
@@ -1226,7 +1413,7 @@ void NeonEmitter::runHeader(raw_ostream &OS) {
           case 'i': ie = ii + 1; break;
         }
       }
-      OS << "case ARM::BI__builtin_neon_"  << MangleName(name, TypeVec[ti], ck)
+      OS << "case ARM::BI__builtin_neon_" << MangleName(name, TypeVec[ti], ck)
          << ": i = " << immidx << "; " << rangestr << "; break;\n";
     }
   }

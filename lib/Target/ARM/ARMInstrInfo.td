@@ -175,7 +175,7 @@ def IsNotDarwin      : Predicate<"!Subtarget->isTargetDarwin()">;
 // FIXME: Eventually this will be just "hasV6T2Ops".
 def UseMovt          : Predicate<"Subtarget->useMovt()">;
 def DontUseMovt      : Predicate<"!Subtarget->useMovt()">;
-def UseVMLx          : Predicate<"Subtarget->useVMLx()">;
+def UseFPVMLx        : Predicate<"Subtarget->useFPVMLx()">;
 
 //===----------------------------------------------------------------------===//
 // ARM Flag Definitions.
@@ -277,6 +277,21 @@ def and_su : PatFrag<(ops node:$lhs, node:$rhs), (and node:$lhs, node:$rhs), [{
 // An 'xor' node with a single use.
 def xor_su : PatFrag<(ops node:$lhs, node:$rhs), (xor node:$lhs, node:$rhs), [{
   return N->hasOneUse();
+}]>;
+
+// An 'fmul' node with a single use.
+def fmul_su : PatFrag<(ops node:$lhs, node:$rhs), (fmul node:$lhs, node:$rhs),[{
+  return N->hasOneUse();
+}]>;
+
+// An 'fadd' node which checks for single non-hazardous use.
+def fadd_mlx : PatFrag<(ops node:$lhs, node:$rhs),(fadd node:$lhs, node:$rhs),[{
+  return hasNoVMLxHazardUse(N);
+}]>;
+
+// An 'fsub' node which checks for single non-hazardous use.
+def fsub_mlx : PatFrag<(ops node:$lhs, node:$rhs),(fsub node:$lhs, node:$rhs),[{
+  return hasNoVMLxHazardUse(N);
 }]>;
 
 //===----------------------------------------------------------------------===//
@@ -2886,6 +2901,14 @@ defm CMP  : AI1_cmp_irs<0b1010, "cmp",
                         IIC_iCMPi, IIC_iCMPr, IIC_iCMPsr,
                         BinOpFrag<(ARMcmp node:$LHS, node:$RHS)>>;
 
+// ARMcmpZ can re-use the above instruction definitions.
+def : ARMPat<(ARMcmpZ GPR:$src, so_imm:$imm),
+             (CMPri   GPR:$src, so_imm:$imm)>;
+def : ARMPat<(ARMcmpZ GPR:$src, GPR:$rhs),
+             (CMPrr   GPR:$src, GPR:$rhs)>;
+def : ARMPat<(ARMcmpZ GPR:$src, so_reg:$rhs),
+             (CMPrs   GPR:$src, so_reg:$rhs)>;
+
 // FIXME: We have to be careful when using the CMN instruction and comparison
 // with 0. One would expect these two pieces of code should give identical
 // results:
@@ -2938,9 +2961,6 @@ defm TEQ  : AI1_cmp_irs<0b1001, "teq",
                         IIC_iTSTi, IIC_iTSTr, IIC_iTSTsr,
                       BinOpFrag<(ARMcmpZ (xor_su node:$LHS, node:$RHS), 0)>, 1>;
 
-defm CMPz  : AI1_cmp_irs<0b1010, "cmp",
-                         IIC_iCMPi, IIC_iCMPr, IIC_iCMPsr,
-                         BinOpFrag<(ARMcmpZ node:$LHS, node:$RHS)>>;
 defm CMNz  : AI1_cmp_irs<0b1011, "cmn",
                          IIC_iCMPi, IIC_iCMPr, IIC_iCMPsr,
                          BinOpFrag<(ARMcmpZ node:$LHS,(ineg node:$RHS))>>;
@@ -3229,12 +3249,11 @@ def SWPB : AIswp<1, (outs GPR:$Rt), (ins GPR:$Rt2, GPR:$Rn), "swpb",
 //
 
 // __aeabi_read_tp preserves the registers r1-r3.
-// FIXME: This needs to be a pseudo of some sort so that we can get the
-// encoding right, complete with fixup for the aeabi_read_tp function.
+// This is a pseudo inst so that we can get the encoding right, 
+// complete with fixup for the aeabi_read_tp function.
 let isCall = 1,
   Defs = [R0, R12, LR, CPSR], Uses = [SP] in {
-  def TPsoft : ABXI<0b1011, (outs), (ins), IIC_Br,
-               "bl\t__aeabi_read_tp",
+  def TPsoft : PseudoInst<(outs), (ins), IIC_Br,
                [(set R0, ARMthread_pointer)]>;
 }
 

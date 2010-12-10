@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCExpr.h"
@@ -46,7 +47,8 @@ void MCStreamer::EmitDwarfSetLineAddr(int64_t LineDelta,
 /// pass in a MCExpr for constant integers.
 void MCStreamer::EmitIntValue(uint64_t Value, unsigned Size,
                               unsigned AddrSpace) {
-  assert(Size <= 8);
+  assert(Size <= 8 && "Invalid size");
+  assert(!(Size == 1 && (signed)Value > 255) && "Invalid size");
   char buf[8];
   // FIXME: Endianness assumption.
   for (unsigned i = 0; i != Size; ++i)
@@ -72,9 +74,42 @@ void MCStreamer::EmitSLEB128IntValue(int64_t Value, unsigned AddrSpace) {
   EmitBytes(OSE.str(), AddrSpace);
 }
 
+void MCStreamer::EmitAbsValue(const MCExpr *Value, unsigned Size,
+                              unsigned AddrSpace) {
+  if (!getContext().getAsmInfo().needsSetToChangeDiffSize()) {
+    EmitValue(Value, Size, AddrSpace);
+    return;
+  }
+  MCSymbol *ABS = getContext().CreateTempSymbol();
+  EmitAssignment(ABS, Value);
+  EmitSymbolValue(ABS, Size, AddrSpace);
+}
+
+
+void MCStreamer::EmitValue(const MCExpr *Value, unsigned Size,
+                           unsigned AddrSpace) {
+  EmitValueImpl(Value, Size, false, AddrSpace);
+}
+
+void MCStreamer::EmitPCRelValue(const MCExpr *Value, unsigned Size,
+                                unsigned AddrSpace) {
+  EmitValueImpl(Value, Size, true, AddrSpace);
+}
+
+void MCStreamer::EmitSymbolValue(const MCSymbol *Sym, unsigned Size,
+                                 bool isPCRel, unsigned AddrSpace) {
+  EmitValueImpl(MCSymbolRefExpr::Create(Sym, getContext()), Size, isPCRel,
+                AddrSpace);
+}
+
 void MCStreamer::EmitSymbolValue(const MCSymbol *Sym, unsigned Size,
                                  unsigned AddrSpace) {
-  EmitValue(MCSymbolRefExpr::Create(Sym, getContext()), Size, AddrSpace);
+  EmitSymbolValue(Sym, Size, false, AddrSpace);
+}
+
+void MCStreamer::EmitPCRelSymbolValue(const MCSymbol *Sym, unsigned Size,
+                                      unsigned AddrSpace) {
+  EmitSymbolValue(Sym, Size, true, AddrSpace);
 }
 
 void MCStreamer::EmitGPRel32Value(const MCExpr *Value) {
@@ -103,31 +138,65 @@ void MCStreamer::EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                   Discriminator);
 }
 
+MCDwarfFrameInfo *MCStreamer::getCurrentFrameInfo() {
+  if (FrameInfos.empty())
+    return NULL;
+  return &FrameInfos.back();
+}
+
+void MCStreamer::EnsureValidFrame() {
+  MCDwarfFrameInfo *CurFrame = getCurrentFrameInfo();
+  if (!CurFrame || CurFrame->End)
+    report_fatal_error("No open frame");
+}
+
 bool MCStreamer::EmitCFIStartProc() {
+  MCDwarfFrameInfo *CurFrame = getCurrentFrameInfo();
+  if (CurFrame && !CurFrame->End) {
+    report_fatal_error("Starting a frame before finishing the previous one!");
+    return true;
+  }
+  MCDwarfFrameInfo Frame = {0, 0, 0, 0};
+  Frame.Begin = getContext().CreateTempSymbol();
+  EmitLabel(Frame.Begin);
+  FrameInfos.push_back(Frame);
   return false;
 }
 
 bool MCStreamer::EmitCFIEndProc() {
+  EnsureValidFrame();
+  MCDwarfFrameInfo *CurFrame = getCurrentFrameInfo();
+  CurFrame->End = getContext().CreateTempSymbol();
+  EmitLabel(CurFrame->End);
   return false;
 }
 
 bool MCStreamer::EmitCFIDefCfaOffset(int64_t Offset) {
+  EnsureValidFrame();
   return false;
 }
 
 bool MCStreamer::EmitCFIDefCfaRegister(int64_t Register) {
+  EnsureValidFrame();
   return false;
 }
 
 bool MCStreamer::EmitCFIOffset(int64_t Register, int64_t Offset) {
+  EnsureValidFrame();
   return false;
 }
 
 bool MCStreamer::EmitCFIPersonality(const MCSymbol *Sym) {
+  EnsureValidFrame();
+  MCDwarfFrameInfo *CurFrame = getCurrentFrameInfo();
+  CurFrame->Personality = Sym;
   return false;
 }
 
 bool MCStreamer::EmitCFILsda(const MCSymbol *Sym) {
+  EnsureValidFrame();
+  MCDwarfFrameInfo *CurFrame = getCurrentFrameInfo();
+  CurFrame->Lsda = Sym;
   return false;
 }
 
