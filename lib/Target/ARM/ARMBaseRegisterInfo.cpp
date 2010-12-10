@@ -63,6 +63,13 @@ ARMBaseRegisterInfo::ARMBaseRegisterInfo(const ARMBaseInstrInfo &tii,
 
 const unsigned*
 ARMBaseRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
+  bool monoCall = false;
+
+  if (MF) {
+    const Function *F = MF->getFunction();
+    monoCall = (F ? F->getCallingConv() == CallingConv::Mono1 : false);
+  }
+
   static const unsigned CalleeSavedRegs[] = {
     ARM::LR, ARM::R11, ARM::R10, ARM::R9, ARM::R8,
     ARM::R7, ARM::R6,  ARM::R5,  ARM::R4,
@@ -82,7 +89,33 @@ ARMBaseRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     ARM::D11, ARM::D10, ARM::D9,  ARM::D8,
     0
   };
-  return STI.isTargetDarwin() ? DarwinCalleeSavedRegs : CalleeSavedRegs;
+
+  /* R8 is used as an additional argument register */
+  static const unsigned MonoCalleeSavedRegs[] = {
+    ARM::LR, ARM::R11, ARM::R10, ARM::R9,
+    ARM::R7, ARM::R6,  ARM::R5,  ARM::R4,
+
+    ARM::D15, ARM::D14, ARM::D13, ARM::D12,
+    ARM::D11, ARM::D10, ARM::D9,  ARM::D8,
+    0
+  };
+
+  static const unsigned MonoDarwinCalleeSavedRegs[] = {
+    // Darwin ABI deviates from ARM standard ABI. R9 is not a callee-saved
+    // register.
+    ARM::LR,  ARM::R7,  ARM::R6, ARM::R5, ARM::R4,
+    ARM::R11, ARM::R10,
+
+    ARM::D15, ARM::D14, ARM::D13, ARM::D12,
+    ARM::D11, ARM::D10, ARM::D9,  ARM::D8,
+    0
+  };
+
+  if (monoCall) {
+    return STI.isTargetDarwin() ? MonoDarwinCalleeSavedRegs : MonoCalleeSavedRegs;
+  } else {
+    return STI.isTargetDarwin() ? DarwinCalleeSavedRegs : CalleeSavedRegs;
+  }
 }
 
 BitVector ARMBaseRegisterInfo::
