@@ -63,7 +63,7 @@ ARMBaseRegisterInfo::ARMBaseRegisterInfo(const ARMBaseInstrInfo &tii,
 
 const unsigned*
 ARMBaseRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
-  bool monoCall = false;
+  bool monoCall = true;
 
   if (MF) {
     const Function *F = MF->getFunction();
@@ -134,6 +134,14 @@ getReservedRegs(const MachineFunction &MF) const {
   // Some targets reserve R9.
   if (STI.isR9Reserved())
     Reserved.set(ARM::R9);
+
+  const Function *F = MF.getFunction();
+  if (F && F->getCallingConv() == CallingConv::Mono1)
+    // FIXME: This is required for some reason, otherwise llvm treats R8 as a callee-saved registers
+    // even if we exclude it in getCalleeSavedRegs (). Luckily, R8 can still be used for argument
+    // passing even if it is 'reserved'.
+    Reserved.set(ARM::R8);
+
   return Reserved;
 }
 
@@ -880,56 +888,6 @@ emitSPUpdate(bool isARM,
   else
     emitT2RegPlusImmediate(MBB, MBBI, dl, ARM::SP, ARM::SP, NumBytes,
                            Pred, PredReg, TII);
-}
-
-//
-// Functions to emit MachineMoves. These use the DWARF unwind terminology, i.e
-// CFA == VirtualFP
-//
-
-// emitDefCfaOffset - Emit a MachineMove to set the CFA offset
-static void
-emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
-                 DebugLoc dl, const ARMBaseInstrInfo &TII,
-                 MachineModuleInfo &MMI,
-                 std::vector<MachineMove> &Moves,
-                 int CfaOffset) {
-  MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
-
-  MachineLocation SPDst(MachineLocation::VirtualFP);
-  MachineLocation SPSrc(MachineLocation::VirtualFP, -CfaOffset);
-  Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
-}
-
-// emitDefCfa - Emit a MachineMove to set the CFA register+offset
-static void
-emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
-           DebugLoc dl, const ARMBaseInstrInfo &TII,
-           MachineModuleInfo &MMI,
-           std::vector<MachineMove> &Moves,
-           int CfaReg, int CfaOffset) {
-  MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
-
-  MachineLocation SPDst(MachineLocation::VirtualFP);
-  MachineLocation SPSrc(CfaReg, CfaOffset);
-  Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
-}
-
-// emitCfaOffset - Emit a MachineMove to define where Reg is saved
-static void
-emitCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
-           DebugLoc dl, const ARMBaseInstrInfo &TII,
-           MachineModuleInfo &MMI,
-           std::vector<MachineMove> &Moves,
-           int Reg, int Offset) {
-  MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
-
-  MachineLocation CSDst(MachineLocation::VirtualFP, Offset);
-  MachineLocation CSSrc(Reg);
-  Moves.push_back(MachineMove(FrameLabel, CSDst, CSSrc));
 }
 
 void ARMBaseRegisterInfo::

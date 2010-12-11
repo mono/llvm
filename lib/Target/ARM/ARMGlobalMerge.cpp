@@ -183,6 +183,8 @@ bool ARMGlobalMerge::doInitialization(Module &M) {
         I->getName().startswith(".llvm."))
       continue;
 
+    // FIXME: This merges Mono's type_info globals, breaking EH
+/*
     if (TD->getTypeAllocSize(I->getType()->getElementType()) < MaxOffset) {
       const TargetLoweringObjectFile &TLOF = TLI->getObjFileLowering();
       if (TLOF.getKindForGlobal(I, TLI->getTargetMachine()).isBSSLocal())
@@ -192,6 +194,7 @@ bool ARMGlobalMerge::doInitialization(Module &M) {
       else
         Globals.push_back(I);
     }
+*/
   }
 
   if (Globals.size() > 1)
