@@ -94,6 +94,9 @@ class DwarfException {
   /// EmitFDE - Emit the Frame Description Entry (FDE) for the function.
   void EmitFDE(const FunctionEHFrameInfo &EHFrameInfo);
 
+  // EmitMonoEHFrame - Emit Mono specific exception handling tables
+  void EmitMonoEHFrame(const Function *Personality);
+
   /// EmitExceptionTable - Emit landing pads and actions.
   ///
   /// The general organization of the table is complex, but the basic concepts

@@ -32,12 +32,19 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 using namespace llvm;
+
+static cl::opt<bool> EnableMonoEH("enable-mono-eh-frame", cl::NotHidden,
+     cl::desc("Enable generation of Mono specific EH tables"));
+
+static cl::opt<bool> DisableGNUEH("disable-gnu-eh-frame", cl::NotHidden,
+     cl::desc("Disable generation of GNU .eh_frame"));
 
 DwarfException::DwarfException(AsmPrinter *A)
   : Asm(A), MMI(Asm->MMI), shouldEmitTable(false), shouldEmitMoves(false),
@@ -916,17 +923,21 @@ void DwarfException::EndModule() {
   if (Asm->MAI->getExceptionHandlingType() != ExceptionHandling::Dwarf)
     return;
 
-  if (!shouldEmitMovesModule && !shouldEmitTableModule)
-    return;
-
   const std::vector<const Function*> &Personalities = MMI->getPersonalities();
 
-  for (unsigned I = 0, E = Personalities.size(); I < E; ++I)
-    EmitCIE(Personalities[I], I);
+  if (shouldEmitMovesModule || shouldEmitTableModule) {
+    if (!DisableGNUEH) {
+      for (unsigned I = 0, E = Personalities.size(); I < E; ++I)
+        EmitCIE(Personalities[I], I);
 
-  for (std::vector<FunctionEHFrameInfo>::iterator
-         I = EHFrames.begin(), E = EHFrames.end(); I != E; ++I)
-    EmitFDE(*I);
+      for (std::vector<FunctionEHFrameInfo>::iterator
+             I = EHFrames.begin(), E = EHFrames.end(); I != E; ++I)
+        EmitFDE(*I);
+    }
+  }
+
+  if (EnableMonoEH)
+    EmitMonoEHFrame(Personalities[0]);
 }
 
 /// BeginFunction - Gather pre-function exception information. Assumes it's
@@ -983,4 +994,164 @@ void DwarfException::EndFunction() {
                                   !MMI->getLandingPads().empty(),
                                   MMI->getFrameMoves(),
                                   Asm->MF->getFunction()));
+}
+
+static inline const MCExpr *MakeStartMinusEndExpr(const MCStreamer &MCOS,
+                                                  const MCSymbol &Start,
+                                                  const MCSymbol &End,
+                                                  int IntVal) {
+  MCSymbolRefExpr::VariantKind Variant = MCSymbolRefExpr::VK_None;
+  const MCExpr *Res =
+    MCSymbolRefExpr::Create(&End, Variant, MCOS.getContext());
+  const MCExpr *RHS =
+    MCSymbolRefExpr::Create(&Start, Variant, MCOS.getContext());
+  const MCExpr *Res1 =
+    MCBinaryExpr::Create(MCBinaryExpr::Sub, Res, RHS, MCOS.getContext());
+  const MCExpr *Res2 =
+    MCConstantExpr::Create(IntVal, MCOS.getContext());
+  const MCExpr *Res3 =
+    MCBinaryExpr::Create(MCBinaryExpr::Sub, Res1, Res2, MCOS.getContext());
+  return Res3;
+}
+
+// EmitMonoEHFrame - Emit Mono specific exception handling tables
+void DwarfException::EmitMonoEHFrame(const Function *Personality)
+{
+  const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
+
+  unsigned LSDAEncoding = TLOF.getLSDAEncoding();
+  unsigned PerEncoding = TLOF.getPersonalityEncoding();
+
+  // Size and sign of stack growth.
+  int stackGrowth = Asm->getTargetData().getPointerSize();
+  if (Asm->TM.getFrameInfo()->getStackGrowthDirection() ==
+      TargetFrameInfo::StackGrowsDown)
+    stackGrowth *= -1;
+
+  //
+  // The Mono runtime obtains EH info for LLVM compiled code by reading the GNU .eh_frame
+  // created by LLVM. This has certain problems:
+  // - .eh_frame resides in a different segment, which makes it impossible to read it at
+  // runtime on some platforms, like the iphone
+  // - the iphone linker can't generate .eh_frame_hdr
+  // - the table is very verbose, a single FDE is about 20-24 bytes on arm, negating any
+  // code size gains obtained by using LLVM.
+  // An alternative would be using the official ARM EH tables. This has problems too:
+  // - it is also in a separate section
+  // - it is very badly specified
+  // - it needs GNU assembler/linker support to work.
+  //
+  // To solve these problems, we generate our own custom EH tables:
+  // - the table is in the rodata segment, pointed to by a local symbol.
+  // - it contains an .eh_frame_hdr style lookup table.
+  //
+  // Use something similar to GNU .eh_frame/.eh_frame_hdr:
+  //
+  // http://refspecs.freestandards.org/LSB_1.3.0/gLSB/gLSB/ehframehdr.html
+  //
+  // It is hard to get smaller tables without assembler supports, since we can't encode
+  // offsets in less that 4 bytes, can't encode information into the upper bits of offsets etc.
+  //
+
+  // Can't use rodata as the symbols we reference are in the text segment
+  Asm->OutStreamer.SwitchSection(TLOF.getTextSection());
+
+  MCSymbol *EHFrameHdrSym =
+	  Asm->OutContext.GetOrCreateSymbol(Twine("mono_eh_frame"));
+  MCSymbol *EHFrameEndSym = Asm->GetTempSymbol ("mono_eh_frame_end");
+
+  Asm->EmitAlignment(4);
+  Asm->OutStreamer.EmitLabel(EHFrameHdrSym);
+  const MCExpr *Length = MakeStartMinusEndExpr(Asm->OutStreamer, *EHFrameHdrSym,
+                                               *EHFrameEndSym, 0);
+  Asm->OutStreamer.EmitELFSize(EHFrameHdrSym, Length);
+
+  // Header
+
+  Asm->OutStreamer.AddComment("version");
+  Asm->OutStreamer.EmitIntValue(1, 1, 0);
+
+  // Search table
+  Asm->EmitAlignment(2);
+  Asm->OutStreamer.AddComment("fde_count");
+  Asm->OutStreamer.EmitIntValue (EHFrames.size(), 4, 0);
+  for (std::vector<FunctionEHFrameInfo>::iterator
+		   I = EHFrames.begin(), E = EHFrames.end(); I != E; ++I) {
+	  const FunctionEHFrameInfo &EHFrameInfo = *I;
+
+      MCSymbol *EHFuncBeginSym =
+        Asm->GetTempSymbol("eh_func_begin", EHFrameInfo.Number);
+	  MCSymbol *FDEBeginSym = Asm->GetTempSymbol ("mono_eh_func_begin", EHFrameInfo.Number);
+	  Asm->EmitLabelDifference(EHFuncBeginSym, EHFrameHdrSym, 4);
+	  Asm->EmitLabelDifference(FDEBeginSym, EHFrameHdrSym, 4);
+  }
+  // Emit a last entry to simplify binary searches and to enable the computation of
+  // the size of the last function/FDE entry
+  if (EHFrames.size() == 0) {
+	  Asm->EmitLabelDifference(EHFrameHdrSym, EHFrameHdrSym, 4);
+	  Asm->EmitLabelDifference(EHFrameHdrSym, EHFrameHdrSym, 4);
+  } else {
+    MCSymbol *Sym1 = Asm->GetTempSymbol("eh_func_end", EHFrames.size() - 1);
+    MCSymbol *Sym2 = Asm->GetTempSymbol ("mono_eh_frame_end");
+    Asm->EmitLabelDifference(Sym1, EHFrameHdrSym, 4);
+    Asm->EmitLabelDifference(Sym2, EHFrameHdrSym, 4);
+  }
+
+  // CIE
+  // This comes right after the search table
+  Asm->EmitULEB128(1, "CIE Code Alignment Factor");
+  Asm->EmitSLEB128(stackGrowth, "CIE Data Alignment Factor");
+  Asm->OutStreamer.AddComment("CIE Return Address Column");
+  const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
+  const TargetFrameInfo *TFI = Asm->TM.getFrameInfo();
+  Asm->EmitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
+
+  if (Personality) {
+    Asm->EmitEncodingByte(PerEncoding, "Personality");
+    Asm->OutStreamer.AddComment("Personality");
+    Asm->EmitReference(Personality, PerEncoding);
+  } else {
+    Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "Personality");
+  }
+  // Initial CIE program
+  std::vector<MachineMove> Moves;
+  TFI->getInitialFrameState(Moves);
+  Asm->EmitFrameMoves(Moves, 0, true);
+
+  // FDEs
+  Asm->OutStreamer.AddBlankLine();
+  for (std::vector<FunctionEHFrameInfo>::iterator
+		   I = EHFrames.begin(), E = EHFrames.end(); I != E; ++I) {
+	  const FunctionEHFrameInfo &EHFrameInfo = *I;
+
+	  MCSymbol *FDEBeginSym = Asm->GetTempSymbol ("mono_eh_func_begin", EHFrameInfo.Number);
+;
+      Asm->OutStreamer.EmitLabel(FDEBeginSym);
+
+      // No need for length, CIE, PC begin, PC range, alignment
+
+      // Emit augmentation
+      if (EHFrameInfo.hasLandingPads) {
+        unsigned Size = Asm->GetSizeOfEncodedValue(LSDAEncoding);
+
+        Asm->EmitULEB128(Size, "Augmentation size");
+        Asm->OutStreamer.AddComment("Language Specific Data Area");
+        Asm->EmitReference(Asm->GetTempSymbol("exception", EHFrameInfo.Number),
+                           LSDAEncoding);
+      } else {
+          Asm->EmitULEB128(0, "Augmentation size");
+      }
+
+      MCSymbol *EHFuncBeginSym =
+        Asm->GetTempSymbol("eh_func_begin", EHFrameInfo.Number);
+      //
+      // The encoding used by EmitFrameMoves is very inefficient, the pc is advanced using
+      // DW_CFA_advance_loc4, because it can't determine that the offsets are smaller.
+      //
+      Asm->EmitFrameMoves(EHFrameInfo.Moves, EHFuncBeginSym, true);
+
+      Asm->OutStreamer.AddBlankLine();
+  }
+
+  Asm->OutStreamer.EmitLabel(EHFrameEndSym);
 }
