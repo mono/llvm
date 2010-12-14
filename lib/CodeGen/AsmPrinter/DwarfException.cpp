@@ -1064,7 +1064,8 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   Asm->OutStreamer.EmitLabel(EHFrameHdrSym);
   const MCExpr *Length = MakeStartMinusEndExpr(Asm->OutStreamer, *EHFrameHdrSym,
                                                *EHFrameEndSym, 0);
-  Asm->OutStreamer.EmitELFSize(EHFrameHdrSym, Length);
+  if (Asm->MAI->hasDotTypeDotSizeDirective())
+    Asm->OutStreamer.EmitELFSize(EHFrameHdrSym, Length);
 
   // Header
 
