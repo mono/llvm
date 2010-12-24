@@ -37,6 +37,7 @@
 #include "ARMDecoderEmitter.h"
 #include "SubtargetEmitter.h"
 #include "TGParser.h"
+#include "llvm/ADT/OwningPtr.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/PrettyStackTrace.h"
@@ -75,6 +76,7 @@ enum ActionType {
   GenEDInfo,
   GenArmNeon,
   GenArmNeonSema,
+  GenArmNeonTest,
   PrintEnums
 };
 
@@ -147,6 +149,8 @@ namespace {
                                "Generate arm_neon.h for clang"),
                     clEnumValN(GenArmNeonSema, "gen-arm-neon-sema",
                                "Generate ARM NEON sema support for clang"),
+                    clEnumValN(GenArmNeonTest, "gen-arm-neon-test",
+                               "Generate ARM NEON tests for clang"),
                     clEnumValN(PrintEnums, "print-enums",
                                "Print enum values for a class"),
                     clEnumValEnd));
@@ -173,9 +177,6 @@ namespace {
 }
 
 
-// FIXME: Eliminate globals from tblgen.
-RecordKeeper llvm::Records;
-
 static SourceMgr SrcMgr;
 
 void llvm::PrintError(SMLoc ErrorLoc, const Twine &Msg) {
@@ -188,14 +189,15 @@ void llvm::PrintError(SMLoc ErrorLoc, const Twine &Msg) {
 /// file.
 static bool ParseFile(const std::string &Filename,
                       const std::vector<std::string> &IncludeDirs,
-                      SourceMgr &SrcMgr) {
-  error_code ec;
-  MemoryBuffer *F = MemoryBuffer::getFileOrSTDIN(Filename.c_str(), ec);
-  if (F == 0) {
+                      SourceMgr &SrcMgr,
+                      RecordKeeper &Records) {
+  OwningPtr<MemoryBuffer> File;
+  if (error_code ec = MemoryBuffer::getFileOrSTDIN(Filename.c_str(), File)) {
     errs() << "Could not open input file '" << Filename << "': "
            << ec.message() <<"\n";
     return true;
   }
+  MemoryBuffer *F = File.take();
 
   // Tell SrcMgr about this buffer, which is what TGParser will pick up.
   SrcMgr.AddNewSourceBuffer(F, SMLoc());
@@ -204,19 +206,21 @@ static bool ParseFile(const std::string &Filename,
   // it later.
   SrcMgr.setIncludeDirs(IncludeDirs);
 
-  TGParser Parser(SrcMgr);
+  TGParser Parser(SrcMgr, Records);
 
   return Parser.ParseFile();
 }
 
 int main(int argc, char **argv) {
+  RecordKeeper Records;
+
   sys::PrintStackTraceOnErrorSignal();
   PrettyStackTraceProgram X(argc, argv);
   cl::ParseCommandLineOptions(argc, argv);
 
 
   // Parse the input file.
-  if (ParseFile(InputFilename, IncludeDirs, SrcMgr))
+  if (ParseFile(InputFilename, IncludeDirs, SrcMgr, Records))
     return 1;
 
   std::string Error;
@@ -329,6 +333,9 @@ int main(int argc, char **argv) {
       break;
     case GenArmNeonSema:
       NeonEmitter(Records).runHeader(Out.os());
+      break;
+    case GenArmNeonTest:
+      NeonEmitter(Records).runTests(Out.os());
       break;
     case PrintEnums:
     {

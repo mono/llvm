@@ -57,6 +57,7 @@ class VarListElementInit;
 class Record;
 class RecordVal;
 struct MultiClass;
+class RecordKeeper;
 
 //===----------------------------------------------------------------------===//
 //  Type Classes
@@ -930,6 +931,8 @@ public:
   // possible to fold.
   Init *Fold(Record *CurRec, MultiClass *CurMultiClass);
 
+  virtual bool isComplete() const { return false; }
+
   virtual Init *resolveReferences(Record &R, const RecordVal *RV);
 
   virtual std::string getAsString() const;
@@ -1227,10 +1230,15 @@ class Record {
   std::vector<std::string> TemplateArgs;
   std::vector<RecordVal> Values;
   std::vector<Record*> SuperClasses;
+
+  // Tracks Record instances. Not owned by Record.
+  RecordKeeper &TrackedRecords;
+
 public:
 
-  explicit Record(const std::string &N, SMLoc loc) :
-    ID(LastID++), Name(N), Loc(loc) {}
+  // Constructs a record.
+  explicit Record(const std::string &N, SMLoc loc, RecordKeeper &records) :
+    ID(LastID++), Name(N), Loc(loc), TrackedRecords(records) {}
   ~Record() {}
 
 
@@ -1315,6 +1323,10 @@ public:
   /// possible references.
   void resolveReferencesTo(const RecordVal *RV);
 
+  RecordKeeper &getRecords() const {
+    return TrackedRecords;
+  }
+
   void dump() const;
 
   //===--------------------------------------------------------------------===//
@@ -1396,7 +1408,8 @@ struct MultiClass {
 
   void dump() const;
 
-  MultiClass(const std::string &Name, SMLoc Loc) : Rec(Name, Loc) {}
+  MultiClass(const std::string &Name, SMLoc Loc, RecordKeeper &Records) : 
+    Rec(Name, Loc, Records) {}
 };
 
 class RecordKeeper {
@@ -1453,7 +1466,6 @@ public:
   std::vector<Record*>
   getAllDerivedDefinitions(const std::string &ClassName) const;
 
-
   void dump() const;
 };
 
@@ -1487,8 +1499,6 @@ public:
 
 
 raw_ostream &operator<<(raw_ostream &OS, const RecordKeeper &RK);
-
-extern RecordKeeper Records;
 
 void PrintError(SMLoc ErrorLoc, const Twine &Msg);
 

@@ -84,6 +84,7 @@ protected:
   };
 
   const TargetRegisterInfo *TRI;
+  MachineRegisterInfo *MRI;
   VirtRegMap *VRM;
   LiveIntervals *LIS;
   LiveUnionArray PhysReg2LiveUnion;
@@ -92,12 +93,12 @@ protected:
   // query on a new live virtual register.
   OwningArrayPtr<LiveIntervalUnion::Query> Queries;
 
-  RegAllocBase(): TRI(0), VRM(0), LIS(0) {}
+  RegAllocBase(): TRI(0), MRI(0), VRM(0), LIS(0) {}
 
   virtual ~RegAllocBase() {}
 
   // A RegAlloc pass should call this before allocatePhysRegs.
-  void init(const TargetRegisterInfo &tri, VirtRegMap &vrm, LiveIntervals &lis);
+  void init(VirtRegMap &vrm, LiveIntervals &lis);
 
   // Get an initialized query to check interferences between lvr and preg.  Note
   // that Query::init must be called at least once for each physical register
@@ -151,6 +152,13 @@ protected:
   // Verify each LiveIntervalUnion.
   void verify();
 #endif
+
+  // Use this group name for NamedRegionTimer.
+  static const char *TimerGroupName;
+
+public:
+  /// VerifyEnabled - True when -verify-regalloc is given.
+  static bool VerifyEnabled;
 
 private:
   void seedLiveVirtRegs(std::priority_queue<std::pair<float, unsigned> >&);

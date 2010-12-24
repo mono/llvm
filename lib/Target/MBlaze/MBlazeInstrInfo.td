@@ -18,7 +18,8 @@ include "MBlazeInstrFormats.td"
 
 // def SDTMBlazeSelectCC : SDTypeProfile<1, 3, [SDTCisSameAs<0, 1>]>;
 def SDT_MBlazeRet     : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
-def SDT_MBlazeJmpLink : SDTypeProfile<0, 1, [SDTCisVT<0, i32>]>;
+def SDT_MBlazeIRet    : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
+def SDT_MBlazeJmpLink : SDTypeProfile<0, -1, [SDTCisVT<0, i32>]>;
 def SDT_MBCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>]>;
 def SDT_MBCallSeqEnd   : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 
@@ -27,18 +28,21 @@ def SDT_MBCallSeqEnd   : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 //===----------------------------------------------------------------------===//
 
 def MBlazeRet     : SDNode<"MBlazeISD::Ret", SDT_MBlazeRet,
-                           [SDNPHasChain, SDNPOptInFlag]>;
+                           [SDNPHasChain, SDNPOptInGlue]>;
+def MBlazeIRet    : SDNode<"MBlazeISD::IRet", SDT_MBlazeIRet,
+                           [SDNPHasChain, SDNPOptInGlue]>;
 
 def MBlazeJmpLink : SDNode<"MBlazeISD::JmpLink",SDT_MBlazeJmpLink,
-                           [SDNPHasChain,SDNPOptInFlag,SDNPOutFlag]>;
+                           [SDNPHasChain,SDNPOptInGlue,SDNPOutGlue,
+                            SDNPVariadic]>;
 
 def MBWrapper   : SDNode<"MBlazeISD::Wrap", SDTIntUnaryOp>;
 
 def callseq_start : SDNode<"ISD::CALLSEQ_START", SDT_MBCallSeqStart,
-                           [SDNPHasChain, SDNPOutFlag]>;
+                           [SDNPHasChain, SDNPOutGlue]>;
 
 def callseq_end   : SDNode<"ISD::CALLSEQ_END", SDT_MBCallSeqEnd,
-                           [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;
+                           [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 
 //===----------------------------------------------------------------------===//
 // MBlaze Instruction Predicate Definitions.
@@ -79,7 +83,6 @@ def brtarget    : Operand<OtherVT>;
 def calltarget  : Operand<i32>;
 def simm16      : Operand<i32>;
 def uimm5       : Operand<i32>;
-def uimm14      : Operand<i32>;
 def uimm15      : Operand<i32>;
 def fimm        : Operand<f32>;
 
@@ -287,7 +290,7 @@ class BranchI<bits<6> op, bits<5> br, string instr_asm> :
 // Branch and Link Instructions
 //===----------------------------------------------------------------------===//
 class BranchL<bits<6> op, bits<5> br, bits<11> flags, string instr_asm> :
-              TA<op, flags, (outs), (ins GPR:$link, GPR:$target),
+              TA<op, flags, (outs), (ins GPR:$link, GPR:$target, variable_ops),
                  !strconcat(instr_asm, "   $link, $target"),
                  [], IIBranch> {
   let ra = br;
@@ -295,7 +298,7 @@ class BranchL<bits<6> op, bits<5> br, bits<11> flags, string instr_asm> :
 }
 
 class BranchLI<bits<6> op, bits<5> br, string instr_asm> :
-               TB<op, (outs), (ins GPR:$link, calltarget:$target),
+               TB<op, (outs), (ins GPR:$link, calltarget:$target, variable_ops),
                   !strconcat(instr_asm, "   $link, $target"),
                   [], IIBranch> {
   let ra = br;
@@ -327,26 +330,44 @@ class BranchCI<bits<6> op, bits<5> br, string instr_asm> :
 //===----------------------------------------------------------------------===//
 
 let isCommutable = 1, isAsCheapAsAMove = 1 in {
-  def ADD    :  Arith<0x00, 0x000, "add    ", add,  IIAlu>;
-  def ADDC   :  Arith<0x02, 0x000, "addc   ", adde, IIAlu>;
-  def ADDK   :  Arith<0x04, 0x000, "addk   ", addc, IIAlu>;
-  def ADDKC  : ArithN<0x06, 0x000, "addkc  ", IIAlu>;
+  def ADDK   :  Arith<0x04, 0x000, "addk   ", add,  IIAlu>;
   def AND    :  Logic<0x21, 0x000, "and    ", and>;
   def OR     :  Logic<0x20, 0x000, "or     ", or>;
   def XOR    :  Logic<0x22, 0x000, "xor    ", xor>;
   def PCMPBF : PatCmp<0x20, 0x400, "pcmpbf ">;
   def PCMPEQ : PatCmp<0x22, 0x400, "pcmpeq ">;
   def PCMPNE : PatCmp<0x23, 0x400, "pcmpne ">;
+
+  let Defs = [CARRY] in {
+    def ADD    :  Arith<0x00, 0x000, "add    ", addc, IIAlu>;
+
+    let Uses = [CARRY] in {
+      def ADDC   :  Arith<0x02, 0x000, "addc   ", adde, IIAlu>;
+    }
+  }
+
+  let Uses = [CARRY] in {
+    def ADDKC  : ArithN<0x06, 0x000, "addkc  ", IIAlu>;
+  }
 }
 
 let isAsCheapAsAMove = 1 in {
   def ANDN   :  ArithN<0x23, 0x000, "andn   ", IIAlu>;
   def CMP    :  ArithN<0x05, 0x001, "cmp    ", IIAlu>;
   def CMPU   :  ArithN<0x05, 0x003, "cmpu   ", IIAlu>;
-  def RSUB   :  ArithR<0x01, 0x000, "rsub   ", sub,  IIAlu>;
-  def RSUBC  :  ArithR<0x03, 0x000, "rsubc  ", sube, IIAlu>;
-  def RSUBK  :  ArithR<0x05, 0x000, "rsubk  ", subc, IIAlu>;
-  def RSUBKC : ArithRN<0x07, 0x000, "rsubkc ", IIAlu>;
+  def RSUBK  :  ArithR<0x05, 0x000, "rsubk  ", sub,  IIAlu>;
+
+  let Defs = [CARRY] in {
+    def RSUB   :  ArithR<0x01, 0x000, "rsub   ", subc, IIAlu>;
+
+    let Uses = [CARRY] in {
+      def RSUBC  :  ArithR<0x03, 0x000, "rsubc  ", sube, IIAlu>;
+    }
+  }
+
+  let Uses = [CARRY] in {
+    def RSUBKC : ArithRN<0x07, 0x000, "rsubkc ", IIAlu>;
+  }
 }
 
 let isCommutable = 1, Predicates=[HasMul] in {
@@ -381,18 +402,27 @@ let Predicates=[HasDiv] in {
 //===----------------------------------------------------------------------===//
 
 let isAsCheapAsAMove = 1 in {
-  def ADDI    :   ArithI<0x08, "addi   ", add,  simm16, immSExt16>;
-  def ADDIC   :  ArithNI<0x0A, "addic  ", simm16, immSExt16>;
-  def ADDIK   :  ArithNI<0x0C, "addik  ", simm16, immSExt16>;
-  def ADDIKC  :   ArithI<0x0E, "addikc ", addc, simm16, immSExt16>;
-  def RSUBI   :  ArithRI<0x09, "rsubi  ", sub,  simm16, immSExt16>;
-  def RSUBIC  : ArithRNI<0x0B, "rsubic ", simm16, immSExt16>;
-  def RSUBIK  : ArithRNI<0x0D, "rsubik ", simm16, immSExt16>;
-  def RSUBIKC :  ArithRI<0x0F, "rsubikc", subc, simm16, immSExt16>;
+  def ADDIK   :   ArithI<0x0C, "addik  ", add,  simm16, immSExt16>;
+  def RSUBIK  :  ArithRI<0x0D, "rsubik ", sub, simm16, immSExt16>;
   def ANDNI   :  ArithNI<0x2B, "andni  ", uimm16, immZExt16>;
   def ANDI    :   LogicI<0x29, "andi   ", and>;
   def ORI     :   LogicI<0x28, "ori    ", or>;
   def XORI    :   LogicI<0x2A, "xori   ", xor>;
+
+  let Defs = [CARRY] in {
+    def ADDI    :   ArithI<0x08, "addi   ", addc, simm16, immSExt16>;
+    def RSUBI   :  ArithRI<0x09, "rsubi  ", subc,  simm16, immSExt16>;
+
+    let Uses = [CARRY] in {
+      def ADDIC   :   ArithI<0x0A, "addic  ", adde, simm16, immSExt16>;
+      def RSUBIC  :  ArithRI<0x0B, "rsubic ", sube, simm16, immSExt16>;
+    }
+  }
+
+  let Uses = [CARRY] in {
+    def ADDIKC  :  ArithNI<0x0E, "addikc ", simm16, immSExt16>;
+    def RSUBIKC : ArithRNI<0x0F, "rsubikc", simm16, immSExt16>;
+  }
 }
 
 let Predicates=[HasMul] in {
@@ -412,26 +442,32 @@ let canFoldAsLoad = 1, isReMaterializable = 1 in {
 
   def LW   :  LoadM<0x32, 0x000, "lw     ">;
   def LWR  :  LoadM<0x32, 0x200, "lwr    ">;
-  def LWX  :  LoadM<0x32, 0x400, "lwx    ">;
+
+  let Defs = [CARRY] in {
+    def LWX  :  LoadM<0x32, 0x400, "lwx    ">;
+  }
 
   def LBUI : LoadMI<0x38, "lbui   ", zextloadi8>;
   def LHUI : LoadMI<0x39, "lhui   ", zextloadi16>;
   def LWI  : LoadMI<0x3A, "lwi    ", load>;
 }
 
-  def SB  :  StoreM<0x34, 0x000, "sb     ">;
-  def SBR :  StoreM<0x34, 0x200, "sbr    ">;
+def SB  :  StoreM<0x34, 0x000, "sb     ">;
+def SBR :  StoreM<0x34, 0x200, "sbr    ">;
 
-  def SH  :  StoreM<0x35, 0x000, "sh     ">;
-  def SHR :  StoreM<0x35, 0x200, "shr    ">;
+def SH  :  StoreM<0x35, 0x000, "sh     ">;
+def SHR :  StoreM<0x35, 0x200, "shr    ">;
 
-  def SW  :  StoreM<0x36, 0x000, "sw     ">;
-  def SWR :  StoreM<0x36, 0x200, "swr    ">;
+def SW  :  StoreM<0x36, 0x000, "sw     ">;
+def SWR :  StoreM<0x36, 0x200, "swr    ">;
+
+let Defs = [CARRY] in {
   def SWX :  StoreM<0x36, 0x400, "swx    ">;
+}
 
-  def SBI : StoreMI<0x3C, "sbi    ", truncstorei8>;
-  def SHI : StoreMI<0x3D, "shi    ", truncstorei16>;
-  def SWI : StoreMI<0x3E, "swi    ", store>;
+def SBI : StoreMI<0x3C, "sbi    ", truncstorei8>;
+def SHI : StoreMI<0x3D, "shi    ", truncstorei16>;
+def SWI : StoreMI<0x3E, "swi    ", store>;
 
 //===----------------------------------------------------------------------===//
 // MBlaze branch instructions
@@ -497,23 +533,22 @@ let isBranch = 1, isIndirectBranch = 1, isTerminator = 1,
   def BGED   :  BranchC<0x27, 0x15, 0x000, "bged   ">;
 }
 
-let isCall = 1, hasDelaySlot = 1, hasCtrlDep = 1, isBarrier = 1,
-    Defs = [R3,R4,R5,R6,R7,R8,R9,R10,R11,R12],
-    Uses = [R1,R5,R6,R7,R8,R9,R10] in {
+let isCall =1, hasDelaySlot = 1,
+    Defs = [R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,CARRY],
+    Uses = [R1] in {
   def BRLID  : BranchLI<0x2E, 0x14, "brlid  ">;
   def BRALID : BranchLI<0x2E, 0x1C, "bralid ">;
 }
 
-let isCall = 1, hasDelaySlot = 1, hasCtrlDep = 1, isIndirectBranch = 1,
-    isBarrier = 1,
-    Defs = [R3,R4,R5,R6,R7,R8,R9,R10,R11,R12],
-    Uses = [R1,R5,R6,R7,R8,R9,R10] in {
+let isCall = 1, hasDelaySlot = 1,
+    Defs = [R3,R4,R5,R6,R7,R8,R9,R10,R11,R12,CARRY],
+    Uses = [R1] in {
   def BRLD   : BranchL<0x26, 0x14, 0x000, "brld   ">;
   def BRALD  : BranchL<0x26, 0x1C, 0x000, "brald  ">;
 }
 
 let isReturn=1, isTerminator=1, hasDelaySlot=1, isBarrier=1,
-    hasCtrlDep=1, rd=0x10, Form=FCRI in {
+    rd=0x10, Form=FCRI in {
   def RTSD   : TB<0x2D, (outs), (ins GPR:$target, simm16:$imm),
                   "rtsd      $target, $imm",
                   [],
@@ -521,7 +556,7 @@ let isReturn=1, isTerminator=1, hasDelaySlot=1, isBarrier=1,
 }
 
 let isReturn=1, isTerminator=1, hasDelaySlot=1, isBarrier=1,
-    hasCtrlDep=1, rd=0x11, Form=FCRI in {
+    rd=0x11, Form=FCRI in {
   def RTID   : TB<0x2D, (outs), (ins GPR:$target, simm16:$imm),
                   "rtid      $target, $imm",
                   [],
@@ -529,7 +564,7 @@ let isReturn=1, isTerminator=1, hasDelaySlot=1, isBarrier=1,
 }
 
 let isReturn=1, isTerminator=1, hasDelaySlot=1, isBarrier=1,
-    hasCtrlDep=1, rd=0x12, Form=FCRI in {
+    rd=0x12, Form=FCRI in {
   def RTBD   : TB<0x2D, (outs), (ins GPR:$target, simm16:$imm),
                   "rtbd      $target, $imm",
                   [],
@@ -537,7 +572,7 @@ let isReturn=1, isTerminator=1, hasDelaySlot=1, isBarrier=1,
 }
 
 let isReturn=1, isTerminator=1, hasDelaySlot=1, isBarrier=1,
-    hasCtrlDep=1, rd=0x14, Form=FCRI in {
+    rd=0x14, Form=FCRI in {
   def RTED   : TB<0x2D, (outs), (ins GPR:$target, simm16:$imm),
                   "rted      $target, $imm",
                   [],
@@ -574,22 +609,25 @@ let usesCustomInserter = 1 in {
     []>;
 }
 
-
 let rb = 0 in {
   def SEXT16 : TA<0x24, 0x061, (outs GPR:$dst), (ins GPR:$src),
                   "sext16    $dst, $src", [], IIAlu>;
   def SEXT8  : TA<0x24, 0x060, (outs GPR:$dst), (ins GPR:$src),
                   "sext8     $dst, $src", [], IIAlu>;
-  def SRL    : TA<0x24, 0x041, (outs GPR:$dst), (ins GPR:$src),
-                  "srl       $dst, $src", [], IIAlu>;
-  def SRA    : TA<0x24, 0x001, (outs GPR:$dst), (ins GPR:$src),
-                  "sra       $dst, $src", [], IIAlu>;
-  def SRC    : TA<0x24, 0x021, (outs GPR:$dst), (ins GPR:$src),
-                  "src       $dst, $src", [], IIAlu>;
+  let Defs = [CARRY] in {
+    def SRL    : TA<0x24, 0x041, (outs GPR:$dst), (ins GPR:$src),
+                    "srl       $dst, $src", [], IIAlu>;
+    def SRA    : TA<0x24, 0x001, (outs GPR:$dst), (ins GPR:$src),
+                    "sra       $dst, $src", [], IIAlu>;
+    let Uses = [CARRY] in {
+      def SRC    : TA<0x24, 0x021, (outs GPR:$dst), (ins GPR:$src),
+                      "src       $dst, $src", [], IIAlu>;
+    }
+  }
 }
 
 let isCodeGenOnly=1 in {
-  def ADDI32  : ArithI32<0x08, "addi   ", simm16, immSExt16>;
+  def ADDIK32 : ArithI32<0x08, "addik  ", simm16, immSExt16>;
   def ORI32   : LogicI32<0x28, "ori    ">;
   def BRLID32 : BranchLI<0x2E, 0x14, "brlid  ">;
 }
@@ -597,11 +635,15 @@ let isCodeGenOnly=1 in {
 //===----------------------------------------------------------------------===//
 // Misc. instructions
 //===----------------------------------------------------------------------===//
-def MFS : SPC<0x25, 0x2, (outs GPR:$dst), (ins uimm14:$rg),
-              "mfs       $dst, $rg", [], IIAlu>;
+let Form=FRCS in {
+  def MFS : SPC<0x25, 0x2, (outs GPR:$dst), (ins SPR:$src),
+                "mfs       $dst, $src", [], IIAlu>;
+}
 
-def MTS : SPC<0x25, 0x3, (outs), (ins uimm14:$dst, GPR:$rg),
-              "mts       $dst, $rg", [], IIAlu>;
+let Form=FCRCS in {
+  def MTS : SPC<0x25, 0x3, (outs SPR:$dst), (ins GPR:$src),
+                "mts       $dst, $src", [], IIAlu>;
+}
 
 def MSRSET : MSR<0x25, 0x20, (outs GPR:$dst), (ins uimm15:$set),
                  "msrset    $dst, $set", [], IIAlu>;
@@ -627,16 +669,57 @@ def IMM : MBlazeInst<0x2C, FCCI, (outs), (ins simm16:$imm),
                      "imm       $imm", [], IIAlu>;
 
 //===----------------------------------------------------------------------===//
+// Pseudo instructions for atomic operations
+//===----------------------------------------------------------------------===//
+let usesCustomInserter=1 in {
+  def CAS32 : MBlazePseudo<(outs GPR:$dst), (ins GPR:$ptr, GPR:$cmp, GPR:$swp),
+    "# atomic compare and swap",
+    [(set GPR:$dst, (atomic_cmp_swap_32 GPR:$ptr, GPR:$cmp, GPR:$swp))]>;
+
+  def SWP32 : MBlazePseudo<(outs GPR:$dst), (ins GPR:$ptr, GPR:$swp),
+    "# atomic swap",
+    [(set GPR:$dst, (atomic_swap_32 GPR:$ptr, GPR:$swp))]>;
+
+  def LAA32 : MBlazePseudo<(outs GPR:$dst), (ins GPR:$ptr, GPR:$val),
+    "# atomic load and add",
+    [(set GPR:$dst, (atomic_load_add_32 GPR:$ptr, GPR:$val))]>;
+
+  def LAS32 : MBlazePseudo<(outs GPR:$dst), (ins GPR:$ptr, GPR:$val),
+    "# atomic load and sub",
+    [(set GPR:$dst, (atomic_load_sub_32 GPR:$ptr, GPR:$val))]>;
+
+  def LAD32 : MBlazePseudo<(outs GPR:$dst), (ins GPR:$ptr, GPR:$val),
+    "# atomic load and and",
+    [(set GPR:$dst, (atomic_load_and_32 GPR:$ptr, GPR:$val))]>;
+
+  def LAO32 : MBlazePseudo<(outs GPR:$dst), (ins GPR:$ptr, GPR:$val),
+    "# atomic load and or",
+    [(set GPR:$dst, (atomic_load_or_32 GPR:$ptr, GPR:$val))]>;
+
+  def LAX32 : MBlazePseudo<(outs GPR:$dst), (ins GPR:$ptr, GPR:$val),
+    "# atomic load and xor",
+    [(set GPR:$dst, (atomic_load_xor_32 GPR:$ptr, GPR:$val))]>;
+
+  def LAN32 : MBlazePseudo<(outs GPR:$dst), (ins GPR:$ptr, GPR:$val),
+    "# atomic load and nand",
+    [(set GPR:$dst, (atomic_load_nand_32 GPR:$ptr, GPR:$val))]>;
+
+  def MEMBARRIER : MBlazePseudo<(outs), (ins),
+    "# memory barrier",
+    [(membarrier (i32 imm), (i32 imm), (i32 imm), (i32 imm), (i32 imm))]>;
+}
+
+//===----------------------------------------------------------------------===//
 //  Arbitrary patterns that map to one or more instructions
 //===----------------------------------------------------------------------===//
 
 // Small immediates
-def : Pat<(i32 0), (ADD (i32 R0), (i32 R0))>;
-def : Pat<(i32 immSExt16:$imm), (ADDI (i32 R0), imm:$imm)>;
+def : Pat<(i32 0), (ADDK (i32 R0), (i32 R0))>;
+def : Pat<(i32 immSExt16:$imm), (ADDIK (i32 R0), imm:$imm)>;
 def : Pat<(i32 immZExt16:$imm), (ORI (i32 R0), imm:$imm)>;
 
 // Arbitrary immediates
-def : Pat<(i32 imm:$imm), (ADDI (i32 R0), imm:$imm)>;
+def : Pat<(i32 imm:$imm), (ADDIK (i32 R0), imm:$imm)>;
 
 // In register sign extension
 def : Pat<(sext_inreg GPR:$src, i16), (SEXT16 GPR:$src)>;
@@ -650,7 +733,7 @@ def : Pat<(MBlazeJmpLink (i32 texternalsym:$dst)),
           (BRLID (i32 R15), texternalsym:$dst)>;
 
 def : Pat<(MBlazeJmpLink GPR:$dst),
-          (BRLD (i32 R15), GPR:$dst)>;
+          (BRALD (i32 R15), GPR:$dst)>;
 
 // Shift Instructions
 def : Pat<(shl GPR:$L, GPR:$R), (ShiftL GPR:$L, GPR:$R)>;
@@ -659,34 +742,34 @@ def : Pat<(srl GPR:$L, GPR:$R), (ShiftRL GPR:$L, GPR:$R)>;
 
 // SET_CC operations
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETEQ),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMP GPR:$R, GPR:$L), 1)>;
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETNE),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMP GPR:$R, GPR:$L), 2)>;
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETGT),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMP GPR:$R, GPR:$L), 3)>;
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETLT),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMP GPR:$R, GPR:$L), 4)>;
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETGE),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMP GPR:$R, GPR:$L), 5)>;
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETLE),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMP GPR:$R, GPR:$L), 6)>;
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETUGT),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMPU GPR:$R, GPR:$L), 3)>;
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETULT),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMPU GPR:$R, GPR:$L), 4)>;
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETUGE),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMPU GPR:$R, GPR:$L), 5)>;
 def : Pat<(setcc (i32 GPR:$L), (i32 GPR:$R), SETULE),
-          (Select_CC (ADDI (i32 R0), 1), (ADDI (i32 R0), 0),
+          (Select_CC (ADDIK (i32 R0), 1), (ADDIK (i32 R0), 0),
                      (CMPU GPR:$R, GPR:$L), 6)>;
 
 // SELECT operations
@@ -727,6 +810,7 @@ def : Pat<(selectcc (i32 GPR:$L), (i32 GPR:$R),
 
 // Ret instructions
 def : Pat<(MBlazeRet GPR:$target), (RTSD GPR:$target, 0x8)>;
+def : Pat<(MBlazeIRet GPR:$target), (RTID GPR:$target, 0x0)>;
 
 // BR instructions
 def : Pat<(br bb:$T), (BRID bb:$T)>;
@@ -765,7 +849,7 @@ def : Pat<(MBWrapper tconstpool:$in),  (ORI (i32 R0), tconstpool:$in)>;
 def : Pat<(and (i32 GPR:$lh), (not (i32 GPR:$rh))),(ANDN GPR:$lh, GPR:$rh)>;
 
 // Arithmetic with immediates
-def : Pat<(add (i32 GPR:$in), imm:$imm),(ADDI GPR:$in, imm:$imm)>;
+def : Pat<(add (i32 GPR:$in), imm:$imm),(ADDIK GPR:$in, imm:$imm)>;
 def : Pat<(or (i32 GPR:$in), imm:$imm),(ORI GPR:$in, imm:$imm)>;
 def : Pat<(xor (i32 GPR:$in), imm:$imm),(XORI GPR:$in, imm:$imm)>;
 

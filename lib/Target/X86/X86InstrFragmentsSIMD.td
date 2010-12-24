@@ -43,6 +43,21 @@ def X86ucomi   : SDNode<"X86ISD::UCOMI",     SDTX86CmpTest>;
 def X86pshufb  : SDNode<"X86ISD::PSHUFB",
                  SDTypeProfile<1, 2, [SDTCisVT<0, v16i8>, SDTCisSameAs<0,1>,
                                       SDTCisSameAs<0,2>]>>;
+def X86pandn   : SDNode<"X86ISD::PANDN", 
+                 SDTypeProfile<1, 2, [SDTCisVT<0, v2i64>, SDTCisSameAs<0,1>,
+                                      SDTCisSameAs<0,2>]>>;
+def X86psignb  : SDNode<"X86ISD::PSIGNB", 
+                 SDTypeProfile<1, 2, [SDTCisVT<0, v16i8>, SDTCisSameAs<0,1>,
+                                      SDTCisSameAs<0,2>]>>;
+def X86psignw  : SDNode<"X86ISD::PSIGNW", 
+                 SDTypeProfile<1, 2, [SDTCisVT<0, v8i16>, SDTCisSameAs<0,1>,
+                                      SDTCisSameAs<0,2>]>>;
+def X86psignd  : SDNode<"X86ISD::PSIGND", 
+                 SDTypeProfile<1, 2, [SDTCisVT<0, v4i32>, SDTCisSameAs<0,1>,
+                                      SDTCisSameAs<0,2>]>>;
+def X86pblendv : SDNode<"X86ISD::PBLENDVB", 
+                 SDTypeProfile<1, 3, [SDTCisVT<0, v16i8>, SDTCisSameAs<0,1>,
+                                      SDTCisSameAs<0,2>, SDTCisSameAs<0,3>]>>;
 def X86pextrb  : SDNode<"X86ISD::PEXTRB",
                  SDTypeProfile<1, 2, [SDTCisVT<0, i32>, SDTCisPtrTy<2>]>>;
 def X86pextrw  : SDNode<"X86ISD::PEXTRW",

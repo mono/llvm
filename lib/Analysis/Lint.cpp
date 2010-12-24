@@ -226,16 +226,17 @@ void Lint::visitCallSite(CallSite CS) {
                 "Undefined behavior: Call argument type mismatches "
                 "callee parameter type", &I);
 
-        // Check that noalias arguments don't alias other arguments. The
-        // AliasAnalysis API isn't expressive enough for what we really want
-        // to do. Known partial overlap is not distinguished from the case
-        // where nothing is known.
+        // Check that noalias arguments don't alias other arguments. This is
+        // not fully precise because we don't know the sizes of the dereferenced
+        // memory regions.
         if (Formal->hasNoAliasAttr() && Actual->getType()->isPointerTy())
           for (CallSite::arg_iterator BI = CS.arg_begin(); BI != AE; ++BI)
-            Assert1(AI == BI ||
-                    !(*BI)->getType()->isPointerTy() ||
-                    AA->alias(*AI, *BI) != AliasAnalysis::MustAlias,
-                    "Unusual: noalias argument aliases another argument", &I);
+            if (AI != BI && (*BI)->getType()->isPointerTy()) {
+              AliasAnalysis::AliasResult Result = AA->alias(*AI, *BI);
+              Assert1(Result != AliasAnalysis::MustAlias &&
+                      Result != AliasAnalysis::PartialAlias,
+                      "Unusual: noalias argument aliases another argument", &I);
+            }
 
         // Check that an sret argument points to valid memory.
         if (Formal->hasStructRetAttr() && Actual->getType()->isPointerTy()) {
@@ -566,7 +567,7 @@ Value *Lint::findValueImpl(Value *V, bool OffsetOk,
   // TODO: Look through eliminable cast pairs.
   // TODO: Look through calls with unique return values.
   // TODO: Look through vector insert/extract/shuffle.
-  V = OffsetOk ? V->getUnderlyingObject() : V->stripPointerCasts();
+  V = OffsetOk ? GetUnderlyingObject(V) : V->stripPointerCasts();
   if (LoadInst *L = dyn_cast<LoadInst>(V)) {
     BasicBlock::iterator BBI = L;
     BasicBlock *BB = L->getParent();

@@ -868,7 +868,6 @@ Init *TGParser::ParseOperation(Record *CurRec) {
     TernOpInit::TernaryOp Code;
     RecTy *Type = 0;
 
-
     tgtok::TokKind LexCode = Lex.getCode();
     Lex.Lex();  // eat the operation
     switch (LexCode) {
@@ -919,16 +918,45 @@ Init *TGParser::ParseOperation(Record *CurRec) {
     switch (LexCode) {
     default: assert(0 && "Unhandled code!");
     case tgtok::XIf: {
-      TypedInit *MHSt = dynamic_cast<TypedInit *>(MHS);
-      TypedInit *RHSt = dynamic_cast<TypedInit *>(RHS);
-      if (MHSt == 0 || RHSt == 0) {
+      // FIXME: The `!if' operator doesn't handle non-TypedInit well at
+      // all. This can be made much more robust.
+      TypedInit *MHSt = dynamic_cast<TypedInit*>(MHS);
+      TypedInit *RHSt = dynamic_cast<TypedInit*>(RHS);
+
+      RecTy *MHSTy = 0;
+      RecTy *RHSTy = 0;
+
+      if (MHSt == 0 && RHSt == 0) {
+        BitsInit *MHSbits = dynamic_cast<BitsInit*>(MHS);
+        BitsInit *RHSbits = dynamic_cast<BitsInit*>(RHS);
+
+        if (MHSbits && RHSbits &&
+            MHSbits->getNumBits() == RHSbits->getNumBits()) {
+          Type = new BitRecTy();
+          break;
+        } else {
+          BitInit *MHSbit = dynamic_cast<BitInit*>(MHS);
+          BitInit *RHSbit = dynamic_cast<BitInit*>(RHS);
+
+          if (MHSbit && RHSbit) {
+            Type = new BitRecTy();
+            break;
+          }
+        }
+      } else if (MHSt != 0 && RHSt != 0) {
+        MHSTy = MHSt->getType();
+        RHSTy = RHSt->getType();
+      }
+
+      if (!MHSTy || !RHSTy) {
         TokError("could not get type for !if");
         return 0;
       }
-      if (MHSt->getType()->typeIsConvertibleTo(RHSt->getType())) {
-        Type = RHSt->getType();
-      } else if (RHSt->getType()->typeIsConvertibleTo(MHSt->getType())) {
-        Type = MHSt->getType();
+
+      if (MHSTy->typeIsConvertibleTo(RHSTy)) {
+        Type = RHSTy;
+      } else if (RHSTy->typeIsConvertibleTo(MHSTy)) {
+        Type = MHSTy;
       } else {
         TokError("inconsistent types for !if");
         return 0;
@@ -1068,7 +1096,9 @@ Init *TGParser::ParseSimpleValue(Record *CurRec, RecTy *ItemType) {
 
     // Create the new record, set it as CurRec temporarily.
     static unsigned AnonCounter = 0;
-    Record *NewRec = new Record("anonymous.val."+utostr(AnonCounter++),NameLoc);
+    Record *NewRec = new Record("anonymous.val."+utostr(AnonCounter++),
+                                NameLoc,
+                                Records);
     SubClassReference SCRef;
     SCRef.RefLoc = NameLoc;
     SCRef.Rec = Class;
@@ -1632,7 +1662,7 @@ bool TGParser::ParseDef(MultiClass *CurMultiClass) {
   Lex.Lex();  // Eat the 'def' token.
 
   // Parse ObjectName and make a record for it.
-  Record *CurRec = new Record(ParseObjectName(), DefLoc);
+  Record *CurRec = new Record(ParseObjectName(), DefLoc, Records);
 
   if (!CurMultiClass) {
     // Top-level def definition.
@@ -1699,7 +1729,7 @@ bool TGParser::ParseClass() {
       return TokError("Class '" + CurRec->getName() + "' already defined");
   } else {
     // If this is the first reference to this class, create and add it.
-    CurRec = new Record(Lex.getCurStrVal(), Lex.getLoc());
+    CurRec = new Record(Lex.getCurStrVal(), Lex.getLoc(), Records);
     Records.addClass(CurRec);
   }
   Lex.Lex(); // eat the name.
@@ -1816,7 +1846,8 @@ bool TGParser::ParseMultiClass() {
   if (MultiClasses.count(Name))
     return TokError("multiclass '" + Name + "' already defined");
 
-  CurMultiClass = MultiClasses[Name] = new MultiClass(Name, Lex.getLoc());
+  CurMultiClass = MultiClasses[Name] = new MultiClass(Name, 
+                                                      Lex.getLoc(), Records);
   Lex.Lex();  // Eat the identifier.
 
   // If there are template args, parse them.
@@ -1945,7 +1976,7 @@ bool TGParser::ParseDefm(MultiClass *CurMultiClass) {
         }
       }
 
-      Record *CurRec = new Record(DefName, DefmPrefixLoc);
+      Record *CurRec = new Record(DefName, DefmPrefixLoc, Records);
 
       SubClassReference Ref;
       Ref.RefLoc = DefmPrefixLoc;

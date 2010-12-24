@@ -24,6 +24,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
@@ -33,6 +34,56 @@ using namespace llvm;
 static cl::opt<bool>
 AllowSplit("spiller-splits-edges",
            cl::desc("Allow critical edge splitting during spilling"));
+
+//===----------------------------------------------------------------------===//
+//                                 Edge Bundles
+//===----------------------------------------------------------------------===//
+
+/// compute - Compute the edge bundles for MF. Bundles depend only on the CFG.
+void EdgeBundles::compute(const MachineFunction *mf) {
+  MF = mf;
+  EC.clear();
+  EC.grow(2 * MF->size());
+
+  for (MachineFunction::const_iterator I = MF->begin(), E = MF->end(); I != E;
+       ++I) {
+    const MachineBasicBlock &MBB = *I;
+    unsigned OutE = 2 * MBB.getNumber() + 1;
+    // Join the outgoing bundle with the ingoing bundles of all successors.
+    for (MachineBasicBlock::const_succ_iterator SI = MBB.succ_begin(),
+           SE = MBB.succ_end(); SI != SE; ++SI)
+      EC.join(OutE, 2 * (*SI)->getNumber());
+  }
+  EC.compress();
+}
+
+/// view - Visualize the annotated bipartite CFG with Graphviz.
+void EdgeBundles::view() const {
+  ViewGraph(*this, "EdgeBundles");
+}
+
+/// Specialize WriteGraph, the standard implementation won't work.
+raw_ostream &llvm::WriteGraph(raw_ostream &O, const EdgeBundles &G,
+                              bool ShortNames,
+                              const std::string &Title) {
+  const MachineFunction *MF = G.getMachineFunction();
+
+  O << "digraph {\n";
+  for (MachineFunction::const_iterator I = MF->begin(), E = MF->end();
+       I != E; ++I) {
+    unsigned BB = I->getNumber();
+    O << "\t\"BB#" << BB << "\" [ shape=box ]\n"
+      << '\t' << G.getBundle(BB, false) << " -> \"BB#" << BB << "\"\n"
+      << "\t\"BB#" << BB << "\" -> " << G.getBundle(BB, true) << '\n';
+    for (MachineBasicBlock::const_succ_iterator SI = I->succ_begin(),
+           SE = I->succ_end(); SI != SE; ++SI)
+      O << "\t\"BB#" << BB << "\" -> \"BB#" << (*SI)->getNumber()
+        << "\" [ color=lightgray ]\n";
+  }
+  O << "}\n";
+  return O;
+}
+
 
 //===----------------------------------------------------------------------===//
 //                                 Split Analysis
@@ -257,12 +308,11 @@ void SplitAnalysis::analyze(const LiveInterval *li) {
   analyzeUses();
 }
 
-const MachineLoop *SplitAnalysis::getBestSplitLoop() {
-  assert(curli_ && "Call analyze() before getBestSplitLoop");
+void SplitAnalysis::getSplitLoops(LoopPtrSet &Loops) {
+  assert(curli_ && "Call analyze() before getSplitLoops");
   if (usingLoops_.empty())
-    return 0;
+    return;
 
-  LoopPtrSet Loops;
   LoopBlocks Blocks;
   BlockPtrSet CriticalExits;
 
@@ -280,11 +330,11 @@ const MachineLoop *SplitAnalysis::getBestSplitLoop() {
       // FIXME: We could split a live range with multiple uses in a peripheral
       // block and still make progress. However, it is possible that splitting
       // another live range will insert copies into a peripheral block, and
-      // there is a small chance we can enter an infinity loop, inserting copies
+      // there is a small chance we can enter an infinite loop, inserting copies
       // forever.
       // For safety, stick to splitting live ranges with uses outside the
       // periphery.
-      DEBUG(dbgs() << ": multiple peripheral uses\n");
+      DEBUG(dbgs() << ": multiple peripheral uses");
       break;
     case ContainedInLoop:
       DEBUG(dbgs() << ": fully contained\n");
@@ -302,9 +352,13 @@ const MachineLoop *SplitAnalysis::getBestSplitLoop() {
     Loops.insert(Loop);
   }
 
-  DEBUG(dbgs() << "  getBestSplitLoop found " << Loops.size()
+  DEBUG(dbgs() << "  getSplitLoops found " << Loops.size()
                << " candidate loops.\n");
+}
 
+const MachineLoop *SplitAnalysis::getBestSplitLoop() {
+  LoopPtrSet Loops;
+  getSplitLoops(Loops);
   if (Loops.empty())
     return 0;
 
@@ -321,6 +375,36 @@ const MachineLoop *SplitAnalysis::getBestSplitLoop() {
   DEBUG(dbgs() << "  getBestSplitLoop found " << *Best);
   return Best;
 }
+
+/// isBypassLoop - Return true if curli is live through Loop and has no uses
+/// inside the loop. Bypass loops are candidates for splitting because it can
+/// prevent interference inside the loop.
+bool SplitAnalysis::isBypassLoop(const MachineLoop *Loop) {
+  // If curli is live into the loop header and there are no uses in the loop, it
+  // must be live in the entire loop and live on at least one exiting edge.
+  return !usingLoops_.count(Loop) &&
+         lis_.isLiveInToMBB(*curli_, Loop->getHeader());
+}
+
+/// getBypassLoops - Get all the maximal bypass loops. These are the bypass
+/// loops whose parent is not a bypass loop.
+void SplitAnalysis::getBypassLoops(LoopPtrSet &BypassLoops) {
+  SmallVector<MachineLoop*, 8> Todo(loops_.begin(), loops_.end());
+  while (!Todo.empty()) {
+    MachineLoop *Loop = Todo.pop_back_val();
+    if (!usingLoops_.count(Loop)) {
+      // This is either a bypass loop or completely irrelevant.
+      if (lis_.isLiveInToMBB(*curli_, Loop->getHeader()))
+        BypassLoops.insert(Loop);
+      // Either way, skip the child loops.
+      continue;
+    }
+
+    // The child loops may be bypass loops.
+    Todo.append(Loop->begin(), Loop->end());
+  }
+}
+
 
 //===----------------------------------------------------------------------===//
 //                               LiveIntervalMap
@@ -1044,11 +1128,13 @@ void SplitEditor::splitAroundLoop(const MachineLoop *Loop) {
   // Create new live interval for the loop.
   openIntv();
 
-  // Insert copies in the predecessors.
-  for (SplitAnalysis::BlockPtrSet::iterator I = Blocks.Preds.begin(),
-       E = Blocks.Preds.end(); I != E; ++I) {
-    MachineBasicBlock &MBB = const_cast<MachineBasicBlock&>(**I);
-    enterIntvAtEnd(MBB);
+  // Insert copies in the predecessors if live-in to the header.
+  if (lis_.isLiveInToMBB(edit_.getParent(), Loop->getHeader())) {
+    for (SplitAnalysis::BlockPtrSet::iterator I = Blocks.Preds.begin(),
+           E = Blocks.Preds.end(); I != E; ++I) {
+      MachineBasicBlock &MBB = const_cast<MachineBasicBlock&>(**I);
+      enterIntvAtEnd(MBB);
+    }
   }
 
   // Switch all loop blocks.

@@ -67,19 +67,6 @@ cmovs, we should expand to a conditional branch like GCC produces.
 
 //===---------------------------------------------------------------------===//
 
-Compile this:
-_Bool f(_Bool a) { return a!=1; }
-
-into:
-        movzbl  %dil, %eax
-        xorl    $1, %eax
-        ret
-
-(Although note that this isn't a legal way to express the code that llvm-gcc
-currently generates for that function.)
-
-//===---------------------------------------------------------------------===//
-
 Some isel ideas:
 
 1. Dynamic programming based approach when compile time if not an
@@ -394,72 +381,8 @@ boundary to improve performance.
 
 //===---------------------------------------------------------------------===//
 
-Codegen:
-
-int f(int a, int b) {
-  if (a == 4 || a == 6)
-    b++;
-  return b;
-}
-
-
-as:
-
-or eax, 2
-cmp eax, 6
-jz label
-
-//===---------------------------------------------------------------------===//
-
 GCC's ix86_expand_int_movcc function (in i386.c) has a ton of interesting
-simplifications for integer "x cmp y ? a : b".  For example, instead of:
-
-int G;
-void f(int X, int Y) {
-  G = X < 0 ? 14 : 13;
-}
-
-compiling to:
-
-_f:
-        movl $14, %eax
-        movl $13, %ecx
-        movl 4(%esp), %edx
-        testl %edx, %edx
-        cmovl %eax, %ecx
-        movl %ecx, _G
-        ret
-
-it could be:
-_f:
-        movl    4(%esp), %eax
-        sarl    $31, %eax
-        notl    %eax
-        addl    $14, %eax
-        movl    %eax, _G
-        ret
-
-etc.
-
-Another is:
-int usesbb(unsigned int a, unsigned int b) {
-       return (a < b ? -1 : 0);
-}
-to:
-_usesbb:
-	movl	8(%esp), %eax
-	cmpl	%eax, 4(%esp)
-	sbbl	%eax, %eax
-	ret
-
-instead of:
-_usesbb:
-	xorl	%eax, %eax
-	movl	8(%esp), %ecx
-	cmpl	%ecx, 4(%esp)
-	movl	$4294967295, %ecx
-	cmovb	%ecx, %eax
-	ret
+simplifications for integer "x cmp y ? a : b".
 
 //===---------------------------------------------------------------------===//
 
@@ -1165,58 +1088,6 @@ abs:
 
 //===---------------------------------------------------------------------===//
 
-Consider:
-int test(unsigned long a, unsigned long b) { return -(a < b); }
-
-We currently compile this to:
-
-define i32 @test(i32 %a, i32 %b) nounwind  {
-	%tmp3 = icmp ult i32 %a, %b		; <i1> [#uses=1]
-	%tmp34 = zext i1 %tmp3 to i32		; <i32> [#uses=1]
-	%tmp5 = sub i32 0, %tmp34		; <i32> [#uses=1]
-	ret i32 %tmp5
-}
-
-and
-
-_test:
-	movl	8(%esp), %eax
-	cmpl	%eax, 4(%esp)
-	setb	%al
-	movzbl	%al, %eax
-	negl	%eax
-	ret
-
-Several deficiencies here.  First, we should instcombine zext+neg into sext:
-
-define i32 @test2(i32 %a, i32 %b) nounwind  {
-	%tmp3 = icmp ult i32 %a, %b		; <i1> [#uses=1]
-	%tmp34 = sext i1 %tmp3 to i32		; <i32> [#uses=1]
-	ret i32 %tmp34
-}
-
-However, before we can do that, we have to fix the bad codegen that we get for
-sext from bool:
-
-_test2:
-	movl	8(%esp), %eax
-	cmpl	%eax, 4(%esp)
-	setb	%al
-	movzbl	%al, %eax
-	shll	$31, %eax
-	sarl	$31, %eax
-	ret
-
-This code should be at least as good as the code above.  Once this is fixed, we
-can optimize this specific case even more to:
-
-	movl	8(%esp), %eax
-	xorl	%ecx, %ecx
-        cmpl    %eax, 4(%esp)
-        sbbl    %ecx, %ecx
-
-//===---------------------------------------------------------------------===//
-
 Take the following code (from 
 http://gcc.gnu.org/bugzilla/show_bug.cgi?id=16541):
 
@@ -1736,46 +1607,6 @@ Ideal output:
 
 //===---------------------------------------------------------------------===//
 
-Testcase:
-int x(int a) { return (a & 0x80) ? 0x100 : 0; }
-int y(int a) { return (a & 0x80) *2; }
-
-Current:
-	testl	$128, 4(%esp)
-	setne	%al
-	movzbl	%al, %eax
-	shll	$8, %eax
-	ret
-
-Better:
-	movl	4(%esp), %eax
-	addl	%eax, %eax
-	andl	$256, %eax
-	ret
-
-This is another general instcombine transformation that is profitable on all
-targets.  In LLVM IR, these functions look like this:
-
-define i32 @x(i32 %a) nounwind readnone {
-entry:
-	%0 = and i32 %a, 128
-	%1 = icmp eq i32 %0, 0
-	%iftmp.0.0 = select i1 %1, i32 0, i32 256
-	ret i32 %iftmp.0.0
-}
-
-define i32 @y(i32 %a) nounwind readnone {
-entry:
-	%0 = shl i32 %a, 1
-	%1 = and i32 %0, 256
-	ret i32 %1
-}
-
-Replacing an icmp+select with a shift should always be considered profitable in
-instcombine.
-
-//===---------------------------------------------------------------------===//
-
 Re-implement atomic builtins __sync_add_and_fetch() and __sync_sub_and_fetch
 properly.
 
@@ -1958,5 +1789,30 @@ It could narrow the loads and stores to emit this:
 The trouble is that there is a TokenFactor between the store and the
 load, making it non-trivial to determine if there's anything between
 the load and the store which would prohibit narrowing.
+
+//===---------------------------------------------------------------------===//
+
+This code:
+void foo(unsigned x) {
+  if (x == 0) bar();
+  else if (x == 1) qux();
+}
+
+currently compiles into:
+_foo:
+	movl	4(%esp), %eax
+	cmpl	$1, %eax
+	je	LBB0_3
+	testl	%eax, %eax
+	jne	LBB0_4
+
+the testl could be removed:
+_foo:
+	movl	4(%esp), %eax
+	cmpl	$1, %eax
+	je	LBB0_3
+	jb	LBB0_4
+
+0 is the only unsigned number < 1.
 
 //===---------------------------------------------------------------------===//

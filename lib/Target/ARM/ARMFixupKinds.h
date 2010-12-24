@@ -18,11 +18,11 @@ enum Fixups {
   // fixup_arm_ldst_pcrel_12 - 12-bit PC relative relocation for symbol
   // addresses
   fixup_arm_ldst_pcrel_12 = FirstTargetFixupKind,
-  
+
   // fixup_t2_ldst_pcrel_12 - Equivalent to fixup_arm_ldst_pcrel_12, with
   // the 16-bit halfwords reordered.
   fixup_t2_ldst_pcrel_12,
-  
+
   // fixup_arm_pcrel_10 - 10-bit PC relative relocation for symbol addresses
   // used in VFP instructions where the lower 2 bits are not encoded
   // (so it's encoded as an 8-bit immediate).
@@ -30,15 +30,28 @@ enum Fixups {
   // fixup_t2_pcrel_10 - Equivalent to fixup_arm_pcrel_10, accounting for
   // the short-swapped encoding of Thumb2 instructions.
   fixup_t2_pcrel_10,
+  // fixup_thumb_adr_pcrel_10 - 10-bit PC relative relocation for symbol
+  // addresses where the lower 2 bits are not encoded (so it's encoded as an
+  // 8-bit immediate).
+  fixup_thumb_adr_pcrel_10,
   // fixup_arm_adr_pcrel_12 - 12-bit PC relative relocation for the ADR
   // instruction.
   fixup_arm_adr_pcrel_12,
+  // fixup_t2_adr_pcrel_12 - 12-bit PC relative relocation for the ADR
+  // instruction.
+  fixup_t2_adr_pcrel_12,
   // fixup_arm_branch - 24-bit PC relative relocation for direct branch
   // instructions.
   fixup_arm_branch,
-  // fixup_t2_branch - 20-bit PC relative relocation for Thumb2 direct branch
-  // instructions.
-  fixup_t2_branch,
+  // fixup_t2_condbranch - 20-bit PC relative relocation for Thumb2 direct
+  // uconditional branch instructions.
+  fixup_t2_condbranch,
+  // fixup_t2_uncondbranch - 20-bit PC relative relocation for Thumb2 direct
+  // branch unconditional branch instructions.
+  fixup_t2_uncondbranch,
+
+  // fixup_arm_thumb_br - 12-bit fixup for Thumb B instructions.
+  fixup_arm_thumb_br,
 
   // fixup_arm_thumb_blx - Fixup for Thumb BL instructions.
   fixup_arm_thumb_bl,
@@ -51,6 +64,9 @@ enum Fixups {
 
   // fixup_arm_thumb_cp - Fixup for Thumb load/store from constant pool instrs.
   fixup_arm_thumb_cp,
+
+  // fixup_arm_thumb_bcc - Fixup for Thumb conditional branching instructions.
+  fixup_arm_thumb_bcc,
 
   // The next two are for the movt/movw pair
   // the 16bit imm field are split into imm{15-12} and imm{11-0}

@@ -29,21 +29,21 @@ class MachineFunction;
 class MachineMove;
 class RegScavenger;
 template<class T> class SmallVectorImpl;
+class raw_ostream;
 
 /// TargetRegisterDesc - This record contains all of the information known about
-/// a particular register.  The AliasSet field (if not null) contains a pointer
-/// to a Zero terminated array of registers that this register aliases.  This is
-/// needed for architectures like X86 which have AL alias AX alias EAX.
-/// Registers that this does not apply to simply should set this to null.
-/// The SubRegs field is a zero terminated array of registers that are
-/// sub-registers of the specific register, e.g. AL, AH are sub-registers of AX.
-/// The SuperRegs field is a zero terminated array of registers that are
+/// a particular register.  The Overlaps field contains a pointer to a zero
+/// terminated array of registers that this register aliases, starting with
+/// itself. This is needed for architectures like X86 which have AL alias AX
+/// alias EAX. The SubRegs field is a zero terminated array of registers that
+/// are sub-registers of the specific register, e.g. AL, AH are sub-registers of
+/// AX. The SuperRegs field is a zero terminated array of registers that are
 /// super-registers of the specific register, e.g. RAX, EAX, are super-registers
 /// of AX.
 ///
 struct TargetRegisterDesc {
   const char     *Name;         // Printable name for the reg (for debugging)
-  const unsigned *AliasSet;     // Register Alias Set, described above
+  const unsigned *Overlaps;     // Overlapping registers, described above
   const unsigned *SubRegs;      // Sub-register set, described above
   const unsigned *SuperRegs;    // Super-register set, described above
 };
@@ -321,6 +321,9 @@ public:
     return Reg >= FirstVirtualRegister;
   }
 
+  /// printReg - Print a virtual or physical register on OS.
+  void printReg(unsigned Reg, raw_ostream &OS) const;
+
   /// getMinimalPhysRegClass - Returns the Register Class of a physical
   /// register of the given type, picking the most sub register class of
   /// the right type that contains this physreg.
@@ -351,7 +354,17 @@ public:
   /// terminated.
   ///
   const unsigned *getAliasSet(unsigned RegNo) const {
-    return get(RegNo).AliasSet;
+    // The Overlaps set always begins with Reg itself.
+    return get(RegNo).Overlaps + 1;
+  }
+
+  /// getOverlaps - Return a list of registers that overlap Reg, including
+  /// itself. This is the same as the alias set except Reg is included in the
+  /// list.
+  /// These are exactly the registers in { x | regsOverlap(x, Reg) }.
+  ///
+  const unsigned *getOverlaps(unsigned RegNo) const {
+    return get(RegNo).Overlaps;
   }
 
   /// getSubRegisters - Return the list of registers that are sub-registers of
@@ -631,7 +644,7 @@ public:
 
   /// materializeFrameBaseRegister - Insert defining instruction(s) for
   /// BaseReg to be a pointer to FrameIdx before insertion point I.
-  virtual void materializeFrameBaseRegister(MachineBasicBlock::iterator I,
+  virtual void materializeFrameBaseRegister(MachineBasicBlock *MBB,
                                             unsigned BaseReg, int FrameIdx,
                                             int64_t Offset) const {
     assert(0 && "materializeFrameBaseRegister does not exist on this target");

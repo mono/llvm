@@ -11,10 +11,14 @@
 // that do not require creating new instructions.  This does constant folding
 // ("add i32 1, 1" -> "2") but can also handle non-constant operands, either
 // returning a constant ("and i32 %x, 0" -> "0") or an already existing value
-// ("and i32 %x, %x" -> "%x").
+// ("and i32 %x, %x" -> "%x").  All operands are assumed to have already been
+// simplified: This is usually true and assuming it simplifies the logic (if
+// they have not been simplified then results are correct but maybe suboptimal).
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "instsimplify"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/Dominators.h"
@@ -26,9 +30,19 @@ using namespace llvm::PatternMatch;
 
 #define RecursionLimit 3
 
+STATISTIC(NumExpand,  "Number of expansions");
+STATISTIC(NumFactor , "Number of factorizations");
+STATISTIC(NumReassoc, "Number of reassociations");
+
+static Value *SimplifyAndInst(Value *, Value *, const TargetData *,
+                              const DominatorTree *, unsigned);
 static Value *SimplifyBinOp(unsigned, Value *, Value *, const TargetData *,
                             const DominatorTree *, unsigned);
 static Value *SimplifyCmpInst(unsigned, Value *, Value *, const TargetData *,
+                              const DominatorTree *, unsigned);
+static Value *SimplifyOrInst(Value *, Value *, const TargetData *,
+                             const DominatorTree *, unsigned);
+static Value *SimplifyXorInst(Value *, Value *, const TargetData *,
                               const DominatorTree *, unsigned);
 
 /// ValueDominatesPHI - Does the given value dominate the specified phi node?
@@ -51,6 +65,238 @@ static bool ValueDominatesPHI(Value *V, PHINode *P, const DominatorTree *DT) {
   return false;
 }
 
+/// ExpandBinOp - Simplify "A op (B op' C)" by distributing op over op', turning
+/// it into "(A op B) op' (A op C)".  Here "op" is given by Opcode and "op'" is
+/// given by OpcodeToExpand, while "A" corresponds to LHS and "B op' C" to RHS.
+/// Also performs the transform "(A op' B) op C" -> "(A op C) op' (B op C)".
+/// Returns the simplified value, or null if no simplification was performed.
+static Value *ExpandBinOp(unsigned Opcode, Value *LHS, Value *RHS,
+                          unsigned OpcodeToExpand, const TargetData *TD,
+                          const DominatorTree *DT, unsigned MaxRecurse) {
+  // Recursion is always used, so bail out at once if we already hit the limit.
+  if (!MaxRecurse--)
+    return 0;
+
+  // Check whether the expression has the form "(A op' B) op C".
+  if (BinaryOperator *Op0 = dyn_cast<BinaryOperator>(LHS))
+    if (Op0->getOpcode() == OpcodeToExpand) {
+      // It does!  Try turning it into "(A op C) op' (B op C)".
+      Value *A = Op0->getOperand(0), *B = Op0->getOperand(1), *C = RHS;
+      // Do "A op C" and "B op C" both simplify?
+      if (Value *L = SimplifyBinOp(Opcode, A, C, TD, DT, MaxRecurse))
+        if (Value *R = SimplifyBinOp(Opcode, B, C, TD, DT, MaxRecurse)) {
+          // They do! Return "L op' R" if it simplifies or is already available.
+          // If "L op' R" equals "A op' B" then "L op' R" is just the LHS.
+          if ((L == A && R == B) || (Instruction::isCommutative(OpcodeToExpand)
+                                     && L == B && R == A)) {
+            ++NumExpand;
+            return LHS;
+          }
+          // Otherwise return "L op' R" if it simplifies.
+          if (Value *V = SimplifyBinOp(OpcodeToExpand, L, R, TD, DT,
+                                       MaxRecurse)) {
+            ++NumExpand;
+            return V;
+          }
+        }
+    }
+
+  // Check whether the expression has the form "A op (B op' C)".
+  if (BinaryOperator *Op1 = dyn_cast<BinaryOperator>(RHS))
+    if (Op1->getOpcode() == OpcodeToExpand) {
+      // It does!  Try turning it into "(A op B) op' (A op C)".
+      Value *A = LHS, *B = Op1->getOperand(0), *C = Op1->getOperand(1);
+      // Do "A op B" and "A op C" both simplify?
+      if (Value *L = SimplifyBinOp(Opcode, A, B, TD, DT, MaxRecurse))
+        if (Value *R = SimplifyBinOp(Opcode, A, C, TD, DT, MaxRecurse)) {
+          // They do! Return "L op' R" if it simplifies or is already available.
+          // If "L op' R" equals "B op' C" then "L op' R" is just the RHS.
+          if ((L == B && R == C) || (Instruction::isCommutative(OpcodeToExpand)
+                                     && L == C && R == B)) {
+            ++NumExpand;
+            return RHS;
+          }
+          // Otherwise return "L op' R" if it simplifies.
+          if (Value *V = SimplifyBinOp(OpcodeToExpand, L, R, TD, DT,
+                                       MaxRecurse)) {
+            ++NumExpand;
+            return V;
+          }
+        }
+    }
+
+  return 0;
+}
+
+/// FactorizeBinOp - Simplify "LHS Opcode RHS" by factorizing out a common term
+/// using the operation OpCodeToExtract.  For example, when Opcode is Add and
+/// OpCodeToExtract is Mul then this tries to turn "(A*B)+(A*C)" into "A*(B+C)".
+/// Returns the simplified value, or null if no simplification was performed.
+static Value *FactorizeBinOp(unsigned Opcode, Value *LHS, Value *RHS,
+                             unsigned OpcodeToExtract, const TargetData *TD,
+                             const DominatorTree *DT, unsigned MaxRecurse) {
+  // Recursion is always used, so bail out at once if we already hit the limit.
+  if (!MaxRecurse--)
+    return 0;
+
+  BinaryOperator *Op0 = dyn_cast<BinaryOperator>(LHS);
+  BinaryOperator *Op1 = dyn_cast<BinaryOperator>(RHS);
+
+  if (!Op0 || Op0->getOpcode() != OpcodeToExtract ||
+      !Op1 || Op1->getOpcode() != OpcodeToExtract)
+    return 0;
+
+  // The expression has the form "(A op' B) op (C op' D)".
+  Value *A = Op0->getOperand(0), *B = Op0->getOperand(1);
+  Value *C = Op1->getOperand(0), *D = Op1->getOperand(1);
+
+  // Use left distributivity, i.e. "X op' (Y op Z) = (X op' Y) op (X op' Z)".
+  // Does the instruction have the form "(A op' B) op (A op' D)" or, in the
+  // commutative case, "(A op' B) op (C op' A)"?
+  if (A == C || (Instruction::isCommutative(OpcodeToExtract) && A == D)) {
+    Value *DD = A == C ? D : C;
+    // Form "A op' (B op DD)" if it simplifies completely.
+    // Does "B op DD" simplify?
+    if (Value *V = SimplifyBinOp(Opcode, B, DD, TD, DT, MaxRecurse)) {
+      // It does!  Return "A op' V" if it simplifies or is already available.
+      // If V equals B then "A op' V" is just the LHS.  If V equals DD then
+      // "A op' V" is just the RHS.
+      if (V == B || V == DD) {
+        ++NumFactor;
+        return V == B ? LHS : RHS;
+      }
+      // Otherwise return "A op' V" if it simplifies.
+      if (Value *W = SimplifyBinOp(OpcodeToExtract, A, V, TD, DT, MaxRecurse)) {
+        ++NumFactor;
+        return W;
+      }
+    }
+  }
+
+  // Use right distributivity, i.e. "(X op Y) op' Z = (X op' Z) op (Y op' Z)".
+  // Does the instruction have the form "(A op' B) op (C op' B)" or, in the
+  // commutative case, "(A op' B) op (B op' D)"?
+  if (B == D || (Instruction::isCommutative(OpcodeToExtract) && B == C)) {
+    Value *CC = B == D ? C : D;
+    // Form "(A op CC) op' B" if it simplifies completely..
+    // Does "A op CC" simplify?
+    if (Value *V = SimplifyBinOp(Opcode, A, CC, TD, DT, MaxRecurse)) {
+      // It does!  Return "V op' B" if it simplifies or is already available.
+      // If V equals A then "V op' B" is just the LHS.  If V equals CC then
+      // "V op' B" is just the RHS.
+      if (V == A || V == CC) {
+        ++NumFactor;
+        return V == A ? LHS : RHS;
+      }
+      // Otherwise return "V op' B" if it simplifies.
+      if (Value *W = SimplifyBinOp(OpcodeToExtract, V, B, TD, DT, MaxRecurse)) {
+        ++NumFactor;
+        return W;
+      }
+    }
+  }
+
+  return 0;
+}
+
+/// SimplifyAssociativeBinOp - Generic simplifications for associative binary
+/// operations.  Returns the simpler value, or null if none was found.
+static Value *SimplifyAssociativeBinOp(unsigned Opcode, Value *LHS, Value *RHS,
+                                       const TargetData *TD,
+                                       const DominatorTree *DT,
+                                       unsigned MaxRecurse) {
+  assert(Instruction::isAssociative(Opcode) && "Not an associative operation!");
+
+  // Recursion is always used, so bail out at once if we already hit the limit.
+  if (!MaxRecurse--)
+    return 0;
+
+  BinaryOperator *Op0 = dyn_cast<BinaryOperator>(LHS);
+  BinaryOperator *Op1 = dyn_cast<BinaryOperator>(RHS);
+
+  // Transform: "(A op B) op C" ==> "A op (B op C)" if it simplifies completely.
+  if (Op0 && Op0->getOpcode() == Opcode) {
+    Value *A = Op0->getOperand(0);
+    Value *B = Op0->getOperand(1);
+    Value *C = RHS;
+
+    // Does "B op C" simplify?
+    if (Value *V = SimplifyBinOp(Opcode, B, C, TD, DT, MaxRecurse)) {
+      // It does!  Return "A op V" if it simplifies or is already available.
+      // If V equals B then "A op V" is just the LHS.
+      if (V == B) return LHS;
+      // Otherwise return "A op V" if it simplifies.
+      if (Value *W = SimplifyBinOp(Opcode, A, V, TD, DT, MaxRecurse)) {
+        ++NumReassoc;
+        return W;
+      }
+    }
+  }
+
+  // Transform: "A op (B op C)" ==> "(A op B) op C" if it simplifies completely.
+  if (Op1 && Op1->getOpcode() == Opcode) {
+    Value *A = LHS;
+    Value *B = Op1->getOperand(0);
+    Value *C = Op1->getOperand(1);
+
+    // Does "A op B" simplify?
+    if (Value *V = SimplifyBinOp(Opcode, A, B, TD, DT, MaxRecurse)) {
+      // It does!  Return "V op C" if it simplifies or is already available.
+      // If V equals B then "V op C" is just the RHS.
+      if (V == B) return RHS;
+      // Otherwise return "V op C" if it simplifies.
+      if (Value *W = SimplifyBinOp(Opcode, V, C, TD, DT, MaxRecurse)) {
+        ++NumReassoc;
+        return W;
+      }
+    }
+  }
+
+  // The remaining transforms require commutativity as well as associativity.
+  if (!Instruction::isCommutative(Opcode))
+    return 0;
+
+  // Transform: "(A op B) op C" ==> "(C op A) op B" if it simplifies completely.
+  if (Op0 && Op0->getOpcode() == Opcode) {
+    Value *A = Op0->getOperand(0);
+    Value *B = Op0->getOperand(1);
+    Value *C = RHS;
+
+    // Does "C op A" simplify?
+    if (Value *V = SimplifyBinOp(Opcode, C, A, TD, DT, MaxRecurse)) {
+      // It does!  Return "V op B" if it simplifies or is already available.
+      // If V equals A then "V op B" is just the LHS.
+      if (V == A) return LHS;
+      // Otherwise return "V op B" if it simplifies.
+      if (Value *W = SimplifyBinOp(Opcode, V, B, TD, DT, MaxRecurse)) {
+        ++NumReassoc;
+        return W;
+      }
+    }
+  }
+
+  // Transform: "A op (B op C)" ==> "B op (C op A)" if it simplifies completely.
+  if (Op1 && Op1->getOpcode() == Opcode) {
+    Value *A = LHS;
+    Value *B = Op1->getOperand(0);
+    Value *C = Op1->getOperand(1);
+
+    // Does "C op A" simplify?
+    if (Value *V = SimplifyBinOp(Opcode, C, A, TD, DT, MaxRecurse)) {
+      // It does!  Return "B op V" if it simplifies or is already available.
+      // If V equals C then "B op V" is just the RHS.
+      if (V == C) return RHS;
+      // Otherwise return "B op V" if it simplifies.
+      if (Value *W = SimplifyBinOp(Opcode, B, V, TD, DT, MaxRecurse)) {
+        ++NumReassoc;
+        return W;
+      }
+    }
+  }
+
+  return 0;
+}
+
 /// ThreadBinOpOverSelect - In the case of a binary operation with a select
 /// instruction as an operand, try to simplify the binop by seeing whether
 /// evaluating it on both branches of the select results in the same value.
@@ -59,6 +305,10 @@ static Value *ThreadBinOpOverSelect(unsigned Opcode, Value *LHS, Value *RHS,
                                     const TargetData *TD,
                                     const DominatorTree *DT,
                                     unsigned MaxRecurse) {
+  // Recursion is always used, so bail out at once if we already hit the limit.
+  if (!MaxRecurse--)
+    return 0;
+
   SelectInst *SI;
   if (isa<SelectInst>(LHS)) {
     SI = cast<SelectInst>(LHS);
@@ -129,6 +379,10 @@ static Value *ThreadCmpOverSelect(CmpInst::Predicate Pred, Value *LHS,
                                   Value *RHS, const TargetData *TD,
                                   const DominatorTree *DT,
                                   unsigned MaxRecurse) {
+  // Recursion is always used, so bail out at once if we already hit the limit.
+  if (!MaxRecurse--)
+    return 0;
+
   // Make sure the select is on the LHS.
   if (!isa<SelectInst>(LHS)) {
     std::swap(LHS, RHS);
@@ -158,6 +412,10 @@ static Value *ThreadCmpOverSelect(CmpInst::Predicate Pred, Value *LHS,
 static Value *ThreadBinOpOverPHI(unsigned Opcode, Value *LHS, Value *RHS,
                                  const TargetData *TD, const DominatorTree *DT,
                                  unsigned MaxRecurse) {
+  // Recursion is always used, so bail out at once if we already hit the limit.
+  if (!MaxRecurse--)
+    return 0;
+
   PHINode *PI;
   if (isa<PHINode>(LHS)) {
     PI = cast<PHINode>(LHS);
@@ -198,6 +456,10 @@ static Value *ThreadBinOpOverPHI(unsigned Opcode, Value *LHS, Value *RHS,
 static Value *ThreadCmpOverPHI(CmpInst::Predicate Pred, Value *LHS, Value *RHS,
                                const TargetData *TD, const DominatorTree *DT,
                                unsigned MaxRecurse) {
+  // Recursion is always used, so bail out at once if we already hit the limit.
+  if (!MaxRecurse--)
+    return 0;
+
   // Make sure the phi is on the LHS.
   if (!isa<PHINode>(LHS)) {
     std::swap(LHS, RHS);
@@ -229,8 +491,9 @@ static Value *ThreadCmpOverPHI(CmpInst::Predicate Pred, Value *LHS, Value *RHS,
 
 /// SimplifyAddInst - Given operands for an Add, see if we can
 /// fold the result.  If not, this returns null.
-Value *llvm::SimplifyAddInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
-                             const TargetData *TD, const DominatorTree *) {
+static Value *SimplifyAddInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
+                              const TargetData *TD, const DominatorTree *DT,
+                              unsigned MaxRecurse) {
   if (Constant *CLHS = dyn_cast<Constant>(Op0)) {
     if (Constant *CRHS = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { CLHS, CRHS };
@@ -242,17 +505,41 @@ Value *llvm::SimplifyAddInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
     std::swap(Op0, Op1);
   }
 
-  if (Constant *Op1C = dyn_cast<Constant>(Op1)) {
-    // X + undef -> undef
-    if (isa<UndefValue>(Op1C))
-      return Op1C;
+  // X + undef -> undef
+  if (isa<UndefValue>(Op1))
+    return Op1;
 
-    // X + 0 --> X
-    if (Op1C->isNullValue())
-      return Op0;
-  }
+  // X + 0 -> X
+  if (match(Op1, m_Zero()))
+    return Op0;
 
-  // FIXME: Could pull several more out of instcombine.
+  // X + (Y - X) -> Y
+  // (Y - X) + X -> Y
+  // Eg: X + -X -> 0
+  Value *Y = 0;
+  if (match(Op1, m_Sub(m_Value(Y), m_Specific(Op0))) ||
+      match(Op0, m_Sub(m_Value(Y), m_Specific(Op1))))
+    return Y;
+
+  // X + ~X -> -1   since   ~X = -X-1
+  if (match(Op0, m_Not(m_Specific(Op1))) ||
+      match(Op1, m_Not(m_Specific(Op0))))
+    return Constant::getAllOnesValue(Op0->getType());
+
+  /// i1 add -> xor.
+  if (MaxRecurse && Op0->getType()->isIntegerTy(1))
+    if (Value *V = SimplifyXorInst(Op0, Op1, TD, DT, MaxRecurse-1))
+      return V;
+
+  // Try some generic simplifications for associative operations.
+  if (Value *V = SimplifyAssociativeBinOp(Instruction::Add, Op0, Op1, TD, DT,
+                                          MaxRecurse))
+    return V;
+
+  // Mul distributes over Add.  Try some generic simplifications based on this.
+  if (Value *V = FactorizeBinOp(Instruction::Add, Op0, Op1, Instruction::Mul,
+                                TD, DT, MaxRecurse))
+    return V;
 
   // Threading Add over selects and phi nodes is pointless, so don't bother.
   // Threading over the select in "A + select(cond, B, C)" means evaluating
@@ -264,6 +551,134 @@ Value *llvm::SimplifyAddInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
   // for threading over phi nodes.
 
   return 0;
+}
+
+Value *llvm::SimplifyAddInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
+                             const TargetData *TD, const DominatorTree *DT) {
+  return ::SimplifyAddInst(Op0, Op1, isNSW, isNUW, TD, DT, RecursionLimit);
+}
+
+/// SimplifySubInst - Given operands for a Sub, see if we can
+/// fold the result.  If not, this returns null.
+static Value *SimplifySubInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
+                              const TargetData *TD, const DominatorTree *DT,
+                              unsigned MaxRecurse) {
+  if (Constant *CLHS = dyn_cast<Constant>(Op0))
+    if (Constant *CRHS = dyn_cast<Constant>(Op1)) {
+      Constant *Ops[] = { CLHS, CRHS };
+      return ConstantFoldInstOperands(Instruction::Sub, CLHS->getType(),
+                                      Ops, 2, TD);
+    }
+
+  // X - undef -> undef
+  // undef - X -> undef
+  if (isa<UndefValue>(Op0) || isa<UndefValue>(Op1))
+    return UndefValue::get(Op0->getType());
+
+  // X - 0 -> X
+  if (match(Op1, m_Zero()))
+    return Op0;
+
+  // X - X -> 0
+  if (Op0 == Op1)
+    return Constant::getNullValue(Op0->getType());
+
+  // (X + Y) - Y -> X
+  // (Y + X) - Y -> X
+  Value *X = 0;
+  if (match(Op0, m_Add(m_Value(X), m_Specific(Op1))) ||
+      match(Op0, m_Add(m_Specific(Op1), m_Value(X))))
+    return X;
+
+  /// i1 sub -> xor.
+  if (MaxRecurse && Op0->getType()->isIntegerTy(1))
+    if (Value *V = SimplifyXorInst(Op0, Op1, TD, DT, MaxRecurse-1))
+      return V;
+
+  // Mul distributes over Sub.  Try some generic simplifications based on this.
+  if (Value *V = FactorizeBinOp(Instruction::Sub, Op0, Op1, Instruction::Mul,
+                                TD, DT, MaxRecurse))
+    return V;
+
+  // Threading Sub over selects and phi nodes is pointless, so don't bother.
+  // Threading over the select in "A - select(cond, B, C)" means evaluating
+  // "A-B" and "A-C" and seeing if they are equal; but they are equal if and
+  // only if B and C are equal.  If B and C are equal then (since we assume
+  // that operands have already been simplified) "select(cond, B, C)" should
+  // have been simplified to the common value of B and C already.  Analysing
+  // "A-B" and "A-C" thus gains nothing, but costs compile time.  Similarly
+  // for threading over phi nodes.
+
+  return 0;
+}
+
+Value *llvm::SimplifySubInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
+                             const TargetData *TD, const DominatorTree *DT) {
+  return ::SimplifySubInst(Op0, Op1, isNSW, isNUW, TD, DT, RecursionLimit);
+}
+
+/// SimplifyMulInst - Given operands for a Mul, see if we can
+/// fold the result.  If not, this returns null.
+static Value *SimplifyMulInst(Value *Op0, Value *Op1, const TargetData *TD,
+                              const DominatorTree *DT, unsigned MaxRecurse) {
+  if (Constant *CLHS = dyn_cast<Constant>(Op0)) {
+    if (Constant *CRHS = dyn_cast<Constant>(Op1)) {
+      Constant *Ops[] = { CLHS, CRHS };
+      return ConstantFoldInstOperands(Instruction::Mul, CLHS->getType(),
+                                      Ops, 2, TD);
+    }
+
+    // Canonicalize the constant to the RHS.
+    std::swap(Op0, Op1);
+  }
+
+  // X * undef -> 0
+  if (isa<UndefValue>(Op1))
+    return Constant::getNullValue(Op0->getType());
+
+  // X * 0 -> 0
+  if (match(Op1, m_Zero()))
+    return Op1;
+
+  // X * 1 -> X
+  if (match(Op1, m_One()))
+    return Op0;
+
+  /// i1 mul -> and.
+  if (MaxRecurse && Op0->getType()->isIntegerTy(1))
+    if (Value *V = SimplifyAndInst(Op0, Op1, TD, DT, MaxRecurse-1))
+      return V;
+
+  // Try some generic simplifications for associative operations.
+  if (Value *V = SimplifyAssociativeBinOp(Instruction::Mul, Op0, Op1, TD, DT,
+                                          MaxRecurse))
+    return V;
+
+  // Mul distributes over Add.  Try some generic simplifications based on this.
+  if (Value *V = ExpandBinOp(Instruction::Mul, Op0, Op1, Instruction::Add,
+                             TD, DT, MaxRecurse))
+    return V;
+
+  // If the operation is with the result of a select instruction, check whether
+  // operating on either branch of the select always yields the same value.
+  if (isa<SelectInst>(Op0) || isa<SelectInst>(Op1))
+    if (Value *V = ThreadBinOpOverSelect(Instruction::Mul, Op0, Op1, TD, DT,
+                                         MaxRecurse))
+      return V;
+
+  // If the operation is with the result of a phi instruction, check whether
+  // operating on all incoming values of the phi always yields the same value.
+  if (isa<PHINode>(Op0) || isa<PHINode>(Op1))
+    if (Value *V = ThreadBinOpOverPHI(Instruction::Mul, Op0, Op1, TD, DT,
+                                      MaxRecurse))
+      return V;
+
+  return 0;
+}
+
+Value *llvm::SimplifyMulInst(Value *Op0, Value *Op1, const TargetData *TD,
+                             const DominatorTree *DT) {
+  return ::SimplifyMulInst(Op0, Op1, TD, DT, RecursionLimit);
 }
 
 /// SimplifyAndInst - Given operands for an And, see if we can
@@ -313,28 +728,38 @@ static Value *SimplifyAndInst(Value *Op0, Value *Op1, const TargetData *TD,
       (A == Op0 || B == Op0))
     return Op0;
 
-  // (A & B) & A -> A & B
-  if (match(Op0, m_And(m_Value(A), m_Value(B))) &&
-      (A == Op1 || B == Op1))
-    return Op0;
+  // Try some generic simplifications for associative operations.
+  if (Value *V = SimplifyAssociativeBinOp(Instruction::And, Op0, Op1, TD, DT,
+                                          MaxRecurse))
+    return V;
 
-  // A & (A & B) -> A & B
-  if (match(Op1, m_And(m_Value(A), m_Value(B))) &&
-      (A == Op0 || B == Op0))
-    return Op1;
+  // And distributes over Or.  Try some generic simplifications based on this.
+  if (Value *V = ExpandBinOp(Instruction::And, Op0, Op1, Instruction::Or,
+                             TD, DT, MaxRecurse))
+    return V;
+
+  // And distributes over Xor.  Try some generic simplifications based on this.
+  if (Value *V = ExpandBinOp(Instruction::And, Op0, Op1, Instruction::Xor,
+                             TD, DT, MaxRecurse))
+    return V;
+
+  // Or distributes over And.  Try some generic simplifications based on this.
+  if (Value *V = FactorizeBinOp(Instruction::And, Op0, Op1, Instruction::Or,
+                                TD, DT, MaxRecurse))
+    return V;
 
   // If the operation is with the result of a select instruction, check whether
   // operating on either branch of the select always yields the same value.
-  if (MaxRecurse && (isa<SelectInst>(Op0) || isa<SelectInst>(Op1)))
+  if (isa<SelectInst>(Op0) || isa<SelectInst>(Op1))
     if (Value *V = ThreadBinOpOverSelect(Instruction::And, Op0, Op1, TD, DT,
-                                         MaxRecurse-1))
+                                         MaxRecurse))
       return V;
 
   // If the operation is with the result of a phi instruction, check whether
   // operating on all incoming values of the phi always yields the same value.
-  if (MaxRecurse && (isa<PHINode>(Op0) || isa<PHINode>(Op1)))
+  if (isa<PHINode>(Op0) || isa<PHINode>(Op1))
     if (Value *V = ThreadBinOpOverPHI(Instruction::And, Op0, Op1, TD, DT,
-                                      MaxRecurse-1))
+                                      MaxRecurse))
       return V;
 
   return 0;
@@ -392,28 +817,33 @@ static Value *SimplifyOrInst(Value *Op0, Value *Op1, const TargetData *TD,
       (A == Op0 || B == Op0))
     return Op0;
 
-  // (A | B) | A -> A | B
-  if (match(Op0, m_Or(m_Value(A), m_Value(B))) &&
-      (A == Op1 || B == Op1))
-    return Op0;
+  // Try some generic simplifications for associative operations.
+  if (Value *V = SimplifyAssociativeBinOp(Instruction::Or, Op0, Op1, TD, DT,
+                                          MaxRecurse))
+    return V;
 
-  // A | (A | B) -> A | B
-  if (match(Op1, m_Or(m_Value(A), m_Value(B))) &&
-      (A == Op0 || B == Op0))
-    return Op1;
+  // Or distributes over And.  Try some generic simplifications based on this.
+  if (Value *V = ExpandBinOp(Instruction::Or, Op0, Op1, Instruction::And,
+                             TD, DT, MaxRecurse))
+    return V;
+
+  // And distributes over Or.  Try some generic simplifications based on this.
+  if (Value *V = FactorizeBinOp(Instruction::Or, Op0, Op1, Instruction::And,
+                                TD, DT, MaxRecurse))
+    return V;
 
   // If the operation is with the result of a select instruction, check whether
   // operating on either branch of the select always yields the same value.
-  if (MaxRecurse && (isa<SelectInst>(Op0) || isa<SelectInst>(Op1)))
+  if (isa<SelectInst>(Op0) || isa<SelectInst>(Op1))
     if (Value *V = ThreadBinOpOverSelect(Instruction::Or, Op0, Op1, TD, DT,
-                                         MaxRecurse-1))
+                                         MaxRecurse))
       return V;
 
   // If the operation is with the result of a phi instruction, check whether
   // operating on all incoming values of the phi always yields the same value.
-  if (MaxRecurse && (isa<PHINode>(Op0) || isa<PHINode>(Op1)))
+  if (isa<PHINode>(Op0) || isa<PHINode>(Op1))
     if (Value *V = ThreadBinOpOverPHI(Instruction::Or, Op0, Op1, TD, DT,
-                                      MaxRecurse-1))
+                                      MaxRecurse))
       return V;
 
   return 0;
@@ -441,7 +871,7 @@ static Value *SimplifyXorInst(Value *Op0, Value *Op1, const TargetData *TD,
 
   // A ^ undef -> undef
   if (isa<UndefValue>(Op1))
-    return UndefValue::get(Op0->getType());
+    return Op1;
 
   // A ^ 0 = A
   if (match(Op1, m_Zero()))
@@ -452,20 +882,20 @@ static Value *SimplifyXorInst(Value *Op0, Value *Op1, const TargetData *TD,
     return Constant::getNullValue(Op0->getType());
 
   // A ^ ~A  =  ~A ^ A  =  -1
-  Value *A = 0, *B = 0;
+  Value *A = 0;
   if ((match(Op0, m_Not(m_Value(A))) && A == Op1) ||
       (match(Op1, m_Not(m_Value(A))) && A == Op0))
     return Constant::getAllOnesValue(Op0->getType());
 
-  // (A ^ B) ^ A = B
-  if (match(Op0, m_Xor(m_Value(A), m_Value(B))) &&
-      (A == Op1 || B == Op1))
-    return A == Op1 ? B : A;
+  // Try some generic simplifications for associative operations.
+  if (Value *V = SimplifyAssociativeBinOp(Instruction::Xor, Op0, Op1, TD, DT,
+                                          MaxRecurse))
+    return V;
 
-  // A ^ (A ^ B) = B
-  if (match(Op1, m_Xor(m_Value(A), m_Value(B))) &&
-      (A == Op0 || B == Op0))
-    return A == Op0 ? B : A;
+  // And distributes over Xor.  Try some generic simplifications based on this.
+  if (Value *V = FactorizeBinOp(Instruction::Xor, Op0, Op1, Instruction::And,
+                                TD, DT, MaxRecurse))
+    return V;
 
   // Threading Xor over selects and phi nodes is pointless, so don't bother.
   // Threading over the select in "A ^ select(cond, B, C)" means evaluating
@@ -550,14 +980,14 @@ static Value *SimplifyICmpInst(unsigned Predicate, Value *LHS, Value *RHS,
 
   // If the comparison is with the result of a select instruction, check whether
   // comparing with either branch of the select always yields the same value.
-  if (MaxRecurse && (isa<SelectInst>(LHS) || isa<SelectInst>(RHS)))
-    if (Value *V = ThreadCmpOverSelect(Pred, LHS, RHS, TD, DT, MaxRecurse-1))
+  if (isa<SelectInst>(LHS) || isa<SelectInst>(RHS))
+    if (Value *V = ThreadCmpOverSelect(Pred, LHS, RHS, TD, DT, MaxRecurse))
       return V;
 
   // If the comparison is with the result of a phi instruction, check whether
   // doing the compare with each incoming phi value yields a common result.
-  if (MaxRecurse && (isa<PHINode>(LHS) || isa<PHINode>(RHS)))
-    if (Value *V = ThreadCmpOverPHI(Pred, LHS, RHS, TD, DT, MaxRecurse-1))
+  if (isa<PHINode>(LHS) || isa<PHINode>(RHS))
+    if (Value *V = ThreadCmpOverPHI(Pred, LHS, RHS, TD, DT, MaxRecurse))
       return V;
 
   return 0;
@@ -645,14 +1075,14 @@ static Value *SimplifyFCmpInst(unsigned Predicate, Value *LHS, Value *RHS,
 
   // If the comparison is with the result of a select instruction, check whether
   // comparing with either branch of the select always yields the same value.
-  if (MaxRecurse && (isa<SelectInst>(LHS) || isa<SelectInst>(RHS)))
-    if (Value *V = ThreadCmpOverSelect(Pred, LHS, RHS, TD, DT, MaxRecurse-1))
+  if (isa<SelectInst>(LHS) || isa<SelectInst>(RHS))
+    if (Value *V = ThreadCmpOverSelect(Pred, LHS, RHS, TD, DT, MaxRecurse))
       return V;
 
   // If the comparison is with the result of a phi instruction, check whether
   // doing the compare with each incoming phi value yields a common result.
-  if (MaxRecurse && (isa<PHINode>(LHS) || isa<PHINode>(RHS)))
-    if (Value *V = ThreadCmpOverPHI(Pred, LHS, RHS, TD, DT, MaxRecurse-1))
+  if (isa<PHINode>(LHS) || isa<PHINode>(RHS))
+    if (Value *V = ThreadCmpOverPHI(Pred, LHS, RHS, TD, DT, MaxRecurse))
       return V;
 
   return 0;
@@ -773,8 +1203,16 @@ static Value *SimplifyBinOp(unsigned Opcode, Value *LHS, Value *RHS,
                             const TargetData *TD, const DominatorTree *DT,
                             unsigned MaxRecurse) {
   switch (Opcode) {
+  case Instruction::Add: return SimplifyAddInst(LHS, RHS, /* isNSW */ false,
+                                                /* isNUW */ false, TD, DT,
+                                                MaxRecurse);
+  case Instruction::Sub: return SimplifySubInst(LHS, RHS, /* isNSW */ false,
+                                                /* isNUW */ false, TD, DT,
+                                                MaxRecurse);
+  case Instruction::Mul: return SimplifyMulInst(LHS, RHS, TD, DT, MaxRecurse);
   case Instruction::And: return SimplifyAndInst(LHS, RHS, TD, DT, MaxRecurse);
   case Instruction::Or:  return SimplifyOrInst(LHS, RHS, TD, DT, MaxRecurse);
+  case Instruction::Xor: return SimplifyXorInst(LHS, RHS, TD, DT, MaxRecurse);
   default:
     if (Constant *CLHS = dyn_cast<Constant>(LHS))
       if (Constant *CRHS = dyn_cast<Constant>(RHS)) {
@@ -782,17 +1220,23 @@ static Value *SimplifyBinOp(unsigned Opcode, Value *LHS, Value *RHS,
         return ConstantFoldInstOperands(Opcode, LHS->getType(), COps, 2, TD);
       }
 
+    // If the operation is associative, try some generic simplifications.
+    if (Instruction::isAssociative(Opcode))
+      if (Value *V = SimplifyAssociativeBinOp(Opcode, LHS, RHS, TD, DT,
+                                              MaxRecurse))
+        return V;
+
     // If the operation is with the result of a select instruction, check whether
     // operating on either branch of the select always yields the same value.
-    if (MaxRecurse && (isa<SelectInst>(LHS) || isa<SelectInst>(RHS)))
+    if (isa<SelectInst>(LHS) || isa<SelectInst>(RHS))
       if (Value *V = ThreadBinOpOverSelect(Opcode, LHS, RHS, TD, DT,
-                                           MaxRecurse-1))
+                                           MaxRecurse))
         return V;
 
     // If the operation is with the result of a phi instruction, check whether
     // operating on all incoming values of the phi always yields the same value.
-    if (MaxRecurse && (isa<PHINode>(LHS) || isa<PHINode>(RHS)))
-      if (Value *V = ThreadBinOpOverPHI(Opcode, LHS, RHS, TD, DT, MaxRecurse-1))
+    if (isa<PHINode>(LHS) || isa<PHINode>(RHS))
+      if (Value *V = ThreadBinOpOverPHI(Opcode, LHS, RHS, TD, DT, MaxRecurse))
         return V;
 
     return 0;
@@ -835,6 +1279,15 @@ Value *llvm::SimplifyInstruction(Instruction *I, const TargetData *TD,
                              cast<BinaryOperator>(I)->hasNoUnsignedWrap(),
                              TD, DT);
     break;
+  case Instruction::Sub:
+    Result = SimplifySubInst(I->getOperand(0), I->getOperand(1),
+                             cast<BinaryOperator>(I)->hasNoSignedWrap(),
+                             cast<BinaryOperator>(I)->hasNoUnsignedWrap(),
+                             TD, DT);
+    break;
+  case Instruction::Mul:
+    Result = SimplifyMulInst(I->getOperand(0), I->getOperand(1), TD, DT);
+    break;
   case Instruction::And:
     Result = SimplifyAndInst(I->getOperand(0), I->getOperand(1), TD, DT);
     break;
@@ -868,8 +1321,8 @@ Value *llvm::SimplifyInstruction(Instruction *I, const TargetData *TD,
 
   /// If called on unreachable code, the above logic may report that the
   /// instruction simplified to itself.  Make life easier for users by
-  /// detecting that case here, returning null if it occurs.
-  return Result == I ? 0 : Result;
+  /// detecting that case here, returning a safe value instead.
+  return Result == I ? UndefValue::get(I->getType()) : Result;
 }
 
 /// ReplaceAndSimplifyAllUses - Perform From->replaceAllUsesWith(To) and then

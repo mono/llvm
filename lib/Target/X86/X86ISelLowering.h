@@ -86,13 +86,13 @@ namespace llvm {
       /// X86 bit-test instructions.
       BT,
 
-      /// X86 SetCC. Operand 0 is condition code, and operand 1 is the flag
-      /// operand produced by a CMP instruction.
+      /// X86 SetCC. Operand 0 is condition code, and operand 1 is the EFLAGS
+      /// operand, usually produced by a CMP instruction.
       SETCC,
 
       // Same as SETCC except it's materialized with a sbb and the value is all
       // one's or all zero's.
-      SETCC_CARRY,
+      SETCC_CARRY,  // R = carry_bit ? ~0 : 0
 
       /// X86 conditional moves. Operand 0 and operand 1 are the two values
       /// to select from. Operand 2 is the condition code, and operand 3 is the
@@ -159,7 +159,16 @@ namespace llvm {
 
       /// PSHUFB - Shuffle 16 8-bit values within a vector.
       PSHUFB,
-
+      
+      /// PANDN - and with not'd value.
+      PANDN,
+      
+      /// PSIGNB/W/D - Copy integer sign.
+      PSIGNB, PSIGNW, PSIGND, 
+      
+      /// PBLENDVB - Variable blend
+      PBLENDVB,
+      
       /// FMAX, FMIN - Floating point max and min.
       ///
       FMAX, FMIN,
@@ -201,7 +210,7 @@ namespace llvm {
       PCMPGTB, PCMPGTW, PCMPGTD, PCMPGTQ,
 
       // ADD, SUB, SMUL, etc. - Arithmetic operations with FLAGS results.
-      ADD, SUB, SMUL,
+      ADD, SUB, ADC, SBB, SMUL,
       INC, DEC, OR, XOR, AND,
       
       UMUL, // LOW, HI, FLAGS = umul LHS, RHS

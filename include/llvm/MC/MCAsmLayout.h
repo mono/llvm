@@ -53,8 +53,8 @@ public:
   /// Get the assembler object this is a layout for.
   MCAssembler &getAssembler() const { return Assembler; }
 
-  /// \brief Invalidate all following fragments because a fragment has been resized. The
-  /// fragments size should have already been updated.
+  /// \brief Invalidate all following fragments because a fragment has been
+  /// resized. The fragments size should have already been updated.
   void Invalidate(MCFragment *F);
 
   /// \brief Perform layout for a single fragment, assuming that the previous
@@ -75,10 +75,6 @@ public:
   /// @}
   /// @name Fragment Layout Data
   /// @{
-
-  /// \brief Get the effective size of the given fragment, as computed in the
-  /// current layout.
-  uint64_t getFragmentEffectiveSize(const MCFragment *F) const;
 
   /// \brief Get the offset of the given fragment inside its containing section.
   uint64_t getFragmentOffset(const MCFragment *F) const;

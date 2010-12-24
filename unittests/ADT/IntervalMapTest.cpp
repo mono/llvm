@@ -247,6 +247,12 @@ TEST(IntervalMapTest, RootMultiCoalescing) {
   EXPECT_EQ(140u, I.start());
   EXPECT_EQ(150u, I.stop());
 
+  I.advanceTo(200);
+  EXPECT_FALSE(I.valid());
+
+  I.advanceTo(300);
+  EXPECT_FALSE(I.valid());
+
   // Coalesce left with followers.
   // [100;110] [120;130] [140;150] [160;170]
   map.insert(111, 115, 1);
@@ -520,6 +526,14 @@ TEST(IntervalMapTest, Branched2) {
   EXPECT_EQ(2000u, I.start());
   EXPECT_EQ(2005u, I.stop());
 
+  // advanceTo beyond end()
+  I.advanceTo(20000);
+  EXPECT_FALSE(I.valid());
+
+  // end().advanceTo() is valid as long as x > map.stop()
+  I.advanceTo(30000);
+  EXPECT_FALSE(I.valid());
+
   // Test clear() on branched map.
   map.clear();
   EXPECT_TRUE(map.empty());
@@ -548,6 +562,155 @@ TEST(IntervalMapTest, RandomCoalescing) {
   EXPECT_EQ(40959u, map.stop());
   EXPECT_EQ(1, std::distance(map.begin(), map.end()));
 
+}
+
+TEST(IntervalMapOverlapsTest, SmallMaps) {
+  typedef IntervalMapOverlaps<UUMap,UUMap> UUOverlaps;
+  UUMap::Allocator allocator;
+  UUMap mapA(allocator);
+  UUMap mapB(allocator);
+
+  // empty, empty.
+  EXPECT_FALSE(UUOverlaps(mapA, mapB).valid());
+
+  mapA.insert(1, 2, 3);
+
+  // full, empty
+  EXPECT_FALSE(UUOverlaps(mapA, mapB).valid());
+  // empty, full
+  EXPECT_FALSE(UUOverlaps(mapB, mapA).valid());
+
+  mapB.insert(3, 4, 5);
+
+  // full, full, non-overlapping
+  EXPECT_FALSE(UUOverlaps(mapA, mapB).valid());
+  EXPECT_FALSE(UUOverlaps(mapB, mapA).valid());
+
+  // Add an overlapping segment.
+  mapA.insert(4, 5, 6);
+
+  UUOverlaps AB(mapA, mapB);
+  ASSERT_TRUE(AB.valid());
+  EXPECT_EQ(4u, AB.a().start());
+  EXPECT_EQ(3u, AB.b().start());
+  ++AB;
+  EXPECT_FALSE(AB.valid());
+
+  UUOverlaps BA(mapB, mapA);
+  ASSERT_TRUE(BA.valid());
+  EXPECT_EQ(3u, BA.a().start());
+  EXPECT_EQ(4u, BA.b().start());
+  // advance past end.
+  BA.advanceTo(6);
+  EXPECT_FALSE(BA.valid());
+  // advance an invalid iterator.
+  BA.advanceTo(7);
+  EXPECT_FALSE(BA.valid());
+}
+
+TEST(IntervalMapOverlapsTest, BigMaps) {
+  typedef IntervalMapOverlaps<UUMap,UUMap> UUOverlaps;
+  UUMap::Allocator allocator;
+  UUMap mapA(allocator);
+  UUMap mapB(allocator);
+
+  // [0;4] [10;14] [20;24] ...
+  for (unsigned n = 0; n != 100; ++n)
+    mapA.insert(10*n, 10*n+4, n);
+
+  // [5;6] [15;16] [25;26] ...
+  for (unsigned n = 10; n != 20; ++n)
+    mapB.insert(10*n+5, 10*n+6, n);
+
+  // [208;209] [218;219] ...
+  for (unsigned n = 20; n != 30; ++n)
+    mapB.insert(10*n+8, 10*n+9, n);
+
+  // insert some overlapping segments.
+  mapB.insert(400, 400, 400);
+  mapB.insert(401, 401, 401);
+  mapB.insert(402, 500, 402);
+  mapB.insert(600, 601, 402);
+
+  UUOverlaps AB(mapA, mapB);
+  ASSERT_TRUE(AB.valid());
+  EXPECT_EQ(400u, AB.a().start());
+  EXPECT_EQ(400u, AB.b().start());
+  ++AB;
+  ASSERT_TRUE(AB.valid());
+  EXPECT_EQ(400u, AB.a().start());
+  EXPECT_EQ(401u, AB.b().start());
+  ++AB;
+  ASSERT_TRUE(AB.valid());
+  EXPECT_EQ(400u, AB.a().start());
+  EXPECT_EQ(402u, AB.b().start());
+  ++AB;
+  ASSERT_TRUE(AB.valid());
+  EXPECT_EQ(410u, AB.a().start());
+  EXPECT_EQ(402u, AB.b().start());
+  ++AB;
+  ASSERT_TRUE(AB.valid());
+  EXPECT_EQ(420u, AB.a().start());
+  EXPECT_EQ(402u, AB.b().start());
+  AB.skipB();
+  ASSERT_TRUE(AB.valid());
+  EXPECT_EQ(600u, AB.a().start());
+  EXPECT_EQ(600u, AB.b().start());
+  ++AB;
+  EXPECT_FALSE(AB.valid());
+
+  // Test advanceTo.
+  UUOverlaps AB2(mapA, mapB);
+  AB2.advanceTo(410);
+  ASSERT_TRUE(AB2.valid());
+  EXPECT_EQ(410u, AB2.a().start());
+  EXPECT_EQ(402u, AB2.b().start());
+
+  // It is valid to advanceTo with any monotonic sequence.
+  AB2.advanceTo(411);
+  ASSERT_TRUE(AB2.valid());
+  EXPECT_EQ(410u, AB2.a().start());
+  EXPECT_EQ(402u, AB2.b().start());
+
+  // Check reversed maps.
+  UUOverlaps BA(mapB, mapA);
+  ASSERT_TRUE(BA.valid());
+  EXPECT_EQ(400u, BA.b().start());
+  EXPECT_EQ(400u, BA.a().start());
+  ++BA;
+  ASSERT_TRUE(BA.valid());
+  EXPECT_EQ(400u, BA.b().start());
+  EXPECT_EQ(401u, BA.a().start());
+  ++BA;
+  ASSERT_TRUE(BA.valid());
+  EXPECT_EQ(400u, BA.b().start());
+  EXPECT_EQ(402u, BA.a().start());
+  ++BA;
+  ASSERT_TRUE(BA.valid());
+  EXPECT_EQ(410u, BA.b().start());
+  EXPECT_EQ(402u, BA.a().start());
+  ++BA;
+  ASSERT_TRUE(BA.valid());
+  EXPECT_EQ(420u, BA.b().start());
+  EXPECT_EQ(402u, BA.a().start());
+  BA.skipA();
+  ASSERT_TRUE(BA.valid());
+  EXPECT_EQ(600u, BA.b().start());
+  EXPECT_EQ(600u, BA.a().start());
+  ++BA;
+  EXPECT_FALSE(BA.valid());
+
+  // Test advanceTo.
+  UUOverlaps BA2(mapB, mapA);
+  BA2.advanceTo(410);
+  ASSERT_TRUE(BA2.valid());
+  EXPECT_EQ(410u, BA2.b().start());
+  EXPECT_EQ(402u, BA2.a().start());
+
+  BA2.advanceTo(411);
+  ASSERT_TRUE(BA2.valid());
+  EXPECT_EQ(410u, BA2.b().start());
+  EXPECT_EQ(402u, BA2.a().start());
 }
 
 } // namespace

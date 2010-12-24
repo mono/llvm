@@ -11,8 +11,8 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAsmInfo.h"
-#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
@@ -102,8 +102,7 @@ public:
 
   virtual void SwitchSection(const MCSection *Section);
 
-  virtual void InitSections() {
-  }
+  virtual void InitSections() {}
 
   virtual void EmitLabel(MCSymbol *Symbol);
 
@@ -540,7 +539,8 @@ namespace llvm {
                                    formatted_raw_ostream &OS,
                                    bool isVerboseAsm, bool useLoc,
                                    MCInstPrinter *IP,
-                                   MCCodeEmitter *CE, bool ShowInst) {
+                                   MCCodeEmitter *CE, TargetAsmBackend *TAB,
+                                   bool ShowInst) {
     return new PTXMCAsmStreamer(Context, OS, isVerboseAsm, useLoc,
                                 IP, CE, ShowInst);
   }

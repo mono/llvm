@@ -72,30 +72,30 @@ def ARMWrapper       : SDNode<"ARMISD::Wrapper",     SDTIntUnaryOp>;
 def ARMWrapperJT     : SDNode<"ARMISD::WrapperJT",   SDTIntBinOp>;
 
 def ARMcallseq_start : SDNode<"ISD::CALLSEQ_START", SDT_ARMCallSeqStart,
-                              [SDNPHasChain, SDNPOutFlag]>;
+                              [SDNPHasChain, SDNPOutGlue]>;
 def ARMcallseq_end   : SDNode<"ISD::CALLSEQ_END",   SDT_ARMCallSeqEnd,
-                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag]>;
+                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 
 def ARMcall          : SDNode<"ARMISD::CALL", SDT_ARMcall,
-                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag,
+                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                                SDNPVariadic]>;
 def ARMcall_pred    : SDNode<"ARMISD::CALL_PRED", SDT_ARMcall,
-                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag,
+                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                                SDNPVariadic]>;
 def ARMcall_nolink   : SDNode<"ARMISD::CALL_NOLINK", SDT_ARMcall,
-                              [SDNPHasChain, SDNPOptInFlag, SDNPOutFlag,
+                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                                SDNPVariadic]>;
 
 def ARMretflag       : SDNode<"ARMISD::RET_FLAG", SDTNone,
-                              [SDNPHasChain, SDNPOptInFlag]>;
+                              [SDNPHasChain, SDNPOptInGlue]>;
 
 def ARMcmov          : SDNode<"ARMISD::CMOV", SDT_ARMCMov,
-                              [SDNPInFlag]>;
+                              [SDNPInGlue]>;
 def ARMcneg          : SDNode<"ARMISD::CNEG", SDT_ARMCMov,
-                              [SDNPInFlag]>;
+                              [SDNPInGlue]>;
 
 def ARMbrcond        : SDNode<"ARMISD::BRCOND", SDT_ARMBrcond,
-                              [SDNPHasChain, SDNPInFlag, SDNPOutFlag]>;
+                              [SDNPHasChain, SDNPInGlue, SDNPOutGlue]>;
 
 def ARMbrjt          : SDNode<"ARMISD::BR_JT", SDT_ARMBrJT,
                               [SDNPHasChain]>;
@@ -106,16 +106,16 @@ def ARMBcci64        : SDNode<"ARMISD::BCC_i64", SDT_ARMBCC_i64,
                               [SDNPHasChain]>;
 
 def ARMcmp           : SDNode<"ARMISD::CMP", SDT_ARMCmp,
-                              [SDNPOutFlag]>;
+                              [SDNPOutGlue]>;
 
 def ARMcmpZ          : SDNode<"ARMISD::CMPZ", SDT_ARMCmp,
-                              [SDNPOutFlag, SDNPCommutative]>;
+                              [SDNPOutGlue, SDNPCommutative]>;
 
 def ARMpic_add       : SDNode<"ARMISD::PIC_ADD", SDT_ARMPICAdd>;
 
-def ARMsrl_flag      : SDNode<"ARMISD::SRL_FLAG", SDTIntUnaryOp, [SDNPOutFlag]>;
-def ARMsra_flag      : SDNode<"ARMISD::SRA_FLAG", SDTIntUnaryOp, [SDNPOutFlag]>;
-def ARMrrx           : SDNode<"ARMISD::RRX"     , SDTIntUnaryOp, [SDNPInFlag ]>;
+def ARMsrl_flag      : SDNode<"ARMISD::SRL_FLAG", SDTIntUnaryOp, [SDNPOutGlue]>;
+def ARMsra_flag      : SDNode<"ARMISD::SRA_FLAG", SDTIntUnaryOp, [SDNPOutGlue]>;
+def ARMrrx           : SDNode<"ARMISD::RRX"     , SDTIntUnaryOp, [SDNPInGlue ]>;
 
 def ARMthread_pointer: SDNode<"ARMISD::THREAD_POINTER", SDT_ARMThreadPointer>;
 def ARMeh_sjlj_setjmp: SDNode<"ARMISD::EH_SJLJ_SETJMP",
@@ -136,7 +136,7 @@ def ARMPreload        : SDNode<"ARMISD::PRELOAD", SDTPrefetch,
 def ARMrbit          : SDNode<"ARMISD::RBIT", SDTIntUnaryOp>;
 
 def ARMtcret         : SDNode<"ARMISD::TC_RETURN", SDT_ARMTCRET,
-                        [SDNPHasChain,  SDNPOptInFlag, SDNPVariadic]>;
+                        [SDNPHasChain,  SDNPOptInGlue, SDNPVariadic]>;
 
 
 def ARMbfi           : SDNode<"ARMISD::BFI", SDT_ARMBFI>;
@@ -156,6 +156,7 @@ def NoVFP            : Predicate<"!Subtarget->hasVFP2()">;
 def HasVFP2          : Predicate<"Subtarget->hasVFP2()">, AssemblerPredicate;
 def HasVFP3          : Predicate<"Subtarget->hasVFP3()">, AssemblerPredicate;
 def HasNEON          : Predicate<"Subtarget->hasNEON()">, AssemblerPredicate;
+def HasFP16          : Predicate<"Subtarget->hasFP16()">, AssemblerPredicate;
 def HasDivide        : Predicate<"Subtarget->hasDivide()">, AssemblerPredicate;
 def HasT2ExtractPack : Predicate<"Subtarget->hasT2ExtractPack()">,
                                  AssemblerPredicate;
@@ -225,16 +226,6 @@ def sext_16_node : PatLeaf<(i32 GPR:$a), [{
   return CurDAG->ComputeNumSignBits(SDValue(N,0)) >= 17;
 }]>;
 
-/// bf_inv_mask_imm predicate - An AND mask to clear an arbitrary width bitfield
-/// e.g., 0xf000ffff
-def bf_inv_mask_imm : Operand<i32>,
-                      PatLeaf<(imm), [{
-  return ARM::isBitFieldInvertedMask(N->getZExtValue());
-}] > {
-  let EncoderMethod = "getBitfieldInvertedMaskOpValue";
-  let PrintMethod = "printBitfieldInvMaskImmOperand";
-}
-
 /// Split a 32-bit immediate into two 16 bit parts.
 def hi16 : SDNodeXForm<imm, [{
   return CurDAG->getTargetConstant((uint32_t)N->getZExtValue() >> 16, MVT::i32);
@@ -301,6 +292,10 @@ def fsub_mlx : PatFrag<(ops node:$lhs, node:$rhs),(fsub node:$lhs, node:$rhs),[{
 // Branch target.
 def brtarget : Operand<OtherVT> {
   let EncoderMethod = "getBranchTargetOpValue";
+}
+
+def uncondbrtarget : Operand<OtherVT> {
+  let EncoderMethod = "getUnconditionalBranchTargetOpValue";
 }
 
 // Call target.
@@ -417,32 +412,6 @@ def arm_i32imm : PatLeaf<(imm), [{
   return ARM_AM::isSOImmTwoPartVal((unsigned)N->getZExtValue());
 }]>;
 
-def so_imm2part_1 : SDNodeXForm<imm, [{
-  unsigned V = ARM_AM::getSOImmTwoPartFirst((unsigned)N->getZExtValue());
-  return CurDAG->getTargetConstant(V, MVT::i32);
-}]>;
-
-def so_imm2part_2 : SDNodeXForm<imm, [{
-  unsigned V = ARM_AM::getSOImmTwoPartSecond((unsigned)N->getZExtValue());
-  return CurDAG->getTargetConstant(V, MVT::i32);
-}]>;
-
-def so_neg_imm2part : Operand<i32>, PatLeaf<(imm), [{
-      return ARM_AM::isSOImmTwoPartVal(-(int)N->getZExtValue());
-    }]> {
-  let PrintMethod = "printSOImm2PartOperand";
-}
-
-def so_neg_imm2part_1 : SDNodeXForm<imm, [{
-  unsigned V = ARM_AM::getSOImmTwoPartFirst(-(int)N->getZExtValue());
-  return CurDAG->getTargetConstant(V, MVT::i32);
-}]>;
-
-def so_neg_imm2part_2 : SDNodeXForm<imm, [{
-  unsigned V = ARM_AM::getSOImmTwoPartSecond(-(int)N->getZExtValue());
-  return CurDAG->getTargetConstant(V, MVT::i32);
-}]>;
-
 /// imm0_31 predicate - True if the 32-bit immediate is in the range [0,31].
 def imm0_31 : Operand<i32>, PatLeaf<(imm), [{
   return (int32_t)N->getZExtValue() < 32;
@@ -460,6 +429,16 @@ def imm0_31_m1 : Operand<i32>, PatLeaf<(imm), [{
 //
 def movt_imm : Operand<i32> {
   let EncoderMethod = "getMovtImmOpValue";
+}
+
+/// bf_inv_mask_imm predicate - An AND mask to clear an arbitrary width bitfield
+/// e.g., 0xf000ffff
+def bf_inv_mask_imm : Operand<i32>,
+                      PatLeaf<(imm), [{
+  return ARM::isBitFieldInvertedMask(N->getZExtValue());
+}] > {
+  let EncoderMethod = "getBitfieldInvertedMaskOpValue";
+  let PrintMethod = "printBitfieldInvMaskImmOperand";
 }
 
 // Define ARM specific addressing modes.
@@ -492,7 +471,7 @@ def ldst_so_reg : Operand<i32>,
 //
 def addrmode2 : Operand<i32>,
                 ComplexPattern<i32, 3, "SelectAddrMode2", []> {
-  string EncoderMethod = "getAddrMode2OpValue";
+  let EncoderMethod = "getAddrMode2OpValue";
   let PrintMethod = "printAddrMode2Operand";
   let MIOperandInfo = (ops GPR:$base, GPR:$offsreg, i32imm:$offsimm);
 }
@@ -500,7 +479,7 @@ def addrmode2 : Operand<i32>,
 def am2offset : Operand<i32>,
                 ComplexPattern<i32, 2, "SelectAddrMode2Offset",
                 [], [SDNPWantRoot]> {
-  string EncoderMethod = "getAddrMode2OffsetOpValue";
+  let EncoderMethod = "getAddrMode2OffsetOpValue";
   let PrintMethod = "printAddrMode2OffsetOperand";
   let MIOperandInfo = (ops GPR, i32imm);
 }

@@ -266,6 +266,13 @@ class tPseudoInst<dag oops, dag iops, SizeFlagVal sz, InstrItinClass itin,
   list<Predicate> Predicates = [IsThumb];
 }
 
+// PseudoInst that's Thumb2-mode only.
+class t2PseudoInst<dag oops, dag iops, SizeFlagVal sz, InstrItinClass itin,
+                    list<dag> pattern>
+  : PseudoInst<oops, iops, itin, pattern> {
+  let SZ = sz;
+  list<Predicate> Predicates = [IsThumb2];
+}
 // Almost all ARM instructions are predicable.
 class I<dag oops, dag iops, AddrMode am, SizeFlagVal sz,
         IndexMode im, Format f, InstrItinClass itin,
@@ -906,7 +913,7 @@ class T1LdStSP<bits<3> opB>   : T1LoadStore<0b1001, opB>; // SP relative
 
 // Helper classes to encode Thumb1 loads and stores. For immediates, the
 // following bits are used for "opA" (see A6.2.4):
-// 
+//
 //   0b0110 => Immediate, 4 bytes
 //   0b1000 => Immediate, 2 bytes
 //   0b0111 => Immediate, 1 byte
@@ -1009,25 +1016,22 @@ class T2Iso<dag oops, dag iops, InstrItinClass itin,
 class T2Ipc<dag oops, dag iops, InstrItinClass itin,
             string opc, string asm, list<dag> pattern>
   : Thumb2I<oops, iops, AddrModeT2_pc, Size4Bytes, itin, opc, asm, "", pattern>;
-class T2Ii8s4<bit P, bit W, bit load, dag oops, dag iops, InstrItinClass itin,
+class T2Ii8s4<bit P, bit W, bit isLoad, dag oops, dag iops, InstrItinClass itin,
               string opc, string asm, list<dag> pattern>
   : Thumb2I<oops, iops, AddrModeT2_i8s4, Size4Bytes, itin, opc, asm, "",
             pattern> {
-  let Inst{31-27} = 0b11101;
-  let Inst{26-25} = 0b00;
-  let Inst{24}    = P;
-  let Inst{23}    = ?; // The U bit.
-  let Inst{22}    = 1;
-  let Inst{21}    = W;
-  let Inst{20}    = load;
-  
   bits<4> Rt;
   bits<4> Rt2;
   bits<13> addr;
+  let Inst{31-25} = 0b1110100;
+  let Inst{24}    = P;
+  let Inst{23}    = addr{8};
+  let Inst{22}    = 1;
+  let Inst{21}    = W;
+  let Inst{20}    = isLoad;
+  let Inst{19-16} = addr{12-9};
   let Inst{15-12} = Rt{3-0};
   let Inst{11-8}  = Rt2{3-0};
-  let Inst{19-16} = addr{12-9};
-  let Inst{23}    = addr{8};
   let Inst{7-0}   = addr{7-0};
 }
 
@@ -1068,11 +1072,11 @@ class T2Iidxldst<bit signed, bits<2> opcod, bit load, bit pre,
   // (P, W) = (1, 1) Pre-indexed or (0, 1) Post-indexed
   let Inst{10}    = pre; // The P bit.
   let Inst{8}     = 1; // The W bit.
-  
+
   bits<9> addr;
   let Inst{7-0} = addr{7-0};
-  let Inst{9}   = addr{8}; // Sign bit 
-  
+  let Inst{9}   = addr{8}; // Sign bit
+
   bits<4> Rt;
   bits<4> Rn;
   let Inst{15-12} = Rt{3-0};
@@ -1520,6 +1524,7 @@ class NDataXI<dag oops, dag iops, Format f, InstrItinClass itin,
   : NeonXI<oops, iops, AddrModeNone, IndexModeNone, f, itin, opc, asm,
            cstr, pattern> {
   let Inst{31-25} = 0b1111001;
+  let PostEncoderMethod = "NEONThumb2DataIPostEncoder";
 }
 
 // NEON "one register and a modified immediate" format.

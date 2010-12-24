@@ -464,11 +464,6 @@ static void ExpandResponseFiles(unsigned argc, char** argv,
       const sys::FileStatus *FileStat = respFile.getFileStatus();
       if (FileStat && FileStat->getSize() != 0) {
 
-        // Mmap the response file into memory.
-        error_code ec;
-        OwningPtr<MemoryBuffer>
-          respFilePtr(MemoryBuffer::getFile(respFile.c_str(), ec));
-
         // If we could open the file, parse its contents, otherwise
         // pass the @file option verbatim.
 
@@ -477,7 +472,9 @@ static void ExpandResponseFiles(unsigned argc, char** argv,
         // itself contain additional @file options; any such options will be
         // processed recursively.")
 
-        if (respFilePtr != 0) {
+        // Mmap the response file into memory.
+        OwningPtr<MemoryBuffer> respFilePtr;
+        if (!MemoryBuffer::getFile(respFile.c_str(), respFilePtr)) {
           ParseCStringVector(newArgv, respFilePtr->getBufferStart());
           continue;
         }
@@ -508,7 +505,7 @@ void cl::ParseCommandLineOptions(int argc, char **argv,
   }
 
   // Copy the program name into ProgName, making sure not to overflow it.
-  std::string ProgName = sys::Path(argv[0]).getLast();
+  std::string ProgName = sys::path::filename(argv[0]);
   size_t Len = std::min(ProgName.size(), size_t(79));
   memcpy(ProgramName, ProgName.data(), Len);
   ProgramName[Len] = '\0';

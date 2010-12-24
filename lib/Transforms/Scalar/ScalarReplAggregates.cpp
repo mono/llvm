@@ -31,6 +31,7 @@
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Analysis/Dominators.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -490,25 +491,38 @@ void ConvertToScalarInfo::ConvertUsesToScalar(Value *Ptr, AllocaInst *NewAI,
       // If the source and destination are both to the same alloca, then this is
       // a noop copy-to-self, just delete it.  Otherwise, emit a load and store
       // as appropriate.
-      AllocaInst *OrigAI = cast<AllocaInst>(Ptr->getUnderlyingObject(0));
+      AllocaInst *OrigAI = cast<AllocaInst>(GetUnderlyingObject(Ptr, 0));
       
-      if (MTI->getSource()->getUnderlyingObject(0) != OrigAI) {
+      if (GetUnderlyingObject(MTI->getSource(), 0) != OrigAI) {
         // Dest must be OrigAI, change this to be a load from the original
         // pointer (bitcasted), then a store to our new alloca.
         assert(MTI->getRawDest() == Ptr && "Neither use is of pointer?");
         Value *SrcPtr = MTI->getSource();
-        SrcPtr = Builder.CreateBitCast(SrcPtr, NewAI->getType());
-        
+        const PointerType* SPTy = cast<PointerType>(SrcPtr->getType());
+        const PointerType* AIPTy = cast<PointerType>(NewAI->getType());
+        if (SPTy->getAddressSpace() != AIPTy->getAddressSpace()) {
+          AIPTy = PointerType::get(AIPTy->getElementType(),
+                                   SPTy->getAddressSpace());
+        }
+        SrcPtr = Builder.CreateBitCast(SrcPtr, AIPTy);
+
         LoadInst *SrcVal = Builder.CreateLoad(SrcPtr, "srcval");
         SrcVal->setAlignment(MTI->getAlignment());
         Builder.CreateStore(SrcVal, NewAI);
-      } else if (MTI->getDest()->getUnderlyingObject(0) != OrigAI) {
+      } else if (GetUnderlyingObject(MTI->getDest(), 0) != OrigAI) {
         // Src must be OrigAI, change this to be a load from NewAI then a store
         // through the original dest pointer (bitcasted).
         assert(MTI->getRawSource() == Ptr && "Neither use is of pointer?");
         LoadInst *SrcVal = Builder.CreateLoad(NewAI, "srcval");
 
-        Value *DstPtr = Builder.CreateBitCast(MTI->getDest(), NewAI->getType());
+        const PointerType* DPTy = cast<PointerType>(MTI->getDest()->getType());
+        const PointerType* AIPTy = cast<PointerType>(NewAI->getType());
+        if (DPTy->getAddressSpace() != AIPTy->getAddressSpace()) {
+          AIPTy = PointerType::get(AIPTy->getElementType(),
+                                   DPTy->getAddressSpace());
+        }
+        Value *DstPtr = Builder.CreateBitCast(MTI->getDest(), AIPTy);
+
         StoreInst *NewStore = Builder.CreateStore(SrcVal, DstPtr);
         NewStore->setAlignment(MTI->getAlignment());
       } else {

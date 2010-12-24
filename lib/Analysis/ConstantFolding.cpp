@@ -467,7 +467,7 @@ Constant *llvm::ConstantFoldLoadFromConstPtr(Constant *C,
   
   // If this load comes from anywhere in a constant global, and if the global
   // is all undef or zero, we know what it loads.
-  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getUnderlyingObject())){
+  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(GetUnderlyingObject(CE))){
     if (GV->isConstant() && GV->hasDefinitiveInitializer()) {
       const Type *ResTy = cast<PointerType>(C->getType())->getElementType();
       if (GV->getInitializer()->isNullValue())
@@ -1216,7 +1216,7 @@ llvm::ConstantFoldCall(Function *F,
           Val.convert(APFloat::IEEEsingle, APFloat::rmNearestTiesToEven, &lost);
 
         // Conversion is always precise.
-        status = status;
+        (void)status;
         assert(status == APFloat::opOK && !lost &&
                "Precision lost during fp16 constfolding");
 
@@ -1313,4 +1313,3 @@ llvm::ConstantFoldCall(Function *F,
   }
   return 0;
 }
-

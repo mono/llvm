@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/Support/ErrorHandling.h"
+#include <cctype>
 using namespace llvm;
 
 //===----------------------------------------------------------------------===//
@@ -164,7 +165,7 @@ unsigned TargetInstrInfo::getInlineAsmLength(const char *Str,
   for (; *Str; ++Str) {
     if (*Str == '\n' || *Str == MAI.getSeparatorChar())
       atInsnStart = true;
-    if (atInsnStart && !isspace(*Str)) {
+    if (atInsnStart && !std::isspace(*Str)) {
       Length += MAI.getMaxInstLength();
       atInsnStart = false;
     }

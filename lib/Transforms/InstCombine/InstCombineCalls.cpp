@@ -234,7 +234,9 @@ Instruction *InstCombiner::SimplifyMemSet(MemSetInst *MI) {
     const Type *ITy = IntegerType::get(MI->getContext(), Len*8);  // n=1 -> i8.
     
     Value *Dest = MI->getDest();
-    Dest = Builder->CreateBitCast(Dest, PointerType::getUnqual(ITy));
+    unsigned DstAddrSp = cast<PointerType>(Dest->getType())->getAddressSpace();
+    Type *NewDstPtrTy = PointerType::get(ITy, DstAddrSp);
+    Dest = Builder->CreateBitCast(Dest, NewDstPtrTy);
 
     // Alignment 0 is identity for alignment 1 for memset, but not store.
     if (Alignment == 0) Alignment = 1;
@@ -850,11 +852,11 @@ Instruction *InstCombiner::tryOptimizeCall(CallInst *CI, const TargetData *TD) {
 Instruction *InstCombiner::visitCallSite(CallSite CS) {
   bool Changed = false;
 
-  // If the callee is a constexpr cast of a function, attempt to move the cast
-  // to the arguments of the call/invoke.
-  if (transformConstExprCastCall(CS)) return 0;
-
+  // If the callee is a pointer to a function, attempt to move any casts to the
+  // arguments of the call/invoke.
   Value *Callee = CS.getCalledValue();
+  if (!isa<Function>(Callee) && transformConstExprCastCall(CS))
+    return 0;
 
   if (Function *CalleeF = dyn_cast<Function>(Callee))
     // If the call and callee calling conventions don't match, this call must
@@ -948,12 +950,10 @@ Instruction *InstCombiner::visitCallSite(CallSite CS) {
 // attempt to move the cast to the arguments of the call/invoke.
 //
 bool InstCombiner::transformConstExprCastCall(CallSite CS) {
-  if (!isa<ConstantExpr>(CS.getCalledValue())) return false;
-  ConstantExpr *CE = cast<ConstantExpr>(CS.getCalledValue());
-  if (CE->getOpcode() != Instruction::BitCast || 
-      !isa<Function>(CE->getOperand(0)))
+  Function *Callee =
+    dyn_cast<Function>(CS.getCalledValue()->stripPointerCasts());
+  if (Callee == 0)
     return false;
-  Function *Callee = cast<Function>(CE->getOperand(0));
   Instruction *Caller = CS.getInstruction();
   const AttrListPtr &CallerPAL = CS.getAttributes();
 
@@ -1015,9 +1015,22 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
     if (!CastInst::isCastable(ActTy, ParamTy))
       return false;   // Cannot transform this parameter value.
 
-    if (CallerPAL.getParamAttributes(i + 1) 
-        & Attribute::typeIncompatible(ParamTy))
+    unsigned Attrs = CallerPAL.getParamAttributes(i + 1);
+    if (Attrs & Attribute::typeIncompatible(ParamTy))
       return false;   // Attribute not compatible with transformed value.
+    
+    // If the parameter is passed as a byval argument, then we have to have a
+    // sized type and the sized type has to have the same size as the old type.
+    if (ParamTy != ActTy && (Attrs & Attribute::ByVal)) {
+      const PointerType *ParamPTy = dyn_cast<PointerType>(ParamTy);
+      if (ParamPTy == 0 || !ParamPTy->getElementType()->isSized() || TD == 0)
+        return false;
+      
+      const Type *CurElTy = cast<PointerType>(ActTy)->getElementType();
+      if (TD->getTypeAllocSize(CurElTy) !=
+          TD->getTypeAllocSize(ParamPTy->getElementType()))
+        return false;
+    }
 
     // Converting from one pointer type to another or between a pointer and an
     // integer of the same size is safe even if we do not have a body.
@@ -1140,8 +1153,8 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
   Value *NV = NC;
   if (OldRetTy != NV->getType() && !Caller->use_empty()) {
     if (!NV->getType()->isVoidTy()) {
-      Instruction::CastOps opcode = CastInst::getCastOpcode(NC, false, 
-                                                            OldRetTy, false);
+      Instruction::CastOps opcode =
+        CastInst::getCastOpcode(NC, false, OldRetTy, false);
       NV = NC = CastInst::Create(opcode, NC, OldRetTy, "tmp");
 
       // If this is an invoke instruction, we should insert it after the first
@@ -1150,7 +1163,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
         BasicBlock::iterator I = II->getNormalDest()->getFirstNonPHI();
         InsertNewInstBefore(NC, *I);
       } else {
-        // Otherwise, it's a call, just insert cast right after the call instr
+        // Otherwise, it's a call, just insert cast right after the call.
         InsertNewInstBefore(NC, *Caller);
       }
       Worklist.AddUsersToWorkList(*Caller);
@@ -1158,7 +1171,6 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
       NV = UndefValue::get(Caller->getType());
     }
   }
-
 
   if (!Caller->use_empty())
     Caller->replaceAllUsesWith(NV);

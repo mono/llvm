@@ -1583,6 +1583,115 @@ Instruction *InstCombiner::visitICmpInstWithCastAndCast(ICmpInst &ICI) {
   return BinaryOperator::CreateNot(Result);
 }
 
+/// ProcessUGT_ADDCST_ADD - The caller has matched a pattern of the form:
+///   I = icmp ugt (add (add A, B), CI2), CI1
+/// If this is of the form:
+///   sum = a + b
+///   if (sum+128 >u 255)
+/// Then replace it with llvm.sadd.with.overflow.i8.
+///
+static Instruction *ProcessUGT_ADDCST_ADD(ICmpInst &I, Value *A, Value *B,
+                                          ConstantInt *CI2, ConstantInt *CI1,
+                                          InstCombiner &IC) {
+  // The transformation we're trying to do here is to transform this into an
+  // llvm.sadd.with.overflow.  To do this, we have to replace the original add
+  // with a narrower add, and discard the add-with-constant that is part of the
+  // range check (if we can't eliminate it, this isn't profitable).
+  
+  // In order to eliminate the add-with-constant, the compare can be its only
+  // use.
+  Instruction *AddWithCst = cast<Instruction>(I.getOperand(0));
+  if (!AddWithCst->hasOneUse()) return 0;
+  
+  // If CI2 is 2^7, 2^15, 2^31, then it might be an sadd.with.overflow.
+  if (!CI2->getValue().isPowerOf2()) return 0;
+  unsigned NewWidth = CI2->getValue().countTrailingZeros();
+  if (NewWidth != 7 && NewWidth != 15 && NewWidth != 31) return 0;
+    
+  // The width of the new add formed is 1 more than the bias.
+  ++NewWidth;
+  
+  // Check to see that CI1 is an all-ones value with NewWidth bits.
+  if (CI1->getBitWidth() == NewWidth ||
+      CI1->getValue() != APInt::getLowBitsSet(CI1->getBitWidth(), NewWidth))
+    return 0;
+  
+  // In order to replace the original add with a narrower 
+  // llvm.sadd.with.overflow, the only uses allowed are the add-with-constant
+  // and truncates that discard the high bits of the add.  Verify that this is
+  // the case.
+  Instruction *OrigAdd = cast<Instruction>(AddWithCst->getOperand(0));
+  for (Value::use_iterator UI = OrigAdd->use_begin(), E = OrigAdd->use_end();
+       UI != E; ++UI) {
+    if (*UI == AddWithCst) continue;
+    
+    // Only accept truncates for now.  We would really like a nice recursive
+    // predicate like SimplifyDemandedBits, but which goes downwards the use-def
+    // chain to see which bits of a value are actually demanded.  If the
+    // original add had another add which was then immediately truncated, we
+    // could still do the transformation.
+    TruncInst *TI = dyn_cast<TruncInst>(*UI);
+    if (TI == 0 ||
+        TI->getType()->getPrimitiveSizeInBits() > NewWidth) return 0;
+  }
+  
+  // If the pattern matches, truncate the inputs to the narrower type and
+  // use the sadd_with_overflow intrinsic to efficiently compute both the
+  // result and the overflow bit.
+  Module *M = I.getParent()->getParent()->getParent();
+  
+  const Type *NewType = IntegerType::get(OrigAdd->getContext(), NewWidth);
+  Value *F = Intrinsic::getDeclaration(M, Intrinsic::sadd_with_overflow,
+                                       &NewType, 1);
+
+  InstCombiner::BuilderTy *Builder = IC.Builder;
+  
+  // Put the new code above the original add, in case there are any uses of the
+  // add between the add and the compare.
+  Builder->SetInsertPoint(OrigAdd);
+  
+  Value *TruncA = Builder->CreateTrunc(A, NewType, A->getName()+".trunc");
+  Value *TruncB = Builder->CreateTrunc(B, NewType, B->getName()+".trunc");
+  CallInst *Call = Builder->CreateCall2(F, TruncA, TruncB, "sadd");
+  Value *Add = Builder->CreateExtractValue(Call, 0, "sadd.result");
+  Value *ZExt = Builder->CreateZExt(Add, OrigAdd->getType());
+  
+  // The inner add was the result of the narrow add, zero extended to the
+  // wider type.  Replace it with the result computed by the intrinsic.
+  IC.ReplaceInstUsesWith(*OrigAdd, ZExt);
+  
+  // The original icmp gets replaced with the overflow value.
+  return ExtractValueInst::Create(Call, 1, "sadd.overflow");
+}
+
+static Instruction *ProcessUAddIdiom(Instruction &I, Value *OrigAddV,
+                                     InstCombiner &IC) {
+  // Don't bother doing this transformation for pointers, don't do it for
+  // vectors.
+  if (!isa<IntegerType>(OrigAddV->getType())) return 0;
+  
+  // If the add is a constant expr, then we don't bother transforming it.
+  Instruction *OrigAdd = dyn_cast<Instruction>(OrigAddV);
+  if (OrigAdd == 0) return 0;
+  
+  Value *LHS = OrigAdd->getOperand(0), *RHS = OrigAdd->getOperand(1);
+  
+  // Put the new code above the original add, in case there are any uses of the
+  // add between the add and the compare.
+  InstCombiner::BuilderTy *Builder = IC.Builder;
+  Builder->SetInsertPoint(OrigAdd);
+
+  Module *M = I.getParent()->getParent()->getParent();
+  const Type *Ty = LHS->getType();
+  Value *F = Intrinsic::getDeclaration(M, Intrinsic::uadd_with_overflow, &Ty,1);
+  CallInst *Call = Builder->CreateCall2(F, LHS, RHS, "uadd");
+  Value *Add = Builder->CreateExtractValue(Call, 0);
+
+  IC.ReplaceInstUsesWith(*OrigAdd, Add);
+
+  // The original icmp gets replaced with the overflow value.
+  return ExtractValueInst::Create(Call, 1, "uadd.overflow");
+}
 
 
 Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
@@ -1646,16 +1755,36 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
   }
 
   unsigned BitWidth = 0;
-  if (TD)
-    BitWidth = TD->getTypeSizeInBits(Ty->getScalarType());
-  else if (Ty->isIntOrIntVectorTy())
+  if (Ty->isIntOrIntVectorTy())
     BitWidth = Ty->getScalarSizeInBits();
-
+  else if (TD)  // Pointers require TD info to get their size.
+    BitWidth = TD->getTypeSizeInBits(Ty->getScalarType());
+  
   bool isSignBit = false;
 
   // See if we are doing a comparison with a constant.
   if (ConstantInt *CI = dyn_cast<ConstantInt>(Op1)) {
     Value *A = 0, *B = 0;
+    
+    // Match the following pattern, which is a common idiom when writing
+    // overflow-safe integer arithmetic function.  The source performs an
+    // addition in wider type, and explicitly checks for overflow using
+    // comparisons against INT_MIN and INT_MAX.  Simplify this by using the
+    // sadd_with_overflow intrinsic.
+    //
+    // TODO: This could probably be generalized to handle other overflow-safe
+    // operations if we worked out the formulas to compute the appropriate 
+    // magic constants.
+    // 
+    // sum = a + b
+    // if (sum+128 >u 255)  ...  -> llvm.sadd.with.overflow.i8
+    {
+    ConstantInt *CI2;    // I = icmp ugt (add (add A, B), CI2), CI
+    if (I.getPredicate() == ICmpInst::ICMP_UGT &&
+        match(Op0, m_Add(m_Add(m_Value(A), m_Value(B)), m_ConstantInt(CI2))))
+      if (Instruction *Res = ProcessUGT_ADDCST_ADD(I, A, B, CI2, CI, *this))
+        return Res;
+    }
     
     // (icmp ne/eq (sub A B) 0) -> (icmp ne/eq A, B)
     if (I.isEquality() && CI->isZero() &&
@@ -2125,6 +2254,22 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
     if (match(Op0, m_Not(m_Value(A))) &&
         match(Op1, m_Not(m_Value(B))))
       return new ICmpInst(I.getPredicate(), B, A);
+
+    // (a+b) <u a  --> llvm.uadd.with.overflow.
+    // (a+b) <u b  --> llvm.uadd.with.overflow.
+    if (I.getPredicate() == ICmpInst::ICMP_ULT &&
+        match(Op0, m_Add(m_Value(A), m_Value(B))) && 
+        (Op1 == A || Op1 == B))
+      if (Instruction *R = ProcessUAddIdiom(I, Op0, *this))
+        return R;
+                                 
+    // a >u (a+b)  --> llvm.uadd.with.overflow.
+    // b >u (a+b)  --> llvm.uadd.with.overflow.
+    if (I.getPredicate() == ICmpInst::ICMP_UGT &&
+        match(Op1, m_Add(m_Value(A), m_Value(B))) &&
+        (Op0 == A || Op0 == B))
+      if (Instruction *R = ProcessUAddIdiom(I, Op1, *this))
+        return R;
   }
   
   if (I.isEquality()) {

@@ -73,7 +73,14 @@ This has a number of uses:
 
 //===---------------------------------------------------------------------===//
 
-Make the PPC branch selector target independant
+We should recognized various "overflow detection" idioms and translate them into
+llvm.uadd.with.overflow and similar intrinsics.  Here is a multiply idiom:
+
+unsigned int mul(unsigned int a,unsigned int b) {
+ if ((unsigned long long)a*b>0xffffffff)
+   exit(0);
+  return a*b;
+}
 
 //===---------------------------------------------------------------------===//
 
@@ -690,7 +697,7 @@ implementations of ceil/floor/rint.
 Consider:
 
 int test() {
-  long long input[8] = {1,1,1,1,1,1,1,1};
+  long long input[8] = {1,0,1,0,1,0,1,0};
   foo(input);
 }
 
@@ -807,6 +814,51 @@ On X86-64, we only handle f2/f3/f4 right.  On x86-32, a few of these
 generate truly horrible code, instead of using shld and friends.  On
 ARM, we end up with calls to L___lshrdi3/L___ashldi3 in f, which is
 badness.  PPC64 misses f, f5 and f6.  CellSPU aborts in isel.
+
+//===---------------------------------------------------------------------===//
+
+This (and similar related idioms):
+
+unsigned int foo(unsigned char i) {
+  return i | (i<<8) | (i<<16) | (i<<24);
+} 
+
+compiles into:
+
+define i32 @foo(i8 zeroext %i) nounwind readnone ssp noredzone {
+entry:
+  %conv = zext i8 %i to i32
+  %shl = shl i32 %conv, 8
+  %shl5 = shl i32 %conv, 16
+  %shl9 = shl i32 %conv, 24
+  %or = or i32 %shl9, %conv
+  %or6 = or i32 %or, %shl5
+  %or10 = or i32 %or6, %shl
+  ret i32 %or10
+}
+
+it would be better as:
+
+unsigned int bar(unsigned char i) {
+  unsigned int j=i | (i << 8); 
+  return j | (j<<16);
+}
+
+aka:
+
+define i32 @bar(i8 zeroext %i) nounwind readnone ssp noredzone {
+entry:
+  %conv = zext i8 %i to i32
+  %shl = shl i32 %conv, 8
+  %or = or i32 %shl, %conv
+  %shl5 = shl i32 %or, 16
+  %or6 = or i32 %shl5, %or
+  ret i32 %or6
+}
+
+or even i*0x01010101, depending on the speed of the multiplier.  The best way to
+handle this is to canonicalize it to a multiply in IR and have codegen handle
+lowering multiplies to shifts on cpus where shifts are faster.
 
 //===---------------------------------------------------------------------===//
 
@@ -1055,18 +1107,6 @@ Should also combine to x | 8.  Currently not optimized with "clang
 
 //===---------------------------------------------------------------------===//
 
-int a(int x) {return (x & 8) == 0 ? -1 : -9;}
-Should combine to (x | -9) ^ 8.  Currently not optimized with "clang
--emit-llvm-bc | opt -std-compile-opts".
-
-//===---------------------------------------------------------------------===//
-
-int a(int x) {return (x & 8) == 0 ? -9 : -1;}
-Should combine to x | -9.  Currently not optimized with "clang
--emit-llvm-bc | opt -std-compile-opts".
-
-//===---------------------------------------------------------------------===//
-
 int a(int x) {return ((x | -9) ^ 8) & x;}
 Should combine to x & -9.  Currently not optimized with "clang
 -emit-llvm-bc | opt -std-compile-opts".
@@ -1238,6 +1278,29 @@ loadpre14.c loadpre15.c
 
 actually a conditional increment: loadpre18.c loadpre19.c
 
+//===---------------------------------------------------------------------===//
+
+[LOAD PRE / STORE SINKING / SPEC HACK]
+
+This is a chunk of code from 456.hmmer:
+
+int f(int M, int *mc, int *mpp, int *tpmm, int *ip, int *tpim, int *dpp,
+     int *tpdm, int xmb, int *bp, int *ms) {
+ int k, sc;
+ for (k = 1; k <= M; k++) {
+     mc[k] = mpp[k-1]   + tpmm[k-1];
+     if ((sc = ip[k-1]  + tpim[k-1]) > mc[k])  mc[k] = sc;
+     if ((sc = dpp[k-1] + tpdm[k-1]) > mc[k])  mc[k] = sc;
+     if ((sc = xmb  + bp[k])         > mc[k])  mc[k] = sc;
+     mc[k] += ms[k];
+   }
+}
+
+It is very profitable for this benchmark to turn the conditional stores to mc[k]
+into a conditional move (select instr in IR) and allow the final store to do the
+store.  See GCC PR27313 for more details.  Note that this is valid to xform even
+with the new C++ memory model, since mc[k] is previously loaded and later
+stored.
 
 //===---------------------------------------------------------------------===//
 
@@ -1369,14 +1432,7 @@ Those should be turned into a switch.
         
 This is interesting for a couple reasons.  First, in this:
 
-        %3073 = call i8* @strcpy(i8* %3072, i8* %3071) nounwind
-        %strlen = call i32 @strlen(i8* %3072)  
-
-The strlen could be replaced with: %strlen = sub %3072, %3073, because the
-strcpy call returns a pointer to the end of the string.  Based on that, the
-endptr GEP just becomes equal to 3073, which eliminates a strlen call and GEP.
-
-Second, the memcpy+strlen strlen can be replaced with:
+The memcpy+strlen strlen can be replaced with:
 
         %3074 = call i32 @strlen([5 x i8]* @"\01LC42") nounwind readonly 
 
@@ -1449,18 +1505,6 @@ This pattern repeats several times, basically doing:
   P[A-1] = 0;
   B = strlen(P);
   where it is "obvious" that B = A-1.
-
-//===---------------------------------------------------------------------===//
-
-186.crafty also contains this code:
-
-%1906 = call i32 @strlen(i8* getelementptr ([32 x i8]* @pgn_event, i32 0,i32 0))
-%1907 = getelementptr [32 x i8]* @pgn_event, i32 0, i32 %1906
-%1908 = call i8* @strcpy(i8* %1907, i8* %1905) nounwind align 1
-%1909 = call i32 @strlen(i8* getelementptr ([32 x i8]* @pgn_event, i32 0,i32 0))
-%1910 = getelementptr [32 x i8]* @pgn_event, i32 0, i32 %1909         
-
-The last strlen is computable as 1908-@pgn_event, which means 1910=1908.
 
 //===---------------------------------------------------------------------===//
 
@@ -1985,3 +2029,39 @@ _foo:                                   ## @foo
 
 //===---------------------------------------------------------------------===//
 
+This code (from GCC PR28685):
+
+int test(int a, int b) {
+  int lt = a < b;
+  int eq = a == b;
+  if (lt)
+    return 1;
+  return eq;
+}
+
+Is compiled to:
+
+define i32 @test(i32 %a, i32 %b) nounwind readnone ssp {
+entry:
+  %cmp = icmp slt i32 %a, %b
+  br i1 %cmp, label %return, label %if.end
+
+if.end:                                           ; preds = %entry
+  %cmp5 = icmp eq i32 %a, %b
+  %conv6 = zext i1 %cmp5 to i32
+  ret i32 %conv6
+
+return:                                           ; preds = %entry
+  ret i32 1
+}
+
+it could be:
+
+define i32 @test__(i32 %a, i32 %b) nounwind readnone ssp {
+entry:
+  %0 = icmp sle i32 %a, %b
+  %retval = zext i1 %0 to i32
+  ret i32 %retval
+}
+
+//===---------------------------------------------------------------------===//

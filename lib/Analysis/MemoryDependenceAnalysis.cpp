@@ -25,6 +25,7 @@
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/PHITransAddr.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/PredIteratorCache.h"
@@ -99,7 +100,7 @@ static void RemoveFromReverseMap(DenseMap<Instruction*,
   InstIt = ReverseMap.find(Inst);
   assert(InstIt != ReverseMap.end() && "Reverse map out of sync?");
   bool Found = InstIt->second.erase(Val);
-  assert(Found && "Invalid reverse map!"); Found=Found;
+  assert(Found && "Invalid reverse map!"); (void)Found;
   if (InstIt->second.empty())
     ReverseMap.erase(InstIt);
 }
@@ -291,7 +292,7 @@ getPointerDependencyFrom(const AliasAnalysis::Location &MemLoc, bool isLoad,
         continue;
       
       // May-alias loads don't depend on each other without a dependence.
-      if (isLoad && R == AliasAnalysis::MayAlias)
+      if (isLoad && R != AliasAnalysis::MustAlias)
         continue;
 
       // Stores don't alias loads from read-only memory.
@@ -323,9 +324,9 @@ getPointerDependencyFrom(const AliasAnalysis::Location &MemLoc, bool isLoad,
       
       if (R == AliasAnalysis::NoAlias)
         continue;
-      if (R == AliasAnalysis::MayAlias)
-        return MemDepResult::getClobber(Inst);
-      return MemDepResult::getDef(Inst);
+      if (R == AliasAnalysis::MustAlias)
+        return MemDepResult::getDef(Inst);
+      return MemDepResult::getClobber(Inst);
     }
 
     // If this is an allocation, and if we know that the accessed pointer is to
@@ -338,7 +339,7 @@ getPointerDependencyFrom(const AliasAnalysis::Location &MemLoc, bool isLoad,
     // need to continue scanning until the malloc call.
     if (isa<AllocaInst>(Inst) ||
         (isa<CallInst>(Inst) && extractMallocCall(Inst))) {
-      const Value *AccessPtr = MemLoc.Ptr->getUnderlyingObject();
+      const Value *AccessPtr = GetUnderlyingObject(MemLoc.Ptr);
       
       if (AccessPtr == Inst ||
           AA->alias(Inst, 1, AccessPtr, 1) == AliasAnalysis::MustAlias)

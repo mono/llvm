@@ -19,6 +19,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include <map>
 using namespace llvm;
 
 // FIXME: Somewhat hackish to use a command line option for this. There should
@@ -198,7 +199,7 @@ std::string CodeEmitterGen::getInstructionCase(Record *R,
 }
 
 void CodeEmitterGen::run(raw_ostream &o) {
-  CodeGenTarget Target;
+  CodeGenTarget Target(Records);
   std::vector<Record*> Insts = Records.getAllDerivedDefinitions("Instruction");
 
   // For little-endian instruction bit encodings, reverse the bit order
@@ -263,7 +264,7 @@ void CodeEmitterGen::run(raw_ostream &o) {
   o << "  const unsigned opcode = MI.getOpcode();\n"
     << "  unsigned Value = InstBits[opcode];\n"
     << "  unsigned op = 0;\n"
-    << "  op = op;  // suppress warning\n"
+    << "  (void)op;  // suppress warning\n"
     << "  switch (opcode) {\n";
 
   // Emit each case statement

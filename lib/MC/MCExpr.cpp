@@ -14,7 +14,6 @@
 #include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCObjectFormat.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/Debug.h"
@@ -267,29 +266,89 @@ bool MCExpr::EvaluateAsAbsolute(int64_t &Res, const MCAssembler *Asm,
     return true;
   }
 
-  if (!EvaluateAsRelocatableImpl(Value, Asm, Layout, Addrs, Addrs) ||
-      !Value.isAbsolute()) {
-    // EvaluateAsAbsolute is defined to return the "current value" of
-    // the expression if we are given a Layout object, even in cases
-    // when the value is not fixed.
-    if (Layout) {
-      Res = Value.getConstant();
-      if (Value.getSymA()) {
-       Res += Layout->getSymbolOffset(
-          &Layout->getAssembler().getSymbolData(Value.getSymA()->getSymbol()));
-      }
-      if (Value.getSymB()) {
-       Res -= Layout->getSymbolOffset(
-          &Layout->getAssembler().getSymbolData(Value.getSymB()->getSymbol()));
-      }
-    }
-    return false;
-  }
+  // FIXME: The use if InSet = Addrs is a hack. Setting InSet causes us
+  // absolutize differences across sections and that is what the MachO writer
+  // uses Addrs for.
+  bool IsRelocatable =
+    EvaluateAsRelocatableImpl(Value, Asm, Layout, Addrs, /*InSet*/ Addrs);
 
+  // Record the current value.
   Res = Value.getConstant();
-  return true;
+
+  return IsRelocatable && Value.isAbsolute();
 }
 
+/// \brief Helper method for \see EvaluateSymbolAdd().
+static void AttemptToFoldSymbolOffsetDifference(const MCAssembler *Asm,
+                                                const MCAsmLayout *Layout,
+                                                const SectionAddrMap *Addrs,
+                                                bool InSet,
+                                                const MCSymbolRefExpr *&A,
+                                                const MCSymbolRefExpr *&B,
+                                                int64_t &Addend) {
+  if (!A || !B)
+    return;
+
+  const MCSymbol &SA = A->getSymbol();
+  const MCSymbol &SB = B->getSymbol();
+
+  if (SA.isUndefined() || SB.isUndefined())
+    return;
+
+  if (!Asm->getWriter().IsSymbolRefDifferenceFullyResolved(*Asm, A, B, InSet))
+    return;
+
+  MCSymbolData &AD = Asm->getSymbolData(SA);
+  MCSymbolData &BD = Asm->getSymbolData(SB);
+
+  if (AD.getFragment() == BD.getFragment()) {
+    Addend += (AD.getOffset() - BD.getOffset());
+
+    // Clear the symbol expr pointers to indicate we have folded these
+    // operands.
+    A = B = 0;
+    return;
+  }
+
+  if (!Layout)
+    return;
+
+  const MCSectionData &SecA = *AD.getFragment()->getParent();
+  const MCSectionData &SecB = *BD.getFragment()->getParent();
+
+  if ((&SecA != &SecB) && !Addrs)
+    return;
+
+  // Eagerly evaluate.
+  Addend += (Layout->getSymbolOffset(&Asm->getSymbolData(A->getSymbol())) -
+             Layout->getSymbolOffset(&Asm->getSymbolData(B->getSymbol())));
+  if (Addrs && (&SecA != &SecB))
+    Addend += (Addrs->lookup(&SecA) - Addrs->lookup(&SecB));
+
+  // Clear the symbol expr pointers to indicate we have folded these
+  // operands.
+  A = B = 0;
+}
+
+/// \brief Evaluate the result of an add between (conceptually) two MCValues.
+///
+/// This routine conceptually attempts to construct an MCValue:
+///   Result = (Result_A - Result_B + Result_Cst)
+/// from two MCValue's LHS and RHS where
+///   Result = LHS + RHS
+/// and
+///   Result = (LHS_A - LHS_B + LHS_Cst) + (RHS_A - RHS_B + RHS_Cst).
+///
+/// This routine attempts to aggresively fold the operands such that the result
+/// is representable in an MCValue, but may not always succeed.
+///
+/// \returns True on success, false if the result is not representable in an
+/// MCValue.
+
+/// NOTE: It is really important to have both the Asm and Layout arguments.
+/// They might look redundant, but this function can be used before layout
+/// is done (see the object streamer for example) and having the Asm argument
+/// lets us avoid relaxations early.
 static bool EvaluateSymbolicAdd(const MCAssembler *Asm,
                                 const MCAsmLayout *Layout,
                                 const SectionAddrMap *Addrs,
@@ -297,73 +356,62 @@ static bool EvaluateSymbolicAdd(const MCAssembler *Asm,
                                 const MCValue &LHS,const MCSymbolRefExpr *RHS_A,
                                 const MCSymbolRefExpr *RHS_B, int64_t RHS_Cst,
                                 MCValue &Res) {
-  // We can't add or subtract two symbols.
-  if ((LHS.getSymA() && RHS_A) ||
-      (LHS.getSymB() && RHS_B))
+  // FIXME: This routine (and other evaluation parts) are *incredibly* sloppy
+  // about dealing with modifiers. This will ultimately bite us, one day.
+  const MCSymbolRefExpr *LHS_A = LHS.getSymA();
+  const MCSymbolRefExpr *LHS_B = LHS.getSymB();
+  int64_t LHS_Cst = LHS.getConstant();
+
+  // Fold the result constant immediately.
+  int64_t Result_Cst = LHS_Cst + RHS_Cst;
+
+  assert((!Layout || Asm) &&
+         "Must have an assembler object if layout is given!");
+
+  // If we have a layout, we can fold resolved differences.
+  if (Asm) {
+    // First, fold out any differences which are fully resolved. By
+    // reassociating terms in
+    //   Result = (LHS_A - LHS_B + LHS_Cst) + (RHS_A - RHS_B + RHS_Cst).
+    // we have the four possible differences:
+    //   (LHS_A - LHS_B),
+    //   (LHS_A - RHS_B),
+    //   (RHS_A - LHS_B),
+    //   (RHS_A - RHS_B).
+    // Since we are attempting to be as aggresive as possible about folding, we
+    // attempt to evaluate each possible alternative.
+    AttemptToFoldSymbolOffsetDifference(Asm, Layout, Addrs, InSet, LHS_A, LHS_B,
+                                        Result_Cst);
+    AttemptToFoldSymbolOffsetDifference(Asm, Layout, Addrs, InSet, LHS_A, RHS_B,
+                                        Result_Cst);
+    AttemptToFoldSymbolOffsetDifference(Asm, Layout, Addrs, InSet, RHS_A, LHS_B,
+                                        Result_Cst);
+    AttemptToFoldSymbolOffsetDifference(Asm, Layout, Addrs, InSet, RHS_A, RHS_B,
+                                        Result_Cst);
+  }
+
+  // We can't represent the addition or subtraction of two symbols.
+  if ((LHS_A && RHS_A) || (LHS_B && RHS_B))
     return false;
 
-  const MCSymbolRefExpr *A = LHS.getSymA() ? LHS.getSymA() : RHS_A;
-  const MCSymbolRefExpr *B = LHS.getSymB() ? LHS.getSymB() : RHS_B;
-  if (B) {
-    // If we have a negated symbol, then we must have also have a non-negated
-    // symbol in order to encode the expression. We can do this check later to
-    // permit expressions which eventually fold to a representable form -- such
-    // as (a + (0 - b)) -- if necessary.
-    if (!A)
-      return false;
-  }
+  // At this point, we have at most one additive symbol and one subtractive
+  // symbol -- find them.
+  const MCSymbolRefExpr *A = LHS_A ? LHS_A : RHS_A;
+  const MCSymbolRefExpr *B = LHS_B ? LHS_B : RHS_B;
 
-  // Absolutize symbol differences between defined symbols when we have a
-  // layout object and the target requests it.
+  // If we have a negated symbol, then we must have also have a non-negated
+  // symbol in order to encode the expression.
+  if (B && !A)
+    return false;
 
-  assert(!(Layout && !Asm));
-
-  if (Asm && A && B) {
-    const MCSymbol &SA = A->getSymbol();
-    const MCSymbol &SB = B->getSymbol();
-    const MCObjectFormat &F = Asm->getBackend().getObjectFormat();
-    if (SA.isDefined() && SB.isDefined() && F.isAbsolute(InSet, SA, SB)) {
-      MCSymbolData &AD = Asm->getSymbolData(A->getSymbol());
-      MCSymbolData &BD = Asm->getSymbolData(B->getSymbol());
-
-      if (AD.getFragment() == BD.getFragment()) {
-        Res = MCValue::get(+ AD.getOffset()
-                           - BD.getOffset()
-                           + LHS.getConstant()
-                           + RHS_Cst);
-        return true;
-      }
-
-      if (Layout) {
-        const MCSectionData &SecA = *AD.getFragment()->getParent();
-        const MCSectionData &SecB = *BD.getFragment()->getParent();
-        int64_t Val = + Layout->getSymbolOffset(&AD)
-                      - Layout->getSymbolOffset(&BD)
-                      + LHS.getConstant()
-                      + RHS_Cst;
-        if (&SecA != &SecB) {
-          if (!Addrs)
-            return false;
-          Val += Addrs->lookup(&SecA);
-          Val -= Addrs->lookup(&SecB);
-        }
-        Res = MCValue::get(Val);
-        return true;
-      }
-    }
-  }
-
-  Res = MCValue::get(A, B, LHS.getConstant() + RHS_Cst);
+  Res = MCValue::get(A, B, Result_Cst);
   return true;
 }
 
 bool MCExpr::EvaluateAsRelocatable(MCValue &Res,
-                                   const MCAsmLayout *Layout) const {
-  if (Layout)
-    return EvaluateAsRelocatableImpl(Res, &Layout->getAssembler(), Layout,
-                                     0, false);
-  else
-    return EvaluateAsRelocatableImpl(Res, 0, 0, 0, false);
+                                   const MCAsmLayout &Layout) const {
+  return EvaluateAsRelocatableImpl(Res, &Layout.getAssembler(), &Layout,
+                                   0, false);
 }
 
 bool MCExpr::EvaluateAsRelocatableImpl(MCValue &Res,

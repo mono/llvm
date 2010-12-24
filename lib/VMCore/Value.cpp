@@ -255,7 +255,7 @@ void Value::takeName(Value *V) {
   // Get V's ST, this should always succed, because V has a name.
   ValueSymbolTable *VST;
   bool Failure = getSymTab(V, VST);
-  assert(!Failure && "V has a name, so it should have a ST!"); Failure=Failure;
+  assert(!Failure && "V has a name, so it should have a ST!"); (void)Failure;
 
   // If these values are both in the same symtab, we can do this very fast.
   // This works even if both values have no symtab yet.
@@ -343,27 +343,6 @@ Value *Value::stripPointerCasts() {
     assert(V->getType()->isPointerTy() && "Unexpected operand type!");
   } while (Visited.insert(V));
 
-  return V;
-}
-
-Value *Value::getUnderlyingObject(unsigned MaxLookup) {
-  if (!getType()->isPointerTy())
-    return this;
-  Value *V = this;
-  for (unsigned Count = 0; MaxLookup == 0 || Count < MaxLookup; ++Count) {
-    if (GEPOperator *GEP = dyn_cast<GEPOperator>(V)) {
-      V = GEP->getPointerOperand();
-    } else if (Operator::getOpcode(V) == Instruction::BitCast) {
-      V = cast<Operator>(V)->getOperand(0);
-    } else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(V)) {
-      if (GA->mayBeOverridden())
-        return V;
-      V = GA->getAliasee();
-    } else {
-      return V;
-    }
-    assert(V->getType()->isPointerTy() && "Unexpected operand type!");
-  }
   return V;
 }
 

@@ -1488,11 +1488,11 @@ bool FilterChooser::emit(raw_ostream &o, unsigned &Indentation) {
 
 class ARMDecoderEmitter::ARMDEBackend {
 public:
-  ARMDEBackend(ARMDecoderEmitter &frontend) :
+  ARMDEBackend(ARMDecoderEmitter &frontend, RecordKeeper &Records) :
     NumberedInstructions(),
     Opcodes(),
     Frontend(frontend),
-    Target(),
+    Target(Records),
     FC(NULL)
   {
     if (Target.getName() == "ARM")
@@ -1613,11 +1613,6 @@ ARMDEBackend::populateInstruction(const CodeGenInstruction &CGI,
         Name == "VNEGScc")
       return false;
 
-    // Ignore the *_sfp instructions when decoding.  They are used by the
-    // compiler to implement scalar floating point operations using vector
-    // operations in order to work around some performance issues.
-    if (Name.find("_sfp") != std::string::npos) return false;
-
     // LDMIA_RET is a special case of LDM (Load Multiple) where the registers
     // loaded include the PC, causing a branch to a loaded address.  Ignore
     // the LDMIA_RET instruction when decoding.
@@ -1684,12 +1679,8 @@ ARMDEBackend::populateInstruction(const CodeGenInstruction &CGI,
     if (Name == "tTPsoft" || Name == "t2TPsoft")
       return false;
 
-    // Ignore tLEApcrel and tLEApcrelJT, prefer tADDrPCi.
-    if (Name == "tLEApcrel" || Name == "tLEApcrelJT")
-      return false;
-
-    // Ignore t2LEApcrel, prefer the generic t2ADD* for disassembly printing.
-    if (Name == "t2LEApcrel")
+    // Ignore tADR, prefer tADDrPCi.
+    if (Name == "tADR")
       return false;
 
     // Ignore tADDrSP, tADDspr, and tPICADD, prefer the generic tADDhirr.
@@ -1716,25 +1707,24 @@ ARMDEBackend::populateInstruction(const CodeGenInstruction &CGI,
     //   tSpill conflicts with tSTRspi
     //   tLDRcp conflicts with tLDRspi
     //   tRestore conflicts with tLDRspi
-    //   t2LEApcrelJT conflicts with t2LEApcrel
     //   t2MOVCCi16 conflicts with tMOVi16
     if (Name == "tBfar" ||
         Name == "tPOP_RET" || Name == "t2LDMIA_RET" ||
         Name == "tMOVCCi" || Name == "tMOVCCr" ||
         Name == "tSpill" || Name == "tLDRcp" || Name == "tRestore" ||
-        Name == "t2LEApcrelJT" || Name == "t2MOVCCi16")
+        Name == "t2MOVCCi16")
       return false;
   }
 
-  // Dumps the instruction encoding format.
-  switch (TargetName) {
-  case TARGET_ARM:
-  case TARGET_THUMB:
-    DEBUG(errs() << Name << " " << stringForARMFormat((ARMFormat)Form));
-    break;
-  }
-
   DEBUG({
+      // Dumps the instruction encoding format.
+      switch (TargetName) {
+      case TARGET_ARM:
+      case TARGET_THUMB:
+        errs() << Name << " " << stringForARMFormat((ARMFormat)Form);
+        break;
+      }
+
       errs() << " ";
 
       // Dumps the instruction encoding bits.
@@ -1843,7 +1833,7 @@ void ARMDecoderEmitter::ARMDEBackend::emit(raw_ostream &o) {
 
 void ARMDecoderEmitter::initBackend()
 {
-    Backend = new ARMDEBackend(*this);
+  Backend = new ARMDEBackend(*this, Records);
 }
 
 void ARMDecoderEmitter::run(raw_ostream &o)

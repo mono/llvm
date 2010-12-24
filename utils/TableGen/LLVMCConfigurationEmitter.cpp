@@ -768,12 +768,19 @@ public:
 
     CheckNumberOfArguments(d, 2);
 
+    // Alias option store the aliased option name in the 'Help' field and do not
+    // have any properties.
     if (OD.isAlias()) {
-      // Aliases store the aliased option name in the 'Help' field.
       OD.Help = InitPtrToString(d.getArg(1));
     }
     else {
       processOptionProperties(d, OD);
+    }
+
+    // Switch options are ZeroOrMore by default.
+    if (OD.isSwitch()) {
+      if (!(OD.isOptional() || OD.isOneOrMore() || OD.isRequired()))
+        OD.setZeroOrMore();
     }
 
     OptDescs_.InsertDescription(OD);
@@ -3028,7 +3035,8 @@ void CheckDriverData(DriverData& Data) {
   CheckForSuperfluousOptions(Data.Edges, Data.ToolDescs, Data.OptDescs);
 }
 
-void EmitDriverCode(const DriverData& Data, raw_ostream& O) {
+void EmitDriverCode(const DriverData& Data, 
+                    raw_ostream& O, RecordKeeper &Records) {
   // Emit file header.
   EmitIncludes(O);
 
@@ -3089,7 +3097,7 @@ void LLVMCConfigurationEmitter::run (raw_ostream &O) {
     CheckDriverData(Data);
 
     this->EmitSourceFileHeader("llvmc-based driver: auto-generated code", O);
-    EmitDriverCode(Data, O);
+    EmitDriverCode(Data, O, Records);
 
   } catch (std::exception& Error) {
     throw Error.what() + std::string(" - usually this means a syntax error.");

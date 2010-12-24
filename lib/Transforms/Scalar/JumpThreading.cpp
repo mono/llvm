@@ -168,40 +168,38 @@ bool JumpThreading::runOnFunction(Function &F) {
         LVI->eraseBlock(BB);
         DeleteDeadBlock(BB);
         Changed = true;
-      } else if (BranchInst *BI = dyn_cast<BranchInst>(BB->getTerminator())) {
-        // Can't thread an unconditional jump, but if the block is "almost
-        // empty", we can replace uses of it with uses of the successor and make
-        // this dead.
-        if (BI->isUnconditional() &&
-            BB != &BB->getParent()->getEntryBlock()) {
-          BasicBlock::iterator BBI = BB->getFirstNonPHI();
-          // Ignore dbg intrinsics.
-          while (isa<DbgInfoIntrinsic>(BBI))
-            ++BBI;
+        continue;
+      }
+      
+      BranchInst *BI = dyn_cast<BranchInst>(BB->getTerminator());
+      
+      // Can't thread an unconditional jump, but if the block is "almost
+      // empty", we can replace uses of it with uses of the successor and make
+      // this dead.
+      if (BI && BI->isUnconditional() &&
+          BB != &BB->getParent()->getEntryBlock() &&
           // If the terminator is the only non-phi instruction, try to nuke it.
-          if (BBI->isTerminator()) {
-            // Since TryToSimplifyUncondBranchFromEmptyBlock may delete the
-            // block, we have to make sure it isn't in the LoopHeaders set.  We
-            // reinsert afterward if needed.
-            bool ErasedFromLoopHeaders = LoopHeaders.erase(BB);
-            BasicBlock *Succ = BI->getSuccessor(0);
+          BB->getFirstNonPHIOrDbg()->isTerminator()) {
+        // Since TryToSimplifyUncondBranchFromEmptyBlock may delete the
+        // block, we have to make sure it isn't in the LoopHeaders set.  We
+        // reinsert afterward if needed.
+        bool ErasedFromLoopHeaders = LoopHeaders.erase(BB);
+        BasicBlock *Succ = BI->getSuccessor(0);
 
-            // FIXME: It is always conservatively correct to drop the info
-            // for a block even if it doesn't get erased.  This isn't totally
-            // awesome, but it allows us to use AssertingVH to prevent nasty
-            // dangling pointer issues within LazyValueInfo.
-            LVI->eraseBlock(BB);
-            if (TryToSimplifyUncondBranchFromEmptyBlock(BB)) {
-              Changed = true;
-              // If we deleted BB and BB was the header of a loop, then the
-              // successor is now the header of the loop.
-              BB = Succ;
-            }
-
-            if (ErasedFromLoopHeaders)
-              LoopHeaders.insert(BB);
-          }
+        // FIXME: It is always conservatively correct to drop the info
+        // for a block even if it doesn't get erased.  This isn't totally
+        // awesome, but it allows us to use AssertingVH to prevent nasty
+        // dangling pointer issues within LazyValueInfo.
+        LVI->eraseBlock(BB);
+        if (TryToSimplifyUncondBranchFromEmptyBlock(BB)) {
+          Changed = true;
+          // If we deleted BB and BB was the header of a loop, then the
+          // successor is now the header of the loop.
+          BB = Succ;
         }
+
+        if (ErasedFromLoopHeaders)
+          LoopHeaders.insert(BB);
       }
     }
     EverChanged |= Changed;
@@ -537,6 +535,40 @@ ComputeValueKnownInPredecessors(Value *V, BasicBlock *BB, PredValueInfo &Result,
 
         return !Result.empty();
       }
+    }
+  }
+
+  if (SelectInst *SI = dyn_cast<SelectInst>(I)) {
+    // Handle select instructions where at least one operand is a known constant
+    // and we can figure out the condition value for any predecessor block.
+    Constant *TrueVal = getKnownConstant(SI->getTrueValue(), Preference);
+    Constant *FalseVal = getKnownConstant(SI->getFalseValue(), Preference);
+    PredValueInfoTy Conds;
+    if ((TrueVal || FalseVal) &&
+        ComputeValueKnownInPredecessors(SI->getCondition(), BB, Conds,
+                                        WantInteger)) {
+      for (unsigned i = 0, e = Conds.size(); i != e; ++i) {
+        Constant *Cond = Conds[i].first;
+
+        // Figure out what value to use for the condition.
+        bool KnownCond;
+        if (ConstantInt *CI = dyn_cast<ConstantInt>(Cond)) {
+          // A known boolean.
+          KnownCond = CI->isOne();
+        } else {
+          assert(isa<UndefValue>(Cond) && "Unexpected condition value");
+          // Either operand will do, so be sure to pick the one that's a known
+          // constant.
+          // FIXME: Do this more cleverly if both values are known constants?
+          KnownCond = (TrueVal != 0);
+        }
+
+        // See if the select has a known constant value for this predecessor.
+        if (Constant *Val = KnownCond ? TrueVal : FalseVal)
+          Result.push_back(std::make_pair(Val, Conds[i].second));
+      }
+
+      return !Result.empty();
     }
   }
 
@@ -952,7 +984,7 @@ FindMostPopularDest(BasicBlock *BB,
     }
   }
 
-  // Okay, now we know the most popular destination.  If there is more than
+  // Okay, now we know the most popular destination.  If there is more than one
   // destination, we need to determine one.  This is arbitrary, but we need
   // to make a deterministic decision.  Pick the first one that appears in the
   // successor list.
@@ -1032,7 +1064,7 @@ bool JumpThreading::ProcessThreadableEdges(Value *Cond, BasicBlock *BB,
     }
 
     // If we have exactly one destination, remember it for efficiency below.
-    if (i == 0)
+    if (PredToDestList.empty())
       OnlyDest = DestBB;
     else if (OnlyDest != DestBB)
       OnlyDest = MultipleDestSentinel;

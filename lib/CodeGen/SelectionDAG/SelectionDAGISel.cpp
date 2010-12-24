@@ -43,6 +43,7 @@
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -239,6 +240,44 @@ static bool FunctionCallsSetJmp(const Function *F) {
 #undef NUM_RETURNS_TWICE_FNS
 }
 
+/// SplitCriticalSideEffectEdges - Look for critical edges with a PHI value that
+/// may trap on it.  In this case we have to split the edge so that the path
+/// through the predecessor block that doesn't go to the phi block doesn't
+/// execute the possibly trapping instruction.
+///
+/// This is required for correctness, so it must be done at -O0.
+///
+static void SplitCriticalSideEffectEdges(Function &Fn, Pass *SDISel) {
+  // Loop for blocks with phi nodes.
+  for (Function::iterator BB = Fn.begin(), E = Fn.end(); BB != E; ++BB) {
+    PHINode *PN = dyn_cast<PHINode>(BB->begin());
+    if (PN == 0) continue;
+    
+  ReprocessBlock:
+    // For each block with a PHI node, check to see if any of the input values
+    // are potentially trapping constant expressions.  Constant expressions are
+    // the only potentially trapping value that can occur as the argument to a
+    // PHI.
+    for (BasicBlock::iterator I = BB->begin(); (PN = dyn_cast<PHINode>(I)); ++I)
+      for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
+        ConstantExpr *CE = dyn_cast<ConstantExpr>(PN->getIncomingValue(i));
+        if (CE == 0 || !CE->canTrap()) continue;
+        
+        // The only case we have to worry about is when the edge is critical.
+        // Since this block has a PHI Node, we assume it has multiple input
+        // edges: check to see if the pred has multiple successors.
+        BasicBlock *Pred = PN->getIncomingBlock(i);
+        if (Pred->getTerminator()->getNumSuccessors() == 1)
+          continue;
+        
+        // Okay, we have to split this edge.
+        SplitCriticalEdge(Pred->getTerminator(),
+                          GetSuccessorNumber(Pred, BB), SDISel, true);
+        goto ReprocessBlock;
+      }
+  }
+}
+
 bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
   // Do some sanity-checking on the command-line options.
   assert((!EnableFastISelVerbose || EnableFastISel) &&
@@ -257,6 +296,8 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
 
   DEBUG(dbgs() << "\n\n\n=== " << Fn.getName() << "\n");
 
+  SplitCriticalSideEffectEdges(const_cast<Function&>(Fn), this);
+  
   CurDAG->init(*MF);
   FuncInfo->set(Fn, *MF);
   SDB->init(GFI, *AA);
@@ -1246,8 +1287,8 @@ SelectInlineAsmMemoryOperands(std::vector<SDValue> &Ops) {
   Ops.push_back(InOps[InlineAsm::Op_IsAlignStack]);  // 3
 
   unsigned i = InlineAsm::Op_FirstOperand, e = InOps.size();
-  if (InOps[e-1].getValueType() == MVT::Flag)
-    --e;  // Don't process a flag operand if it is here.
+  if (InOps[e-1].getValueType() == MVT::Glue)
+    --e;  // Don't process a glue operand if it is here.
 
   while (i != e) {
     unsigned Flags = cast<ConstantSDNode>(InOps[i])->getZExtValue();
@@ -1274,15 +1315,15 @@ SelectInlineAsmMemoryOperands(std::vector<SDValue> &Ops) {
     }
   }
 
-  // Add the flag input back if present.
+  // Add the glue input back if present.
   if (e != InOps.size())
     Ops.push_back(InOps.back());
 }
 
-/// findFlagUse - Return use of EVT::Flag value produced by the specified
+/// findGlueUse - Return use of MVT::Glue value produced by the specified
 /// SDNode.
 ///
-static SDNode *findFlagUse(SDNode *N) {
+static SDNode *findGlueUse(SDNode *N) {
   unsigned FlagResNo = N->getNumValues()-1;
   for (SDNode::use_iterator I = N->use_begin(), E = N->use_end(); I != E; ++I) {
     SDUse &Use = I.getUse();
@@ -1304,7 +1345,7 @@ static bool findNonImmUse(SDNode *Use, SDNode* Def, SDNode *ImmedUse,
   // never find it.
   //
   // The Use may be -1 (unassigned) if it is a newly allocated node.  This can
-  // happen because we scan down to newly selected nodes in the case of flag
+  // happen because we scan down to newly selected nodes in the case of glue
   // uses.
   if ((Use->getNodeId() < Def->getNodeId() && Use->getNodeId() != -1))
     return false;
@@ -1365,8 +1406,8 @@ bool SelectionDAGISel::IsLegalToFold(SDValue N, SDNode *U, SDNode *Root,
   //
   // * indicates nodes to be folded together.
   //
-  // If Root produces a flag, then it gets (even more) interesting. Since it
-  // will be "glued" together with its flag use in the scheduler, we need to
+  // If Root produces glue, then it gets (even more) interesting. Since it
+  // will be "glued" together with its glue use in the scheduler, we need to
   // check if it might reach N.
   //
   //          [N*]           //
@@ -1384,24 +1425,24 @@ bool SelectionDAGISel::IsLegalToFold(SDValue N, SDNode *U, SDNode *Root,
   //           ^   /         //
   //           f  /          //
   //           | /           //
-  //          [FU]           //
+  //          [GU]           //
   //
-  // If FU (flag use) indirectly reaches N (the load), and Root folds N
-  // (call it Fold), then X is a predecessor of FU and a successor of
-  // Fold. But since Fold and FU are flagged together, this will create
+  // If GU (glue use) indirectly reaches N (the load), and Root folds N
+  // (call it Fold), then X is a predecessor of GU and a successor of
+  // Fold. But since Fold and GU are glued together, this will create
   // a cycle in the scheduling graph.
 
-  // If the node has flags, walk down the graph to the "lowest" node in the
-  // flagged set.
+  // If the node has glue, walk down the graph to the "lowest" node in the
+  // glueged set.
   EVT VT = Root->getValueType(Root->getNumValues()-1);
-  while (VT == MVT::Flag) {
-    SDNode *FU = findFlagUse(Root);
-    if (FU == NULL)
+  while (VT == MVT::Glue) {
+    SDNode *GU = findGlueUse(Root);
+    if (GU == NULL)
       break;
-    Root = FU;
+    Root = GU;
     VT = Root->getValueType(Root->getNumValues()-1);
     
-    // If our query node has a flag result with a use, we've walked up it.  If
+    // If our query node has a glue result with a use, we've walked up it.  If
     // the user (which has already been selected) has a chain or indirectly uses
     // the chain, our WalkChainUsers predicate will not consider it.  Because of
     // this, we cannot ignore chains in this predicate.
@@ -1419,7 +1460,7 @@ SDNode *SelectionDAGISel::Select_INLINEASM(SDNode *N) {
     
   std::vector<EVT> VTs;
   VTs.push_back(MVT::Other);
-  VTs.push_back(MVT::Flag);
+  VTs.push_back(MVT::Glue);
   SDValue New = CurDAG->getNode(ISD::INLINEASM, N->getDebugLoc(),
                                 VTs, &Ops[0], Ops.size());
   New->setNodeId(-1);
@@ -1448,20 +1489,20 @@ GetVBR(uint64_t Val, const unsigned char *MatcherTable, unsigned &Idx) {
 }
 
 
-/// UpdateChainsAndFlags - When a match is complete, this method updates uses of
-/// interior flag and chain results to use the new flag and chain results.
+/// UpdateChainsAndGlue - When a match is complete, this method updates uses of
+/// interior glue and chain results to use the new glue and chain results.
 void SelectionDAGISel::
-UpdateChainsAndFlags(SDNode *NodeToMatch, SDValue InputChain,
-                     const SmallVectorImpl<SDNode*> &ChainNodesMatched,
-                     SDValue InputFlag,
-                     const SmallVectorImpl<SDNode*> &FlagResultNodesMatched,
-                     bool isMorphNodeTo) {
+UpdateChainsAndGlue(SDNode *NodeToMatch, SDValue InputChain,
+                    const SmallVectorImpl<SDNode*> &ChainNodesMatched,
+                    SDValue InputGlue,
+                    const SmallVectorImpl<SDNode*> &GlueResultNodesMatched,
+                    bool isMorphNodeTo) {
   SmallVector<SDNode*, 4> NowDeadNodes;
   
   ISelUpdater ISU(ISelPosition);
 
   // Now that all the normal results are replaced, we replace the chain and
-  // flag results if present.
+  // glue results if present.
   if (!ChainNodesMatched.empty()) {
     assert(InputChain.getNode() != 0 &&
            "Matched input chains but didn't produce a chain");
@@ -1480,7 +1521,7 @@ UpdateChainsAndFlags(SDNode *NodeToMatch, SDValue InputChain,
         continue;
       
       SDValue ChainVal = SDValue(ChainNode, ChainNode->getNumValues()-1);
-      if (ChainVal.getValueType() == MVT::Flag)
+      if (ChainVal.getValueType() == MVT::Glue)
         ChainVal = ChainVal.getValue(ChainVal->getNumValues()-2);
       assert(ChainVal.getValueType() == MVT::Other && "Not a chain?");
       CurDAG->ReplaceAllUsesOfValueWith(ChainVal, InputChain, &ISU);
@@ -1492,21 +1533,21 @@ UpdateChainsAndFlags(SDNode *NodeToMatch, SDValue InputChain,
     }
   }
   
-  // If the result produces a flag, update any flag results in the matched
-  // pattern with the flag result.
-  if (InputFlag.getNode() != 0) {
+  // If the result produces glue, update any glue results in the matched
+  // pattern with the glue result.
+  if (InputGlue.getNode() != 0) {
     // Handle any interior nodes explicitly marked.
-    for (unsigned i = 0, e = FlagResultNodesMatched.size(); i != e; ++i) {
-      SDNode *FRN = FlagResultNodesMatched[i];
+    for (unsigned i = 0, e = GlueResultNodesMatched.size(); i != e; ++i) {
+      SDNode *FRN = GlueResultNodesMatched[i];
       
       // If this node was already deleted, don't look at it.
       if (FRN->getOpcode() == ISD::DELETED_NODE)
         continue;
       
-      assert(FRN->getValueType(FRN->getNumValues()-1) == MVT::Flag &&
-             "Doesn't have a flag result");
+      assert(FRN->getValueType(FRN->getNumValues()-1) == MVT::Glue &&
+             "Doesn't have a glue result");
       CurDAG->ReplaceAllUsesOfValueWith(SDValue(FRN, FRN->getNumValues()-1),
-                                        InputFlag, &ISU);
+                                        InputGlue, &ISU);
       
       // If the node became dead and we haven't already seen it, delete it.
       if (FRN->use_empty() &&
@@ -1704,15 +1745,15 @@ MorphNode(SDNode *Node, unsigned TargetOpc, SDVTList VTList,
           const SDValue *Ops, unsigned NumOps, unsigned EmitNodeInfo) {
   // It is possible we're using MorphNodeTo to replace a node with no
   // normal results with one that has a normal result (or we could be
-  // adding a chain) and the input could have flags and chains as well.
+  // adding a chain) and the input could have glue and chains as well.
   // In this case we need to shift the operands down.
   // FIXME: This is a horrible hack and broken in obscure cases, no worse
   // than the old isel though.
-  int OldFlagResultNo = -1, OldChainResultNo = -1;
+  int OldGlueResultNo = -1, OldChainResultNo = -1;
 
   unsigned NTMNumResults = Node->getNumValues();
-  if (Node->getValueType(NTMNumResults-1) == MVT::Flag) {
-    OldFlagResultNo = NTMNumResults-1;
+  if (Node->getValueType(NTMNumResults-1) == MVT::Glue) {
+    OldGlueResultNo = NTMNumResults-1;
     if (NTMNumResults != 1 &&
         Node->getValueType(NTMNumResults-2) == MVT::Other)
       OldChainResultNo = NTMNumResults-2;
@@ -1733,13 +1774,13 @@ MorphNode(SDNode *Node, unsigned TargetOpc, SDVTList VTList,
   }
 
   unsigned ResNumResults = Res->getNumValues();
-  // Move the flag if needed.
-  if ((EmitNodeInfo & OPFL_FlagOutput) && OldFlagResultNo != -1 &&
-      (unsigned)OldFlagResultNo != ResNumResults-1)
-    CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, OldFlagResultNo), 
+  // Move the glue if needed.
+  if ((EmitNodeInfo & OPFL_GlueOutput) && OldGlueResultNo != -1 &&
+      (unsigned)OldGlueResultNo != ResNumResults-1)
+    CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, OldGlueResultNo), 
                                       SDValue(Res, ResNumResults-1));
 
-  if ((EmitNodeInfo & OPFL_FlagOutput) != 0)
+  if ((EmitNodeInfo & OPFL_GlueOutput) != 0)
     --ResNumResults;
 
   // Move the chain reference if needed.
@@ -1937,11 +1978,11 @@ struct MatchScope {
   /// NumMatchedMemRefs - The number of matched memref entries.
   unsigned NumMatchedMemRefs;
   
-  /// InputChain/InputFlag - The current chain/flag 
-  SDValue InputChain, InputFlag;
+  /// InputChain/InputGlue - The current chain/glue 
+  SDValue InputChain, InputGlue;
 
   /// HasChainNodesMatched - True if the ChainNodesMatched list is non-empty.
-  bool HasChainNodesMatched, HasFlagResultNodesMatched;
+  bool HasChainNodesMatched, HasGlueResultNodesMatched;
 };
 
 }
@@ -2004,17 +2045,17 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
   // pattern.
   SmallVector<MachineMemOperand*, 2> MatchedMemRefs;
   
-  // These are the current input chain and flag for use when generating nodes.
+  // These are the current input chain and glue for use when generating nodes.
   // Various Emit operations change these.  For example, emitting a copytoreg
   // uses and updates these.
-  SDValue InputChain, InputFlag;
+  SDValue InputChain, InputGlue;
   
   // ChainNodesMatched - If a pattern matches nodes that have input/output
   // chains, the OPC_EmitMergeInputChains operation is emitted which indicates
   // which ones they are.  The result is captured into this list so that we can
   // update the chain results when the pattern is complete.
   SmallVector<SDNode*, 3> ChainNodesMatched;
-  SmallVector<SDNode*, 3> FlagResultNodesMatched;
+  SmallVector<SDNode*, 3> GlueResultNodesMatched;
   
   DEBUG(errs() << "ISEL: Starting pattern match on root node: ";
         NodeToMatch->dump(CurDAG);
@@ -2118,9 +2159,9 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       NewEntry.NumRecordedNodes = RecordedNodes.size();
       NewEntry.NumMatchedMemRefs = MatchedMemRefs.size();
       NewEntry.InputChain = InputChain;
-      NewEntry.InputFlag = InputFlag;
+      NewEntry.InputGlue = InputGlue;
       NewEntry.HasChainNodesMatched = !ChainNodesMatched.empty();
-      NewEntry.HasFlagResultNodesMatched = !FlagResultNodesMatched.empty();
+      NewEntry.HasGlueResultNodesMatched = !GlueResultNodesMatched.empty();
       MatchScopes.push_back(NewEntry);
       continue;
     }
@@ -2149,11 +2190,11 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       MatchedMemRefs.push_back(cast<MemSDNode>(N)->getMemOperand());
       continue;
         
-    case OPC_CaptureFlagInput:
-      // If the current node has an input flag, capture it in InputFlag.
+    case OPC_CaptureGlueInput:
+      // If the current node has an input glue, capture it in InputGlue.
       if (N->getNumOperands() != 0 &&
-          N->getOperand(N->getNumOperands()-1).getValueType() == MVT::Flag)
-        InputFlag = N->getOperand(N->getNumOperands()-1);
+          N->getOperand(N->getNumOperands()-1).getValueType() == MVT::Glue)
+        InputGlue = N->getOperand(N->getNumOperands()-1);
       continue;
         
     case OPC_MoveChild: {
@@ -2429,9 +2470,9 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       
       InputChain = CurDAG->getCopyToReg(InputChain, NodeToMatch->getDebugLoc(),
                                         DestPhysReg, RecordedNodes[RecNo].first,
-                                        InputFlag);
+                                        InputGlue);
       
-      InputFlag = InputChain.getValue(1);
+      InputGlue = InputChain.getValue(1);
       continue;
     }
         
@@ -2461,8 +2502,8 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       
       if (EmitNodeInfo & OPFL_Chain)
         VTs.push_back(MVT::Other);
-      if (EmitNodeInfo & OPFL_FlagOutput)
-        VTs.push_back(MVT::Flag);
+      if (EmitNodeInfo & OPFL_GlueOutput)
+        VTs.push_back(MVT::Glue);
       
       // This is hot code, so optimize the two most common cases of 1 and 2
       // results.
@@ -2493,21 +2534,21 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
         FirstOpToCopy += (EmitNodeInfo & OPFL_Chain) ? 1 : 0;
         assert(NodeToMatch->getNumOperands() >= FirstOpToCopy &&
                "Invalid variadic node");
-        // Copy all of the variadic operands, not including a potential flag
+        // Copy all of the variadic operands, not including a potential glue
         // input.
         for (unsigned i = FirstOpToCopy, e = NodeToMatch->getNumOperands();
              i != e; ++i) {
           SDValue V = NodeToMatch->getOperand(i);
-          if (V.getValueType() == MVT::Flag) break;
+          if (V.getValueType() == MVT::Glue) break;
           Ops.push_back(V);
         }
       }
       
-      // If this has chain/flag inputs, add them.
+      // If this has chain/glue inputs, add them.
       if (EmitNodeInfo & OPFL_Chain)
         Ops.push_back(InputChain);
-      if ((EmitNodeInfo & OPFL_FlagInput) && InputFlag.getNode() != 0)
-        Ops.push_back(InputFlag);
+      if ((EmitNodeInfo & OPFL_GlueInput) && InputGlue.getNode() != 0)
+        Ops.push_back(InputGlue);
       
       // Create the node.
       SDNode *Res = 0;
@@ -2517,9 +2558,9 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
         Res = CurDAG->getMachineNode(TargetOpc, NodeToMatch->getDebugLoc(),
                                      VTList, Ops.data(), Ops.size());
         
-        // Add all the non-flag/non-chain results to the RecordedNodes list.
+        // Add all the non-glue/non-chain results to the RecordedNodes list.
         for (unsigned i = 0, e = VTs.size(); i != e; ++i) {
-          if (VTs[i] == MVT::Other || VTs[i] == MVT::Flag) break;
+          if (VTs[i] == MVT::Other || VTs[i] == MVT::Glue) break;
           RecordedNodes.push_back(std::pair<SDValue,SDNode*>(SDValue(Res, i),
                                                              (SDNode*) 0));
         }
@@ -2529,16 +2570,16 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
                         EmitNodeInfo);
       }
       
-      // If the node had chain/flag results, update our notion of the current
-      // chain and flag.
-      if (EmitNodeInfo & OPFL_FlagOutput) {
-        InputFlag = SDValue(Res, VTs.size()-1);
+      // If the node had chain/glue results, update our notion of the current
+      // chain and glue.
+      if (EmitNodeInfo & OPFL_GlueOutput) {
+        InputGlue = SDValue(Res, VTs.size()-1);
         if (EmitNodeInfo & OPFL_Chain)
           InputChain = SDValue(Res, VTs.size()-2);
       } else if (EmitNodeInfo & OPFL_Chain)
         InputChain = SDValue(Res, VTs.size()-1);
 
-      // If the OPFL_MemRefs flag is set on this node, slap all of the
+      // If the OPFL_MemRefs glue is set on this node, slap all of the
       // accumulated memrefs onto it.
       //
       // FIXME: This is vastly incorrect for patterns with multiple outputs
@@ -2558,26 +2599,26 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       
       // If this was a MorphNodeTo then we're completely done!
       if (Opcode == OPC_MorphNodeTo) {
-        // Update chain and flag uses.
-        UpdateChainsAndFlags(NodeToMatch, InputChain, ChainNodesMatched,
-                             InputFlag, FlagResultNodesMatched, true);
+        // Update chain and glue uses.
+        UpdateChainsAndGlue(NodeToMatch, InputChain, ChainNodesMatched,
+                            InputGlue, GlueResultNodesMatched, true);
         return Res;
       }
       
       continue;
     }
         
-    case OPC_MarkFlagResults: {
+    case OPC_MarkGlueResults: {
       unsigned NumNodes = MatcherTable[MatcherIndex++];
       
-      // Read and remember all the flag-result nodes.
+      // Read and remember all the glue-result nodes.
       for (unsigned i = 0; i != NumNodes; ++i) {
         unsigned RecNo = MatcherTable[MatcherIndex++];
         if (RecNo & 128)
           RecNo = GetVBR(RecNo, MatcherTable, MatcherIndex);
 
         assert(RecNo < RecordedNodes.size() && "Invalid CheckSame");
-        FlagResultNodesMatched.push_back(RecordedNodes[RecNo].first.getNode());
+        GlueResultNodesMatched.push_back(RecordedNodes[RecNo].first.getNode());
       }
       continue;
     }
@@ -2598,7 +2639,7 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
         
         assert(i < NodeToMatch->getNumValues() &&
                NodeToMatch->getValueType(i) != MVT::Other &&
-               NodeToMatch->getValueType(i) != MVT::Flag &&
+               NodeToMatch->getValueType(i) != MVT::Glue &&
                "Invalid number of results to complete!");
         assert((NodeToMatch->getValueType(i) == Res.getValueType() ||
                 NodeToMatch->getValueType(i) == MVT::iPTR ||
@@ -2609,14 +2650,13 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
         CurDAG->ReplaceAllUsesOfValueWith(SDValue(NodeToMatch, i), Res);
       }
 
-      // If the root node defines a flag, add it to the flag nodes to update
-      // list.
-      if (NodeToMatch->getValueType(NodeToMatch->getNumValues()-1) == MVT::Flag)
-        FlagResultNodesMatched.push_back(NodeToMatch);
+      // If the root node defines glue, add it to the glue nodes to update list.
+      if (NodeToMatch->getValueType(NodeToMatch->getNumValues()-1) == MVT::Glue)
+        GlueResultNodesMatched.push_back(NodeToMatch);
       
-      // Update chain and flag uses.
-      UpdateChainsAndFlags(NodeToMatch, InputChain, ChainNodesMatched,
-                           InputFlag, FlagResultNodesMatched, false);
+      // Update chain and glue uses.
+      UpdateChainsAndGlue(NodeToMatch, InputChain, ChainNodesMatched,
+                          InputGlue, GlueResultNodesMatched, false);
       
       assert(NodeToMatch->use_empty() &&
              "Didn't replace all uses of the node?");
@@ -2653,11 +2693,11 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       DEBUG(errs() << "  Continuing at " << MatcherIndex << "\n");
     
       InputChain = LastScope.InputChain;
-      InputFlag = LastScope.InputFlag;
+      InputGlue = LastScope.InputGlue;
       if (!LastScope.HasChainNodesMatched)
         ChainNodesMatched.clear();
-      if (!LastScope.HasFlagResultNodesMatched)
-        FlagResultNodesMatched.clear();
+      if (!LastScope.HasGlueResultNodesMatched)
+        GlueResultNodesMatched.clear();
 
       // Check to see what the offset is at the new MatcherIndex.  If it is zero
       // we have reached the end of this scope, otherwise we have another child
@@ -2685,7 +2725,7 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
 void SelectionDAGISel::CannotYetSelect(SDNode *N) {
   std::string msg;
   raw_string_ostream Msg(msg);
-  Msg << "Cannot yet select: ";
+  Msg << "Cannot select: ";
   
   if (N->getOpcode() != ISD::INTRINSIC_W_CHAIN &&
       N->getOpcode() != ISD::INTRINSIC_WO_CHAIN &&

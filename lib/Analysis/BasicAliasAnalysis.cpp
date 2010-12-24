@@ -27,6 +27,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -233,7 +234,7 @@ static Value *GetLinearExpression(Value *V, APInt &Scale, APInt &Offset,
 /// the gep cannot necessarily be reconstructed from its decomposed form.
 ///
 /// When TargetData is around, this function is capable of analyzing everything
-/// that Value::getUnderlyingObject() can look through.  When not, it just looks
+/// that GetUnderlyingObject can look through.  When not, it just looks
 /// through pointer casts.
 ///
 static const Value *
@@ -262,6 +263,14 @@ DecomposeGEPExpression(const Value *V, int64_t &BaseOffs,
       V = Op->getOperand(0);
       continue;
     }
+
+    if (const Instruction *I = dyn_cast<Instruction>(V))
+      // TODO: Get a DominatorTree and use it here.
+      if (const Value *Simplified =
+            SimplifyInstruction(const_cast<Instruction *>(I), TD)) {
+        V = Simplified;
+        continue;
+      }
     
     const GEPOperator *GEPOp = dyn_cast<GEPOperator>(Op);
     if (GEPOp == 0)
@@ -528,7 +537,7 @@ BasicAliasAnalysis::pointsToConstantMemory(const Location &Loc, bool OrLocal) {
   SmallVector<const Value *, 16> Worklist;
   Worklist.push_back(Loc.Ptr);
   do {
-    const Value *V = Worklist.pop_back_val()->getUnderlyingObject();
+    const Value *V = GetUnderlyingObject(Worklist.pop_back_val());
     if (!Visited.insert(V)) {
       Visited.clear();
       return AliasAnalysis::pointsToConstantMemory(Loc, OrLocal);
@@ -633,7 +642,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
   assert(notDifferentParent(CS.getInstruction(), Loc.Ptr) &&
          "AliasAnalysis query involving multiple functions!");
 
-  const Value *Object = Loc.Ptr->getUnderlyingObject();
+  const Value *Object = GetUnderlyingObject(Loc.Ptr);
   
   // If this is a tail call and Loc.Ptr points to a stack location, we know that
   // the tail call cannot access or modify the local stack.
@@ -761,7 +770,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
 
 /// aliasGEP - Provide a bunch of ad-hoc rules to disambiguate a GEP instruction
 /// against another pointer.  We know that V1 is a GEP, but we don't know
-/// anything about V2.  UnderlyingV1 is GEP1->getUnderlyingObject(),
+/// anything about V2.  UnderlyingV1 is GetUnderlyingObject(GEP1),
 /// UnderlyingV2 is the same for V2.
 ///
 AliasAnalysis::AliasResult
@@ -807,7 +816,7 @@ BasicAliasAnalysis::aliasGEP(const GEPOperator *GEP1, uint64_t V1Size,
     // to handle without it.
     if (GEP1BasePtr != UnderlyingV1 || GEP2BasePtr != UnderlyingV2) {
       assert(TD == 0 &&
-             "DecomposeGEPExpression and getUnderlyingObject disagree!");
+             "DecomposeGEPExpression and GetUnderlyingObject disagree!");
       return MayAlias;
     }
     
@@ -843,7 +852,7 @@ BasicAliasAnalysis::aliasGEP(const GEPOperator *GEP1, uint64_t V1Size,
     // to handle without it.
     if (GEP1BasePtr != UnderlyingV1) {
       assert(TD == 0 &&
-             "DecomposeGEPExpression and getUnderlyingObject disagree!");
+             "DecomposeGEPExpression and GetUnderlyingObject disagree!");
       return MayAlias;
     }
   }
@@ -856,6 +865,17 @@ BasicAliasAnalysis::aliasGEP(const GEPOperator *GEP1, uint64_t V1Size,
   // must aliases the GEP, the end result is a must alias also.
   if (GEP1BaseOffset == 0 && GEP1VariableIndices.empty())
     return MustAlias;
+
+  // If there is a difference betwen the pointers, but the difference is
+  // less than the size of the associated memory object, then we know
+  // that the objects are partially overlapping.
+  if (GEP1BaseOffset != 0 && GEP1VariableIndices.empty()) {
+    if (GEP1BaseOffset >= 0 ?
+        (V2Size != UnknownSize && (uint64_t)GEP1BaseOffset < V2Size) :
+        (V1Size != UnknownSize && -(uint64_t)GEP1BaseOffset < V1Size &&
+         GEP1BaseOffset != INT64_MIN))
+      return PartialAlias;
+  }
 
   // If we have a known constant offset, see if this offset is larger than the
   // access size being queried.  If so, and if no variable indices can remove
@@ -1033,8 +1053,8 @@ BasicAliasAnalysis::aliasCheck(const Value *V1, uint64_t V1Size,
     return NoAlias;  // Scalars cannot alias each other
 
   // Figure out what objects these things are pointing to if we can.
-  const Value *O1 = V1->getUnderlyingObject();
-  const Value *O2 = V2->getUnderlyingObject();
+  const Value *O1 = GetUnderlyingObject(V1);
+  const Value *O2 = GetUnderlyingObject(V2);
 
   // Null values in the default address space don't point to any object, so they
   // don't alias any other pointer.

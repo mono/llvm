@@ -1,4 +1,4 @@
-//===-- ARMConstantIslandPass.cpp - ARM constant islands --------*- C++ -*-===//
+//===-- ARMConstantIslandPass.cpp - ARM constant islands ------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -327,7 +327,7 @@ bool ARMConstantIslands::runOnMachineFunction(MachineFunction &MF) {
 
 
   /// Remove dead constant pool entries.
-  RemoveUnusedCPEntries();
+  MadeChange |= RemoveUnusedCPEntries();
 
   // Iteratively place constant pool entries and fix up branches until there
   // is no change.
@@ -482,7 +482,7 @@ void ARMConstantIslands::InitialFunctionScan(MachineFunction &MF,
         HasInlineAsm = true;
   }
 
-  // Now go back through the instructions and build up our data structures
+  // Now go back through the instructions and build up our data structures.
   unsigned Offset = 0;
   for (MachineFunction::iterator MBBI = MF.begin(), E = MF.end();
        MBBI != E; ++MBBI) {
@@ -615,7 +615,6 @@ void ARMConstantIslands::InitialFunctionScan(MachineFunction &MF,
             break;
 
           case ARM::tLDRpci:
-          case ARM::tLDRcp:
             Bits = 8;
             Scale = 4;  // +(offset_8*4)
             break;

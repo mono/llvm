@@ -20,20 +20,18 @@
 #include "llvm/ADT/IntervalMap.h"
 #include "llvm/CodeGen/LiveInterval.h"
 
+#include <algorithm>
+
 namespace llvm {
+
+class MachineLoopRange;
+class TargetRegisterInfo;
 
 #ifndef NDEBUG
 // forward declaration
 template <unsigned Element> class SparseBitVector;
 typedef SparseBitVector<128> LiveVirtRegBitSet;
 #endif
-
-/// Abstraction to provide info for the representative register.
-class AbstractRegisterDescription {
-public:
-  virtual const char *getName(unsigned Reg) const = 0;
-  virtual ~AbstractRegisterDescription() {}
-};
 
 /// Compare a live virtual register segment to a LiveIntervalUnion segment.
 inline bool
@@ -76,8 +74,12 @@ public:
   SegmentIter begin() { return Segments.begin(); }
   SegmentIter end() { return Segments.end(); }
   SegmentIter find(SlotIndex x) { return Segments.find(x); }
-  bool empty() { return Segments.empty(); }
-  SlotIndex startIndex() { return Segments.start(); }
+  bool empty() const { return Segments.empty(); }
+  SlotIndex startIndex() const { return Segments.start(); }
+
+  // Provide public access to the underlying map to allow overlap iteration.
+  typedef LiveSegments Map;
+  const Map &getMap() { return Segments; }
 
   // Add a live virtual register to this union and merge its segments.
   void unify(LiveInterval &VirtReg);
@@ -85,10 +87,8 @@ public:
   // Remove a live virtual register's segments from this union.
   void extract(LiveInterval &VirtReg);
 
-  void dump(const AbstractRegisterDescription *RegDesc) const;
-
-  // If tri != NULL, use it to decode RepReg
-  void print(raw_ostream &OS, const AbstractRegisterDescription *RegDesc) const;
+  // Print union, using TRI to translate register names
+  void print(raw_ostream &OS, const TargetRegisterInfo *TRI) const;
 
 #ifndef NDEBUG
   // Verify the live intervals in this union and add them to the visited set.
@@ -113,6 +113,19 @@ public:
     // Public default ctor.
     InterferenceResult(): VirtRegI(), LiveUnionI() {}
 
+    /// start - Return the start of the current overlap.
+    SlotIndex start() const {
+      return std::max(VirtRegI->start, LiveUnionI.start());
+    }
+
+    /// stop - Return the end of the current overlap.
+    SlotIndex stop() const {
+      return std::min(VirtRegI->end, LiveUnionI.stop());
+    }
+
+    /// interference - Return the register that is interfering here.
+    LiveInterval *interference() const { return LiveUnionI.value(); }
+
     // Note: this interface provides raw access to the iterators because the
     // result has no way to tell if it's valid to dereference them.
 
@@ -128,6 +141,8 @@ public:
     bool operator!=(const InterferenceResult &IR) const {
       return !operator==(IR);
     }
+
+    void print(raw_ostream &OS, const TargetRegisterInfo *TRI) const;
   };
 
   /// Query interferences between a single live virtual register and a live
@@ -213,6 +228,11 @@ public:
       return InterferingVRegs;
     }
 
+    /// checkLoopInterference - Return true if there is interference overlapping
+    /// Loop.
+    bool checkLoopInterference(MachineLoopRange*);
+
+    void print(raw_ostream &OS, const TargetRegisterInfo *TRI);
   private:
     Query(const Query&);          // DO NOT IMPLEMENT
     void operator=(const Query&); // DO NOT IMPLEMENT

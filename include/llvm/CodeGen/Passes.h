@@ -45,6 +45,11 @@ namespace llvm {
   ///
   extern char &MachineLoopInfoID;
 
+  /// MachineLoopRanges pass - This pass is an on-demand loop coverage
+  /// analysis pass.
+  ///
+  extern char &MachineLoopRangesID;
+
   /// MachineDominators pass - This pass is a machine dominators analysis pass.
   ///
   extern char &MachineDominatorsID;
@@ -201,7 +206,7 @@ namespace llvm {
 
   /// createMachineVerifierPass - This pass verifies cenerated machine code
   /// instructions for correctness.
-  FunctionPass *createMachineVerifierPass();
+  FunctionPass *createMachineVerifierPass(const char *Banner = 0);
 
   /// createDwarfEHPass - This pass mulches exception handling code into a form
   /// adapted to code generation.  Required if using dwarf exception handling.

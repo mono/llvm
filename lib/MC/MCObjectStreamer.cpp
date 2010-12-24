@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCObjectStreamer.h"
 
 #include "llvm/Support/ErrorHandling.h"
@@ -21,10 +22,11 @@
 using namespace llvm;
 
 MCObjectStreamer::MCObjectStreamer(MCContext &Context, TargetAsmBackend &TAB,
-                                   raw_ostream &_OS, MCCodeEmitter *_Emitter)
-  : MCStreamer(Context), Assembler(new MCAssembler(Context, TAB,
-                                                   *_Emitter,
-                                                   _OS)),
+                                   raw_ostream &OS, MCCodeEmitter *Emitter_)
+  : MCStreamer(Context),
+    Assembler(new MCAssembler(Context, TAB,
+                              *Emitter_, *TAB.createObjectWriter(OS),
+                              OS)),
     CurSectionData(0)
 {
 }
@@ -32,6 +34,7 @@ MCObjectStreamer::MCObjectStreamer(MCContext &Context, TargetAsmBackend &TAB,
 MCObjectStreamer::~MCObjectStreamer() {
   delete &Assembler->getBackend();
   delete &Assembler->getEmitter();
+  delete &Assembler->getWriter();
   delete Assembler;
 }
 
@@ -88,7 +91,7 @@ void MCObjectStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
     return;
   }
   DF->addFixup(MCFixup::Create(DF->getContents().size(),
-                               AddValueSymbols(Value),
+                               Value,
                                MCFixup::getKindForSize(Size, isPCRel)));
   DF->getContents().resize(DF->getContents().size() + Size, 0);
 }
@@ -207,6 +210,11 @@ void MCObjectStreamer::EmitDwarfAdvanceLineAddr(int64_t LineDelta,
   if (AddrDelta->EvaluateAsAbsolute(Res, getAssembler())) {
     MCDwarfLineAddr::Emit(this, LineDelta, Res);
     return;
+  }
+  if (!getContext().getAsmInfo().hasAggressiveSymbolFolding()) {
+    MCSymbol *ABS = getContext().CreateTempSymbol();
+    EmitAssignment(ABS, AddrDelta);
+    AddrDelta = MCSymbolRefExpr::Create(ABS, getContext());
   }
   new MCDwarfLineAddrFragment(LineDelta, *AddrDelta, getCurrentSectionData());
 }

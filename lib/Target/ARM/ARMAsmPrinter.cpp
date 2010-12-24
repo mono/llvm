@@ -286,7 +286,7 @@ bool ARMAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNum,
     case 'Q':
     case 'R':
     case 'H':
-      report_fatal_error("llvm does not support 'Q', 'R', and 'H' modifiers!");
+      // These modifiers are not yet supported.
       return true;
     }
   }
@@ -734,6 +734,18 @@ void ARMAsmPrinter::PrintDebugValueComment(const MachineInstr *MI,
   printOperand(MI, NOps-2, OS);
 }
 
+static void populateADROperands(MCInst &Inst, unsigned Dest,
+                                const MCSymbol *Label,
+                                unsigned pred, unsigned ccreg,
+                                MCContext &Ctx) {
+  const MCExpr *SymbolExpr = MCSymbolRefExpr::Create(Label, Ctx);
+  Inst.addOperand(MCOperand::CreateReg(Dest));
+  Inst.addOperand(MCOperand::CreateExpr(SymbolExpr));
+  // Add predicate operands.
+  Inst.addOperand(MCOperand::CreateImm(pred));
+  Inst.addOperand(MCOperand::CreateReg(ccreg));
+}
+
 void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   switch (MI->getOpcode()) {
   default: break;
@@ -755,34 +767,41 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     return;
   }
-  case ARM::LEApcrel: {
-    // FIXME: Need to also handle globals and externals
-    assert (MI->getOperand(1).isCPI());
-    unsigned LabelId = MI->getOperand(1).getIndex();
-    MCSymbol *Sym = GetCPISymbol(LabelId);
-    const MCExpr *SymbolExpr = MCSymbolRefExpr::Create(Sym, OutContext);
+  case ARM::tBfar: {
     MCInst TmpInst;
-    TmpInst.setOpcode(ARM::ADR);
-    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
-    TmpInst.addOperand(MCOperand::CreateExpr(SymbolExpr));
-    // Add predicate operands.
-    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
-    TmpInst.addOperand(MCOperand::CreateReg(0));
+    TmpInst.setOpcode(ARM::tBL);
+    TmpInst.addOperand(MCOperand::CreateExpr(MCSymbolRefExpr::Create(
+          MI->getOperand(0).getMBB()->getSymbol(), OutContext)));
     OutStreamer.EmitInstruction(TmpInst);
     return;
   }
-  case ARM::LEApcrelJT: {
-    unsigned JTI = MI->getOperand(1).getIndex();
-    unsigned Id = MI->getOperand(2).getImm();
-    MCSymbol *JTISymbol = GetARMJTIPICJumpTableLabel2(JTI, Id);
-    const MCExpr *SymbolExpr = MCSymbolRefExpr::Create(JTISymbol, OutContext);
+  case ARM::LEApcrel:
+  case ARM::tLEApcrel:
+  case ARM::t2LEApcrel: {
+    // FIXME: Need to also handle globals and externals
     MCInst TmpInst;
-    TmpInst.setOpcode(ARM::ADR);
-    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
-    TmpInst.addOperand(MCOperand::CreateExpr(SymbolExpr));
-    // Add predicate operands.
-    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
-    TmpInst.addOperand(MCOperand::CreateReg(0));
+    TmpInst.setOpcode(MI->getOpcode() == ARM::t2LEApcrel ? ARM::t2ADR
+                      : (MI->getOpcode() == ARM::tLEApcrel ? ARM::tADR
+                         : ARM::ADR));
+    populateADROperands(TmpInst, MI->getOperand(0).getReg(),
+                        GetCPISymbol(MI->getOperand(1).getIndex()),
+                        MI->getOperand(2).getImm(), MI->getOperand(3).getReg(),
+                        OutContext);
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  case ARM::LEApcrelJT:
+  case ARM::tLEApcrelJT:
+  case ARM::t2LEApcrelJT: {
+    MCInst TmpInst;
+    TmpInst.setOpcode(MI->getOpcode() == ARM::t2LEApcrelJT ? ARM::t2ADR
+                      : (MI->getOpcode() == ARM::tLEApcrelJT ? ARM::tADR
+                         : ARM::ADR));
+    populateADROperands(TmpInst, MI->getOperand(0).getReg(),
+                      GetARMJTIPICJumpTableLabel2(MI->getOperand(1).getIndex(),
+                                                  MI->getOperand(2).getImm()),
+                      MI->getOperand(3).getImm(), MI->getOperand(4).getReg(),
+                      OutContext);
     OutStreamer.EmitInstruction(TmpInst);
     return;
   }
@@ -1027,7 +1046,7 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     OutStreamer.EmitInstruction(TmpInst);
 
     // Make sure the Thumb jump table is 4-byte aligned.
-    if (Opc == ARM::tMOVr)
+    if (Opc == ARM::tMOVgpr2gpr)
       EmitAlignment(2);
 
     // Output the data for the jump table itself
@@ -1142,13 +1161,12 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     {
       MCInst TmpInst;
-      TmpInst.setOpcode(ARM::tSTR);
+      TmpInst.setOpcode(ARM::tSTRi);
       TmpInst.addOperand(MCOperand::CreateReg(ValReg));
       TmpInst.addOperand(MCOperand::CreateReg(SrcReg));
       // The offset immediate is #4. The operand value is scaled by 4 for the
       // tSTR instruction.
       TmpInst.addOperand(MCOperand::CreateImm(1));
-      TmpInst.addOperand(MCOperand::CreateReg(0));
       // Predicate.
       TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
       TmpInst.addOperand(MCOperand::CreateReg(0));
@@ -1325,13 +1343,12 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     unsigned ScratchReg = MI->getOperand(1).getReg();
     {
       MCInst TmpInst;
-      TmpInst.setOpcode(ARM::tLDR);
+      TmpInst.setOpcode(ARM::tLDRi);
       TmpInst.addOperand(MCOperand::CreateReg(ScratchReg));
       TmpInst.addOperand(MCOperand::CreateReg(SrcReg));
       // The offset immediate is #8. The operand value is scaled by 4 for the
-      // tSTR instruction.
+      // tLDR instruction.
       TmpInst.addOperand(MCOperand::CreateImm(2));
-      TmpInst.addOperand(MCOperand::CreateReg(0));
       // Predicate.
       TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
       TmpInst.addOperand(MCOperand::CreateReg(0));
@@ -1349,11 +1366,10 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     {
       MCInst TmpInst;
-      TmpInst.setOpcode(ARM::tLDR);
+      TmpInst.setOpcode(ARM::tLDRi);
       TmpInst.addOperand(MCOperand::CreateReg(ScratchReg));
       TmpInst.addOperand(MCOperand::CreateReg(SrcReg));
       TmpInst.addOperand(MCOperand::CreateImm(1));
-      TmpInst.addOperand(MCOperand::CreateReg(0));
       // Predicate.
       TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
       TmpInst.addOperand(MCOperand::CreateReg(0));
@@ -1361,10 +1377,9 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     {
       MCInst TmpInst;
-      TmpInst.setOpcode(ARM::tLDR);
+      TmpInst.setOpcode(ARM::tLDRr);
       TmpInst.addOperand(MCOperand::CreateReg(ARM::R7));
       TmpInst.addOperand(MCOperand::CreateReg(SrcReg));
-      TmpInst.addOperand(MCOperand::CreateImm(0));
       TmpInst.addOperand(MCOperand::CreateReg(0));
       // Predicate.
       TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));

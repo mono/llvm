@@ -93,10 +93,8 @@ void SimpleRegisterCoalescing::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<MachineLoopInfo>();
   AU.addPreserved<MachineLoopInfo>();
   AU.addPreservedID(MachineDominatorsID);
-  if (StrongPHIElim)
-    AU.addPreservedID(StrongPHIEliminationID);
-  else
-    AU.addPreservedID(PHIEliminationID);
+  AU.addPreservedID(StrongPHIEliminationID);
+  AU.addPreservedID(PHIEliminationID);
   AU.addPreservedID(TwoAddressInstructionPassID);
   MachineFunctionPass::getAnalysisUsage(AU);
 }
@@ -621,8 +619,8 @@ bool SimpleRegisterCoalescing::ReMaterializeTrivialDef(LiveInterval &SrcInt,
       return false;
   }
 
-  // If destination register has a sub-register index on it, make sure it mtches
-  // the instruction register class.
+  // If destination register has a sub-register index on it, make sure it
+  // matches the instruction register class.
   if (DstSubIdx) {
     const TargetInstrDesc &TID = DefMI->getDesc();
     if (TID.getNumDefs() != 1)

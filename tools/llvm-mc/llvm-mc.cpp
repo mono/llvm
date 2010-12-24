@@ -168,12 +168,12 @@ static tool_output_file *GetOutputStream() {
 }
 
 static int AsLexInput(const char *ProgName) {
-  error_code ec;
-  MemoryBuffer *Buffer = MemoryBuffer::getFileOrSTDIN(InputFilename, ec);
-  if (Buffer == 0) {
+  OwningPtr<MemoryBuffer> BufferPtr;
+  if (error_code ec = MemoryBuffer::getFileOrSTDIN(InputFilename, BufferPtr)) {
     errs() << ProgName << ": " << ec.message() << '\n';
     return 1;
   }
+  MemoryBuffer *Buffer = BufferPtr.take();
 
   SourceMgr SrcMgr;
   
@@ -281,12 +281,12 @@ static int AssembleInput(const char *ProgName) {
   if (!TheTarget)
     return 1;
 
-  error_code ec;
-  MemoryBuffer *Buffer = MemoryBuffer::getFileOrSTDIN(InputFilename, ec);
-  if (Buffer == 0) {
+  OwningPtr<MemoryBuffer> BufferPtr;
+  if (error_code ec = MemoryBuffer::getFileOrSTDIN(InputFilename, BufferPtr)) {
     errs() << ProgName << ": " << ec.message() << '\n';
     return 1;
   }
+  MemoryBuffer *Buffer = BufferPtr.take();
   
   SourceMgr SrcMgr;
   
@@ -340,10 +340,14 @@ static int AssembleInput(const char *ProgName) {
     MCInstPrinter *IP =
       TheTarget->createMCInstPrinter(OutputAsmVariant, *MAI);
     MCCodeEmitter *CE = 0;
-    if (ShowEncoding)
+    TargetAsmBackend *TAB = 0;
+    if (ShowEncoding) {
       CE = TheTarget->createCodeEmitter(*TM, Ctx);
+      TAB = TheTarget->createAsmBackend(TripleName);
+    }
     Str.reset(TheTarget->createAsmStreamer(Ctx, FOS, /*asmverbose*/true,
-                                           /*useLoc*/ true, IP, CE, ShowInst));
+                                           /*useLoc*/ true, IP, CE, TAB,
+                                           ShowInst));
   } else if (FileType == OFT_Null) {
     Str.reset(createNullStreamer(Ctx));
   } else {
@@ -383,9 +387,8 @@ static int DisassembleInput(const char *ProgName, bool Enhanced) {
   if (!TheTarget)
     return 0;
 
-  error_code ec;
-  MemoryBuffer *Buffer = MemoryBuffer::getFileOrSTDIN(InputFilename, ec);
-  if (Buffer == 0) {
+  OwningPtr<MemoryBuffer> Buffer;
+  if (error_code ec = MemoryBuffer::getFileOrSTDIN(InputFilename, Buffer)) {
     errs() << ProgName << ": " << ec.message() << '\n';
     return 1;
   }
@@ -396,9 +399,11 @@ static int DisassembleInput(const char *ProgName, bool Enhanced) {
 
   int Res;
   if (Enhanced)
-    Res = Disassembler::disassembleEnhanced(TripleName, *Buffer, Out->os());
+    Res =
+      Disassembler::disassembleEnhanced(TripleName, *Buffer.take(), Out->os());
   else
-    Res = Disassembler::disassemble(*TheTarget, TripleName, *Buffer, Out->os());
+    Res = Disassembler::disassemble(*TheTarget, TripleName,
+                                    *Buffer.take(), Out->os());
 
   // Keep output if no errors.
   if (Res == 0) Out->keep();

@@ -698,8 +698,11 @@ void LICM::PromoteAliasSet(AliasSet &AS) {
       if (isa<LoadInst>(Use))
         assert(!cast<LoadInst>(Use)->isVolatile() && "AST broken");
       else if (isa<StoreInst>(Use)) {
+        // Stores *of* the pointer are not interesting, only stores *to* the
+        // pointer.
+        if (Use->getOperand(1) != ASIV)
+          continue;
         assert(!cast<StoreInst>(Use)->isVolatile() && "AST broken");
-        if (Use->getOperand(0) == ASIV) return;
       } else
         return; // Not a load or store.
       

@@ -13,8 +13,9 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCDirectives.h"
+#include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCObjectFormat.h"
+#include "llvm/MC/MCMachObjectWriter.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
@@ -27,10 +28,65 @@
 using namespace llvm;
 
 namespace {
+class ARMMachObjectWriter : public MCMachObjectTargetWriter {
+public:
+  ARMMachObjectWriter(bool Is64Bit, uint32_t CPUType,
+                      uint32_t CPUSubtype)
+    : MCMachObjectTargetWriter(Is64Bit, CPUType, CPUSubtype,
+                               /*UseAggressiveSymbolFolding=*/true) {}
+};
+
+class ARMELFObjectWriter : public MCELFObjectTargetWriter {
+public:
+  ARMELFObjectWriter(Triple::OSType OSType)
+    : MCELFObjectTargetWriter(/*Is64Bit*/ false, OSType, ELF::EM_ARM,
+                              /*HasRelocationAddend*/ false) {}
+};
+
 class ARMAsmBackend : public TargetAsmBackend {
   bool isThumbMode;  // Currently emitting Thumb code.
 public:
   ARMAsmBackend(const Target &T) : TargetAsmBackend(), isThumbMode(false) {}
+
+  unsigned getNumFixupKinds() const { return ARM::NumTargetFixupKinds; }
+
+  const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const {
+    const static MCFixupKindInfo Infos[ARM::NumTargetFixupKinds] = {
+// This table *must* be in the order that the fixup_* kinds are defined in
+// ARMFixupKinds.h.
+//
+// Name                      Offset (bits) Size (bits)     Flags
+{ "fixup_arm_ldst_pcrel_12", 1,            24,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_t2_ldst_pcrel_12",  0,            32,  MCFixupKindInfo::FKF_IsPCRel |
+                                   MCFixupKindInfo::FKF_IsAlignedDownTo32Bits},
+{ "fixup_arm_pcrel_10",      1,            24,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_t2_pcrel_10",       0,            32,  MCFixupKindInfo::FKF_IsPCRel |
+                                   MCFixupKindInfo::FKF_IsAlignedDownTo32Bits},
+{ "fixup_thumb_adr_pcrel_10",0,            8,   MCFixupKindInfo::FKF_IsPCRel |
+                                   MCFixupKindInfo::FKF_IsAlignedDownTo32Bits},
+{ "fixup_arm_adr_pcrel_12",  1,            24,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_t2_adr_pcrel_12",   0,            32,  MCFixupKindInfo::FKF_IsPCRel |
+                                   MCFixupKindInfo::FKF_IsAlignedDownTo32Bits},
+{ "fixup_arm_branch",        0,            24,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_t2_condbranch",     0,            32,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_t2_uncondbranch",   0,            32,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_thumb_br",      0,            16,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_thumb_bl",      0,            32,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_thumb_blx",     7,            21,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_thumb_cb",      0,            16,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_thumb_cp",      1,             8,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_thumb_bcc",     1,             8,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_movt_hi16",     0,            16,  0 },
+{ "fixup_arm_movw_lo16",     0,            16,  0 },
+    };
+
+    if (Kind < FirstTargetFixupKind)
+      return TargetAsmBackend::getFixupKindInfo(Kind);
+
+    assert(unsigned(Kind - FirstTargetFixupKind) < getNumFixupKinds() &&
+           "Invalid kind!");
+    return Infos[Kind - FirstTargetFixupKind];
+  }
 
   bool MayNeedRelaxation(const MCInst &Inst) const;
 
@@ -68,18 +124,26 @@ void ARMAsmBackend::RelaxInstruction(const MCInst &Inst, MCInst &Res) const {
 
 bool ARMAsmBackend::WriteNopData(uint64_t Count, MCObjectWriter *OW) const {
   if (isThumb()) {
-    assert (((Count & 1) == 0) && "Unaligned Nop data fragment!");
     // FIXME: 0xbf00 is the ARMv7 value. For v6 and before, we'll need to
     // use 0x46c0 (which is a 'mov r8, r8' insn).
-    Count /= 2;
-    for (uint64_t i = 0; i != Count; ++i)
+    uint64_t NumNops = Count / 2;
+    for (uint64_t i = 0; i != NumNops; ++i)
       OW->Write16(0xbf00);
+    if (Count & 1)
+      OW->Write8(0);
     return true;
   }
   // ARM mode
-  Count /= 4;
-  for (uint64_t i = 0; i != Count; ++i)
+  uint64_t NumNops = Count / 4;
+  for (uint64_t i = 0; i != NumNops; ++i)
     OW->Write32(0xe1a00000);
+  switch (Count % 4) {
+  default: break; // No leftover bytes to write
+  case 1: OW->Write8(0); break;
+  case 2: OW->Write16(0); break;
+  case 3: OW->Write16(0); OW->Write8(0xa0); break;
+  }
+
   return true;
 }
 
@@ -87,6 +151,8 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
   switch (Kind) {
   default:
     llvm_unreachable("Unknown fixup kind!");
+  case FK_Data_1:
+  case FK_Data_2:
   case FK_Data_4:
     return Value;
   case ARM::fixup_arm_movt_hi16:
@@ -112,7 +178,7 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
     }
     assert ((Value < 4096) && "Out of range pc-relative fixup value!");
     Value |= isAdd << 23;
-    
+
     // Same addressing mode as fixup_arm_pcrel_10,
     // but with 16-bit halfwords swapped.
     if (Kind == ARM::fixup_t2_ldst_pcrel_12) {
@@ -120,9 +186,11 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
       swapped |= (Value & 0x0000FFFF) << 16;
       return swapped;
     }
-    
+
     return Value;
   }
+  case ARM::fixup_thumb_adr_pcrel_10:
+    return ((Value - 4) >> 2) & 0xff;
   case ARM::fixup_arm_adr_pcrel_12: {
     // ARM PC-relative values are offset by 8.
     Value -= 8;
@@ -136,22 +204,62 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
     // Encode the immediate and shift the opcode into place.
     return ARM_AM::getSOImmVal(Value) | (opc << 21);
   }
+
+  case ARM::fixup_t2_adr_pcrel_12: {
+    Value -= 4;
+    unsigned opc = 0;
+    if ((int64_t)Value < 0) {
+      Value = -Value;
+      opc = 5;
+    }
+
+    uint32_t out = (opc << 21);
+    out |= (Value & 0x800) << 14;
+    out |= (Value & 0x700) << 4;
+    out |= (Value & 0x0FF);
+
+    uint64_t swapped = (out & 0xFFFF0000) >> 16;
+    swapped |= (out & 0x0000FFFF) << 16;
+    return swapped;
+  }
+
   case ARM::fixup_arm_branch:
     // These values don't encode the low two bits since they're always zero.
     // Offset by 8 just as above.
     return 0xffffff & ((Value - 8) >> 2);
-  case ARM::fixup_t2_branch: {
-    Value = Value - 6;
+  case ARM::fixup_t2_uncondbranch: {
+    Value = Value - 4;
     Value >>= 1; // Low bit is not encoded.
-    
+
+    uint32_t out = 0;
+    bool I =  Value & 0x800000;
+    bool J1 = Value & 0x400000;
+    bool J2 = Value & 0x200000;
+    J1 ^= I;
+    J2 ^= I;
+
+    out |= I  << 26; // S bit
+    out |= !J1 << 13; // J1 bit
+    out |= !J2 << 11; // J2 bit
+    out |= (Value & 0x1FF800)  << 5; // imm6 field
+    out |= (Value & 0x0007FF);        // imm11 field
+
+    uint64_t swapped = (out & 0xFFFF0000) >> 16;
+    swapped |= (out & 0x0000FFFF) << 16;
+    return swapped;
+  }
+  case ARM::fixup_t2_condbranch: {
+    Value = Value - 4;
+    Value >>= 1; // Low bit is not encoded.
+
     uint64_t out = 0;
     out |= (Value & 0x80000) << 7; // S bit
     out |= (Value & 0x40000) >> 7; // J2 bit
     out |= (Value & 0x20000) >> 4; // J1 bit
     out |= (Value & 0x1F800) << 5; // imm6 field
     out |= (Value & 0x007FF);      // imm11 field
-    
-    uint64_t swapped = (out & 0xFFFF0000) >> 16;
+
+    uint32_t swapped = (out & 0xFFFF0000) >> 16;
     swapped |= (out & 0x0000FFFF) << 16;
     return swapped;
   }
@@ -159,9 +267,9 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
     // The value doesn't encode the low bit (always zero) and is offset by
     // four. The value is encoded into disjoint bit positions in the destination
     // opcode. x = unchanged, I = immediate value bit, S = sign extension bit
-    // 
+    //
     //   BL:  xxxxxSIIIIIIIIII xxxxxIIIIIIIIIII
-    // 
+    //
     // Note that the halfwords are stored high first, low second; so we need
     // to transpose the fixup value here to map properly.
     unsigned isNeg = (int64_t(Value) < 0) ? 1 : 0;
@@ -177,9 +285,9 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
     // four (see fixup_arm_thumb_cp). The value is encoded into disjoint bit
     // positions in the destination opcode. x = unchanged, I = immediate value
     // bit, S = sign extension bit, 0 = zero.
-    // 
+    //
     //   BLX: xxxxxSIIIIIIIIII xxxxxIIIIIIIIII0
-    // 
+    //
     // Note that the halfwords are stored high first, low second; so we need
     // to transpose the fixup value here to map properly.
     unsigned isNeg = (int64_t(Value) < 0) ? 1 : 0;
@@ -198,15 +306,21 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
   case ARM::fixup_arm_thumb_cb: {
     // Offset by 4 and don't encode the lower bit, which is always 0.
     uint32_t Binary = (Value - 4) >> 1;
-    return ((Binary & 0x20) << 9) | ((Binary & 0x1f) << 3);
+    return ((Binary & 0x20) << 4) | ((Binary & 0x1f) << 3);
   }
+  case ARM::fixup_arm_thumb_br:
+    // Offset by 4 and don't encode the lower bit, which is always 0.
+    return ((Value - 4) >> 1) & 0x7ff;
+  case ARM::fixup_arm_thumb_bcc:
+    // Offset by 4 and don't encode the lower bit, which is always 0.
+    return ((Value - 4) >> 1) & 0xff;
   case ARM::fixup_arm_pcrel_10:
-    Value = Value - 6; // ARM fixups offset by an additional word and don't
+    Value = Value - 4; // ARM fixups offset by an additional word and don't
                        // need to adjust for the half-word ordering.
     // Fall through.
   case ARM::fixup_t2_pcrel_10: {
     // Offset by 4, adjusted by two due to the half-word ordering of thumb.
-    Value = Value - 2;
+    Value = Value - 4;
     bool isAdd = true;
     if ((int64_t)Value < 0) {
       Value = -Value;
@@ -220,7 +334,7 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
     // Same addressing mode as fixup_arm_pcrel_10,
     // but with 16-bit halfwords swapped.
     if (Kind == ARM::fixup_t2_pcrel_10) {
-      uint64_t swapped = (Value & 0xFFFF0000) >> 16;
+      uint32_t swapped = (Value & 0xFFFF0000) >> 16;
       swapped |= (Value & 0x0000FFFF) << 16;
       return swapped;
     }
@@ -235,27 +349,17 @@ namespace {
 // FIXME: This should be in a separate file.
 // ELF is an ELF of course...
 class ELFARMAsmBackend : public ARMAsmBackend {
-  MCELFObjectFormat Format;
-
 public:
   Triple::OSType OSType;
   ELFARMAsmBackend(const Target &T, Triple::OSType _OSType)
-    : ARMAsmBackend(T), OSType(_OSType) {
-    HasScatteredSymbols = true;
-  }
-
-  virtual const MCObjectFormat &getObjectFormat() const {
-    return Format;
-  }
+    : ARMAsmBackend(T), OSType(_OSType) { }
 
   void ApplyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                   uint64_t Value) const;
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return createELFObjectWriter(OS, /*Is64Bit=*/false,
-                                 OSType, ELF::EM_ARM,
-                                 /*IsLittleEndian=*/true,
-                                 /*HasRelocationAddend=*/false);
+    return createELFObjectWriter(new ARMELFObjectWriter(OSType), OS,
+                              /*IsLittleEndian*/ true);
   }
 };
 
@@ -278,24 +382,19 @@ void ELFARMAsmBackend::ApplyFixup(const MCFixup &Fixup, char *Data,
 
 // FIXME: This should be in a separate file.
 class DarwinARMAsmBackend : public ARMAsmBackend {
-  MCMachOObjectFormat Format;
 public:
-  DarwinARMAsmBackend(const Target &T) : ARMAsmBackend(T) {
-    HasScatteredSymbols = true;
-  }
-
-  virtual const MCObjectFormat &getObjectFormat() const {
-    return Format;
-  }
+  DarwinARMAsmBackend(const Target &T) : ARMAsmBackend(T) { }
 
   void ApplyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                   uint64_t Value) const;
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
     // FIXME: Subtarget info should be derived. Force v7 for now.
-    return createMachObjectWriter(OS, /*Is64Bit=*/false,
-                                  object::mach::CTM_ARM,
-                                  object::mach::CSARM_V7,
+    return createMachObjectWriter(new ARMMachObjectWriter(
+                                    /*Is64Bit=*/false,
+                                    object::mach::CTM_ARM,
+                                    object::mach::CSARM_V7),
+                                  OS,
                                   /*IsLittleEndian=*/true);
   }
 
@@ -310,9 +409,14 @@ static unsigned getFixupKindNumBytes(unsigned Kind) {
   default:
     llvm_unreachable("Unknown fixup kind!");
 
+  case FK_Data_1:
+  case ARM::fixup_arm_thumb_bcc:
   case ARM::fixup_arm_thumb_cp:
+  case ARM::fixup_thumb_adr_pcrel_10:
     return 1;
 
+  case FK_Data_2:
+  case ARM::fixup_arm_thumb_br:
   case ARM::fixup_arm_thumb_cb:
     return 2;
 
@@ -324,8 +428,10 @@ static unsigned getFixupKindNumBytes(unsigned Kind) {
 
   case FK_Data_4:
   case ARM::fixup_t2_ldst_pcrel_12:
-  case ARM::fixup_t2_branch:
+  case ARM::fixup_t2_condbranch:
+  case ARM::fixup_t2_uncondbranch:
   case ARM::fixup_t2_pcrel_10:
+  case ARM::fixup_t2_adr_pcrel_12:
   case ARM::fixup_arm_thumb_bl:
   case ARM::fixup_arm_thumb_blx:
     return 4;

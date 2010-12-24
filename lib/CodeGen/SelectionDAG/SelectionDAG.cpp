@@ -491,7 +491,7 @@ encodeMemSDNodeFlags(int ConvType, ISD::MemIndexedMode AM, bool isVolatile,
 
 /// doNotCSE - Return true if CSE should not be performed for this node.
 static bool doNotCSE(SDNode *N) {
-  if (N->getValueType(0) == MVT::Flag)
+  if (N->getValueType(0) == MVT::Glue)
     return true; // Never CSE anything that produces a flag.
 
   switch (N->getOpcode()) {
@@ -503,7 +503,7 @@ static bool doNotCSE(SDNode *N) {
 
   // Check that remaining values produced are not flags.
   for (unsigned i = 1, e = N->getNumValues(); i != e; ++i)
-    if (N->getValueType(i) == MVT::Flag)
+    if (N->getValueType(i) == MVT::Glue)
       return true; // Never CSE anything that produces a flag.
 
   return false;
@@ -611,9 +611,6 @@ void SelectionDAG::DeallocateNode(SDNode *N) {
 bool SelectionDAG::RemoveNodeFromCSEMaps(SDNode *N) {
   bool Erased = false;
   switch (N->getOpcode()) {
-  case ISD::EntryToken:
-    llvm_unreachable("EntryToken should not be in CSEMaps!");
-    return false;
   case ISD::HANDLENODE: return false;  // noop.
   case ISD::CONDCODE:
     assert(CondCodeNodes[cast<CondCodeSDNode>(N)->get()] &&
@@ -643,6 +640,8 @@ bool SelectionDAG::RemoveNodeFromCSEMaps(SDNode *N) {
   }
   default:
     // Remove it from the CSE Map.
+    assert(N->getOpcode() != ISD::DELETED_NODE && "DELETED_NODE in CSEMap!");
+    assert(N->getOpcode() != ISD::EntryToken && "EntryToken in CSEMap!");
     Erased = CSEMap.RemoveNode(N);
     break;
   }
@@ -650,7 +649,7 @@ bool SelectionDAG::RemoveNodeFromCSEMaps(SDNode *N) {
   // Verify that the node was actually in one of the CSE maps, unless it has a
   // flag result (which cannot be CSE'd) or is one of the special cases that are
   // not subject to CSE.
-  if (!Erased && N->getValueType(N->getNumValues()-1) != MVT::Flag &&
+  if (!Erased && N->getValueType(N->getNumValues()-1) != MVT::Glue &&
       !N->isMachineOpcode() && !doNotCSE(N)) {
     N->dump(this);
     dbgs() << "\n";
@@ -1957,7 +1956,8 @@ void SelectionDAG::ComputeMaskedBits(SDValue Op, const APInt &Mask,
     }
   }
   // fall through
-  case ISD::ADD: {
+  case ISD::ADD:
+  case ISD::ADDE: {
     // Output known-0 bits are known if clear or set in both the low clear bits
     // common to both LHS & RHS.  For example, 8+(X<<3) is known to have the
     // low 3 bits clear.
@@ -1972,7 +1972,17 @@ void SelectionDAG::ComputeMaskedBits(SDValue Op, const APInt &Mask,
     KnownZeroOut = std::min(KnownZeroOut,
                             KnownZero2.countTrailingOnes());
 
-    KnownZero |= APInt::getLowBitsSet(BitWidth, KnownZeroOut);
+    if (Op.getOpcode() == ISD::ADD) {
+      KnownZero |= APInt::getLowBitsSet(BitWidth, KnownZeroOut);
+      return;
+    }
+
+    // With ADDE, a carry bit may be added in, so we can only use this
+    // information if we know (at least) that the low two bits are clear.  We
+    // then return to the caller that the low bit is unknown but that other bits
+    // are known zero.
+    if (KnownZeroOut >= 2) // ADDE
+      KnownZero |= APInt::getBitsSet(BitWidth, 1, KnownZeroOut);
     return;
   }
   case ISD::SREM:
@@ -2554,7 +2564,7 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL,
 
   SDNode *N;
   SDVTList VTs = getVTList(VT);
-  if (VT != MVT::Flag) { // Don't CSE flag producing nodes
+  if (VT != MVT::Glue) { // Don't CSE flag producing nodes
     FoldingSetNodeID ID;
     SDValue Ops[1] = { Operand };
     AddNodeIDNode(ID, Opcode, VTs, Ops, 1);
@@ -2996,7 +3006,7 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
   // Memoize this node if possible.
   SDNode *N;
   SDVTList VTs = getVTList(VT);
-  if (VT != MVT::Flag) {
+  if (VT != MVT::Glue) {
     SDValue Ops[] = { N1, N2 };
     FoldingSetNodeID ID;
     AddNodeIDNode(ID, Opcode, VTs, Ops, 2);
@@ -3064,7 +3074,7 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
   // Memoize node if it doesn't produce a flag.
   SDNode *N;
   SDVTList VTs = getVTList(VT);
-  if (VT != MVT::Flag) {
+  if (VT != MVT::Glue) {
     SDValue Ops[] = { N1, N2, N3 };
     FoldingSetNodeID ID;
     AddNodeIDNode(ID, Opcode, VTs, Ops, 3);
@@ -3872,7 +3882,7 @@ SelectionDAG::getMemIntrinsicNode(unsigned Opcode, DebugLoc dl, SDVTList VTList,
 
   // Memoize the node unless it returns a flag.
   MemIntrinsicSDNode *N;
-  if (VTList.VTs[VTList.NumVTs-1] != MVT::Flag) {
+  if (VTList.VTs[VTList.NumVTs-1] != MVT::Glue) {
     FoldingSetNodeID ID;
     AddNodeIDNode(ID, Opcode, VTList, Ops, NumOps);
     void *IP = 0;
@@ -4228,7 +4238,7 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
   SDNode *N;
   SDVTList VTs = getVTList(VT);
 
-  if (VT != MVT::Flag) {
+  if (VT != MVT::Glue) {
     FoldingSetNodeID ID;
     AddNodeIDNode(ID, Opcode, VTs, Ops, NumOps);
     void *IP = 0;
@@ -4294,7 +4304,7 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, SDVTList VTList,
 
   // Memoize the node unless it returns a flag.
   SDNode *N;
-  if (VTList.VTs[VTList.NumVTs-1] != MVT::Flag) {
+  if (VTList.VTs[VTList.NumVTs-1] != MVT::Glue) {
     FoldingSetNodeID ID;
     AddNodeIDNode(ID, Opcode, VTList, Ops, NumOps);
     void *IP = 0;
@@ -4703,7 +4713,7 @@ SDNode *SelectionDAG::MorphNodeTo(SDNode *N, unsigned Opc,
                                   unsigned NumOps) {
   // If an identical node already exists, use it.
   void *IP = 0;
-  if (VTs.VTs[VTs.NumVTs-1] != MVT::Flag) {
+  if (VTs.VTs[VTs.NumVTs-1] != MVT::Glue) {
     FoldingSetNodeID ID;
     AddNodeIDNode(ID, Opc, VTs, Ops, NumOps);
     if (SDNode *ON = CSEMap.FindNodeOrInsertPos(ID, IP))
@@ -4903,7 +4913,7 @@ SelectionDAG::getMachineNode(unsigned Opcode, DebugLoc dl,
 MachineSDNode *
 SelectionDAG::getMachineNode(unsigned Opcode, DebugLoc DL, SDVTList VTs,
                              const SDValue *Ops, unsigned NumOps) {
-  bool DoCSE = VTs.VTs[VTs.NumVTs-1] != MVT::Flag;
+  bool DoCSE = VTs.VTs[VTs.NumVTs-1] != MVT::Glue;
   MachineSDNode *N;
   void *IP;
 
@@ -4965,7 +4975,7 @@ SelectionDAG::getTargetInsertSubreg(int SRIdx, DebugLoc DL, EVT VT,
 /// else return NULL.
 SDNode *SelectionDAG::getNodeIfExists(unsigned Opcode, SDVTList VTList,
                                       const SDValue *Ops, unsigned NumOps) {
-  if (VTList.VTs[VTList.NumVTs-1] != MVT::Flag) {
+  if (VTList.VTs[VTList.NumVTs-1] != MVT::Glue) {
     FoldingSetNodeID ID;
     AddNodeIDNode(ID, Opcode, VTList, Ops, NumOps);
     void *IP = 0;

@@ -78,8 +78,11 @@ namespace llvm {
       // Integer Compare
       ICmp,
 
-      // Return
-      Ret
+      // Return from subroutine
+      Ret,
+
+      // Return from interrupt
+      IRet
     };
   }
 
@@ -145,6 +148,15 @@ namespace llvm {
                   const SmallVectorImpl<ISD::OutputArg> &Outs,
                   const SmallVectorImpl<SDValue> &OutVals,
                   DebugLoc dl, SelectionDAG &DAG) const;
+
+    virtual MachineBasicBlock*
+      EmitCustomShift(MachineInstr *MI, MachineBasicBlock *MBB) const;
+
+    virtual MachineBasicBlock*
+      EmitCustomSelect(MachineInstr *MI, MachineBasicBlock *MBB) const;
+
+    virtual MachineBasicBlock*
+            EmitCustomAtomic(MachineInstr *MI, MachineBasicBlock *MBB) const;
 
     virtual MachineBasicBlock *
       EmitInstrWithCustomInserter(MachineInstr *MI,

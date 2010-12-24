@@ -38,26 +38,6 @@ public:
 
   ~X86MCCodeEmitter() {}
 
-  unsigned getNumFixupKinds() const {
-    return 7;
-  }
-
-  const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const {
-    const static MCFixupKindInfo Infos[] = {
-      { "reloc_riprel_4byte", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel },
-      { "reloc_riprel_4byte_movq_load", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel },
-      { "reloc_signed_4byte", 0, 4 * 8, 0},
-      { "reloc_global_offset_table", 0, 4 * 8, 0}
-    };
-
-    if (Kind < FirstTargetFixupKind)
-      return MCCodeEmitter::getFixupKindInfo(Kind);
-
-    assert(unsigned(Kind - FirstTargetFixupKind) < getNumFixupKinds() &&
-           "Invalid kind!");
-    return Infos[Kind - FirstTargetFixupKind];
-  }
-
   static unsigned GetX86RegNum(const MCOperand &MO) {
     return X86RegisterInfo::getX86RegNum(MO.getReg());
   }
@@ -1016,7 +996,10 @@ EncodeInstruction(const MCInst &MI, raw_ostream &OS,
                     Fixups);
     } else {
       unsigned FixupKind;
-      if (MI.getOpcode() == X86::MOV64ri32 || MI.getOpcode() == X86::MOV64mi32)
+      // FIXME: Is there a better way to know that we need a signed relocation?
+      if (MI.getOpcode() == X86::MOV64ri32 ||
+          MI.getOpcode() == X86::MOV64mi32 ||
+          MI.getOpcode() == X86::PUSH64i32)
         FixupKind = X86::reloc_signed_4byte;
       else
         FixupKind = getImmFixupKind(TSFlags);

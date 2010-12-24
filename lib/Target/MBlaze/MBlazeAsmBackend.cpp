@@ -13,9 +13,9 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCAsmLayout.h"
+#include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCELFSymbolFlags.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCObjectFormat.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
@@ -41,10 +41,21 @@ static unsigned getFixupKindSize(unsigned Kind) {
 
 
 namespace {
+class MBlazeELFObjectWriter : public MCELFObjectTargetWriter {
+public:
+  MBlazeELFObjectWriter(Triple::OSType OSType)
+    : MCELFObjectTargetWriter(/*is64Bit*/ false, OSType, ELF::EM_MBLAZE,
+                              /*HasRelocationAddend*/ true) {}
+};
+
 class MBlazeAsmBackend : public TargetAsmBackend {
 public:
   MBlazeAsmBackend(const Target &T)
     : TargetAsmBackend() {
+  }
+
+  unsigned getNumFixupKinds() const {
+    return 2;
   }
 
   bool MayNeedRelaxation(const MCInst &Inst) const;
@@ -61,7 +72,7 @@ public:
 static unsigned getRelaxedOpcode(unsigned Op) {
     switch (Op) {
     default:            return Op;
-    case MBlaze::ADDI:  return MBlaze::ADDI32;
+    case MBlaze::ADDIK: return MBlaze::ADDIK32;
     case MBlaze::ORI:   return MBlaze::ORI32;
     case MBlaze::BRLID: return MBlaze::BRLID32;
     }
@@ -96,28 +107,17 @@ bool MBlazeAsmBackend::WriteNopData(uint64_t Count, MCObjectWriter *OW) const {
 
 namespace {
 class ELFMBlazeAsmBackend : public MBlazeAsmBackend {
-  MCELFObjectFormat Format;
-
 public:
   Triple::OSType OSType;
   ELFMBlazeAsmBackend(const Target &T, Triple::OSType _OSType)
-    : MBlazeAsmBackend(T), OSType(_OSType) {
-    HasScatteredSymbols = true;
-  }
-
-  virtual const MCObjectFormat &getObjectFormat() const {
-    return Format;
-  }
-
+    : MBlazeAsmBackend(T), OSType(_OSType) { }
 
   void ApplyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                   uint64_t Value) const;
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return createELFObjectWriter(OS,/*Is64Bit=*/false,
-                                 OSType, ELF::EM_MBLAZE,
-                                 /*IsLittleEndian=*/false,
-                                 /*HasRelocationAddend=*/true);
+    return createELFObjectWriter(new MBlazeELFObjectWriter(OSType), OS,
+                                 /*IsLittleEndian*/ false);
   }
 };
 

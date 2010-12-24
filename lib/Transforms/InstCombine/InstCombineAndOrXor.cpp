@@ -984,8 +984,9 @@ Instruction *InstCombiner::visitAnd(BinaryOperator &I) {
   if (Value *V = SimplifyAndInst(Op0, Op1, TD))
     return ReplaceInstUsesWith(I, V);
 
-  if (Instruction *NV = SimplifyByFactorizing(I)) // (A|B)&(A|C) -> A|(B&C)
-    return NV;
+  // (A|B)&(A|C) -> A|(B&C) etc
+  if (Value *V = SimplifyUsingDistributiveLaws(I))
+    return ReplaceInstUsesWith(I, V);
 
   // See if we can simplify any instructions used by the instruction whose sole 
   // purpose is to compute bits we don't care about.
@@ -1429,13 +1430,11 @@ Value *InstCombiner::FoldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS) {
       return getICmpValue(isSigned, Code, Op0, Op1, Builder);
     }
   }
-  
-  {
-    // handle (roughly):
-    // (icmp ne (A & B), C) | (icmp ne (A & D), E)
-    Value* fold = foldLogOpOfMaskedICmps(LHS, RHS, ICmpInst::ICMP_NE, Builder);
-    if (fold) return fold;
-  }
+
+  // handle (roughly):
+  // (icmp ne (A & B), C) | (icmp ne (A & D), E)
+  if (Value *V = foldLogOpOfMaskedICmps(LHS, RHS, ICmpInst::ICMP_NE, Builder))
+    return V;
 
   // This only handles icmp of constants: (icmp1 A, C1) | (icmp2 B, C2).
   Value *Val = LHS->getOperand(0), *Val2 = RHS->getOperand(0);
@@ -1450,7 +1449,16 @@ Value *InstCombiner::FoldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS) {
       return Builder->CreateICmp(LHSCC, NewOr, LHSCst);
     }
   }
-  
+
+  // (icmp ult (X + CA), C1) | (icmp eq X, C2) -> (icmp ule (X + CA), C1)
+  //   iff C2 + CA == C1.
+  if (LHSCC == ICmpInst::ICMP_ULT && RHSCC == ICmpInst::ICMP_EQ) {
+    ConstantInt *AddCst;
+    if (match(Val, m_Add(m_Specific(Val2), m_ConstantInt(AddCst))))
+      if (RHSCst->getValue() + AddCst->getValue() == LHSCst->getValue())
+        return Builder->CreateICmpULE(Val, LHSCst);
+  }
+
   // From here on, we only handle:
   //    (icmp1 A, C1) | (icmp2 A, C2) --> something simpler.
   if (Val != Val2) return 0;
@@ -1695,8 +1703,9 @@ Instruction *InstCombiner::visitOr(BinaryOperator &I) {
   if (Value *V = SimplifyOrInst(Op0, Op1, TD))
     return ReplaceInstUsesWith(I, V);
 
-  if (Instruction *NV = SimplifyByFactorizing(I)) // (A&B)|(A&C) -> A&(B|C)
-    return NV;
+  // (A&B)|(A&C) -> A&(B|C) etc
+  if (Value *V = SimplifyUsingDistributiveLaws(I))
+    return ReplaceInstUsesWith(I, V);
 
   // See if we can simplify any instructions used by the instruction whose sole 
   // purpose is to compute bits we don't care about.
@@ -1966,8 +1975,9 @@ Instruction *InstCombiner::visitXor(BinaryOperator &I) {
   if (Value *V = SimplifyXorInst(Op0, Op1, TD))
     return ReplaceInstUsesWith(I, V);
 
-  if (Instruction *NV = SimplifyByFactorizing(I)) // (A&B)^(A&C) -> A&(B^C)
-    return NV;
+  // (A&B)^(A&C) -> A&(B^C) etc
+  if (Value *V = SimplifyUsingDistributiveLaws(I))
+    return ReplaceInstUsesWith(I, V);
 
   // See if we can simplify any instructions used by the instruction whose sole 
   // purpose is to compute bits we don't care about.

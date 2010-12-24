@@ -12,8 +12,10 @@
 #include "X86FixupKinds.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAssembler.h"
+#include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCExpr.h"
-#include "llvm/MC/MCObjectFormat.h"
+#include "llvm/MC/MCFixupKindInfo.h"
+#include "llvm/MC/MCMachObjectWriter.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
@@ -44,10 +46,38 @@ static unsigned getFixupKindLog2Size(unsigned Kind) {
 }
 
 namespace {
+
+class X86ELFObjectWriter : public MCELFObjectTargetWriter {
+public:
+  X86ELFObjectWriter(bool is64Bit, Triple::OSType OSType, uint16_t EMachine,
+                     bool HasRelocationAddend)
+    : MCELFObjectTargetWriter(is64Bit, OSType, EMachine, HasRelocationAddend) {}
+};
+
 class X86AsmBackend : public TargetAsmBackend {
 public:
   X86AsmBackend(const Target &T)
     : TargetAsmBackend() {}
+
+  unsigned getNumFixupKinds() const {
+    return X86::NumTargetFixupKinds;
+  }
+
+  const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const {
+    const static MCFixupKindInfo Infos[X86::NumTargetFixupKinds] = {
+      { "reloc_riprel_4byte", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel },
+      { "reloc_riprel_4byte_movq_load", 0, 4 * 8, MCFixupKindInfo::FKF_IsPCRel},
+      { "reloc_signed_4byte", 0, 4 * 8, 0},
+      { "reloc_global_offset_table", 0, 4 * 8, 0}
+    };
+
+    if (Kind < FirstTargetFixupKind)
+      return TargetAsmBackend::getFixupKindInfo(Kind);
+
+    assert(unsigned(Kind - FirstTargetFixupKind) < getNumFixupKinds() &&
+           "Invalid kind!");
+    return Infos[Kind - FirstTargetFixupKind];
+  }
 
   void ApplyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                   uint64_t Value) const {
@@ -152,6 +182,9 @@ static unsigned getRelaxedOpcodeArith(unsigned Op) {
   case X86::CMP32mi8: return X86::CMP32mi;
   case X86::CMP64ri8: return X86::CMP64ri32;
   case X86::CMP64mi8: return X86::CMP64mi32;
+
+    // PUSH
+  case X86::PUSHi8: return X86::PUSHi32;
   }
 }
 
@@ -254,18 +287,11 @@ bool X86AsmBackend::WriteNopData(uint64_t Count, MCObjectWriter *OW) const {
 
 namespace {
 class ELFX86AsmBackend : public X86AsmBackend {
-  MCELFObjectFormat Format;
-
 public:
   Triple::OSType OSType;
   ELFX86AsmBackend(const Target &T, Triple::OSType _OSType)
     : X86AsmBackend(T), OSType(_OSType) {
-    HasScatteredSymbols = true;
     HasReliableSymbolDifference = true;
-  }
-
-  virtual const MCObjectFormat &getObjectFormat() const {
-    return Format;
   }
 
   virtual bool doesSectionRequireSymbols(const MCSection &Section) const {
@@ -280,10 +306,9 @@ public:
     : ELFX86AsmBackend(T, OSType) {}
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return createELFObjectWriter(OS, /*Is64Bit=*/false,
-                                 OSType, ELF::EM_386,
-                                 /*IsLittleEndian=*/true,
-                                 /*HasRelocationAddend=*/false);
+    return createELFObjectWriter(new X86ELFObjectWriter(false, OSType,
+                                                        ELF::EM_386, false),
+                                 OS, /*IsLittleEndian*/ true);
   }
 };
 
@@ -293,26 +318,19 @@ public:
     : ELFX86AsmBackend(T, OSType) {}
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return createELFObjectWriter(OS, /*Is64Bit=*/true,
-                                 OSType, ELF::EM_X86_64,
-                                 /*IsLittleEndian=*/true,
-                                 /*HasRelocationAddend=*/true);
+    return createELFObjectWriter(new X86ELFObjectWriter(true, OSType,
+                                                        ELF::EM_X86_64, true),
+                                 OS, /*IsLittleEndian*/ true);
   }
 };
 
 class WindowsX86AsmBackend : public X86AsmBackend {
   bool Is64Bit;
-  MCCOFFObjectFormat Format;
 
 public:
   WindowsX86AsmBackend(const Target &T, bool is64Bit)
     : X86AsmBackend(T)
     , Is64Bit(is64Bit) {
-    HasScatteredSymbols = true;
-  }
-
-  virtual const MCObjectFormat &getObjectFormat() const {
-    return Format;
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
@@ -321,17 +339,9 @@ public:
 };
 
 class DarwinX86AsmBackend : public X86AsmBackend {
-  MCMachOObjectFormat Format;
-
 public:
   DarwinX86AsmBackend(const Target &T)
-    : X86AsmBackend(T) {
-    HasScatteredSymbols = true;
-  }
-
-  virtual const MCObjectFormat &getObjectFormat() const {
-    return Format;
-  }
+    : X86AsmBackend(T) { }
 };
 
 class DarwinX86_32AsmBackend : public DarwinX86AsmBackend {
@@ -340,10 +350,9 @@ public:
     : DarwinX86AsmBackend(T) {}
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return createMachObjectWriter(OS, /*Is64Bit=*/false,
-                                  object::mach::CTM_i386,
-                                  object::mach::CSX86_ALL,
-                                  /*IsLittleEndian=*/true);
+    return createX86MachObjectWriter(OS, /*Is64Bit=*/false,
+                                     object::mach::CTM_i386,
+                                     object::mach::CSX86_ALL);
   }
 };
 
@@ -355,10 +364,9 @@ public:
   }
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return createMachObjectWriter(OS, /*Is64Bit=*/true,
-                                  object::mach::CTM_x86_64,
-                                  object::mach::CSX86_ALL,
-                                  /*IsLittleEndian=*/true);
+    return createX86MachObjectWriter(OS, /*Is64Bit=*/true,
+                                     object::mach::CTM_x86_64,
+                                     object::mach::CSX86_ALL);
   }
 
   virtual bool doesSectionRequireSymbols(const MCSection &Section) const {

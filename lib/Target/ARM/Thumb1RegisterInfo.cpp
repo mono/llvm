@@ -63,7 +63,7 @@ void Thumb1RegisterInfo::emitLoadConstPool(MachineBasicBlock &MBB,
           Type::getInt32Ty(MBB.getParent()->getFunction()->getContext()), Val);
   unsigned Idx = ConstantPool->getConstantPoolIndex(C, 4);
 
-  BuildMI(MBB, MBBI, dl, TII.get(ARM::tLDRcp))
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::tLDRpci))
           .addReg(DestReg, getDefRegState(true), SubIdx)
           .addConstantPoolIndex(Idx).addImm(Pred).addReg(PredReg);
 }
@@ -351,6 +351,22 @@ static void removeOperands(MachineInstr &MI, unsigned i) {
     MI.RemoveOperand(Op);
 }
 
+/// convertToNonSPOpcode - Change the opcode to the non-SP version, because
+/// we're replacing the frame index with a non-SP register.
+static unsigned convertToNonSPOpcode(unsigned Opcode) {
+  switch (Opcode) {
+  case ARM::tLDRspi:
+  case ARM::tRestore:           // FIXME: Should this opcode be here?
+    return ARM::tLDRi;
+
+  case ARM::tSTRspi:
+  case ARM::tSpill:             // FIXME: Should this opcode be here?
+    return ARM::tSTRi;
+  }
+
+  return Opcode;
+}
+
 bool Thumb1RegisterInfo::
 rewriteFrameIndex(MachineBasicBlock::iterator II, unsigned FrameRegIdx,
                   unsigned FrameReg, int &Offset,
@@ -452,55 +468,51 @@ rewriteFrameIndex(MachineBasicBlock::iterator II, unsigned FrameRegIdx,
     }
     return true;
   } else {
-    unsigned ImmIdx = 0;
-    int InstrOffs = 0;
-    unsigned NumBits = 0;
-    unsigned Scale = 1;
-    switch (AddrMode) {
-    case ARMII::AddrModeT1_s: {
-      ImmIdx = FrameRegIdx+1;
-      InstrOffs = MI.getOperand(ImmIdx).getImm();
-      NumBits = (FrameReg == ARM::SP) ? 8 : 5;
-      Scale = 4;
-      break;
-    }
-    default:
+    if (AddrMode != ARMII::AddrModeT1_s)
       llvm_unreachable("Unsupported addressing mode!");
-      break;
-    }
+
+    unsigned ImmIdx = FrameRegIdx + 1;
+    int InstrOffs = MI.getOperand(ImmIdx).getImm();
+    unsigned NumBits = (FrameReg == ARM::SP) ? 8 : 5;
+    unsigned Scale = 4;
 
     Offset += InstrOffs * Scale;
-    assert((Offset & (Scale-1)) == 0 && "Can't encode this offset!");
+    assert((Offset & (Scale - 1)) == 0 && "Can't encode this offset!");
 
     // Common case: small offset, fits into instruction.
     MachineOperand &ImmOp = MI.getOperand(ImmIdx);
     int ImmedOffset = Offset / Scale;
     unsigned Mask = (1 << NumBits) - 1;
+
     if ((unsigned)Offset <= Mask * Scale) {
-      // Replace the FrameIndex with sp
+      // Replace the FrameIndex with the frame register (e.g., sp).
       MI.getOperand(FrameRegIdx).ChangeToRegister(FrameReg, false);
       ImmOp.ChangeToImmediate(ImmedOffset);
+
+      // If we're using a register where sp was stored, convert the instruction
+      // to the non-SP version.
+      unsigned NewOpc = convertToNonSPOpcode(Opcode);
+      if (NewOpc != Opcode && FrameReg != ARM::SP)
+        MI.setDesc(TII.get(NewOpc));
+
       return true;
     }
 
-    bool isThumSpillRestore = Opcode == ARM::tRestore || Opcode == ARM::tSpill;
-    if (AddrMode == ARMII::AddrModeT1_s) {
-      // Thumb tLDRspi, tSTRspi. These will change to instructions that use
-      // a different base register.
-      NumBits = 5;
-      Mask = (1 << NumBits) - 1;
-    }
+    NumBits = 5;
+    Mask = (1 << NumBits) - 1;
+
     // If this is a thumb spill / restore, we will be using a constpool load to
     // materialize the offset.
-    if (AddrMode == ARMII::AddrModeT1_s && isThumSpillRestore)
+    if (Opcode == ARM::tRestore || Opcode == ARM::tSpill) {
       ImmOp.ChangeToImmediate(0);
-    else {
+    } else {
       // Otherwise, it didn't fit. Pull in what we can to simplify the immed.
       ImmedOffset = ImmedOffset & Mask;
       ImmOp.ChangeToImmediate(ImmedOffset);
-      Offset &= ~(Mask*Scale);
+      Offset &= ~(Mask * Scale);
     }
   }
+
   return Offset == 0;
 }
 
@@ -644,13 +656,11 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                 *this, dl);
     }
 
-    MI.setDesc(TII.get(ARM::tLDR));
+    MI.setDesc(TII.get(UseRR ? ARM::tLDRr : ARM::tLDRi));
     MI.getOperand(i).ChangeToRegister(TmpReg, false, false, true);
     if (UseRR)
       // Use [reg, reg] addrmode.
       MI.addOperand(MachineOperand::CreateReg(FrameReg, false));
-    else  // tLDR has an extra register operand.
-      MI.addOperand(MachineOperand::CreateReg(0, false));
   } else if (Desc.mayStore()) {
       VReg = MF.getRegInfo().createVirtualRegister(ARM::tGPRRegisterClass);
       bool UseRR = false;
@@ -666,14 +676,13 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
       } else
         emitThumbRegPlusImmediate(MBB, II, VReg, FrameReg, Offset, TII,
                                   *this, dl);
-      MI.setDesc(TII.get(ARM::tSTR));
+      MI.setDesc(TII.get(UseRR ? ARM::tSTRr : ARM::tSTRi));
       MI.getOperand(i).ChangeToRegister(VReg, false, false, true);
       if (UseRR)  // Use [reg, reg] addrmode.
         MI.addOperand(MachineOperand::CreateReg(FrameReg, false));
-      else // tSTR has an extra register operand.
-        MI.addOperand(MachineOperand::CreateReg(0, false));
-  } else
+  } else {
     assert(false && "Unexpected opcode!");
+  }
 
   // Add predicate back if it's needed.
   if (MI.getDesc().isPredicable()) {

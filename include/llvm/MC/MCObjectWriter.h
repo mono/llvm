@@ -20,6 +20,8 @@ class MCAsmLayout;
 class MCAssembler;
 class MCFixup;
 class MCFragment;
+class MCSymbol;
+class MCSymbolRefExpr;
 class MCValue;
 class raw_ostream;
 
@@ -76,6 +78,17 @@ public:
                                 const MCFragment *Fragment,
                                 const MCFixup &Fixup, MCValue Target,
                                 uint64_t &FixedValue) = 0;
+
+  /// \brief Check whether the difference (A - B) between two symbol
+  /// references is fully resolved.
+  ///
+  /// Clients are not required to answer precisely and may conservatively return
+  /// false, even when a difference is fully resolved.
+  virtual bool
+  IsSymbolRefDifferenceFullyResolved(const MCAssembler &Asm,
+                                     const MCSymbolRefExpr *A,
+                                     const MCSymbolRefExpr *B,
+                                     bool InSet) const;
 
   /// Check if a fixup is fully resolved.
   ///
@@ -179,13 +192,6 @@ public:
   static void EncodeULEB128(uint64_t Value, raw_ostream &OS);
 };
 
-MCObjectWriter *createMachObjectWriter(raw_ostream &OS, bool is64Bit,
-                                       uint32_t CPUType, uint32_t CPUSubtype,
-                                       bool IsLittleEndian);
-MCObjectWriter *createELFObjectWriter(raw_ostream &OS, bool is64Bit,
-                                      Triple::OSType OSType, uint16_t EMachine,
-                                      bool IsLittleEndian,
-                                      bool HasRelocationAddend);
 MCObjectWriter *createWinCOFFObjectWriter(raw_ostream &OS, bool is64Bit);
 
 } // End llvm namespace

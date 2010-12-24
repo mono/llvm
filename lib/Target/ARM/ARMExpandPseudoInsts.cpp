@@ -1145,18 +1145,12 @@ bool ARMExpandPseudo::ExpandMBB(MachineBasicBlock &MBB) {
       ExpandLaneOp(MBBI);
       break;
 
-    case ARM::VTBL2Pseudo:
-      ExpandVTBL(MBBI, ARM::VTBL2, false, 2); break;
-    case ARM::VTBL3Pseudo:
-      ExpandVTBL(MBBI, ARM::VTBL3, false, 3); break;
-    case ARM::VTBL4Pseudo:
-      ExpandVTBL(MBBI, ARM::VTBL4, false, 4); break;
-    case ARM::VTBX2Pseudo:
-      ExpandVTBL(MBBI, ARM::VTBX2, true, 2); break;
-    case ARM::VTBX3Pseudo:
-      ExpandVTBL(MBBI, ARM::VTBX3, true, 3); break;
-    case ARM::VTBX4Pseudo:
-      ExpandVTBL(MBBI, ARM::VTBX4, true, 4); break;
+    case ARM::VTBL2Pseudo: ExpandVTBL(MBBI, ARM::VTBL2, false, 2); break;
+    case ARM::VTBL3Pseudo: ExpandVTBL(MBBI, ARM::VTBL3, false, 3); break;
+    case ARM::VTBL4Pseudo: ExpandVTBL(MBBI, ARM::VTBL4, false, 4); break;
+    case ARM::VTBX2Pseudo: ExpandVTBL(MBBI, ARM::VTBX2, true, 2); break;
+    case ARM::VTBX3Pseudo: ExpandVTBL(MBBI, ARM::VTBX3, true, 3); break;
+    case ARM::VTBX4Pseudo: ExpandVTBL(MBBI, ARM::VTBX4, true, 4); break;
     }
 
     if (ModifiedOp)

@@ -15,15 +15,12 @@
 #define DEBUG_TYPE "regalloc"
 #include "Spiller.h"
 #include "LiveRangeEdit.h"
-#include "SplitKit.h"
 #include "VirtRegMap.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
-#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetInstrInfo.h"
@@ -36,18 +33,12 @@ using namespace llvm;
 static cl::opt<bool>
 VerifySpills("verify-spills", cl::desc("Verify after each spill/split"));
 
-static cl::opt<bool>
-ExtraSpillerSplits("extra-spiller-splits",
-                   cl::desc("Enable additional splitting during splitting"));
-
 namespace {
 class InlineSpiller : public Spiller {
   MachineFunctionPass &pass_;
   MachineFunction &mf_;
   LiveIntervals &lis_;
   LiveStacks &lss_;
-  MachineDominatorTree &mdt_;
-  MachineLoopInfo &loops_;
   AliasAnalysis *aa_;
   VirtRegMap &vrm_;
   MachineFrameInfo &mfi_;
@@ -55,8 +46,6 @@ class InlineSpiller : public Spiller {
   const TargetInstrInfo &tii_;
   const TargetRegisterInfo &tri_;
   const BitVector reserved_;
-
-  SplitAnalysis splitAnalysis_;
 
   // Variables that are valid during spill(), but used by multiple methods.
   LiveRangeEdit *edit_;
@@ -76,16 +65,13 @@ public:
       mf_(mf),
       lis_(pass.getAnalysis<LiveIntervals>()),
       lss_(pass.getAnalysis<LiveStacks>()),
-      mdt_(pass.getAnalysis<MachineDominatorTree>()),
-      loops_(pass.getAnalysis<MachineLoopInfo>()),
       aa_(&pass.getAnalysis<AliasAnalysis>()),
       vrm_(vrm),
       mfi_(*mf.getFrameInfo()),
       mri_(mf.getRegInfo()),
       tii_(*mf.getTarget().getInstrInfo()),
       tri_(*mf.getTarget().getRegisterInfo()),
-      reserved_(tri_.getReservedRegs(mf_)),
-      splitAnalysis_(mf, lis_, loops_) {}
+      reserved_(tri_.getReservedRegs(mf_)) {}
 
   void spill(LiveInterval *li,
              SmallVectorImpl<LiveInterval*> &newIntervals,
@@ -94,14 +80,13 @@ public:
   void spill(LiveRangeEdit &);
 
 private:
-  bool split();
-
   bool reMaterializeFor(MachineBasicBlock::iterator MI);
   void reMaterializeAll();
 
   bool coalesceStackAccess(MachineInstr *MI);
   bool foldMemoryOperand(MachineBasicBlock::iterator MI,
-                         const SmallVectorImpl<unsigned> &Ops);
+                         const SmallVectorImpl<unsigned> &Ops,
+                         MachineInstr *LoadMI = 0);
   void insertReload(LiveInterval &NewLI, MachineBasicBlock::iterator MI);
   void insertSpill(LiveInterval &NewLI, MachineBasicBlock::iterator MI);
 };
@@ -112,45 +97,9 @@ Spiller *createInlineSpiller(MachineFunctionPass &pass,
                              MachineFunction &mf,
                              VirtRegMap &vrm) {
   if (VerifySpills)
-    mf.verify(&pass);
+    mf.verify(&pass, "When creating inline spiller");
   return new InlineSpiller(pass, mf, vrm);
 }
-}
-
-/// split - try splitting the current interval into pieces that may allocate
-/// separately. Return true if successful.
-bool InlineSpiller::split() {
-  splitAnalysis_.analyze(&edit_->getParent());
-
-  // Try splitting around loops.
-  if (ExtraSpillerSplits) {
-    const MachineLoop *loop = splitAnalysis_.getBestSplitLoop();
-    if (loop) {
-      SplitEditor(splitAnalysis_, lis_, vrm_, mdt_, *edit_)
-        .splitAroundLoop(loop);
-      return true;
-    }
-  }
-
-  // Try splitting into single block intervals.
-  SplitAnalysis::BlockPtrSet blocks;
-  if (splitAnalysis_.getMultiUseBlocks(blocks)) {
-    SplitEditor(splitAnalysis_, lis_, vrm_, mdt_, *edit_)
-      .splitSingleBlocks(blocks);
-    return true;
-  }
-
-  // Try splitting inside a basic block.
-  if (ExtraSpillerSplits) {
-    const MachineBasicBlock *MBB = splitAnalysis_.getBlockForInsideSplit();
-    if (MBB){
-      SplitEditor(splitAnalysis_, lis_, vrm_, mdt_, *edit_)
-        .splitInsideBlock(MBB);
-      return true;
-    }
-  }
-
-  return false;
 }
 
 /// reMaterializeFor - Attempt to rematerialize edit_->getReg() before MI instead of
@@ -191,6 +140,14 @@ bool InlineSpiller::reMaterializeFor(MachineBasicBlock::iterator MI) {
         return false;
       }
     }
+  }
+
+  // Before rematerializing into a register for a single instruction, try to
+  // fold a load into the instruction. That avoids allocating a new register.
+  if (RM.OrigMI->getDesc().canFoldAsLoad() &&
+      foldMemoryOperand(MI, Ops, RM.OrigMI)) {
+    edit_->markRematerialized(RM.ParentVNI);
+    return true;
   }
 
   // Alocate a new register for the remat.
@@ -295,9 +252,13 @@ bool InlineSpiller::coalesceStackAccess(MachineInstr *MI) {
 }
 
 /// foldMemoryOperand - Try folding stack slot references in Ops into MI.
-/// Return true on success, and MI will be erased.
+/// @param MI     Instruction using or defining the current register.
+/// @param Ops    Operand indices from readsWritesVirtualRegister().
+/// @param LoadMI Load instruction to use instead of stack slot when non-null.
+/// @return       True on success, and MI will be erased.
 bool InlineSpiller::foldMemoryOperand(MachineBasicBlock::iterator MI,
-                                      const SmallVectorImpl<unsigned> &Ops) {
+                                      const SmallVectorImpl<unsigned> &Ops,
+                                      MachineInstr *LoadMI) {
   // TargetInstrInfo::foldMemoryOperand only expects explicit, non-tied
   // operands.
   SmallVector<unsigned, 8> FoldOps;
@@ -314,11 +275,14 @@ bool InlineSpiller::foldMemoryOperand(MachineBasicBlock::iterator MI,
       FoldOps.push_back(Idx);
   }
 
-  MachineInstr *FoldMI = tii_.foldMemoryOperand(MI, FoldOps, stackSlot_);
+  MachineInstr *FoldMI =
+                LoadMI ? tii_.foldMemoryOperand(MI, FoldOps, LoadMI)
+                       : tii_.foldMemoryOperand(MI, FoldOps, stackSlot_);
   if (!FoldMI)
     return false;
   lis_.ReplaceMachineInstrInMaps(MI, FoldMI);
-  vrm_.addSpillSlotUse(stackSlot_, FoldMI);
+  if (!LoadMI)
+    vrm_.addSpillSlotUse(stackSlot_, FoldMI);
   MI->eraseFromParent();
   DEBUG(dbgs() << "\tfolded: " << *FoldMI);
   return true;
@@ -365,7 +329,7 @@ void InlineSpiller::spill(LiveInterval *li,
   LiveRangeEdit edit(*li, newIntervals, spillIs);
   spill(edit);
   if (VerifySpills)
-    mf_.verify(&pass_);
+    mf_.verify(&pass_, "After inline spill");
 }
 
 void InlineSpiller::spill(LiveRangeEdit &edit) {
@@ -376,9 +340,6 @@ void InlineSpiller::spill(LiveRangeEdit &edit) {
                << ':' << edit.getParent() << "\n");
   assert(edit.getParent().isSpillable() &&
          "Attempting to spill already spilled value.");
-
-  if (split())
-    return;
 
   reMaterializeAll();
 

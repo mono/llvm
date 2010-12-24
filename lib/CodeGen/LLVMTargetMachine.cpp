@@ -143,14 +143,17 @@ bool LLVMTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
 
     // Create a code emitter if asked to show the encoding.
     MCCodeEmitter *MCE = 0;
-    if (ShowMCEncoding)
+    TargetAsmBackend *TAB = 0;
+    if (ShowMCEncoding) {
       MCE = getTarget().createCodeEmitter(*this, *Context);
+      TAB = getTarget().createAsmBackend(TargetTriple);
+    }
 
     MCStreamer *S = getTarget().createAsmStreamer(*Context, Out,
                                                   getVerboseAsm(),
                                                   hasMCUseLoc(),
                                                   InstPrinter,
-                                                  MCE,
+                                                  MCE, TAB,
                                                   ShowMCInst);
     AsmStreamer.reset(S);
     break;
@@ -248,7 +251,7 @@ static void printAndVerify(PassManagerBase &PM,
     PM.add(createMachineFunctionPrinterPass(dbgs(), Banner));
 
   if (VerifyMachineCode)
-    PM.add(createMachineVerifierPass());
+    PM.add(createMachineVerifierPass(Banner));
 }
 
 /// addCommonCodeGenPasses - Add standard LLVM codegen passes used for both

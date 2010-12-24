@@ -11,6 +11,7 @@
 #define LLVM_MC_MCASSEMBLER_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/ilist.h"
 #include "llvm/ADT/ilist_node.h"
@@ -73,10 +74,6 @@ private:
   /// Offset - The offset of this fragment in its section. This is ~0 until
   /// initialized.
   uint64_t Offset;
-
-  /// EffectiveSize - The compute size of this section. This is ~0 until
-  /// initialized.
-  uint64_t EffectiveSize;
 
   /// LayoutOrder - The layout order of this fragment.
   unsigned LayoutOrder;
@@ -308,13 +305,10 @@ class MCOrgFragment : public MCFragment {
   /// Value - Value to use for filling bytes.
   int8_t Value;
 
-  /// Size - The current estimate of the size.
-  unsigned Size;
-
 public:
   MCOrgFragment(const MCExpr &_Offset, int8_t _Value, MCSectionData *SD = 0)
     : MCFragment(FT_Org, SD),
-      Offset(&_Offset), Value(_Value), Size(0) {}
+      Offset(&_Offset), Value(_Value) {}
 
   /// @name Accessors
   /// @{
@@ -323,9 +317,6 @@ public:
 
   uint8_t getValue() const { return Value; }
 
-  unsigned getSize() const { return Size; }
-
-  void setSize(unsigned Size_) { Size = Size_; }
   /// @}
 
   static bool classof(const MCFragment *F) {
@@ -644,6 +635,8 @@ private:
 
   MCCodeEmitter &Emitter;
 
+  MCObjectWriter &Writer;
+
   raw_ostream &OS;
 
   iplist<MCSectionData> Sections;
@@ -662,6 +655,15 @@ private:
 
   std::vector<IndirectSymbolData> IndirectSymbols;
 
+  /// The set of function symbols for which a .thumb_func directive has
+  /// been seen.
+  //
+  // FIXME: We really would like this in target specific code rather than
+  // here. Maybe when the relocation stuff moves to target specific,
+  // this can go with it? The streamer would need some target specific
+  // refactoring too.
+  SmallPtrSet<const MCSymbol*, 64> ThumbFuncs;
+
   unsigned RelaxAll : 1;
   unsigned SubsectionsViaSymbols : 1;
 
@@ -679,49 +681,42 @@ private:
   /// \return Whether the fixup value was fully resolved. This is true if the
   /// \arg Value result is fixed, otherwise the value may change due to
   /// relocation.
-  bool EvaluateFixup(const MCObjectWriter &Writer, const MCAsmLayout &Layout,
+  bool EvaluateFixup(const MCAsmLayout &Layout,
                      const MCFixup &Fixup, const MCFragment *DF,
                      MCValue &Target, uint64_t &Value) const;
 
   /// Check whether a fixup can be satisfied, or whether it needs to be relaxed
   /// (increased in size, in order to hold its value correctly).
-  bool FixupNeedsRelaxation(const MCObjectWriter &Writer,
-                            const MCFixup &Fixup, const MCFragment *DF,
+  bool FixupNeedsRelaxation(const MCFixup &Fixup, const MCFragment *DF,
                             const MCAsmLayout &Layout) const;
 
   /// Check whether the given fragment needs relaxation.
-  bool FragmentNeedsRelaxation(const MCObjectWriter &Writer,
-                               const MCInstFragment *IF,
+  bool FragmentNeedsRelaxation(const MCInstFragment *IF,
                                const MCAsmLayout &Layout) const;
-
-  /// Compute the effective fragment size assuming it is layed out at the given
-  /// \arg SectionAddress and \arg FragmentOffset.
-  uint64_t ComputeFragmentSize(const MCFragment &F,
-                               uint64_t FragmentOffset) const;
 
   /// LayoutOnce - Perform one layout iteration and return true if any offsets
   /// were adjusted.
-  bool LayoutOnce(const MCObjectWriter &Writer, MCAsmLayout &Layout);
+  bool LayoutOnce(MCAsmLayout &Layout);
 
-  bool RelaxInstruction(const MCObjectWriter &Writer, MCAsmLayout &Layout,
-                        MCInstFragment &IF);
+  bool LayoutSectionOnce(MCAsmLayout &Layout, MCSectionData &SD);
 
-  bool RelaxOrg(const MCObjectWriter &Writer, MCAsmLayout &Layout,
-                MCOrgFragment &OF);
+  bool RelaxInstruction(MCAsmLayout &Layout, MCInstFragment &IF);
 
-  bool RelaxLEB(const MCObjectWriter &Writer, MCAsmLayout &Layout,
-                MCLEBFragment &IF);
+  bool RelaxLEB(MCAsmLayout &Layout, MCLEBFragment &IF);
 
-  bool RelaxDwarfLineAddr(const MCObjectWriter &Writer, MCAsmLayout &Layout,
-			  MCDwarfLineAddrFragment &DF);
+  bool RelaxDwarfLineAddr(MCAsmLayout &Layout, MCDwarfLineAddrFragment &DF);
 
   /// FinishLayout - Finalize a layout, including fragment lowering.
   void FinishLayout(MCAsmLayout &Layout);
 
-  uint64_t HandleFixup(MCObjectWriter &Writer, const MCAsmLayout &Layout,
+  uint64_t HandleFixup(const MCAsmLayout &Layout,
                        MCFragment &F, const MCFixup &Fixup);
 
 public:
+  /// Compute the effective fragment size assuming it is layed out at the given
+  /// \arg SectionAddress and \arg FragmentOffset.
+  uint64_t ComputeFragmentSize(const MCAsmLayout &Layout, const MCFragment &F) const;
+
   /// Find the symbol which defines the atom containing the given symbol, or
   /// null if there is no such symbol.
   const MCSymbolData *getAtom(const MCSymbolData *Symbol) const;
@@ -733,10 +728,16 @@ public:
   bool isSymbolLinkerVisible(const MCSymbol &SD) const;
 
   /// Emit the section contents using the given object writer.
-  //
-  // FIXME: Should MCAssembler always have a reference to the object writer?
-  void WriteSectionData(const MCSectionData *Section, const MCAsmLayout &Layout,
-                        MCObjectWriter *OW) const;
+  void WriteSectionData(const MCSectionData *Section,
+                        const MCAsmLayout &Layout) const;
+
+  /// Check whether a given symbol has been flagged with .thumb_func.
+  bool isThumbFunc(const MCSymbol *Func) const {
+    return ThumbFuncs.count(Func);
+  }
+
+  /// Flag a function symbol as the target of a .thumb_func directive.
+  void setIsThumbFunc(const MCSymbol *Func) { ThumbFuncs.insert(Func); }
 
 public:
   /// Construct a new assembler instance.
@@ -747,8 +748,9 @@ public:
   // concrete and require clients to pass in a target like object. The other
   // option is to make this abstract, and have targets provide concrete
   // implementations as we do with AsmParser.
-  MCAssembler(MCContext &_Context, TargetAsmBackend &_Backend,
-              MCCodeEmitter &_Emitter, raw_ostream &OS);
+  MCAssembler(MCContext &Context_, TargetAsmBackend &Backend_,
+              MCCodeEmitter &Emitter_, MCObjectWriter &Writer_,
+              raw_ostream &OS);
   ~MCAssembler();
 
   MCContext &getContext() const { return Context; }
@@ -757,10 +759,12 @@ public:
 
   MCCodeEmitter &getEmitter() const { return Emitter; }
 
+  MCObjectWriter &getWriter() const { return Writer; }
+
   /// Finish - Do final processing and write the object to the output stream.
   /// \arg Writer is used for custom object writer (as the MCJIT does),
   /// if not specified it is automatically created from backend.
-  void Finish(MCObjectWriter *Writer = 0);
+  void Finish();
 
   // FIXME: This does not belong here.
   bool getSubsectionsViaSymbols() const {

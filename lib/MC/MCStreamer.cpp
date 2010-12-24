@@ -48,7 +48,8 @@ void MCStreamer::EmitDwarfSetLineAddr(int64_t LineDelta,
 void MCStreamer::EmitIntValue(uint64_t Value, unsigned Size,
                               unsigned AddrSpace) {
   assert(Size <= 8 && "Invalid size");
-  assert(!(Size == 1 && (signed)Value > 255) && "Invalid size");
+  assert((isUIntN(8 * Size, Value) || isIntN(8 * Size, Value)) &&
+         "Invalid size");
   char buf[8];
   // FIXME: Endianness assumption.
   for (unsigned i = 0; i != Size; ++i)
@@ -76,7 +77,7 @@ void MCStreamer::EmitSLEB128IntValue(int64_t Value, unsigned AddrSpace) {
 
 void MCStreamer::EmitAbsValue(const MCExpr *Value, unsigned Size,
                               unsigned AddrSpace) {
-  if (!getContext().getAsmInfo().needsSetToChangeDiffSize()) {
+  if (getContext().getAsmInfo().hasAggressiveSymbolFolding()) {
     EmitValue(Value, Size, AddrSpace);
     return;
   }

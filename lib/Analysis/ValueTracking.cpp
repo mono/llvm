@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Constants.h"
 #include "llvm/Instructions.h"
 #include "llvm/GlobalVariable.h"
@@ -676,6 +677,13 @@ unsigned llvm::ComputeNumSignBits(Value *V, const TargetData *TD,
     if (ConstantInt *C = dyn_cast<ConstantInt>(U->getOperand(1))) {
       Tmp += C->getZExtValue();
       if (Tmp > TyBits) Tmp = TyBits;
+    }
+    // vector ashr X, <C, C, C, C>  -> adds C sign bits
+    if (ConstantVector *C = dyn_cast<ConstantVector>(U->getOperand(1))) {
+      if (ConstantInt *CI = dyn_cast_or_null<ConstantInt>(C->getSplatValue())) {
+        Tmp += CI->getZExtValue();
+        if (Tmp > TyBits) Tmp = TyBits;
+      }
     }
     return Tmp;
   case Instruction::Shl:
@@ -1425,4 +1433,32 @@ uint64_t llvm::GetStringLength(Value *V) {
   // If Len is ~0ULL, we had an infinite phi cycle: this is dead code, so return
   // an empty string as a length.
   return Len == ~0ULL ? 1 : Len;
+}
+
+Value *llvm::GetUnderlyingObject(Value *V, unsigned MaxLookup) {
+  if (!V->getType()->isPointerTy())
+    return V;
+  for (unsigned Count = 0; MaxLookup == 0 || Count < MaxLookup; ++Count) {
+    if (GEPOperator *GEP = dyn_cast<GEPOperator>(V)) {
+      V = GEP->getPointerOperand();
+    } else if (Operator::getOpcode(V) == Instruction::BitCast) {
+      V = cast<Operator>(V)->getOperand(0);
+    } else if (GlobalAlias *GA = dyn_cast<GlobalAlias>(V)) {
+      if (GA->mayBeOverridden())
+        return V;
+      V = GA->getAliasee();
+    } else {
+      // See if InstructionSimplify knows any relevant tricks.
+      if (Instruction *I = dyn_cast<Instruction>(V))
+        // TODO: Aquire TargetData and DominatorTree and use them.
+        if (Value *Simplified = SimplifyInstruction(I, 0, 0)) {
+          V = Simplified;
+          continue;
+        }
+
+      return V;
+    }
+    assert(V->getType()->isPointerTy() && "Unexpected operand type!");
+  }
+  return V;
 }

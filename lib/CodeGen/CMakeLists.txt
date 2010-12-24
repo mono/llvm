@@ -1,5 +1,6 @@
 add_llvm_library(LLVMCodeGen
   AggressiveAntiDepBreaker.cpp
+  AllocationOrder.cpp
   Analysis.cpp
   BranchFolding.cpp
   CalcSpillWeights.cpp
@@ -39,6 +40,7 @@ add_llvm_library(LLVMCodeGen
   MachineInstr.cpp
   MachineLICM.cpp
   MachineLoopInfo.cpp
+  MachineLoopRanges.cpp
   MachineModuleInfo.cpp
   MachineModuleInfoImpls.cpp
   MachinePassRegistry.cpp

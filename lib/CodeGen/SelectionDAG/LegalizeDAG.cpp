@@ -253,10 +253,15 @@ void SelectionDAGLegalize::LegalizeDAG() {
 /// FindCallEndFromCallStart - Given a chained node that is part of a call
 /// sequence, find the CALLSEQ_END node that terminates the call sequence.
 static SDNode *FindCallEndFromCallStart(SDNode *Node, int depth = 0) {
+  // Nested CALLSEQ_START/END constructs aren't yet legal,
+  // but we can DTRT and handle them correctly here.
   if (Node->getOpcode() == ISD::CALLSEQ_START)
     depth++;
-  if ((Node->getOpcode() == ISD::CALLSEQ_END) && (depth == 1))
-    return Node;
+  else if (Node->getOpcode() == ISD::CALLSEQ_END) {
+    depth--;
+    if (depth == 0)
+      return Node;
+  }
   if (Node->use_empty())
     return 0;   // No CallSeqEnd
 
@@ -1085,7 +1090,7 @@ SDValue SelectionDAGLegalize::LegalizeOp(SDValue Op) {
     Tmp1 = LegalizeOp(Node->getOperand(0));  // Legalize the chain.
     // Do not try to legalize the target-specific arguments (#1+), except for
     // an optional flag input.
-    if (Node->getOperand(Node->getNumOperands()-1).getValueType() != MVT::Flag){
+    if (Node->getOperand(Node->getNumOperands()-1).getValueType() != MVT::Glue){
       if (Tmp1 != Node->getOperand(0)) {
         SmallVector<SDValue, 8> Ops(Node->op_begin(), Node->op_end());
         Ops[0] = Tmp1;

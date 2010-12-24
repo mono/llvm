@@ -97,8 +97,11 @@ class Section:
             print "   ])"
         elif dumpdata:
             f.seek(self.sh_offset)
-            data = f.read(self.sh_size)
-            print "   ('_section_data', '%s')" % common_dump.dataToHex(data)
+            if self.sh_type != 8: # != SHT_NOBITS
+                data = f.read(self.sh_size)
+                print "   ('_section_data', '%s')" % common_dump.dataToHex(data)
+            else:
+                print "   ('_section_data', '')" 
         print "  ),"
 
 def dumpSymtab(f, section, strtab):
@@ -118,8 +121,8 @@ def dumpSymtab(f, section, strtab):
         print "     ('st_other', %s)" % common_dump.HexDump(f.read8())
         print "     ('st_shndx', %s)" % common_dump.HexDump(f.read16())
         if f.is64Bit:
-            print "     ('st_value', %s)" % common_dump.HexDump(f.read64())
-            print "     ('st_size', %s)" % common_dump.HexDump(f.read64())
+            print "     ('st_value', %s)" % common_dump.HexDump(f.read64(), 64)
+            print "     ('st_size', %s)" % common_dump.HexDump(f.read64(), 64)
         print "    ),"
 
 def dumpRel(f, section, dumprela = False):

@@ -142,6 +142,7 @@ void initializeMachineCSEPass(PassRegistry&);
 void initializeMachineDominatorTreePass(PassRegistry&);
 void initializeMachineLICMPass(PassRegistry&);
 void initializeMachineLoopInfoPass(PassRegistry&);
+void initializeMachineLoopRangesPass(PassRegistry&);
 void initializeMachineModuleInfoPass(PassRegistry&);
 void initializeMachineSinkingPass(PassRegistry&);
 void initializeMachineVerifierPassPass(PassRegistry&);
@@ -216,6 +217,7 @@ void initializeUnreachableBlockElimPass(PassRegistry&);
 void initializeUnreachableMachineBlockElimPass(PassRegistry&);
 void initializeVerifierPass(PassRegistry&);
 void initializeVirtRegMapPass(PassRegistry&);
+void initializeInstSimplifierPass(PassRegistry&);
 
 }
 

@@ -39,7 +39,7 @@ namespace {
 
   const llvm::error_code success;
 
-  StringRef find_first_component(const StringRef  &path) {
+  StringRef find_first_component(StringRef path) {
     // Look for this first component in the following order.
     // * empty (in this case we return an empty string)
     // * either C: or {//,\\}net.
@@ -53,7 +53,7 @@ namespace {
 #ifdef LLVM_ON_WIN32
     // C:
     if (path.size() >= 2 && std::isalpha(path[0]) && path[1] == ':')
-      return StringRef(path.begin(), 2);
+      return path.substr(0, 2);
 #endif
 
     // //net
@@ -63,33 +63,25 @@ namespace {
         !is_separator(path[2])) {
       // Find the next directory separator.
       size_t end = path.find_first_of(separators, 2);
-      if (end == StringRef::npos)
-        return path;
-      else
-        return StringRef(path.begin(), end);
+      return path.substr(0, end);
     }
 
     // {/,\}
     if (is_separator(path[0]))
-      return StringRef(path.begin(), 1);
+      return path.substr(0, 1);
 
     if (path.startswith(".."))
-      return StringRef(path.begin(), 2);
+      return path.substr(0, 2);
 
     if (path[0] == '.')
-      return StringRef(path.begin(), 1);
+      return path.substr(0, 1);
 
     // * {file,directory}name
     size_t end = path.find_first_of(separators, 2);
-    if (end == StringRef::npos)
-      return path;
-    else
-      return StringRef(path.begin(), end);
-
-    return StringRef();
+    return path.substr(0, end);
   }
 
-  size_t filename_pos(const StringRef &str) {
+  size_t filename_pos(StringRef str) {
     if (str.size() == 2 &&
         is_separator(str[0]) &&
         str[0] == str[1])
@@ -112,7 +104,7 @@ namespace {
     return pos + 1;
   }
 
-  size_t root_dir_start(const StringRef &str) {
+  size_t root_dir_start(StringRef str) {
     // case "c:/"
 #ifdef LLVM_ON_WIN32
     if (str.size() > 2 &&
@@ -142,13 +134,13 @@ namespace {
     return StringRef::npos;
   }
 
-  size_t parent_path_end(const StringRef &path) {
+  size_t parent_path_end(StringRef path) {
     size_t end_pos = filename_pos(path);
 
     bool filename_was_sep = path.size() > 0 && is_separator(path[end_pos]);
 
     // Skip separators except for root dir.
-    size_t root_dir_pos = root_dir_start(StringRef(path.begin(), end_pos));
+    size_t root_dir_pos = root_dir_start(path.substr(0, end_pos));
 
     while(end_pos > 0 &&
           (end_pos - 1) != root_dir_pos &&
@@ -166,7 +158,7 @@ namespace llvm {
 namespace sys  {
 namespace path {
 
-const_iterator begin(const StringRef &path) {
+const_iterator begin(StringRef path) {
   const_iterator i;
   i.Path      = path;
   i.Component = find_first_component(path);
@@ -174,7 +166,7 @@ const_iterator begin(const StringRef &path) {
   return i;
 }
 
-const_iterator end(const StringRef &path) {
+const_iterator end(StringRef path) {
   const_iterator i;
   i.Path      = path;
   i.Position  = path.size();
@@ -209,7 +201,7 @@ const_iterator &const_iterator::operator++() {
         || Component.endswith(":")
 #endif
         ) {
-      Component = StringRef(Path.begin() + Position, 1);
+      Component = Path.substr(Position, 1);
       return *this;
     }
 
@@ -229,9 +221,7 @@ const_iterator &const_iterator::operator++() {
 
   // Find next component.
   size_t end_pos = Path.find_first_of(separators, Position);
-  if (end_pos == StringRef::npos)
-    end_pos = Path.size();
-  Component = StringRef(Path.begin() + Position, end_pos - Position);
+  Component = Path.slice(Position, end_pos);
 
   return *this;
 }
@@ -260,8 +250,8 @@ const_iterator &const_iterator::operator--() {
     --end_pos;
 
   // Find next separator.
-  size_t start_pos = filename_pos(StringRef(Path.begin(), end_pos));
-  Component = StringRef(Path.begin() + start_pos, end_pos - start_pos);
+  size_t start_pos = filename_pos(Path.substr(0, end_pos));
+  Component = Path.slice(start_pos, end_pos);
   Position = start_pos;
   return *this;
 }
@@ -279,7 +269,7 @@ ptrdiff_t const_iterator::operator-(const const_iterator &RHS) const {
   return Position - RHS.Position;
 }
 
-const StringRef root_path(const StringRef &path) {
+const StringRef root_path(StringRef path) {
   const_iterator b = begin(path),
                  pos = b,
                  e = end(path);
@@ -295,7 +285,7 @@ const StringRef root_path(const StringRef &path) {
     if (has_net || has_drive) {
       if ((++pos != e) && is_separator((*pos)[0])) {
         // {C:/,//net/}, so get the first two components.
-        return StringRef(path.begin(), b->size() + pos->size());
+        return path.substr(0, b->size() + pos->size());
       } else {
         // just {C:,//net}, return the first component.
         return *b;
@@ -311,7 +301,7 @@ const StringRef root_path(const StringRef &path) {
   return StringRef();
 }
 
-const StringRef root_name(const StringRef &path) {
+const StringRef root_name(StringRef path) {
   const_iterator b = begin(path),
                  e = end(path);
   if (b != e) {
@@ -333,7 +323,7 @@ const StringRef root_name(const StringRef &path) {
   return StringRef();
 }
 
-const StringRef root_directory(const StringRef &path) {
+const StringRef root_directory(StringRef path) {
   const_iterator b = begin(path),
                  pos = b,
                  e = end(path);
@@ -362,9 +352,9 @@ const StringRef root_directory(const StringRef &path) {
   return StringRef();
 }
 
-const StringRef relative_path(const StringRef &path) {
+const StringRef relative_path(StringRef path) {
   StringRef root = root_path(path);
-  return StringRef(path.begin() + root.size(), path.size() - root.size());
+  return root.substr(root.size());
 }
 
 void append(SmallVectorImpl<char> &path, const Twine &a,
@@ -392,7 +382,7 @@ void append(SmallVectorImpl<char> &path, const Twine &a,
     if (path_has_sep) {
       // Strip separators from beginning of component.
       size_t loc = i->find_first_not_of(separators);
-      StringRef c = StringRef(i->begin() + loc, i->size() - loc);
+      StringRef c = i->substr(loc);
 
       // Append it.
       path.append(c.begin(), c.end());
@@ -408,12 +398,12 @@ void append(SmallVectorImpl<char> &path, const Twine &a,
   }
 }
 
-const StringRef parent_path(const StringRef &path) {
+const StringRef parent_path(StringRef path) {
   size_t end_pos = parent_path_end(path);
   if (end_pos == StringRef::npos)
     return StringRef();
   else
-    return StringRef(path.data(), end_pos);
+    return path.substr(0, end_pos);
 }
 
 void remove_filename(SmallVectorImpl<char> &path) {
@@ -461,11 +451,11 @@ void native(const Twine &path, SmallVectorImpl<char> &result) {
 #endif
 }
 
-const StringRef filename(const StringRef &path) {
+const StringRef filename(StringRef path) {
   return *(--end(path));
 }
 
-const StringRef stem(const StringRef &path) {
+const StringRef stem(StringRef path) {
   StringRef fname = filename(path);
   size_t pos = fname.find_last_of('.');
   if (pos == StringRef::npos)
@@ -475,10 +465,10 @@ const StringRef stem(const StringRef &path) {
         (fname.size() == 2 && fname == ".."))
       return fname;
     else
-      return StringRef(fname.begin(), pos);
+      return fname.substr(0, pos);
 }
 
-const StringRef extension(const StringRef &path) {
+const StringRef extension(StringRef path) {
   StringRef fname = filename(path);
   size_t pos = fname.find_last_of('.');
   if (pos == StringRef::npos)
@@ -488,7 +478,7 @@ const StringRef extension(const StringRef &path) {
         (fname.size() == 2 && fname == ".."))
       return StringRef();
     else
-      return StringRef(fname.begin() + pos, fname.size() - pos);
+      return fname.substr(pos);
 }
 
 bool has_root_name(const Twine &path) {
@@ -510,6 +500,13 @@ bool has_root_path(const Twine &path) {
   StringRef p = path.toStringRef(path_storage);
 
   return !root_path(p).empty();
+}
+
+bool has_relative_path(const Twine &path) {
+  SmallString<128> path_storage;
+  StringRef p = path.toStringRef(path_storage);
+
+  return !relative_path(p).empty();
 }
 
 bool has_filename(const Twine &path) {

@@ -59,25 +59,33 @@ Init *BitsRecTy::convertValue(UnsetInit *UI) {
 }
 
 Init *BitsRecTy::convertValue(BitInit *UI) {
-  if (Size != 1) return 0;  // Can only convert single bit...
+  if (Size != 1) return 0;  // Can only convert single bit.
   BitsInit *Ret = new BitsInit(1);
   Ret->setBit(0, UI);
   return Ret;
 }
 
-// convertValue from Int initializer to bits type: Split the integer up into the
-// appropriate bits...
-//
+/// canFitInBitfield - Return true if the number of bits is large enough to hold
+/// the integer value.
+static bool canFitInBitfield(int64_t Value, unsigned NumBits) {
+  if (Value >= 0) {
+    if (Value & ~((1LL << NumBits) - 1))
+      return false;
+  } else if ((Value >> NumBits) != -1 || (Value & (1LL << (NumBits-1))) == 0) {
+    return false;
+  }
+
+  return true;
+}
+
+/// convertValue from Int initializer to bits type: Split the integer up into the
+/// appropriate bits.
+///
 Init *BitsRecTy::convertValue(IntInit *II) {
   int64_t Value = II->getValue();
-  // Make sure this bitfield is large enough to hold the integer value...
-  if (Value >= 0) {
-    if (Value & ~((1LL << Size)-1))
-      return 0;
-  } else {
-    if ((Value >> Size) != -1 || ((Value & (1LL << (Size-1))) == 0))
-      return 0;
-  }
+  // Make sure this bitfield is large enough to hold the integer value.
+  if (!canFitInBitfield(Value, Size))
+    return 0;
 
   BitsInit *Ret = new BitsInit(Size);
   for (unsigned i = 0; i != Size; ++i)
@@ -88,7 +96,7 @@ Init *BitsRecTy::convertValue(IntInit *II) {
 
 Init *BitsRecTy::convertValue(BitsInit *BI) {
   // If the number of bits is right, return it.  Otherwise we need to expand or
-  // truncate...
+  // truncate.
   if (BI->getNumBits() == Size) return BI;
   return 0;
 }
@@ -101,10 +109,54 @@ Init *BitsRecTy::convertValue(TypedInit *VI) {
         Ret->setBit(i, new VarBitInit(VI, i));
       return Ret;
     }
+
   if (Size == 1 && dynamic_cast<BitRecTy*>(VI->getType())) {
     BitsInit *Ret = new BitsInit(1);
     Ret->setBit(0, VI);
     return Ret;
+  }
+
+  if (TernOpInit *Tern = dynamic_cast<TernOpInit*>(VI)) {
+    if (Tern->getOpcode() == TernOpInit::IF) {
+      Init *LHS = Tern->getLHS();
+      Init *MHS = Tern->getMHS();
+      Init *RHS = Tern->getRHS();
+
+      IntInit *MHSi = dynamic_cast<IntInit*>(MHS);
+      IntInit *RHSi = dynamic_cast<IntInit*>(RHS);
+
+      if (MHSi && RHSi) {
+        int64_t MHSVal = MHSi->getValue();
+        int64_t RHSVal = RHSi->getValue();
+
+        if (canFitInBitfield(MHSVal, Size) && canFitInBitfield(RHSVal, Size)) {
+          BitsInit *Ret = new BitsInit(Size);
+
+          for (unsigned i = 0; i != Size; ++i)
+            Ret->setBit(i, new TernOpInit(TernOpInit::IF, LHS,
+                                          new IntInit((MHSVal & (1LL << i)) ? 1 : 0),
+                                          new IntInit((RHSVal & (1LL << i)) ? 1 : 0),
+                                          VI->getType()));
+
+          return Ret;
+        }
+      } else {
+        BitsInit *MHSbs = dynamic_cast<BitsInit*>(MHS);
+        BitsInit *RHSbs = dynamic_cast<BitsInit*>(RHS);
+
+        if (MHSbs && RHSbs) {
+          BitsInit *Ret = new BitsInit(Size);
+
+          for (unsigned i = 0; i != Size; ++i)
+            Ret->setBit(i, new TernOpInit(TernOpInit::IF, LHS,
+                                          MHSbs->getBit(i),
+                                          RHSbs->getBit(i),
+                                          VI->getType()));
+
+          return Ret;
+        }
+      }
+    }
   }
 
   return 0;
@@ -528,7 +580,7 @@ Init *UnOpInit::Fold(Record *CurRec, MultiClass *CurMultiClass) {
           }
         }
 
-        if (Record *D = Records.getDef(Name))
+        if (Record *D = (CurRec->getRecords()).getDef(Name))
           return new DefInit(D);
 
         errs() << "Variable not defined: '" + Name + "'\n";
@@ -966,7 +1018,7 @@ RecTy *TypedInit::getFieldType(const std::string &FieldName) const {
 
 Init *TypedInit::convertInitializerBitRange(const std::vector<unsigned> &Bits) {
   BitsRecTy *T = dynamic_cast<BitsRecTy*>(getType());
-  if (T == 0) return 0;  // Cannot subscript a non-bits variable...
+  if (T == 0) return 0;  // Cannot subscript a non-bits variable.
   unsigned NumBits = T->getNumBits();
 
   BitsInit *BI = new BitsInit(Bits.size());
@@ -982,7 +1034,7 @@ Init *TypedInit::convertInitializerBitRange(const std::vector<unsigned> &Bits) {
 
 Init *TypedInit::convertInitListSlice(const std::vector<unsigned> &Elements) {
   ListRecTy *T = dynamic_cast<ListRecTy*>(getType());
-  if (T == 0) return 0;  // Cannot subscript a non-list variable...
+  if (T == 0) return 0;  // Cannot subscript a non-list variable.
 
   if (Elements.size() == 1)
     return new VarListElementInit(this, Elements[0]);
@@ -1135,7 +1187,7 @@ Init *FieldInit::resolveBitReference(Record &R, const RecordVal *RV,
       assert(Bit < BI->getNumBits() && "Bit reference out of range!");
       Init *B = BI->getBit(Bit);
 
-      if (dynamic_cast<BitInit*>(B))  // If the bit is set...
+      if (dynamic_cast<BitInit*>(B))  // If the bit is set.
         return B;                     // Replace the VarBitInit with it.
     }
   return 0;
@@ -1227,14 +1279,14 @@ void RecordVal::print(raw_ostream &OS, bool PrintSem) const {
 unsigned Record::LastID = 0;
 
 void Record::setName(const std::string &Name) {
-  if (Records.getDef(getName()) == this) {
-    Records.removeDef(getName());
+  if (TrackedRecords.getDef(getName()) == this) {
+    TrackedRecords.removeDef(getName());
     this->Name = Name;
-    Records.addDef(this);
+    TrackedRecords.addDef(this);
   } else {
-    Records.removeClass(getName());
+    TrackedRecords.removeClass(getName());
     this->Name = Name;
-    Records.addClass(this);
+    TrackedRecords.addClass(this);
   }
 }
 
@@ -1497,7 +1549,7 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const RecordKeeper &RK) {
 /// name does not exist, an error is printed and true is returned.
 std::vector<Record*>
 RecordKeeper::getAllDerivedDefinitions(const std::string &ClassName) const {
-  Record *Class = Records.getClass(ClassName);
+  Record *Class = getClass(ClassName);
   if (!Class)
     throw "ERROR: Couldn't find the `" + ClassName + "' class!\n";
 

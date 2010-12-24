@@ -105,9 +105,6 @@
 #include "llvm/Support/RecyclingAllocator.h"
 #include <iterator>
 
-// FIXME: Remove debugging code.
-#include "llvm/Support/raw_ostream.h"
-
 namespace llvm {
 
 
@@ -590,16 +587,6 @@ public:
   }
 
   unsigned insertFrom(unsigned &Pos, unsigned Size, KeyT a, KeyT b, ValT y);
-
-#ifndef NDEBUG
-  void dump(raw_ostream &OS, unsigned Size) {
-    OS << "  N" << this << " [shape=record label=\"{ " << Size << '/' << N;
-    for (unsigned i = 0; i != Size; ++i)
-      OS << " | {" << start(i) << '-' << stop(i) << "|" << value(i) << '}';
-    OS << "}\"];\n";
-  }
-#endif
-
 };
 
 /// insertFrom - Add mapping of [a;b] to y if possible, coalescing as much as
@@ -743,19 +730,6 @@ public:
     subtree(i) = Node;
     stop(i) = Stop;
   }
-
-#ifndef NDEBUG
-  void dump(raw_ostream &OS, unsigned Size) {
-    OS << "  N" << this << " [shape=record label=\"" << Size << '/' << N;
-    for (unsigned i = 0; i != Size; ++i)
-      OS << " | <s" << i << "> " << stop(i);
-    OS << "\"];\n";
-    for (unsigned i = 0; i != Size; ++i)
-      OS << "  N" << this << ":s" << i << " -> N"
-         << &subtree(i).template get<BranchNode>() << ";\n";
-  }
-#endif
-
 };
 
 //===----------------------------------------------------------------------===//
@@ -922,14 +896,6 @@ public:
     moveLeft(Level);
     ++path[Level].offset;
   }
-
-#ifndef NDEBUG
-  void dump() const {
-    for (unsigned l = 0, e = path.size(); l != e; ++l)
-      errs() << l << ": " << path[l].node << ' ' << path[l].size << ' '
-             << path[l].offset << '\n';
-  }
-#endif
 };
 
 } // namespace IntervalMapImpl
@@ -974,6 +940,9 @@ class IntervalMap {
 
 public:
   typedef typename Sizer::Allocator Allocator;
+  typedef KeyT KeyType;
+  typedef ValT ValueType;
+  typedef Traits KeyTraits;
 
 private:
   // The root data is either a RootLeaf or a RootBranchData instance.
@@ -1155,12 +1124,6 @@ public:
     I.find(x);
     return I;
   }
-
-#ifndef NDEBUG
-  raw_ostream *OS;
-  void dump();
-  void dumpNode(IntervalMapImpl::NodeRef Node, unsigned Height);
-#endif
 };
 
 /// treeSafeLookup - Return the mapped value at x or NotFound, assuming a
@@ -1303,32 +1266,6 @@ clear() {
   }
   rootSize = 0;
 }
-
-#ifndef NDEBUG
-template <typename KeyT, typename ValT, unsigned N, typename Traits>
-void IntervalMap<KeyT, ValT, N, Traits>::
-dumpNode(IntervalMapImpl::NodeRef Node, unsigned Height) {
-  if (Height)
-    Node.get<Branch>().dump(*OS, Node.size());
-  else
-    Node.get<Leaf>().dump(*OS, Node.size());
-}
-
-template <typename KeyT, typename ValT, unsigned N, typename Traits>
-void IntervalMap<KeyT, ValT, N, Traits>::
-dump() {
-  std::string errors;
-  raw_fd_ostream ofs("tree.dot", errors);
-  OS = &ofs;
-  ofs << "digraph {\n";
-  if (branched())
-    rootBranch().dump(ofs, rootSize);
-  else
-    rootLeaf().dump(ofs, rootSize);
-  visitNodes(&IntervalMap::dumpNode);
-  ofs << "}\n";
-}
-#endif
 
 //===----------------------------------------------------------------------===//
 //---                   IntervalMap::const_iterator                       ----//
@@ -1474,6 +1411,8 @@ public:
   /// The search is started from the current position, and no earlier positions
   /// can be found. This is much faster than find() for small moves.
   void advanceTo(KeyT x) {
+    if (!valid())
+      return;
     if (branched())
       treeAdvanceTo(x);
     else
@@ -2071,6 +2010,129 @@ iterator::overflow(unsigned Level) {
   P.offset(Level) = NewOffset.second;
   return SplitRoot;
 }
+
+//===----------------------------------------------------------------------===//
+//---                       IntervalMapOverlaps                           ----//
+//===----------------------------------------------------------------------===//
+
+/// IntervalMapOverlaps - Iterate over the overlaps of mapped intervals in two
+/// IntervalMaps. The maps may be different, but the KeyT and Traits types
+/// should be the same.
+///
+/// Typical uses:
+///
+/// 1. Test for overlap:
+///    bool overlap = IntervalMapOverlaps(a, b).valid();
+///
+/// 2. Enumerate overlaps:
+///    for (IntervalMapOverlaps I(a, b); I.valid() ; ++I) { ... }
+///
+template <typename MapA, typename MapB>
+class IntervalMapOverlaps {
+  typedef typename MapA::KeyType KeyType;
+  typedef typename MapA::KeyTraits Traits;
+  typename MapA::const_iterator posA;
+  typename MapB::const_iterator posB;
+
+  /// advance - Move posA and posB forward until reaching an overlap, or until
+  /// either meets end.
+  /// Don't move the iterators if they are already overlapping.
+  void advance() {
+    if (!valid())
+      return;
+
+    if (Traits::stopLess(posA.stop(), posB.start())) {
+      // A ends before B begins. Catch up.
+      posA.advanceTo(posB.start());
+      if (!posA.valid() || !Traits::stopLess(posB.stop(), posA.start()))
+        return;
+    } else if (Traits::stopLess(posB.stop(), posA.start())) {
+      // B ends before A begins. Catch up.
+      posB.advanceTo(posA.start());
+      if (!posB.valid() || !Traits::stopLess(posA.stop(), posB.start()))
+        return;
+    } else
+      // Already overlapping.
+      return;
+
+    for (;;) {
+      // Make a.end > b.start.
+      posA.advanceTo(posB.start());
+      if (!posA.valid() || !Traits::stopLess(posB.stop(), posA.start()))
+        return;
+      // Make b.end > a.start.
+      posB.advanceTo(posA.start());
+      if (!posB.valid() || !Traits::stopLess(posA.stop(), posB.start()))
+        return;
+    }
+  }
+
+public:
+  /// IntervalMapOverlaps - Create an iterator for the overlaps of a and b.
+  IntervalMapOverlaps(const MapA &a, const MapB &b)
+    : posA(b.empty() ? a.end() : a.find(b.start())),
+      posB(posA.valid() ? b.find(posA.start()) : b.end()) { advance(); }
+
+  /// valid - Return true if iterator is at an overlap.
+  bool valid() const {
+    return posA.valid() && posB.valid();
+  }
+
+  /// a - access the left hand side in the overlap.
+  const typename MapA::const_iterator &a() const { return posA; }
+
+  /// b - access the right hand side in the overlap.
+  const typename MapB::const_iterator &b() const { return posB; }
+
+  /// start - Beginning of the overlapping interval.
+  KeyType start() const {
+    KeyType ak = a().start();
+    KeyType bk = b().start();
+    return Traits::startLess(ak, bk) ? bk : ak;
+  }
+
+  /// stop - End of the overlapping interval.
+  KeyType stop() const {
+    KeyType ak = a().stop();
+    KeyType bk = b().stop();
+    return Traits::startLess(ak, bk) ? ak : bk;
+  }
+
+  /// skipA - Move to the next overlap that doesn't involve a().
+  void skipA() {
+    ++posA;
+    advance();
+  }
+
+  /// skipB - Move to the next overlap that doesn't involve b().
+  void skipB() {
+    ++posB;
+    advance();
+  }
+
+  /// Preincrement - Move to the next overlap.
+  IntervalMapOverlaps &operator++() {
+    // Bump the iterator that ends first. The other one may have more overlaps.
+    if (Traits::startLess(posB.stop(), posA.stop()))
+      skipB();
+    else
+      skipA();
+    return *this;
+  }
+
+  /// advanceTo - Move to the first overlapping interval with
+  /// stopLess(x, stop()).
+  void advanceTo(KeyType x) {
+    if (!valid())
+      return;
+    // Make sure advanceTo sees monotonic keys.
+    if (Traits::stopLess(posA.stop(), x))
+      posA.advanceTo(x);
+    if (Traits::stopLess(posB.stop(), x))
+      posB.advanceTo(x);
+    advance();
+  }
+};
 
 } // namespace llvm
 
