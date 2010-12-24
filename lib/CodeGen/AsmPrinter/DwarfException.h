@@ -15,6 +15,7 @@
 #define LLVM_CODEGEN_ASMPRINTER_DWARFEXCEPTION_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Module.h"
 #include <vector>
 
 namespace llvm {
@@ -41,6 +42,30 @@ class DwarfException {
   /// MMI - Collected machine module information.
   MachineModuleInfo *MMI;
 
+  /// CallSiteEntry - Structure describing an entry in the call-site table.
+  struct CallSiteEntry {
+    // The 'try-range' is BeginLabel .. EndLabel.
+    MCSymbol *BeginLabel; // zero indicates the start of the function.
+    MCSymbol *EndLabel;   // zero indicates the end of the function.
+
+    // The landing pad starts at PadLabel.
+    MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
+    unsigned Action;
+  };
+
+  struct MonoEHFrameInfo {
+    // Mono specific
+    // FIXME: Move into separate structure
+    const MachineFunction *MF;
+    std::vector<CallSiteEntry> CallSites;
+    std::vector<const GlobalVariable *> TypeInfos;
+    std::vector<unsigned> FilterIds;
+    std::vector<LandingPadInfo> PadInfos;
+    int FunctionNumber;
+    int FrameReg;
+    int ThisOffset;
+  };
+
   struct FunctionEHFrameInfo {
     MCSymbol *FunctionEHSym;  // L_foo.eh
     unsigned Number;
@@ -49,6 +74,8 @@ class DwarfException {
     bool hasLandingPads;
     std::vector<MachineMove> Moves;
     const Function *function;
+
+    MonoEHFrameInfo MonoEH;
 
     FunctionEHFrameInfo(MCSymbol *EHSym, unsigned Num, unsigned P,
                         bool hC, bool hL,
@@ -97,6 +124,10 @@ class DwarfException {
   // EmitMonoEHFrame - Emit Mono specific exception handling tables
   void EmitMonoEHFrame(const Function *Personality);
 
+  void PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo);
+
+  void EmitMonoLSDA(const FunctionEHFrameInfo *EHFrameInfo);
+
   /// EmitExceptionTable - Emit landing pads and actions.
   ///
   /// The general organization of the table is complex, but the basic concepts
@@ -139,17 +170,6 @@ class DwarfException {
     int ValueForTypeID; // The value to write - may not be equal to the type id.
     int NextAction;
     unsigned Previous;
-  };
-
-  /// CallSiteEntry - Structure describing an entry in the call-site table.
-  struct CallSiteEntry {
-    // The 'try-range' is BeginLabel .. EndLabel.
-    MCSymbol *BeginLabel; // zero indicates the start of the function.
-    MCSymbol *EndLabel;   // zero indicates the end of the function.
-
-    // The landing pad starts at PadLabel.
-    MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
-    unsigned Action;
   };
 
   /// ComputeActionsTable - Compute the actions table and gather the first

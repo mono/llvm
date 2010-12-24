@@ -47,7 +47,7 @@ ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
   SupportsDebugInformation = true;
 
   // Exceptions handling
-  ExceptionsType = ExceptionHandling::SjLj;
+  ExceptionsType = ExceptionHandling::Dwarf;
 }
 
 ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
