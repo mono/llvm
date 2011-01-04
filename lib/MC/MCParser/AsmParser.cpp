@@ -244,6 +244,8 @@ public:
                                                               ".cfi_startproc");
     AddDirectiveHandler<&GenericAsmParser::ParseDirectiveCFIEndProc>(
                                                                 ".cfi_endproc");
+    AddDirectiveHandler<&GenericAsmParser::ParseDirectiveCFIDefCfa>(
+                                                         ".cfi_def_cfa");
     AddDirectiveHandler<&GenericAsmParser::ParseDirectiveCFIDefCfaOffset>(
                                                          ".cfi_def_cfa_offset");
     AddDirectiveHandler<&GenericAsmParser::ParseDirectiveCFIDefCfaRegister>(
@@ -254,6 +256,10 @@ public:
      &GenericAsmParser::ParseDirectiveCFIPersonalityOrLsda>(".cfi_personality");
     AddDirectiveHandler<
             &GenericAsmParser::ParseDirectiveCFIPersonalityOrLsda>(".cfi_lsda");
+    AddDirectiveHandler<
+      &GenericAsmParser::ParseDirectiveCFIRememberState>(".cfi_remember_state");
+    AddDirectiveHandler<
+      &GenericAsmParser::ParseDirectiveCFIRestoreState>(".cfi_restore_state");
 
     // Macro directives.
     AddDirectiveHandler<&GenericAsmParser::ParseDirectiveMacrosOnOff>(
@@ -274,10 +280,13 @@ public:
   bool ParseDirectiveStabs(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveCFIStartProc(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveCFIEndProc(StringRef, SMLoc DirectiveLoc);
+  bool ParseDirectiveCFIDefCfa(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveCFIDefCfaOffset(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveCFIDefCfaRegister(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveCFIOffset(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveCFIPersonalityOrLsda(StringRef, SMLoc DirectiveLoc);
+  bool ParseDirectiveCFIRememberState(StringRef, SMLoc DirectiveLoc);
+  bool ParseDirectiveCFIRestoreState(StringRef, SMLoc DirectiveLoc);
 
   bool ParseDirectiveMacrosOnOff(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveMacro(StringRef, SMLoc DirectiveLoc);
@@ -2166,6 +2175,25 @@ bool GenericAsmParser::ParseDirectiveCFIEndProc(StringRef, SMLoc DirectiveLoc) {
   return getStreamer().EmitCFIEndProc();
 }
 
+/// ParseDirectiveCFIDefCfa
+/// ::= .cfi_def_cfa register,  offset
+bool GenericAsmParser::ParseDirectiveCFIDefCfa(StringRef,
+                                               SMLoc DirectiveLoc) {
+  int64_t Register = 0;
+  if (getParser().ParseAbsoluteExpression(Register))
+    return true;
+
+  if (getLexer().isNot(AsmToken::Comma))
+    return TokError("unexpected token in directive");
+  Lex();
+
+  int64_t Offset = 0;
+  if (getParser().ParseAbsoluteExpression(Offset))
+    return true;
+
+  return getStreamer().EmitCFIDefCfa(Register, Offset);
+}
+
 /// ParseDirectiveCFIDefCfaOffset
 /// ::= .cfi_def_cfa_offset offset
 bool GenericAsmParser::ParseDirectiveCFIDefCfaOffset(StringRef,
@@ -2206,6 +2234,28 @@ bool GenericAsmParser::ParseDirectiveCFIOffset(StringRef, SMLoc DirectiveLoc) {
   return getStreamer().EmitCFIOffset(Register, Offset);
 }
 
+static bool isValidEncoding(int64_t Encoding) {
+  if (Encoding & ~0xff)
+    return false;
+
+  if (Encoding == dwarf::DW_EH_PE_omit)
+    return true;
+
+  const unsigned Format = Encoding & 0xf;
+  if (Format != dwarf::DW_EH_PE_absptr && Format != dwarf::DW_EH_PE_udata2 &&
+      Format != dwarf::DW_EH_PE_udata4 && Format != dwarf::DW_EH_PE_udata8 &&
+      Format != dwarf::DW_EH_PE_sdata2 && Format != dwarf::DW_EH_PE_sdata4 &&
+      Format != dwarf::DW_EH_PE_sdata8 && Format != dwarf::DW_EH_PE_signed)
+    return false;
+
+  const unsigned Application = Encoding & 0x70;
+  if (Application != dwarf::DW_EH_PE_absptr &&
+      Application != dwarf::DW_EH_PE_pcrel)
+    return false;
+
+  return true;
+}
+
 /// ParseDirectiveCFIPersonalityOrLsda
 /// ::= .cfi_personality encoding, [symbol_name]
 /// ::= .cfi_lsda encoding, [symbol_name]
@@ -2214,10 +2264,10 @@ bool GenericAsmParser::ParseDirectiveCFIPersonalityOrLsda(StringRef IDVal,
   int64_t Encoding = 0;
   if (getParser().ParseAbsoluteExpression(Encoding))
     return true;
-  if (Encoding == 255)
+  if (Encoding == dwarf::DW_EH_PE_omit)
     return false;
 
-  if (Encoding != 0)
+  if (!isValidEncoding(Encoding))
     return TokError("unsupported encoding.");
 
   if (getLexer().isNot(AsmToken::Comma))
@@ -2231,11 +2281,25 @@ bool GenericAsmParser::ParseDirectiveCFIPersonalityOrLsda(StringRef IDVal,
   MCSymbol *Sym = getContext().GetOrCreateSymbol(Name);
 
   if (IDVal == ".cfi_personality")
-    return getStreamer().EmitCFIPersonality(Sym);
+    return getStreamer().EmitCFIPersonality(Sym, Encoding);
   else {
     assert(IDVal == ".cfi_lsda");
-    return getStreamer().EmitCFILsda(Sym);
+    return getStreamer().EmitCFILsda(Sym, Encoding);
   }
+}
+
+/// ParseDirectiveCFIRememberState
+/// ::= .cfi_remember_state
+bool GenericAsmParser::ParseDirectiveCFIRememberState(StringRef IDVal,
+                                                      SMLoc DirectiveLoc) {
+  return getStreamer().EmitCFIRememberState();
+}
+
+/// ParseDirectiveCFIRestoreState
+/// ::= .cfi_remember_state
+bool GenericAsmParser::ParseDirectiveCFIRestoreState(StringRef IDVal,
+                                                     SMLoc DirectiveLoc) {
+  return getStreamer().EmitCFIRestoreState();
 }
 
 /// ParseDirectiveMacrosOnOff

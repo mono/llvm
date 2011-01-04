@@ -119,18 +119,6 @@ Path::isAbsolute() const {
   return path[0] == '/';
 }
 
-void Path::makeAbsolute() {
-  if (isAbsolute())
-    return;
-
-  Path CWD = Path::GetCurrentDirectory();
-  assert(CWD.isAbsolute() && "GetCurrentDirectory returned relative path!");
-
-  CWD.appendComponent(path);
-
-  path = CWD.str();
-}
-
 Path
 Path::GetRootDirectory() {
   Path result;
@@ -254,12 +242,11 @@ Path::GetLLVMDefaultConfigDir() {
 Path
 Path::GetUserHomeDirectory() {
   const char* home = getenv("HOME");
-  if (home) {
-    Path result;
-    if (result.set(home))
-      return result;
-  }
-  return GetRootDirectory();
+  Path result;
+  if (home && result.set(home))
+    return result;
+  result.set("/");
+  return result;
 }
 
 Path

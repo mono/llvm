@@ -52,6 +52,10 @@ namespace llvm {
     void EmitSymbolValue(const MCSymbol *Sym, unsigned Size,
                          bool isPCRel, unsigned AddrSpace);
 
+    std::vector<MCDwarfFrameInfo> FrameInfos;
+    MCDwarfFrameInfo *getCurrentFrameInfo();
+    void EnsureValidFrame();
+
   protected:
     MCStreamer(MCContext &Ctx);
 
@@ -62,10 +66,6 @@ namespace llvm {
     /// PrevSection - This is the previous section code is being emitted to, it
     /// is kept up to date by SwitchSection.
     const MCSection *PrevSection;
-
-    std::vector<MCDwarfFrameInfo> FrameInfos;
-    MCDwarfFrameInfo *getCurrentFrameInfo();
-    void EnsureValidFrame();
 
   public:
     virtual ~MCStreamer();
@@ -386,16 +386,24 @@ namespace llvm {
                                           const MCSymbol *LastLabel,
                                           const MCSymbol *Label) = 0;
 
+    virtual void EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
+                                           const MCSymbol *Label) {
+    }
+
     void EmitDwarfSetLineAddr(int64_t LineDelta, const MCSymbol *Label,
                               int PointerSize);
 
     virtual bool EmitCFIStartProc();
     virtual bool EmitCFIEndProc();
+    virtual bool EmitCFIDefCfa(int64_t Register, int64_t Offset);
     virtual bool EmitCFIDefCfaOffset(int64_t Offset);
     virtual bool EmitCFIDefCfaRegister(int64_t Register);
     virtual bool EmitCFIOffset(int64_t Register, int64_t Offset);
-    virtual bool EmitCFIPersonality(const MCSymbol *Sym);
-    virtual bool EmitCFILsda(const MCSymbol *Sym);
+    virtual bool EmitCFIPersonality(const MCSymbol *Sym,
+                                    unsigned Encoding);
+    virtual bool EmitCFILsda(const MCSymbol *Sym, unsigned Encoding);
+    virtual bool EmitCFIRememberState();
+    virtual bool EmitCFIRestoreState();
 
     /// EmitInstruction - Emit the given @p Instruction into the current
     /// section.

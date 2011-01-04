@@ -36,14 +36,17 @@ void llvm::initializeScalarOpts(PassRegistry &Registry) {
   initializeDSEPass(Registry);
   initializeGEPSplitterPass(Registry);
   initializeGVNPass(Registry);
+  initializeEarlyCSEPass(Registry);
   initializeIndVarSimplifyPass(Registry);
   initializeJumpThreadingPass(Registry);
   initializeLICMPass(Registry);
   initializeLoopDeletionPass(Registry);
+  initializeLoopInstSimplifyPass(Registry);
   initializeLoopRotatePass(Registry);
   initializeLoopStrengthReducePass(Registry);
   initializeLoopUnrollPass(Registry);
   initializeLoopUnswitchPass(Registry);
+  initializeLoopIdiomRecognizePass(Registry);
   initializeLowerAtomicPass(Registry);
   initializeMemCpyOptPass(Registry);
   initializeReassociatePass(Registry);

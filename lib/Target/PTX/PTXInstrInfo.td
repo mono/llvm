@@ -22,9 +22,87 @@ include "PTXInstrFormats.td"
 //===----------------------------------------------------------------------===//
 
 def load_global : PatFrag<(ops node:$ptr), (load node:$ptr), [{
-  if (const Value *Src = cast<LoadSDNode>(N)->getSrcValue())
-    if (const PointerType *PT = dyn_cast<PointerType>(Src->getType()))
-      return PT->getAddressSpace() <= 255;
+  const Value *Src;
+  const PointerType *PT;
+  if ((Src = cast<LoadSDNode>(N)->getSrcValue()) &&
+      (PT = dyn_cast<PointerType>(Src->getType())))
+    return PT->getAddressSpace() == PTX::GLOBAL;
+  return false;
+}]>;
+
+def load_constant : PatFrag<(ops node:$ptr), (load node:$ptr), [{
+  const Value *Src;
+  const PointerType *PT;
+  if ((Src = cast<LoadSDNode>(N)->getSrcValue()) &&
+      (PT = dyn_cast<PointerType>(Src->getType())))
+    return PT->getAddressSpace() == PTX::CONSTANT;
+  return false;
+}]>;
+
+def load_local : PatFrag<(ops node:$ptr), (load node:$ptr), [{
+  const Value *Src;
+  const PointerType *PT;
+  if ((Src = cast<LoadSDNode>(N)->getSrcValue()) &&
+      (PT = dyn_cast<PointerType>(Src->getType())))
+    return PT->getAddressSpace() == PTX::LOCAL;
+  return false;
+}]>;
+
+def load_parameter : PatFrag<(ops node:$ptr), (load node:$ptr), [{
+  const Value *Src;
+  const PointerType *PT;
+  if ((Src = cast<LoadSDNode>(N)->getSrcValue()) &&
+      (PT = dyn_cast<PointerType>(Src->getType())))
+    return PT->getAddressSpace() == PTX::PARAMETER;
+  return false;
+}]>;
+
+def load_shared : PatFrag<(ops node:$ptr), (load node:$ptr), [{
+  const Value *Src;
+  const PointerType *PT;
+  if ((Src = cast<LoadSDNode>(N)->getSrcValue()) &&
+      (PT = dyn_cast<PointerType>(Src->getType())))
+    return PT->getAddressSpace() == PTX::SHARED;
+  return false;
+}]>;
+
+def store_global
+  : PatFrag<(ops node:$d, node:$ptr), (store node:$d, node:$ptr), [{
+  const Value *Src;
+  const PointerType *PT;
+  if ((Src = cast<StoreSDNode>(N)->getSrcValue()) &&
+      (PT = dyn_cast<PointerType>(Src->getType())))
+    return PT->getAddressSpace() == PTX::GLOBAL;
+  return false;
+}]>;
+
+def store_local
+  : PatFrag<(ops node:$d, node:$ptr), (store node:$d, node:$ptr), [{
+  const Value *Src;
+  const PointerType *PT;
+  if ((Src = cast<StoreSDNode>(N)->getSrcValue()) &&
+      (PT = dyn_cast<PointerType>(Src->getType())))
+    return PT->getAddressSpace() == PTX::LOCAL;
+  return false;
+}]>;
+
+def store_parameter
+  : PatFrag<(ops node:$d, node:$ptr), (store node:$d, node:$ptr), [{
+  const Value *Src;
+  const PointerType *PT;
+  if ((Src = cast<StoreSDNode>(N)->getSrcValue()) &&
+      (PT = dyn_cast<PointerType>(Src->getType())))
+    return PT->getAddressSpace() == PTX::PARAMETER;
+  return false;
+}]>;
+
+def store_shared
+  : PatFrag<(ops node:$d, node:$ptr), (store node:$d, node:$ptr), [{
+  const Value *Src;
+  const PointerType *PT;
+  if ((Src = cast<StoreSDNode>(N)->getSrcValue()) &&
+      (PT = dyn_cast<PointerType>(Src->getType())))
+    return PT->getAddressSpace() == PTX::SHARED;
   return false;
 }]>;
 
@@ -34,10 +112,6 @@ def ADDRri : ComplexPattern<i32, 2, "SelectADDRri", [], []>;
 def ADDRii : ComplexPattern<i32, 2, "SelectADDRii", [], []>;
 
 // Address operands
-def MEMrr : Operand<i32> {
-  let PrintMethod = "printMemOperand";
-  let MIOperandInfo = (ops RRegs32, RRegs32);
-}
 def MEMri : Operand<i32> {
   let PrintMethod = "printMemOperand";
   let MIOperandInfo = (ops RRegs32, i32imm);
@@ -94,7 +168,7 @@ multiclass INT3ntnc<string opcstr, SDNode opnode> {
 
 multiclass PTX_LD<string opstr, RegisterClass RC, PatFrag pat_load> {
   def rr : InstPTX<(outs RC:$d),
-                   (ins MEMrr:$a),
+                   (ins MEMri:$a),
                    !strconcat(opstr, ".%type\t$d, [$a]"),
                    [(set RC:$d, (pat_load ADDRrr:$a))]>;
   def ri : InstPTX<(outs RC:$d),
@@ -105,6 +179,21 @@ multiclass PTX_LD<string opstr, RegisterClass RC, PatFrag pat_load> {
                    (ins MEMii:$a),
                    !strconcat(opstr, ".%type\t$d, [$a]"),
                    [(set RC:$d, (pat_load ADDRii:$a))]>;
+}
+
+multiclass PTX_ST<string opstr, RegisterClass RC, PatFrag pat_store> {
+  def rr : InstPTX<(outs),
+                   (ins RC:$d, MEMri:$a),
+                   !strconcat(opstr, ".%type\t[$a], $d"),
+                   [(pat_store RC:$d, ADDRrr:$a)]>;
+  def ri : InstPTX<(outs),
+                   (ins RC:$d, MEMri:$a),
+                   !strconcat(opstr, ".%type\t[$a], $d"),
+                   [(pat_store RC:$d, ADDRri:$a)]>;
+  def ii : InstPTX<(outs),
+                   (ins RC:$d, MEMii:$a),
+                   !strconcat(opstr, ".%type\t[$a], $d"),
+                   [(pat_store RC:$d, ADDRii:$a)]>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -142,6 +231,15 @@ let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
 }
 
 defm LDg : PTX_LD<"ld.global", RRegs32, load_global>;
+defm LDc : PTX_LD<"ld.const",  RRegs32, load_constant>;
+defm LDl : PTX_LD<"ld.local",  RRegs32, load_local>;
+defm LDp : PTX_LD<"ld.param",  RRegs32, load_parameter>;
+defm LDs : PTX_LD<"ld.shared", RRegs32, load_shared>;
+
+defm STg : PTX_ST<"st.global", RRegs32, store_global>;
+defm STl : PTX_ST<"st.local",  RRegs32, store_local>;
+defm STp : PTX_ST<"st.param",  RRegs32, store_parameter>;
+defm STs : PTX_ST<"st.shared", RRegs32, store_shared>;
 
 ///===- Control Flow Instructions -----------------------------------------===//
 

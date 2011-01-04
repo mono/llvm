@@ -504,6 +504,10 @@ fdivrp %st(1), %st(0) // CHECK: encoding: [0xde,0xf9]
 fsubrp %ST(0), %ST(1) // CHECK: encoding: [0xde,0xe9]
 fsubrp %ST(1), %ST(0) // CHECK: encoding: [0xde,0xe9]
 
+// also PR8861
+fdivp %st(0), %st(1) // CHECK: encoding: [0xde,0xf1]
+fdivp %st(1), %st(0) // CHECK: encoding: [0xde,0xf1]
+
 
 movl	foo(%rip), %eax
 // CHECK: movl	foo(%rip), %eax
@@ -916,3 +920,7 @@ movq	%mm5, %rbx // CHECK: movd %mm5, %rbx # encoding: [0x48,0x0f,0x7e,0xeb]
 
 rex64 // CHECK: rex64 # encoding: [0x48]
 data16 // CHECK: data16 # encoding: [0x66]
+
+// PR8855
+movq 18446744073709551615,%rbx   // CHECK: movq	-1, %rbx
+

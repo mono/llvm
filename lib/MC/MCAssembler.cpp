@@ -11,6 +11,7 @@
 #include "llvm/MC/MCAssembler.h"
 #include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSection.h"
@@ -218,22 +219,37 @@ bool MCAssembler::EvaluateFixup(const MCAsmLayout &Layout,
   if (!Fixup.getValue()->EvaluateAsRelocatable(Target, Layout))
     report_fatal_error("expected relocatable expression");
 
-  // FIXME: How do non-scattered symbols work in ELF? I presume the linker
-  // doesn't support small relocations, but then under what criteria does the
-  // assembler allow symbol differences?
+  bool IsPCRel = Backend.getFixupKindInfo(
+    Fixup.getKind()).Flags & MCFixupKindInfo::FKF_IsPCRel;
+
+  bool IsResolved;
+  if (IsPCRel) {
+    if (Target.getSymB()) {
+      IsResolved = false;
+    } else if (!Target.getSymA()) {
+      IsResolved = false;
+    } else {
+      const MCSymbol &SA = Target.getSymA()->getSymbol();
+      if (SA.AliasedSymbol().isUndefined()) {
+        IsResolved = false;
+      } else {
+        const MCSymbolData &DataA = getSymbolData(SA);
+        IsResolved =
+          getWriter().IsSymbolRefDifferenceFullyResolvedImpl(*this, DataA,
+                                                             *DF, false, true);
+      }
+    }
+  } else {
+    IsResolved = Target.isAbsolute();
+  }
 
   Value = Target.getConstant();
 
-  bool IsPCRel = Backend.getFixupKindInfo(
-    Fixup.getKind()).Flags & MCFixupKindInfo::FKF_IsPCRel;
-  bool IsResolved = true;
   bool IsThumb = false;
   if (const MCSymbolRefExpr *A = Target.getSymA()) {
     const MCSymbol &Sym = A->getSymbol().AliasedSymbol();
     if (Sym.isDefined())
       Value += Layout.getSymbolOffset(&getSymbolData(Sym));
-    else
-      IsResolved = false;
     if (isThumbFunc(&Sym))
       IsThumb = true;
   }
@@ -241,12 +257,8 @@ bool MCAssembler::EvaluateFixup(const MCAsmLayout &Layout,
     const MCSymbol &Sym = B->getSymbol().AliasedSymbol();
     if (Sym.isDefined())
       Value -= Layout.getSymbolOffset(&getSymbolData(Sym));
-    else
-      IsResolved = false;
   }
 
-  if (IsResolved)
-    IsResolved = getWriter().IsFixupFullyResolved(*this, Target, IsPCRel, DF);
 
   bool ShouldAlignPC = Backend.getFixupKindInfo(Fixup.getKind()).Flags &
                          MCFixupKindInfo::FKF_IsAlignedDownTo32Bits;
@@ -311,6 +323,8 @@ uint64_t MCAssembler::ComputeFragmentSize(const MCAsmLayout &Layout,
 
   case MCFragment::FT_Dwarf:
     return cast<MCDwarfLineAddrFragment>(F).getContents().size();
+  case MCFragment::FT_DwarfFrame:
+    return cast<MCDwarfCallFrameFragment>(F).getContents().size();
   }
 
   assert(0 && "invalid fragment kind");
@@ -439,6 +453,11 @@ static void WriteFragmentData(const MCAssembler &Asm, const MCAsmLayout &Layout,
   case MCFragment::FT_Dwarf: {
     const MCDwarfLineAddrFragment &OF = cast<MCDwarfLineAddrFragment>(F);
     OW->WriteBytes(OF.getContents().str());
+    break;
+  }
+  case MCFragment::FT_DwarfFrame: {
+    const MCDwarfCallFrameFragment &CF = cast<MCDwarfCallFrameFragment>(F);
+    OW->WriteBytes(CF.getContents().str());
     break;
   }
   }
@@ -700,6 +719,21 @@ bool MCAssembler::RelaxDwarfLineAddr(MCAsmLayout &Layout,
   return OldSize != Data.size();
 }
 
+bool MCAssembler::RelaxDwarfCallFrameFragment(MCAsmLayout &Layout,
+                                              MCDwarfCallFrameFragment &DF) {
+  int64_t AddrDelta = 0;
+  uint64_t OldSize = DF.getContents().size();
+  bool IsAbs = DF.getAddrDelta().EvaluateAsAbsolute(AddrDelta, Layout);
+  (void)IsAbs;
+  assert(IsAbs);
+  SmallString<8> &Data = DF.getContents();
+  Data.clear();
+  raw_svector_ostream OSE(Data);
+  MCDwarfFrameEmitter::EncodeAdvanceLoc(AddrDelta, OSE);
+  OSE.flush();
+  return OldSize != Data.size();
+}
+
 bool MCAssembler::LayoutSectionOnce(MCAsmLayout &Layout,
                                     MCSectionData &SD) {
   MCFragment *FirstInvalidFragment = NULL;
@@ -718,9 +752,14 @@ bool MCAssembler::LayoutSectionOnce(MCAsmLayout &Layout,
       relaxedFrag = RelaxDwarfLineAddr(Layout,
                                        *cast<MCDwarfLineAddrFragment>(it2));
       break;
-        case MCFragment::FT_LEB:
-          relaxedFrag = RelaxLEB(Layout, *cast<MCLEBFragment>(it2));
-          break;
+    case MCFragment::FT_DwarfFrame:
+      relaxedFrag =
+        RelaxDwarfCallFrameFragment(Layout,
+                                    *cast<MCDwarfCallFrameFragment>(it2));
+      break;
+    case MCFragment::FT_LEB:
+      relaxedFrag = RelaxLEB(Layout, *cast<MCLEBFragment>(it2));
+      break;
     }
     // Update the layout, and remember that we relaxed.
     if (relaxedFrag && !FirstInvalidFragment)
@@ -777,6 +816,7 @@ void MCFragment::dump() {
   case MCFragment::FT_Inst:  OS << "MCInstFragment"; break;
   case MCFragment::FT_Org:   OS << "MCOrgFragment"; break;
   case MCFragment::FT_Dwarf: OS << "MCDwarfFragment"; break;
+  case MCFragment::FT_DwarfFrame: OS << "MCDwarfCallFrameFragment"; break;
   case MCFragment::FT_LEB:   OS << "MCLEBFragment"; break;
   }
 
@@ -841,6 +881,12 @@ void MCFragment::dump() {
     OS << "\n       ";
     OS << " AddrDelta:" << OF->getAddrDelta()
        << " LineDelta:" << OF->getLineDelta();
+    break;
+  }
+  case MCFragment::FT_DwarfFrame:  {
+    const MCDwarfCallFrameFragment *CF = cast<MCDwarfCallFrameFragment>(this);
+    OS << "\n       ";
+    OS << " AddrDelta:" << CF->getAddrDelta();
     break;
   }
   case MCFragment::FT_LEB: {

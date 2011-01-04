@@ -3132,6 +3132,17 @@ SDValue SelectionDAG::getStackArgumentTokenFactor(SDValue Chain) {
                  &ArgChains[0], ArgChains.size());
 }
 
+/// SplatByte - Distribute ByteVal over NumBits bits.
+static APInt SplatByte(unsigned NumBits, uint8_t ByteVal) {
+  APInt Val = APInt(NumBits, ByteVal);
+  unsigned Shift = 8;
+  for (unsigned i = NumBits; i > 8; i >>= 1) {
+    Val = (Val << Shift) | Val;
+    Shift <<= 1;
+  }
+  return Val;
+}
+
 /// getMemsetValue - Vectorized representation of the memset value
 /// operand.
 static SDValue getMemsetValue(SDValue Value, EVT VT, SelectionDAG &DAG,
@@ -3140,27 +3151,18 @@ static SDValue getMemsetValue(SDValue Value, EVT VT, SelectionDAG &DAG,
 
   unsigned NumBits = VT.getScalarType().getSizeInBits();
   if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Value)) {
-    APInt Val = APInt(NumBits, C->getZExtValue() & 255);
-    unsigned Shift = 8;
-    for (unsigned i = NumBits; i > 8; i >>= 1) {
-      Val = (Val << Shift) | Val;
-      Shift <<= 1;
-    }
+    APInt Val = SplatByte(NumBits, C->getZExtValue() & 255);
     if (VT.isInteger())
       return DAG.getConstant(Val, VT);
     return DAG.getConstantFP(APFloat(Val), VT);
   }
 
-  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
   Value = DAG.getNode(ISD::ZERO_EXTEND, dl, VT, Value);
-  unsigned Shift = 8;
-  for (unsigned i = NumBits; i > 8; i >>= 1) {
-    Value = DAG.getNode(ISD::OR, dl, VT,
-                        DAG.getNode(ISD::SHL, dl, VT, Value,
-                                    DAG.getConstant(Shift,
-                                                    TLI.getShiftAmountTy())),
-                        Value);
-    Shift <<= 1;
+  if (NumBits > 8) {
+    // Use a multiplication with 0x010101... to extend the input to the
+    // required length.
+    APInt Magic = SplatByte(NumBits, 0x01);
+    Value = DAG.getNode(ISD::MUL, dl, VT, Value, DAG.getConstant(Magic, VT));
   }
 
   return Value;
@@ -3525,16 +3527,34 @@ static SDValue getMemsetStores(SelectionDAG &DAG, DebugLoc dl,
   SmallVector<SDValue, 8> OutChains;
   uint64_t DstOff = 0;
   unsigned NumMemOps = MemOps.size();
+
+  // Find the largest store and generate the bit pattern for it.
+  EVT LargestVT = MemOps[0];
+  for (unsigned i = 1; i < NumMemOps; i++)
+    if (MemOps[i].bitsGT(LargestVT))
+      LargestVT = MemOps[i];
+  SDValue MemSetValue = getMemsetValue(Src, LargestVT, DAG, dl);
+
   for (unsigned i = 0; i < NumMemOps; i++) {
     EVT VT = MemOps[i];
-    unsigned VTSize = VT.getSizeInBits() / 8;
-    SDValue Value = getMemsetValue(Src, VT, DAG, dl);
+
+    // If this store is smaller than the largest store see whether we can get
+    // the smaller value for free with a truncate.
+    SDValue Value = MemSetValue;
+    if (VT.bitsLT(LargestVT)) {
+      if (!LargestVT.isVector() && !VT.isVector() &&
+          TLI.isTruncateFree(LargestVT, VT))
+        Value = DAG.getNode(ISD::TRUNCATE, dl, VT, MemSetValue);
+      else
+        Value = getMemsetValue(Src, VT, DAG, dl);
+    }
+    assert(Value.getValueType() == VT && "Value with wrong type.");
     SDValue Store = DAG.getStore(Chain, dl, Value,
                                  getMemBasePlusOffset(Dst, DstOff, DAG),
                                  DstPtrInfo.getWithOffset(DstOff),
                                  isVol, false, Align);
     OutChains.push_back(Store);
-    DstOff += VTSize;
+    DstOff += VT.getSizeInBits() / 8;
   }
 
   return DAG.getNode(ISD::TokenFactor, dl, MVT::Other,

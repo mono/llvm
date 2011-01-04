@@ -119,8 +119,10 @@ bool CodeGenPrepare::runOnFunction(Function &F) {
   // unconditional branch.
   EverMadeChange |= EliminateMostlyEmptyBlocks(F);
 
-  // Now find loop back edges.
-  findLoopBackEdges(F);
+  // Now find loop back edges, but only if they are being used to decide which
+  // critical edges to split.
+  if (CriticalEdgeSplit)
+    findLoopBackEdges(F);
 
   bool MadeChange = true;
   while (MadeChange) {
@@ -623,8 +625,8 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
   
   // Try to collapse single-value PHI nodes.  This is necessary to undo 
   // unprofitable PRE transformations.
-  std::vector<Value*> worklist;
-  SmallPtrSet<Value*, 4> Visited;
+  SmallVector<Value*, 8> worklist;
+  SmallPtrSet<Value*, 16> Visited;
   worklist.push_back(Addr);
   
   // Use a worklist to iteratively look through PHI nodes, and ensure that

@@ -344,10 +344,12 @@ namespace {
                                           MCDataFragment *F,
                                           const MCSectionData *SD);
 
-    virtual bool IsFixupFullyResolved(const MCAssembler &Asm,
-                              const MCValue Target,
-                              bool IsPCRel,
-                              const MCFragment *DF) const;
+    virtual bool
+    IsSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
+                                           const MCSymbolData &DataA,
+                                           const MCFragment &FB,
+                                           bool InSet,
+                                           bool IsPCRel) const;
 
     virtual void WriteObject(MCAssembler &Asm, const MCAsmLayout &Layout);
     virtual void WriteSection(MCAssembler &Asm,
@@ -1154,50 +1156,22 @@ void ELFObjectWriter::CreateMetadataSections(MCAssembler &Asm,
   }
 }
 
-bool ELFObjectWriter::IsFixupFullyResolved(const MCAssembler &Asm,
-                                           const MCValue Target,
-                                           bool IsPCRel,
-                                           const MCFragment *DF) const {
-  // If this is a PCrel relocation, find the section this fixup value is
-  // relative to.
-  const MCSection *BaseSection = 0;
-  if (IsPCRel) {
-    BaseSection = &DF->getParent()->getSection();
-    assert(BaseSection);
-  }
-
-  const MCSection *SectionA = 0;
-  const MCSymbol *SymbolA = 0;
-  if (const MCSymbolRefExpr *A = Target.getSymA()) {
-    SymbolA = &A->getSymbol();
-    SectionA = &SymbolA->AliasedSymbol().getSection();
-  }
-
-  const MCSection *SectionB = 0;
-  const MCSymbol *SymbolB = 0;
-  if (const MCSymbolRefExpr *B = Target.getSymB()) {
-    SymbolB = &B->getSymbol();
-    SectionB = &SymbolB->AliasedSymbol().getSection();
-  }
-
-  if (!BaseSection)
-    return SectionA == SectionB;
-
-  if (SymbolB)
-    return false;
-
-  // Absolute address but PCrel instruction, so we need a relocation.
-  if (!SymbolA)
-    return false;
-
+bool
+ELFObjectWriter::IsSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
+                                                      const MCSymbolData &DataA,
+                                                      const MCFragment &FB,
+                                                      bool InSet,
+                                                      bool IsPCRel) const {
   // FIXME: This is in here just to match gnu as output. If the two ends
   // are in the same section, there is nothing that the linker can do to
   // break it.
-  const MCSymbolData &DataA = Asm.getSymbolData(*SymbolA);
   if (DataA.isExternal())
     return false;
 
-  return BaseSection == SectionA;
+  const MCSection &SecA = DataA.getSymbol().AliasedSymbol().getSection();
+  const MCSection &SecB = FB.getParent()->getSection();
+  // On ELF A - B is absolute if A and B are in the same section.
+  return &SecA == &SecB;
 }
 
 void ELFObjectWriter::CreateGroupSections(MCAssembler &Asm,
@@ -1291,6 +1265,7 @@ void ELFObjectWriter::WriteSection(MCAssembler &Asm,
   case ELF::SHT_PROGBITS:
   case ELF::SHT_STRTAB:
   case ELF::SHT_NOBITS:
+  case ELF::SHT_NOTE:
   case ELF::SHT_NULL:
   case ELF::SHT_ARM_ATTRIBUTES:
     // Nothing to do.
@@ -1629,26 +1604,43 @@ unsigned X86ELFObjectWriter::GetRelocType(const MCValue &Target,
   unsigned Type;
   if (is64Bit()) {
     if (IsPCRel) {
-      switch (Modifier) {
-      default:
-        llvm_unreachable("Unimplemented");
-      case MCSymbolRefExpr::VK_None:
-        Type = ELF::R_X86_64_PC32;
+      switch ((unsigned)Fixup.getKind()) {
+      default: llvm_unreachable("invalid fixup kind!");
+      case FK_PCRel_8:
+        assert(Modifier == MCSymbolRefExpr::VK_None);
+        Type = ELF::R_X86_64_PC64;
         break;
-      case MCSymbolRefExpr::VK_PLT:
-        Type = ELF::R_X86_64_PLT32;
+      case X86::reloc_signed_4byte:
+      case X86::reloc_riprel_4byte_movq_load:
+      case FK_Data_4: // FIXME?
+      case X86::reloc_riprel_4byte:
+      case FK_PCRel_4:
+        switch (Modifier) {
+        default:
+          llvm_unreachable("Unimplemented");
+        case MCSymbolRefExpr::VK_None:
+          Type = ELF::R_X86_64_PC32;
+          break;
+        case MCSymbolRefExpr::VK_PLT:
+          Type = ELF::R_X86_64_PLT32;
+          break;
+        case MCSymbolRefExpr::VK_GOTPCREL:
+          Type = ELF::R_X86_64_GOTPCREL;
+          break;
+        case MCSymbolRefExpr::VK_GOTTPOFF:
+          Type = ELF::R_X86_64_GOTTPOFF;
         break;
-      case MCSymbolRefExpr::VK_GOTPCREL:
-        Type = ELF::R_X86_64_GOTPCREL;
+        case MCSymbolRefExpr::VK_TLSGD:
+          Type = ELF::R_X86_64_TLSGD;
+          break;
+        case MCSymbolRefExpr::VK_TLSLD:
+          Type = ELF::R_X86_64_TLSLD;
+          break;
+        }
         break;
-      case MCSymbolRefExpr::VK_GOTTPOFF:
-        Type = ELF::R_X86_64_GOTTPOFF;
-        break;
-      case MCSymbolRefExpr::VK_TLSGD:
-        Type = ELF::R_X86_64_TLSGD;
-        break;
-      case MCSymbolRefExpr::VK_TLSLD:
-        Type = ELF::R_X86_64_TLSLD;
+      case FK_PCRel_2:
+        assert(Modifier == MCSymbolRefExpr::VK_None);
+        Type = ELF::R_X86_64_PC16;
         break;
       }
     } else {
@@ -1656,7 +1648,6 @@ unsigned X86ELFObjectWriter::GetRelocType(const MCValue &Target,
       default: llvm_unreachable("invalid fixup kind!");
       case FK_Data_8: Type = ELF::R_X86_64_64; break;
       case X86::reloc_signed_4byte:
-      case FK_PCRel_4:
         assert(isInt<32>(Target.getConstant()));
         switch (Modifier) {
         default:

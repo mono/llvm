@@ -140,6 +140,9 @@ ARMSubtarget::ARMSubtarget(const std::string &TT, const std::string &FS,
     FSWithArch = FS;
   CPUString = ParseSubtargetFeatures(FSWithArch, CPUString);
 
+  // After parsing Itineraries, set ItinData.IssueWidth.
+  computeIssueWidth();
+
   // Thumb2 implies at least V6T2.
   if (ARMArchVersion >= V6T2)
     ThumbMode = Thumb2;
@@ -201,7 +204,7 @@ ARMSubtarget::GVIsIndirectSymbol(const GlobalValue *GV,
       // through a stub.
       if (!isDecl && !GV->isWeakForLinker())
         return false;
-    
+
       // Unless we have a symbol with hidden visibility, we have to go through a
       // normal $non_lazy_ptr stub because this symbol might be resolved late.
       if (!GV->hasHiddenVisibility())  // Non-hidden $non_lazy_ptr reference.
@@ -219,9 +222,25 @@ unsigned ARMSubtarget::getMispredictionPenalty() const {
     return 13;
   else if (isCortexA9())
     return 8;
-  
+
   // Otherwise, just return a sensible default.
   return 10;
+}
+
+void ARMSubtarget::computeIssueWidth() {
+  unsigned allStage1Units = 0;
+  for (const InstrItinerary *itin = InstrItins.Itineraries;
+       itin->FirstStage != ~0U; ++itin) {
+    const InstrStage *IS = InstrItins.Stages + itin->FirstStage;
+    allStage1Units |= IS->getUnits();
+  }
+  InstrItins.IssueWidth = 0;
+  while (allStage1Units) {
+    ++InstrItins.IssueWidth;
+    // clear the lowest bit
+    allStage1Units ^= allStage1Units & ~(allStage1Units - 1);
+  }
+  assert(InstrItins.IssueWidth <= 2 && "itinerary bug, too many stage 1 units");
 }
 
 bool ARMSubtarget::enablePostRAScheduler(

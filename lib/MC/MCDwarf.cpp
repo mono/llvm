@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCAssembler.h"
@@ -17,6 +18,7 @@
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetAsmBackend.h"
 #include "llvm/Target/TargetAsmInfo.h"
@@ -437,78 +439,144 @@ static int getDataAlignmentFactor(MCStreamer &streamer) {
    return -size;
 }
 
-/// EmitFrameMoves - Emit frame instructions to describe the layout of the
-/// frame.
-static void EmitFrameMoves(MCStreamer &streamer,
-                           const std::vector<MachineMove> &Moves,
-                           MCSymbol *BaseLabel, bool isEH) {
-  MCContext &context = streamer.getContext();
-  const TargetAsmInfo &asmInfo = context.getTargetAsmInfo();
-  int dataAlignmentFactor = getDataAlignmentFactor(streamer);
+static void EmitCFIInstruction(MCStreamer &Streamer,
+                               const MCCFIInstruction &Instr) {
+  int dataAlignmentFactor = getDataAlignmentFactor(Streamer);
 
-  for (unsigned i = 0, N = Moves.size(); i < N; ++i) {
-    const MachineMove &Move = Moves[i];
-    MCSymbol *Label = Move.getLabel();
-    // Throw out move if the label is invalid.
-    if (Label && !Label->isDefined()) continue; // Not emitted, in dead code.
-
-    const MachineLocation &Dst = Move.getDestination();
-    const MachineLocation &Src = Move.getSource();
-
-    // Advance row if new location.
-    if (BaseLabel && Label) {
-      MCSymbol *ThisSym = Label;
-      if (ThisSym != BaseLabel) {
-        streamer.EmitIntValue(dwarf::DW_CFA_advance_loc4, 1);
-        const MCExpr *Length = MakeStartMinusEndExpr(streamer, *BaseLabel,
-                                                     *ThisSym, 4);
-        streamer.EmitValue(Length, 4);
-        BaseLabel = ThisSym;
-      }
-    }
+  switch (Instr.getOperation()) {
+  case MCCFIInstruction::Move: {
+    const MachineLocation &Dst = Instr.getDestination();
+    const MachineLocation &Src = Instr.getSource();
 
     // If advancing cfa.
     if (Dst.isReg() && Dst.getReg() == MachineLocation::VirtualFP) {
       assert(!Src.isReg() && "Machine move not supported yet.");
 
       if (Src.getReg() == MachineLocation::VirtualFP) {
-        streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_offset, 1);
+        Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_offset, 1);
       } else {
-        streamer.EmitIntValue(dwarf::DW_CFA_def_cfa, 1);
-        streamer.EmitULEB128IntValue(asmInfo.getDwarfRegNum(Src.getReg(), isEH),
-                                     1);
+        Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa, 1);
+        Streamer.EmitULEB128IntValue(Src.getReg());
       }
 
-      streamer.EmitULEB128IntValue(-Src.getOffset(), 1);
-      continue;
+      Streamer.EmitULEB128IntValue(-Src.getOffset(), 1);
+      return;
     }
 
     if (Src.isReg() && Src.getReg() == MachineLocation::VirtualFP) {
       assert(Dst.isReg() && "Machine move not supported yet.");
-      streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_register, 1);
-      streamer.EmitULEB128IntValue(asmInfo.getDwarfRegNum(Dst.getReg(), isEH));
-      continue;
+      Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_register, 1);
+      Streamer.EmitULEB128IntValue(Dst.getReg());
+      return;
     }
 
-    unsigned Reg = asmInfo.getDwarfRegNum(Src.getReg(), isEH);
+    unsigned Reg = Src.getReg();
     int Offset = Dst.getOffset() / dataAlignmentFactor;
 
     if (Offset < 0) {
-      streamer.EmitIntValue(dwarf::DW_CFA_offset_extended_sf, 1);
-      streamer.EmitULEB128IntValue(Reg);
-      streamer.EmitSLEB128IntValue(Offset);
+      Streamer.EmitIntValue(dwarf::DW_CFA_offset_extended_sf, 1);
+      Streamer.EmitULEB128IntValue(Reg);
+      Streamer.EmitSLEB128IntValue(Offset);
     } else if (Reg < 64) {
-      streamer.EmitIntValue(dwarf::DW_CFA_offset + Reg, 1);
-      streamer.EmitULEB128IntValue(Offset, 1);
+      Streamer.EmitIntValue(dwarf::DW_CFA_offset + Reg, 1);
+      Streamer.EmitULEB128IntValue(Offset, 1);
     } else {
-      streamer.EmitIntValue(dwarf::DW_CFA_offset_extended, 1);
-      streamer.EmitULEB128IntValue(Reg, 1);
-      streamer.EmitULEB128IntValue(Offset, 1);
+      Streamer.EmitIntValue(dwarf::DW_CFA_offset_extended, 1);
+      Streamer.EmitULEB128IntValue(Reg, 1);
+      Streamer.EmitULEB128IntValue(Offset, 1);
     }
+    return;
+  }
+  case MCCFIInstruction::Remember:
+    Streamer.EmitIntValue(dwarf::DW_CFA_remember_state, 1);
+    return;
+  case MCCFIInstruction::Restore:
+    Streamer.EmitIntValue(dwarf::DW_CFA_restore_state, 1);
+    return;
+  }
+  llvm_unreachable("Unhandled case in switch");
+}
+
+/// EmitFrameMoves - Emit frame instructions to describe the layout of the
+/// frame.
+static void EmitCFIInstructions(MCStreamer &streamer,
+                                const std::vector<MCCFIInstruction> &Instrs,
+                                MCSymbol *BaseLabel) {
+  for (unsigned i = 0, N = Instrs.size(); i < N; ++i) {
+    const MCCFIInstruction &Instr = Instrs[i];
+    MCSymbol *Label = Instr.getLabel();
+    // Throw out move if the label is invalid.
+    if (Label && !Label->isDefined()) continue; // Not emitted, in dead code.
+
+    // Advance row if new location.
+    if (BaseLabel && Label) {
+      MCSymbol *ThisSym = Label;
+      if (ThisSym != BaseLabel) {
+        streamer.EmitDwarfAdvanceFrameAddr(BaseLabel, ThisSym);
+        BaseLabel = ThisSym;
+      }
+    }
+
+    EmitCFIInstruction(streamer, Instr);
   }
 }
 
-static const MCSymbol &EmitCIE(MCStreamer &streamer) {
+static void EmitSymbol(MCStreamer &streamer, const MCSymbol &symbol,
+                       unsigned symbolEncoding) {
+  MCContext &context = streamer.getContext();
+  const TargetAsmInfo &asmInfo = context.getTargetAsmInfo();
+  unsigned format = symbolEncoding & 0x0f;
+  unsigned application = symbolEncoding & 0x70;
+  unsigned size;
+  switch (format) {
+  default:
+    assert(0 && "Unknown Encoding");
+  case dwarf::DW_EH_PE_absptr:
+  case dwarf::DW_EH_PE_signed:
+    size = asmInfo.getPointerSize();
+    break;
+  case dwarf::DW_EH_PE_udata2:
+  case dwarf::DW_EH_PE_sdata2:
+    size = 2;
+    break;
+  case dwarf::DW_EH_PE_udata4:
+  case dwarf::DW_EH_PE_sdata4:
+    size = 4;
+    break;
+  case dwarf::DW_EH_PE_udata8:
+  case dwarf::DW_EH_PE_sdata8:
+    size = 8;
+    break;
+  }
+  switch (application) {
+  default:
+    assert(0 && "Unknown Encoding");
+    break;
+  case 0:
+    streamer.EmitSymbolValue(&symbol, size);
+    break;
+  case dwarf::DW_EH_PE_pcrel:
+    streamer.EmitPCRelSymbolValue(&symbol, size);
+    break;
+  }
+}
+
+static const MachineLocation TranslateMachineLocation(
+                                                  const TargetAsmInfo &AsmInfo,
+                                                  const MachineLocation &Loc) {
+  unsigned Reg = Loc.getReg() == MachineLocation::VirtualFP ?
+    MachineLocation::VirtualFP :
+    unsigned(AsmInfo.getDwarfRegNum(Loc.getReg(), true));
+  const MachineLocation &NewLoc = Loc.isReg() ?
+    MachineLocation(Reg) : MachineLocation(Reg, Loc.getOffset());
+  return NewLoc;
+}
+
+static const MCSymbol &EmitCIE(MCStreamer &streamer,
+                               const MCSymbol *personality,
+                               unsigned personalityEncoding,
+                               const MCSymbol *lsda,
+                               unsigned lsdaEncoding) {
   MCContext &context = streamer.getContext();
   const TargetAsmInfo &asmInfo = context.getTargetAsmInfo();
   const MCSection &section = *asmInfo.getEHFrameSection();
@@ -530,7 +598,12 @@ static const MCSymbol &EmitCIE(MCStreamer &streamer) {
 
   // Augmentation String
   SmallString<8> Augmentation;
-  Augmentation += "zR";
+  Augmentation += "z";
+  if (personality)
+    Augmentation += "P";
+  if (lsda)
+    Augmentation += "L";
+  Augmentation += "R";
   streamer.EmitBytes(Augmentation.str(), 0);
   streamer.EmitIntValue(0, 1);
 
@@ -553,17 +626,39 @@ static const MCSymbol &EmitCIE(MCStreamer &streamer) {
 
   // Augmentation Data (optional)
   streamer.EmitLabel(augmentationStart);
+  if (personality) {
+    // Personality Encoding
+    streamer.EmitIntValue(personalityEncoding, 1);
+    // Personality
+    EmitSymbol(streamer, *personality, personalityEncoding);
+  }
+  if (lsda) {
+    // LSDA Encoding
+    streamer.EmitIntValue(lsdaEncoding, 1);
+  }
+  // Encoding of the FDE pointers
   streamer.EmitIntValue(dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4, 1);
   streamer.EmitLabel(augmentationEnd);
 
   // Initial Instructions
 
   const std::vector<MachineMove> Moves = asmInfo.getInitialFrameState();
+  std::vector<MCCFIInstruction> Instructions;
 
-  EmitFrameMoves(streamer, Moves, NULL, true);
+  for (int i = 0, n = Moves.size(); i != n; ++i) {
+    MCSymbol *Label = Moves[i].getLabel();
+    const MachineLocation &Dst =
+      TranslateMachineLocation(asmInfo, Moves[i].getDestination());
+    const MachineLocation &Src =
+      TranslateMachineLocation(asmInfo, Moves[i].getSource());
+    MCCFIInstruction Inst(Label, Dst, Src);
+    Instructions.push_back(Inst);
+  }
+
+  EmitCFIInstructions(streamer, Instructions, NULL);
 
   // Padding
-  streamer.EmitValueToAlignment(asmInfo.getPointerSize());
+  streamer.EmitValueToAlignment(4);
 
   streamer.EmitLabel(sectionEnd);
   return *sectionStart;
@@ -572,8 +667,9 @@ static const MCSymbol &EmitCIE(MCStreamer &streamer) {
 static MCSymbol *EmitFDE(MCStreamer &streamer,
                          const MCSymbol &cieStart,
                          const MCDwarfFrameInfo &frame) {
-  MCSymbol *fdeStart = streamer.getContext().CreateTempSymbol();
-  MCSymbol *fdeEnd = streamer.getContext().CreateTempSymbol();
+  MCContext &context = streamer.getContext();
+  MCSymbol *fdeStart = context.CreateTempSymbol();
+  MCSymbol *fdeEnd = context.CreateTempSymbol();
 
   // Length
   const MCExpr *Length = MakeStartMinusEndExpr(streamer, *fdeStart, *fdeEnd, 0);
@@ -594,10 +690,21 @@ static MCSymbol *EmitFDE(MCStreamer &streamer,
   streamer.EmitValue(Range, 4);
 
   // Augmentation Data Length
-  streamer.EmitULEB128IntValue(0);
+  MCSymbol *augmentationStart = streamer.getContext().CreateTempSymbol();
+  MCSymbol *augmentationEnd = streamer.getContext().CreateTempSymbol();
+  const MCExpr *augmentationLength = MakeStartMinusEndExpr(streamer,
+                                                           *augmentationStart,
+                                                           *augmentationEnd, 0);
+  streamer.EmitULEB128Value(augmentationLength);
 
   // Augmentation Data
+  streamer.EmitLabel(augmentationStart);
+  if (frame.Lsda)
+    EmitSymbol(streamer, *frame.Lsda, frame.LsdaEncoding);
+  streamer.EmitLabel(augmentationEnd);
   // Call Frame Instructions
+
+  EmitCFIInstructions(streamer, frame.Instructions, frame.Begin);
 
   // Padding
   streamer.EmitValueToAlignment(4);
@@ -605,17 +712,103 @@ static MCSymbol *EmitFDE(MCStreamer &streamer,
   return fdeEnd;
 }
 
+namespace {
+  struct CIEKey {
+    static const CIEKey getEmptyKey() { return CIEKey(0, 0, -1); }
+    static const CIEKey getTombstoneKey() { return CIEKey(0, -1, 0); }
+
+    CIEKey(const MCSymbol* Personality_, unsigned PersonalityEncoding_,
+           unsigned LsdaEncoding_) : Personality(Personality_),
+                                     PersonalityEncoding(PersonalityEncoding_),
+                                     LsdaEncoding(LsdaEncoding_) {
+    }
+    const MCSymbol* Personality;
+    unsigned PersonalityEncoding;
+    unsigned LsdaEncoding;
+  };
+}
+
+namespace llvm {
+  template <>
+  struct DenseMapInfo<CIEKey> {
+    static CIEKey getEmptyKey() {
+      return CIEKey::getEmptyKey();
+    }
+    static CIEKey getTombstoneKey() {
+      return CIEKey::getTombstoneKey();
+    }
+    static unsigned getHashValue(const CIEKey &Key) {
+      FoldingSetNodeID ID;
+      ID.AddPointer(Key.Personality);
+      ID.AddInteger(Key.PersonalityEncoding);
+      ID.AddInteger(Key.LsdaEncoding);
+      return ID.ComputeHash();
+    }
+    static bool isEqual(const CIEKey &LHS,
+                        const CIEKey &RHS) {
+      return LHS.Personality == RHS.Personality &&
+        LHS.PersonalityEncoding == RHS.PersonalityEncoding &&
+        LHS.LsdaEncoding == RHS.LsdaEncoding;
+    }
+  };
+}
+
 void MCDwarfFrameEmitter::Emit(MCStreamer &streamer) {
   const MCContext &context = streamer.getContext();
   const TargetAsmInfo &asmInfo = context.getTargetAsmInfo();
-  const MCSymbol &cieStart = EmitCIE(streamer);
   MCSymbol *fdeEnd = NULL;
+  DenseMap<CIEKey, const MCSymbol*> CIEStarts;
+
   for (unsigned i = 0, n = streamer.getNumFrameInfos(); i < n; ++i) {
-    fdeEnd = EmitFDE(streamer, cieStart, streamer.getFrameInfo(i));
+    const MCDwarfFrameInfo &frame = streamer.getFrameInfo(i);
+    CIEKey key(frame.Personality, frame.PersonalityEncoding,
+               frame.LsdaEncoding);
+    const MCSymbol *&cieStart = CIEStarts[key];
+    if (!cieStart)
+      cieStart = &EmitCIE(streamer, frame.Personality,
+                          frame.PersonalityEncoding, frame.Lsda,
+                          frame.LsdaEncoding);
+    fdeEnd = EmitFDE(streamer, *cieStart, frame);
     if (i != n - 1)
       streamer.EmitLabel(fdeEnd);
   }
+
   streamer.EmitValueToAlignment(asmInfo.getPointerSize());
   if (fdeEnd)
     streamer.EmitLabel(fdeEnd);
+}
+
+void MCDwarfFrameEmitter::EmitAdvanceLoc(MCStreamer &Streamer,
+                                         uint64_t AddrDelta) {
+  SmallString<256> Tmp;
+  raw_svector_ostream OS(Tmp);
+  MCDwarfFrameEmitter::EncodeAdvanceLoc(AddrDelta, OS);
+  Streamer.EmitBytes(OS.str(), /*AddrSpace=*/0);
+}
+
+void MCDwarfFrameEmitter::EncodeAdvanceLoc(uint64_t AddrDelta,
+                                           raw_ostream &OS) {
+  // FIXME: Assumes the code alignment factor is 1.
+  if (AddrDelta == 0) {
+  } else if (isUIntN(6, AddrDelta)) {
+    uint8_t Opcode = dwarf::DW_CFA_advance_loc | AddrDelta;
+    OS << Opcode;
+  } else if (isUInt<8>(AddrDelta)) {
+    OS << uint8_t(dwarf::DW_CFA_advance_loc1);
+    OS << uint8_t(AddrDelta);
+  } else if (isUInt<16>(AddrDelta)) {
+    // FIXME: check what is the correct behavior on a big endian machine.
+    OS << uint8_t(dwarf::DW_CFA_advance_loc2);
+    OS << uint8_t( AddrDelta       & 0xff);
+    OS << uint8_t((AddrDelta >> 8) & 0xff);
+  } else {
+    // FIXME: check what is the correct behavior on a big endian machine.
+    assert(isUInt<32>(AddrDelta));
+    OS << uint8_t(dwarf::DW_CFA_advance_loc4);
+    OS << uint8_t( AddrDelta        & 0xff);
+    OS << uint8_t((AddrDelta >> 8)  & 0xff);
+    OS << uint8_t((AddrDelta >> 16) & 0xff);
+    OS << uint8_t((AddrDelta >> 24) & 0xff);
+
+  }
 }

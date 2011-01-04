@@ -18,13 +18,14 @@
 #include "llvm/Function.h"
 #include "llvm/Pass.h"
 #include "llvm/Type.h"
+#include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include <queue>
 using namespace llvm;
 
 STATISTIC(NumSimplified, "Number of redundant instructions removed");
@@ -42,54 +43,40 @@ namespace {
 
     /// runOnFunction - Remove instructions that simplify.
     bool runOnFunction(Function &F) {
-      const TargetData *TD = getAnalysisIfAvailable<TargetData>();
       const DominatorTree *DT = getAnalysisIfAvailable<DominatorTree>();
+      const TargetData *TD = getAnalysisIfAvailable<TargetData>();
+      SmallPtrSet<const Instruction*, 8> S1, S2, *ToSimplify = &S1, *Next = &S2;
       bool Changed = false;
 
-      // Add all interesting instructions to the worklist.  These are processed
-      // in FIFO order, so instructions are usually visited before their uses.
-      std::queue<Instruction*> Worklist;
-      for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB)
-        for (BasicBlock::iterator BI = BB->begin(), BE = BB->end(); BI != BE;) {
-          Instruction *I = BI++;
-          // Zap any dead instructions.
-          if (isInstructionTriviallyDead(I)) {
-            I->eraseFromParent();
-            Changed = true;
-            continue;
+      do {
+        for (df_iterator<BasicBlock*> DI = df_begin(&F.getEntryBlock()),
+             DE = df_end(&F.getEntryBlock()); DI != DE; ++DI)
+          for (BasicBlock::iterator BI = DI->begin(), BE = DI->end(); BI != BE;) {
+            Instruction *I = BI++;
+            // The first time through the loop ToSimplify is empty and we try to
+            // simplify all instructions.  On later iterations ToSimplify is not
+            // empty and we only bother simplifying instructions that are in it.
+            if (!ToSimplify->empty() && !ToSimplify->count(I))
+              continue;
+            // Don't waste time simplifying unused instructions.
+            if (!I->use_empty())
+              if (Value *V = SimplifyInstruction(I, TD, DT)) {
+                // Mark all uses for resimplification next time round the loop.
+                for (Value::use_iterator UI = I->use_begin(), UE = I->use_end();
+                     UI != UE; ++UI)
+                  Next->insert(cast<Instruction>(*UI));
+                I->replaceAllUsesWith(V);
+                ++NumSimplified;
+                Changed = true;
+              }
+            Changed |= RecursivelyDeleteTriviallyDeadInstructions(I);
           }
-          // Add all others to the worklist.
-          Worklist.push(I);
-        }
 
-      // Simplify everything in the worklist until the cows come home.
-      while (!Worklist.empty()) {
-        Instruction *I = Worklist.front();
-        Worklist.pop();
-        // Don't bother simplifying unused instructions.
-        if (I->use_empty()) continue;
-        Value *V = SimplifyInstruction(I, TD, DT);
-        if (!V) continue;
-
-        // This instruction simplifies!  Replace it with its simplification and
-        // add all uses to the worklist, since they may now simplify.
-        ++NumSimplified;
-        I->replaceAllUsesWith(V);
-        for (Value::use_iterator UI = I->use_begin(), UE = I->use_end();
-             UI != UE; ++UI)
-          Worklist.push(cast<Instruction>(*UI));
-        Changed = true;
-      }
-
-      // Finally, run over the function zapping any dead instructions.
-      for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB)
-        for (BasicBlock::iterator BI = BB->begin(), BE = BB->end(); BI != BE;) {
-          Instruction *I = BI++;
-          if (isInstructionTriviallyDead(I)) {
-            I->eraseFromParent();
-            Changed = true;
-          }
-        }
+        // Place the list of instructions to simplify on the next loop iteration
+        // into ToSimplify.
+        std::swap(ToSimplify, Next);
+        Next->clear();
+      } while (!ToSimplify->empty());
 
       return Changed;
     }

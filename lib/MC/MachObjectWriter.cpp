@@ -64,86 +64,6 @@ static bool doesSymbolRequireExternRelocation(MCSymbolData *SD) {
   return false;
 }
 
-static bool isScatteredFixupFullyResolved(const MCAssembler &Asm,
-                                          const MCValue Target,
-                                          const MCSymbolData *BaseSymbol) {
-  // The effective fixup address is
-  //     addr(atom(A)) + offset(A)
-  //   - addr(atom(B)) - offset(B)
-  //   - addr(BaseSymbol) + <fixup offset from base symbol>
-  // and the offsets are not relocatable, so the fixup is fully resolved when
-  //  addr(atom(A)) - addr(atom(B)) - addr(BaseSymbol) == 0.
-  //
-  // Note that "false" is almost always conservatively correct (it means we emit
-  // a relocation which is unnecessary), except when it would force us to emit a
-  // relocation which the target cannot encode.
-
-  const MCSymbolData *A_Base = 0, *B_Base = 0;
-  if (const MCSymbolRefExpr *A = Target.getSymA()) {
-    // Modified symbol references cannot be resolved.
-    if (A->getKind() != MCSymbolRefExpr::VK_None)
-      return false;
-
-    A_Base = Asm.getAtom(&Asm.getSymbolData(A->getSymbol()));
-    if (!A_Base)
-      return false;
-  }
-
-  if (const MCSymbolRefExpr *B = Target.getSymB()) {
-    // Modified symbol references cannot be resolved.
-    if (B->getKind() != MCSymbolRefExpr::VK_None)
-      return false;
-
-    B_Base = Asm.getAtom(&Asm.getSymbolData(B->getSymbol()));
-    if (!B_Base)
-      return false;
-  }
-
-  // If there is no base, A and B have to be the same atom for this fixup to be
-  // fully resolved.
-  if (!BaseSymbol)
-    return A_Base == B_Base;
-
-  // Otherwise, B must be missing and A must be the base.
-  return !B_Base && BaseSymbol == A_Base;
-}
-
-static bool isScatteredFixupFullyResolvedSimple(const MCAssembler &Asm,
-                                                const MCValue Target,
-                                                const MCSection *BaseSection) {
-  // The effective fixup address is
-  //     addr(atom(A)) + offset(A)
-  //   - addr(atom(B)) - offset(B)
-  //   - addr(<base symbol>) + <fixup offset from base symbol>
-  // and the offsets are not relocatable, so the fixup is fully resolved when
-  //  addr(atom(A)) - addr(atom(B)) - addr(<base symbol>)) == 0.
-  //
-  // The simple (Darwin, except on x86_64) way of dealing with this was to
-  // assume that any reference to a temporary symbol *must* be a temporary
-  // symbol in the same atom, unless the sections differ. Therefore, any PCrel
-  // relocation to a temporary symbol (in the same section) is fully
-  // resolved. This also works in conjunction with absolutized .set, which
-  // requires the compiler to use .set to absolutize the differences between
-  // symbols which the compiler knows to be assembly time constants, so we don't
-  // need to worry about considering symbol differences fully resolved.
-
-  // Non-relative fixups are only resolved if constant.
-  if (!BaseSection)
-    return Target.isAbsolute();
-
-  // Otherwise, relative fixups are only resolved if not a difference and the
-  // target is a temporary in the same section.
-  if (Target.isAbsolute() || Target.getSymB())
-    return false;
-
-  const MCSymbol *A = &Target.getSymA()->getSymbol();
-  if (!A->isTemporary() || !A->isInSection() ||
-      &A->getSection() != BaseSection)
-    return false;
-
-  return true;
-}
-
 namespace {
 
 class MachObjectWriter : public MCObjectWriter {
@@ -900,9 +820,9 @@ public:
     Relocations[Fragment->getParent()].push_back(MRE);
   }
 
-  static bool getARMFixupKindMachOInfo(unsigned Kind, bool &Is24BitBranch,
+  static bool getARMFixupKindMachOInfo(unsigned Kind, unsigned &RelocType,
                                        unsigned &Log2Size) {
-    Is24BitBranch = false;
+    RelocType = unsigned(macho::RIT_Vanilla);
     Log2Size = ~0U;
 
     switch (Kind) {
@@ -927,7 +847,24 @@ public:
     case ARM::fixup_arm_pcrel_10:
     case ARM::fixup_arm_adr_pcrel_12:
     case ARM::fixup_arm_branch:
-      Is24BitBranch = true;
+      RelocType = unsigned(macho::RIT_ARM_Branch24Bit);
+      // Report as 'long', even though that is not quite accurate.
+      Log2Size = llvm::Log2_32(4);
+      return true;
+
+      // Handle Thumb branches.
+    case ARM::fixup_arm_thumb_br:
+      RelocType = unsigned(macho::RIT_ARM_ThumbBranch22Bit);
+      Log2Size = llvm::Log2_32(2);
+      return true;
+
+    case ARM::fixup_arm_thumb_bl:
+      RelocType = unsigned(macho::RIT_ARM_ThumbBranch32Bit);
+      Log2Size = llvm::Log2_32(4);
+      return true;
+
+    case ARM::fixup_arm_thumb_blx:
+      RelocType = unsigned(macho::RIT_ARM_ThumbBranch22Bit);
       // Report as 'long', even though that is not quite accurate.
       Log2Size = llvm::Log2_32(4);
       return true;
@@ -938,8 +875,8 @@ public:
                            MCValue Target, uint64_t &FixedValue) {
     unsigned IsPCRel = isFixupKindPCRel(Asm, Fixup.getKind());
     unsigned Log2Size;
-    bool Is24BitBranch;
-    if (!getARMFixupKindMachOInfo(Fixup.getKind(), Is24BitBranch, Log2Size)) {
+    unsigned RelocType = macho::RIT_Vanilla;
+    if (!getARMFixupKindMachOInfo(Fixup.getKind(), RelocType, Log2Size)) {
       report_fatal_error("unknown ARM fixup kind!");
       return;
     }
@@ -962,7 +899,7 @@ public:
     //
     // Is this right for ARM?
     uint32_t Offset = Target.getConstant();
-    if (IsPCRel && !Is24BitBranch)
+    if (IsPCRel && RelocType == macho::RIT_Vanilla)
       Offset += 1 << Log2Size;
     if (Offset && SD && !doesSymbolRequireExternRelocation(SD))
       return RecordARMScatteredRelocation(Asm, Layout, Fragment, Fixup,
@@ -1006,9 +943,8 @@ public:
       if (IsPCRel)
         FixedValue -= getSectionAddress(Fragment->getParent());
 
-      // Determine the appropriate type based on the fixup kind.
-      Type = Is24BitBranch ? (unsigned)macho::RIT_ARM_Branch24Bit :
-        (unsigned)macho::RIT_Vanilla;
+      // The type is determined by the fixup kind.
+      Type = RelocType;
     }
 
     // struct relocation_info (8 bytes)
@@ -1311,15 +1247,13 @@ public:
                        UndefinedSymbolData);
   }
 
-  bool IsSymbolRefDifferenceFullyResolved(const MCAssembler &Asm,
-                                          const MCSymbolRefExpr *A,
-                                          const MCSymbolRefExpr *B,
-                                          bool InSet) const {
+  virtual bool IsSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
+                                                      const MCSymbolData &DataA,
+                                                      const MCFragment &FB,
+                                                      bool InSet,
+                                                      bool IsPCRel) const {
     if (InSet)
       return true;
-
-    if (!TargetObjectWriter->useAggressiveSymbolFolding())
-      return false;
 
     // The effective address is
     //     addr(atom(A)) + offset(A)
@@ -1328,16 +1262,38 @@ public:
     //  addr(atom(A)) - addr(atom(B)) == 0.
     const MCSymbolData *A_Base = 0, *B_Base = 0;
 
-    // Modified symbol references cannot be resolved.
-    if (A->getKind() != MCSymbolRefExpr::VK_None ||
-        B->getKind() != MCSymbolRefExpr::VK_None)
-      return false;
+    const MCSymbol &SA = DataA.getSymbol().AliasedSymbol();
+    const MCSection &SecA = SA.getSection();
+    const MCSection &SecB = FB.getParent()->getSection();
 
-    A_Base = Asm.getAtom(&Asm.getSymbolData(A->getSymbol()));
+    if (IsPCRel) {
+      // The simple (Darwin, except on x86_64) way of dealing with this was to
+      // assume that any reference to a temporary symbol *must* be a temporary
+      // symbol in the same atom, unless the sections differ. Therefore, any
+      // PCrel relocation to a temporary symbol (in the same section) is fully
+      // resolved. This also works in conjunction with absolutized .set, which
+      // requires the compiler to use .set to absolutize the differences between
+      // symbols which the compiler knows to be assembly time constants, so we
+      // don't need to worry about considering symbol differences fully
+      // resolved.
+
+      if (!Asm.getBackend().hasReliableSymbolDifference()) {
+        if (!SA.isTemporary() || !SA.isInSection() || &SecA != &SecB)
+          return false;
+        return true;
+      }
+    } else {
+      if (!TargetObjectWriter->useAggressiveSymbolFolding())
+        return false;
+    }
+
+    const MCFragment &FA = *Asm.getSymbolData(SA).getFragment();
+
+    A_Base = FA.getAtom();
     if (!A_Base)
       return false;
 
-    B_Base = Asm.getAtom(&Asm.getSymbolData(B->getSymbol()));
+    B_Base = FB.getAtom();
     if (!B_Base)
       return false;
 
@@ -1347,37 +1303,6 @@ public:
 
     // Otherwise, we can't prove this is fully resolved.
     return false;
-  }
-
-  bool IsFixupFullyResolved(const MCAssembler &Asm,
-                            const MCValue Target,
-                            bool IsPCRel,
-                            const MCFragment *DF) const {
-    // Otherwise, determine whether this value is actually resolved; scattering
-    // may cause atoms to move.
-
-    // Check if we are using the "simple" resolution algorithm (e.g.,
-    // i386).
-    if (!Asm.getBackend().hasReliableSymbolDifference()) {
-      const MCSection *BaseSection = 0;
-      if (IsPCRel)
-        BaseSection = &DF->getParent()->getSection();
-
-      return isScatteredFixupFullyResolvedSimple(Asm, Target, BaseSection);
-    }
-
-    // Otherwise, compute the proper answer as reliably as possible.
-
-    // If this is a PCrel relocation, find the base atom (identified by its
-    // symbol) that the fixup value is relative to.
-    const MCSymbolData *BaseSymbol = 0;
-    if (IsPCRel) {
-      BaseSymbol = DF->getAtom();
-      if (!BaseSymbol)
-        return false;
-    }
-
-    return isScatteredFixupFullyResolved(Asm, Target, BaseSymbol);
   }
 
   void WriteObject(MCAssembler &Asm, const MCAsmLayout &Layout) {

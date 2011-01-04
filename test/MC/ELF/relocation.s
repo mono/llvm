@@ -15,6 +15,8 @@ bar:
         leaq	foo@TLSLD(%rip), %rdi    # R_X86_64_TLSLD
         leaq	foo@DTPOFF(%rax), %rcx   # R_X86_64_DTPOFF32
         pushq    $bar
+        movq	foo(%rip), %rdx
+        leaq    foo-bar(%r14),%r14
 
 
 // CHECK:  # Section 0x00000001
@@ -98,3 +100,15 @@ bar:
 // CHECK-NEXT:   ('r_sym', 0x00000002)
 // CHECK-NEXT:   ('r_type', 0x0000000b)
 // CHECK-NEXT:   ('r_addend', 0x00000000)
+
+// CHECK: # Relocation 0x0000000c
+// CHECK-NEXT: (('r_offset', 0x00000055)
+// CHECK-NEXT:  ('r_sym', 0x00000006)
+// CHECK-NEXT:  ('r_type', 0x00000002)
+// CHECK-NEXT:  ('r_addend', 0xfffffffc)
+
+// CHECK: # Relocation 0x0000000d
+// CHECK-NEXT: (('r_offset', 0x0000005c)
+// CHECK-NEXT:  ('r_sym', 0x00000006)
+// CHECK-NEXT:  ('r_type', 0x00000002)
+// CHECK-NEXT:  ('r_addend', 0x0000005c)

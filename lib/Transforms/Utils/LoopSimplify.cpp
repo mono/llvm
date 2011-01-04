@@ -46,7 +46,7 @@
 #include "llvm/LLVMContext.h"
 #include "llvm/Type.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/Dominators.h"
+#include "llvm/Analysis/DominanceFrontier.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -91,7 +91,6 @@ namespace {
       AU.addPreserved<ScalarEvolution>();
       AU.addPreservedID(BreakCriticalEdgesID);  // No critical edges added.
       AU.addPreserved<DominanceFrontier>();
-      AU.addPreservedID(LCSSAID);
     }
 
     /// verifyAnalysis() - Verify LoopSimplifyForm's guarantees.
@@ -164,9 +163,8 @@ ReprocessLoop:
     for (SmallPtrSet<BasicBlock*, 4>::iterator I = BadPreds.begin(),
          E = BadPreds.end(); I != E; ++I) {
 
-      DEBUG(dbgs() << "LoopSimplify: Deleting edge from dead predecessor ";
-            WriteAsOperand(dbgs(), *I, false);
-            dbgs() << "\n");
+      DEBUG(dbgs() << "LoopSimplify: Deleting edge from dead predecessor "
+                   << (*I)->getName() << "\n");
 
       // Inform each successor of each dead pred.
       for (succ_iterator SI = succ_begin(*I), SE = succ_end(*I); SI != SE; ++SI)
@@ -191,9 +189,8 @@ ReprocessLoop:
       if (BI->isConditional()) {
         if (UndefValue *Cond = dyn_cast<UndefValue>(BI->getCondition())) {
 
-          DEBUG(dbgs() << "LoopSimplify: Resolving \"br i1 undef\" to exit in ";
-                WriteAsOperand(dbgs(), *I, false);
-                dbgs() << "\n");
+          DEBUG(dbgs() << "LoopSimplify: Resolving \"br i1 undef\" to exit in "
+                       << (*I)->getName() << "\n");
 
           BI->setCondition(ConstantInt::get(Cond->getType(),
                                             !L->contains(BI->getSuccessor(0))));
@@ -269,12 +266,11 @@ ReprocessLoop:
   PHINode *PN;
   for (BasicBlock::iterator I = L->getHeader()->begin();
        (PN = dyn_cast<PHINode>(I++)); )
-    if (Value *V = SimplifyInstruction(PN, 0, DT))
-      if (LI->replacementPreservesLCSSAForm(PN, V)) {
-          if (AA) AA->deleteValue(PN);
-          PN->replaceAllUsesWith(V);
-          PN->eraseFromParent();
-      }
+    if (Value *V = SimplifyInstruction(PN, 0, DT)) {
+      if (AA) AA->deleteValue(PN);
+      PN->replaceAllUsesWith(V);
+      PN->eraseFromParent();
+    }
 
   // If this loop has multiple exits and the exits all go to the same
   // block, attempt to merge the exits. This helps several passes, such
@@ -326,10 +322,8 @@ ReprocessLoop:
 
       // Success. The block is now dead, so remove it from the loop,
       // update the dominator tree and dominance frontier, and delete it.
-
-      DEBUG(dbgs() << "LoopSimplify: Eliminating exiting block ";
-            WriteAsOperand(dbgs(), ExitingBlock, false);
-            dbgs() << "\n");
+      DEBUG(dbgs() << "LoopSimplify: Eliminating exiting block "
+                   << ExitingBlock->getName() << "\n");
 
       assert(pred_begin(ExitingBlock) == pred_end(ExitingBlock));
       Changed = true;
@@ -386,9 +380,8 @@ BasicBlock *LoopSimplify::InsertPreheaderForLoop(Loop *L) {
     SplitBlockPredecessors(Header, &OutsideBlocks[0], OutsideBlocks.size(),
                            ".preheader", this);
 
-  DEBUG(dbgs() << "LoopSimplify: Creating pre-header ";
-        WriteAsOperand(dbgs(), NewBB, false);
-        dbgs() << "\n");
+  DEBUG(dbgs() << "LoopSimplify: Creating pre-header " << NewBB->getName()
+               << "\n");
 
   // Make sure that NewBB is put someplace intelligent, which doesn't mess up
   // code layout too horribly.
@@ -417,10 +410,8 @@ BasicBlock *LoopSimplify::RewriteLoopExitBlock(Loop *L, BasicBlock *Exit) {
                                              LoopBlocks.size(), ".loopexit",
                                              this);
 
-  DEBUG(dbgs() << "LoopSimplify: Creating dedicated exit block ";
-        WriteAsOperand(dbgs(), NewBB, false);
-        dbgs() << "\n");
-
+  DEBUG(dbgs() << "LoopSimplify: Creating dedicated exit block "
+               << NewBB->getName() << "\n");
   return NewBB;
 }
 
@@ -450,14 +441,13 @@ static PHINode *FindPHIToPartitionLoops(Loop *L, DominatorTree *DT,
   for (BasicBlock::iterator I = L->getHeader()->begin(); isa<PHINode>(I); ) {
     PHINode *PN = cast<PHINode>(I);
     ++I;
-    if (Value *V = SimplifyInstruction(PN, 0, DT))
-      if (LI->replacementPreservesLCSSAForm(PN, V)) {
-        // This is a degenerate PHI already, don't modify it!
-        PN->replaceAllUsesWith(V);
-        if (AA) AA->deleteValue(PN);
-        PN->eraseFromParent();
-        continue;
-      }
+    if (Value *V = SimplifyInstruction(PN, 0, DT)) {
+      // This is a degenerate PHI already, don't modify it!
+      PN->replaceAllUsesWith(V);
+      if (AA) AA->deleteValue(PN);
+      PN->eraseFromParent();
+      continue;
+    }
 
     // Scan this PHI node looking for a use of the PHI node by itself.
     for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
@@ -652,9 +642,8 @@ LoopSimplify::InsertUniqueBackedgeBlock(Loop *L, BasicBlock *Preheader) {
                                            Header->getName()+".backedge", F);
   BranchInst *BETerminator = BranchInst::Create(Header, BEBlock);
 
-  DEBUG(dbgs() << "LoopSimplify: Inserting unique backedge block ";
-        WriteAsOperand(dbgs(), BEBlock, false);
-        dbgs() << "\n");
+  DEBUG(dbgs() << "LoopSimplify: Inserting unique backedge block "
+               << BEBlock->getName() << "\n");
 
   // Move the new backedge block to right after the last backedge block.
   Function::iterator InsertPos = BackedgeBlocks.back(); ++InsertPos;

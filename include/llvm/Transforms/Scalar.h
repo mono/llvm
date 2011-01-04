@@ -119,6 +119,12 @@ Pass *createLoopUnswitchPass(bool OptimizeForSize = false);
 
 //===----------------------------------------------------------------------===//
 //
+// LoopInstSimplify - This pass simplifies instructions in a loop's body.
+//
+Pass *createLoopInstSimplifyPass();
+
+//===----------------------------------------------------------------------===//
+//
 // LoopUnroll - This pass is a simple loop unrolling pass.
 //
 Pass *createLoopUnrollPass();
@@ -129,6 +135,12 @@ Pass *createLoopUnrollPass();
 //
 Pass *createLoopRotatePass();
 
+//===----------------------------------------------------------------------===//
+//
+// LoopIdiom - This pass recognizes and replaces idioms in loops.
+//
+Pass *createLoopIdiomPass();
+  
 //===----------------------------------------------------------------------===//
 //
 // PromoteMemoryToRegister - This pass is used to promote memory references to
@@ -252,6 +264,13 @@ FunctionPass *createBlockPlacementPass();
 Pass *createLCSSAPass();
 extern char &LCSSAID;
 
+//===----------------------------------------------------------------------===//
+//
+// EarlyCSE - This pass performs a simple and fast CSE pass over the dominator
+// tree.
+//
+FunctionPass *createEarlyCSEPass();
+  
 //===----------------------------------------------------------------------===//
 //
 // GVN - This pass performs global value numbering and redundant load 

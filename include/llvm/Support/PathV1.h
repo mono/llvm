@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-#define LLVMV_PATH_DEPRECATED_MSG(replacement) \
+#define LLVM_PATH_DEPRECATED_MSG(replacement) \
   "PathV1 has been deprecated and will be removed as soon as all LLVM and" \
   " Clang clients have been moved over to PathV2. Please use `" #replacement \
   "` from PathV2 instead."
@@ -98,7 +98,8 @@ namespace sys {
       /// it is file:///. Other operating systems may have different notions of
       /// what the root directory is or none at all. In that case, a consistent
       /// default root directory will be used.
-      static Path GetRootDirectory();
+      LLVM_ATTRIBUTE_DEPRECATED(static Path GetRootDirectory(),
+        LLVM_PATH_DEPRECATED_MSG(NOTHING));
 
       /// Construct a path to a unique temporary directory that is created in
       /// a "standard" place for the operating system. The directory is
@@ -267,7 +268,7 @@ namespace sys {
       /// @brief Returns the last component of the path name.
       LLVM_ATTRIBUTE_DEPRECATED(
         StringRef getLast() const,
-        LLVMV_PATH_DEPRECATED_MSG(path::filename));
+        LLVM_PATH_DEPRECATED_MSG(path::filename));
 
       /// This function strips off the path and suffix of the file or directory
       /// name and returns just the basename. For example /a/foo.bar would cause
@@ -275,12 +276,12 @@ namespace sys {
       /// @returns StringRef containing the basename of the path
       /// @brief Get the base name of the path
       LLVM_ATTRIBUTE_DEPRECATED(StringRef getBasename() const,
-        LLVMV_PATH_DEPRECATED_MSG(path::stem));
+        LLVM_PATH_DEPRECATED_MSG(path::stem));
 
       /// This function strips off the suffix of the path beginning with the
       /// path separator ('/' on Unix, '\' on Windows) and returns the result.
       LLVM_ATTRIBUTE_DEPRECATED(StringRef getDirname() const,
-        LLVMV_PATH_DEPRECATED_MSG(path::parent_path));
+        LLVM_PATH_DEPRECATED_MSG(path::parent_path));
 
       /// This function strips off the path and basename(up to and
       /// including the last dot) of the file or directory name and
@@ -289,7 +290,7 @@ namespace sys {
       /// @returns StringRef containing the suffix of the path
       /// @brief Get the suffix of the path
       LLVM_ATTRIBUTE_DEPRECATED(StringRef getSuffix() const,
-        LLVMV_PATH_DEPRECATED_MSG(path::extension));
+        LLVM_PATH_DEPRECATED_MSG(path::extension));
 
       /// Obtain a 'C' string for the path name.
       /// @returns a 'C' string containing the path name.
@@ -320,7 +321,7 @@ namespace sys {
       /// @brief Determine if the path is absolute.
       LLVM_ATTRIBUTE_DEPRECATED(
         static bool isAbsolute(const char *NameStart, unsigned NameLen),
-        LLVMV_PATH_DEPRECATED_MSG(path::is_absolute));
+        LLVM_PATH_DEPRECATED_MSG(path::is_absolute));
 
       /// This function opens the file associated with the path name provided by
       /// the Path object and reads its magic number. If the magic number at the
@@ -328,7 +329,8 @@ namespace sys {
       /// cases (file not found, file not accessible, etc.) it returns false.
       /// @returns true if the magic number of the file matches \p magic.
       /// @brief Determine if file has a specific magic number
-      bool hasMagicNumber(StringRef magic) const;
+      LLVM_ATTRIBUTE_DEPRECATED(bool hasMagicNumber(StringRef magic) const,
+        LLVM_PATH_DEPRECATED_MSG(fs::has_magic));
 
       /// This function retrieves the first \p len bytes of the file associated
       /// with \p this. These bytes are returned as the "magic number" in the
@@ -494,7 +496,9 @@ namespace sys {
 
       /// The current Path name is made absolute by prepending the
       /// current working directory if necessary.
-      void makeAbsolute();
+      LLVM_ATTRIBUTE_DEPRECATED(
+        void makeAbsolute(),
+        LLVM_PATH_DEPRECATED_MSG(fs::make_absolute));
 
     /// @}
     /// @name Disk Mutators
@@ -626,7 +630,7 @@ namespace sys {
   /// efficiency. First, the file status requires additional space and the space
   /// is incorporated directly into PathWithStatus without an additional malloc.
   /// Second, obtaining status information is an expensive operation on most
-  /// operating systems so we want to be careful and explicity about where we
+  /// operating systems so we want to be careful and explicit about where we
   /// allow this operation in LLVM.
   /// @brief Path with file status class.
   class PathWithStatus : public Path {

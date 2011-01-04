@@ -14,6 +14,7 @@
 
 #define DEBUG_TYPE "memcpyopt"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/GlobalVariable.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/Instructions.h"
 #include "llvm/ADT/SmallVector.h"
@@ -21,8 +22,10 @@
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
+#include "llvm/Support/IRBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetData.h"
 #include <list>
@@ -31,57 +34,7 @@ using namespace llvm;
 STATISTIC(NumMemCpyInstr, "Number of memcpy instructions deleted");
 STATISTIC(NumMemSetInfer, "Number of memsets inferred");
 STATISTIC(NumMoveToCpy,   "Number of memmoves converted to memcpy");
-
-/// isBytewiseValue - If the specified value can be set by repeating the same
-/// byte in memory, return the i8 value that it is represented with.  This is
-/// true for all i8 values obviously, but is also true for i32 0, i32 -1,
-/// i16 0xF0F0, double 0.0 etc.  If the value can't be handled with a repeated
-/// byte store (e.g. i16 0x1234), return null.
-static Value *isBytewiseValue(Value *V) {
-  // All byte-wide stores are splatable, even of arbitrary variables.
-  if (V->getType()->isIntegerTy(8)) return V;
-  
-  // Constant float and double values can be handled as integer values if the
-  // corresponding integer value is "byteable".  An important case is 0.0. 
-  if (ConstantFP *CFP = dyn_cast<ConstantFP>(V)) {
-    if (CFP->getType()->isFloatTy())
-      V = ConstantExpr::getBitCast(CFP, Type::getInt32Ty(V->getContext()));
-    if (CFP->getType()->isDoubleTy())
-      V = ConstantExpr::getBitCast(CFP, Type::getInt64Ty(V->getContext()));
-    // Don't handle long double formats, which have strange constraints.
-  }
-  
-  // We can handle constant integers that are power of two in size and a 
-  // multiple of 8 bits.
-  if (ConstantInt *CI = dyn_cast<ConstantInt>(V)) {
-    unsigned Width = CI->getBitWidth();
-    if (isPowerOf2_32(Width) && Width > 8) {
-      // We can handle this value if the recursive binary decomposition is the
-      // same at all levels.
-      APInt Val = CI->getValue();
-      APInt Val2;
-      while (Val.getBitWidth() != 8) {
-        unsigned NextWidth = Val.getBitWidth()/2;
-        Val2  = Val.lshr(NextWidth);
-        Val2 = Val2.trunc(Val.getBitWidth()/2);
-        Val = Val.trunc(Val.getBitWidth()/2);
-
-        // If the top/bottom halves aren't the same, reject it.
-        if (Val != Val2)
-          return 0;
-      }
-      return ConstantInt::get(V->getContext(), Val);
-    }
-  }
-  
-  // Conceptually, we could handle things like:
-  //   %a = zext i8 %X to i16
-  //   %b = shl i16 %a, 8
-  //   %c = or i16 %a, %b
-  // but until there is an example that actually needs this, it doesn't seem
-  // worth worrying about.
-  return 0;
-}
+STATISTIC(NumCpyToSet,    "Number of memcpys converted to memset");
 
 static int64_t GetOffsetFromIndex(const GetElementPtrInst *GEP, unsigned Idx,
                                   bool &VariableIdxFound, TargetData &TD) {
@@ -380,8 +333,6 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
     }
   }
   
-  LLVMContext &Context = SI->getContext();
-
   // There are two cases that are interesting for this code to handle: memcpy
   // and memset.  Right now we only handle memset.
   
@@ -393,7 +344,6 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
     return false;
 
   AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
-  Module *M = SI->getParent()->getParent()->getParent();
 
   // Okay, so we now have a single store that can be splatable.  Scan to find
   // all subsequent stores of the same value to offset from the same pointer.
@@ -479,28 +429,10 @@ bool MemCpyOpt::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
       Alignment = TD->getABITypeAlignment(EltType);
     }
 
-    // Cast the start ptr to be i8* as memset requires.
-    const PointerType* StartPTy = cast<PointerType>(StartPtr->getType());
-    const PointerType *i8Ptr = Type::getInt8PtrTy(Context,
-                                                  StartPTy->getAddressSpace());
-    if (StartPTy!= i8Ptr)
-      StartPtr = new BitCastInst(StartPtr, i8Ptr, StartPtr->getName(),
-                                 InsertPt);
-
-    Value *Ops[] = {
-      StartPtr, ByteVal,   // Start, value
-      // size
-      ConstantInt::get(Type::getInt64Ty(Context), Range.End-Range.Start),
-      // align
-      ConstantInt::get(Type::getInt32Ty(Context), Alignment),
-      // volatile
-      ConstantInt::getFalse(Context),
-    };
-    const Type *Tys[] = { Ops[0]->getType(), Ops[2]->getType() };
-
-    Function *MemSetF = Intrinsic::getDeclaration(M, Intrinsic::memset, Tys, 2);
-
-    Value *C = CallInst::Create(MemSetF, Ops, Ops+5, "", InsertPt);
+    IRBuilder<> Builder(InsertPt);
+    Value *C = 
+      Builder.CreateMemSet(StartPtr, ByteVal, Range.End-Range.Start, Alignment);
+    
     DEBUG(dbgs() << "Replace stores:\n";
           for (unsigned i = 0, e = Range.TheStores.size(); i != e; ++i)
             dbgs() << *Range.TheStores[i] << '\n';
@@ -711,20 +643,11 @@ bool MemCpyOpt::processMemCpyMemCpyDependence(MemCpyInst *M, MemCpyInst *MDep,
   // If the dest of the second might alias the source of the first, then the
   // source and dest might overlap.  We still want to eliminate the intermediate
   // value, but we have to generate a memmove instead of memcpy.
-  Intrinsic::ID ResultFn = Intrinsic::memcpy;
-  if (AA.alias(AA.getLocationForDest(M), AA.getLocationForSource(MDep)) !=
-      AliasAnalysis::NoAlias)
-    ResultFn = Intrinsic::memmove;
+  bool UseMemMove = false;
+  if (!AA.isNoAlias(AA.getLocationForDest(M), AA.getLocationForSource(MDep)))
+    UseMemMove = true;
   
   // If all checks passed, then we can transform M.
-  const Type *ArgTys[3] = {
-    M->getRawDest()->getType(),
-    MDep->getRawSource()->getType(),
-    M->getLength()->getType()
-  };
-  Function *MemCpyFun =
-    Intrinsic::getDeclaration(MDep->getParent()->getParent()->getParent(),
-                              ResultFn, ArgTys, 3);
   
   // Make sure to use the lesser of the alignment of the source and the dest
   // since we're changing where we're reading from, but don't want to increase
@@ -732,14 +655,14 @@ bool MemCpyOpt::processMemCpyMemCpyDependence(MemCpyInst *M, MemCpyInst *MDep,
   // TODO: Is this worth it if we're creating a less aligned memcpy? For
   // example we could be moving from movaps -> movq on x86.
   unsigned Align = std::min(MDep->getAlignment(), M->getAlignment());
-  Value *Args[5] = {
-    M->getRawDest(),
-    MDep->getRawSource(), 
-    M->getLength(),
-    ConstantInt::get(Type::getInt32Ty(MemCpyFun->getContext()), Align), 
-    M->getVolatileCst()
-  };
-  CallInst::Create(MemCpyFun, Args, Args+5, "", M);
+  
+  IRBuilder<> Builder(M);
+  if (UseMemMove)
+    Builder.CreateMemMove(M->getRawDest(), MDep->getRawSource(), M->getLength(),
+                          Align, M->isVolatile());
+  else
+    Builder.CreateMemCpy(M->getRawDest(), MDep->getRawSource(), M->getLength(),
+                         Align, M->isVolatile());
 
   // Remove the instruction we're replacing.
   MD->removeInstruction(M);
@@ -765,8 +688,20 @@ bool MemCpyOpt::processMemCpy(MemCpyInst *M) {
     M->eraseFromParent();
     return false;
   }
-  
-  
+
+  // If copying from a constant, try to turn the memcpy into a memset.
+  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(M->getSource()))
+    if (GV->isConstant() && GV->hasDefinitiveInitializer())
+      if (Value *ByteVal = isBytewiseValue(GV->getInitializer())) {
+        IRBuilder<> Builder(M);
+        Builder.CreateMemSet(M->getRawDest(), ByteVal, CopySize,
+                             M->getAlignment(), false);
+        MD->removeInstruction(M);
+        M->eraseFromParent();
+        ++NumCpyToSet;
+        return true;
+      }
+
   // The are two possible optimizations we can do for memcpy:
   //   a) memcpy-memcpy xform which exposes redundance for DSE.
   //   b) call-memcpy xform for return slot optimization.
@@ -793,9 +728,7 @@ bool MemCpyOpt::processMemMove(MemMoveInst *M) {
   AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
 
   // See if the pointers alias.
-  if (AA.alias(AA.getLocationForDest(M),
-               AA.getLocationForSource(M)) !=
-      AliasAnalysis::NoAlias)
+  if (!AA.isNoAlias(AA.getLocationForDest(M), AA.getLocationForSource(M)))
     return false;
   
   DEBUG(dbgs() << "MemCpyOpt: Optimizing memmove -> memcpy: " << *M << "\n");

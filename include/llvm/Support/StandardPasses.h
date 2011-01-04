@@ -129,6 +129,7 @@ namespace llvm {
     
     // Start of function pass.
     PM->add(createScalarReplAggregatesPass());  // Break up aggregate allocas
+    PM->add(createEarlyCSEPass());              // Catch trivial redundancies
     if (SimplifyLibCalls)
       PM->add(createSimplifyLibCallsPass());    // Library Call Optimizations
     PM->add(createInstructionCombiningPass());  // Cleanup for scalarrepl.
@@ -145,6 +146,7 @@ namespace llvm {
     PM->add(createLoopUnswitchPass(OptimizeSize || OptimizationLevel < 3));
     PM->add(createInstructionCombiningPass());  
     PM->add(createIndVarSimplifyPass());        // Canonicalize indvars
+    PM->add(createLoopIdiomPass());             // Recognize idioms like memset.
     PM->add(createLoopDeletionPass());          // Delete dead loops
     if (UnrollLoops)
       PM->add(createLoopUnrollPass());          // Unroll small loops
