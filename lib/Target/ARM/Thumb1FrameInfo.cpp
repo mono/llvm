@@ -18,6 +18,9 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/Target/TargetOptions.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -43,6 +46,54 @@ static void emitSPUpdate(MachineBasicBlock &MBB,
                             MRI, dl);
 }
 
+//
+// Functions to emit MachineMoves. These use the DWARF unwind terminology, i.e
+// CFA == VirtualFP
+//
+
+// emitDefCfaOffset - Emit a MachineMove to set the CFA offset
+static void
+emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+                 DebugLoc dl, const ARMBaseInstrInfo &TII,
+                 MachineModuleInfo &MMI,
+                 std::vector<MachineMove> &Moves, MCSymbol *FrameLabel,
+                 int CfaOffset) {
+  if (!FrameLabel) {
+    FrameLabel = MMI.getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+  }
+  MachineLocation SPDst(MachineLocation::VirtualFP);
+  MachineLocation SPSrc(MachineLocation::VirtualFP, -CfaOffset);
+  Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
+}
+
+// emitDefCfa - Emit a MachineMove to set the CFA register+offset
+static void
+emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+           DebugLoc dl, const ARMBaseInstrInfo &TII,
+           MachineModuleInfo &MMI,
+           std::vector<MachineMove> &Moves,
+           int CfaReg, int CfaOffset) {
+  MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+
+  MachineLocation SPDst(MachineLocation::VirtualFP);
+  MachineLocation SPSrc(CfaReg, CfaOffset);
+  Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
+}
+
+// emitCfaOffset - Emit a MachineMove to define where Reg is saved
+static void
+emitCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+              DebugLoc dl, const ARMBaseInstrInfo &TII,
+              MachineModuleInfo &MMI,
+              std::vector<MachineMove> &Moves, MCSymbol *FrameLabel,
+              int Reg, int Offset) {
+  MachineLocation CSDst(MachineLocation::VirtualFP, Offset);
+  MachineLocation CSSrc(Reg);
+  Moves.push_back(MachineMove(FrameLabel, CSDst, CSSrc));
+}
+
 void Thumb1FrameInfo::emitPrologue(MachineFunction &MF) const {
   MachineBasicBlock &MBB = MF.front();
   MachineBasicBlock::iterator MBBI = MBB.begin();
@@ -59,6 +110,13 @@ void Thumb1FrameInfo::emitPrologue(MachineFunction &MF) const {
   DebugLoc dl = MBBI != MBB.end() ? MBBI->getDebugLoc() : DebugLoc();
   unsigned FramePtr = RegInfo->getFrameRegister(MF);
   unsigned BasePtr = RegInfo->getBaseRegister();
+  MachineModuleInfo &MMI = MF.getMMI();
+  bool NeedsFrameMoves = UnwindTablesMandatory;
+  // The cfa register
+  int CfaReg = ARM::SP;
+  // The offset between the value of CfaReg and the CFA
+  int CfaOffset = 0;
+  std::vector<MachineMove> &Moves = MMI.getFrameMoves();
 
   // Thumb add/sub sp, imm8 instructions implicitly multiply the offset by 4.
   NumBytes = (NumBytes + 3) & ~3;
@@ -71,10 +129,14 @@ void Thumb1FrameInfo::emitPrologue(MachineFunction &MF) const {
 
   if (VARegSaveSize)
     emitSPUpdate(MBB, MBBI, TII, dl, *RegInfo, -VARegSaveSize);
+  CfaOffset += VARegSaveSize;
 
   if (!AFI->hasStackFrame()) {
     if (NumBytes != 0)
       emitSPUpdate(MBB, MBBI, TII, dl, *RegInfo, -NumBytes);
+    CfaOffset += NumBytes;
+    if (NeedsFrameMoves && CfaOffset)
+      emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, NULL, CfaOffset);
     return;
   }
 
@@ -118,11 +180,34 @@ void Thumb1FrameInfo::emitPrologue(MachineFunction &MF) const {
       dl = MBBI->getDebugLoc();
   }
 
+  CfaOffset += GPRCS1Size;
+  if (NeedsFrameMoves) {
+    MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+    // CFA = sp + offset
+    emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, FrameLabel, CfaOffset);
+
+    // Emit moves for the registers in spill area 1
+    for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+      unsigned Reg = CSI[i].getReg();
+      int FI = CSI[i].getFrameIdx();
+      int64_t Offset = MFI->getObjectOffset(FI);
+
+      // The offset is relative to the incoming stack pointer which is 
+      // the cfa
+      if (AFI->isGPRCalleeSavedArea1Frame(FI)) {
+        // Reg is saved at cfa + offset
+        emitCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, FrameLabel, Reg, Offset);
+      }
+    }
+  }
+
   // Determine starting offsets of spill areas.
   unsigned DPRCSOffset  = NumBytes - (GPRCS1Size + GPRCS2Size + DPRCSSize);
   unsigned GPRCS2Offset = DPRCSOffset + DPRCSSize;
   unsigned GPRCS1Offset = GPRCS2Offset + GPRCS2Size;
-  AFI->setFramePtrSpillOffset(MFI->getObjectOffset(FramePtrSpillFI) + NumBytes);
+  if (hasFP(MF))
+    AFI->setFramePtrSpillOffset(MFI->getObjectOffset(FramePtrSpillFI) + NumBytes);
   AFI->setGPRCalleeSavedArea1Offset(GPRCS1Offset);
   AFI->setGPRCalleeSavedArea2Offset(GPRCS2Offset);
   AFI->setDPRCalleeSavedAreaOffset(DPRCSOffset);
@@ -136,11 +221,24 @@ void Thumb1FrameInfo::emitPrologue(MachineFunction &MF) const {
       // If offset is > 7 then sp cannot be adjusted in a single instruction,
       // try restoring from fp instead.
       AFI->setShouldRestoreSPFromFP(true);
+
+    if (NeedsFrameMoves) {
+      // CFA = FramePtr + offset from cfa where fp was stored
+      CfaReg = FramePtr;
+      CfaOffset = MFI->getObjectOffset (FramePtrSpillFI);
+      emitDefCfa(MBB, MBBI, dl, TII, MMI, Moves, CfaReg, CfaOffset);
+    }
   }
 
-  if (NumBytes)
+  if (NumBytes) {
     // Insert it after all the callee-save spills.
     emitSPUpdate(MBB, MBBI, TII, dl, *RegInfo, -NumBytes);
+
+    if (NeedsFrameMoves && CfaReg == ARM::SP) {
+      CfaOffset += NumBytes;
+      emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, NULL, CfaOffset);
+    }
+  }
 
   if (STI.isTargetELF() && hasFP(MF))
     MFI->setOffsetAdjustment(MFI->getOffsetAdjustment() -
