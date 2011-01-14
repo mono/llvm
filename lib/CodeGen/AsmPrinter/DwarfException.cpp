@@ -628,7 +628,7 @@ void DwarfException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
 
     if (ThisSlot != -1) {
       unsigned FrameReg;
-      MonoEH->ThisOffset = Asm->MF->getTarget ().getFrameInfo ()->getFrameIndexReference (*Asm->MF, ThisSlot, FrameReg);
+      MonoEH->ThisOffset = Asm->MF->getTarget ().getFrameLowering ()->getFrameIndexReference (*Asm->MF, ThisSlot, FrameReg);
       MonoEH->FrameReg = Asm->MF->getTarget ().getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
     } else {
       MonoEH->FrameReg = -1;
@@ -1315,8 +1315,8 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
 
   // Size and sign of stack growth.
   int stackGrowth = Asm->getTargetData().getPointerSize();
-  if (Asm->TM.getFrameInfo()->getStackGrowthDirection() ==
-      TargetFrameInfo::StackGrowsDown)
+  if (Asm->TM.getFrameLowering()->getStackGrowthDirection() ==
+      TargetFrameLowering::StackGrowsDown)
     stackGrowth *= -1;
 
   //
@@ -1401,7 +1401,7 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   Asm->EmitSLEB128(stackGrowth, "CIE Data Alignment Factor");
   Asm->OutStreamer.AddComment("CIE Return Address Column");
   const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
-  const TargetFrameInfo *TFI = Asm->TM.getFrameInfo();
+  const TargetFrameLowering *TFI = Asm->TM.getFrameLowering();
   Asm->EmitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
 
   if (Personality) {

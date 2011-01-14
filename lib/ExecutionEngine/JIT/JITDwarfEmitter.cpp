@@ -407,7 +407,7 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
 
     // Emit 'this' location
     unsigned FrameReg;
-    int Offset = MF->getTarget ().getFrameInfo ()->getFrameIndexReference (*MF, ThisSlot, FrameReg);
+    int Offset = MF->getTarget ().getFrameLowering ()->getFrameIndexReference (*MF, ThisSlot, FrameReg);
     FrameReg = MF->getTarget ().getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
 
     JCE->emitByte((int)dwarf::DW_OP_bregx);
