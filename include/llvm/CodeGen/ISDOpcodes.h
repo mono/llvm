@@ -270,8 +270,8 @@ namespace ISD {
     CONCAT_VECTORS,
 
     /// EXTRACT_SUBVECTOR(VECTOR, IDX) - Returns a subvector from VECTOR (an
-    /// vector value) starting with the (potentially variable) element number
-    /// IDX, which must be a multiple of the result vector length.
+    /// vector value) starting with the element number IDX, which must be a
+    /// constant multiple of the result vector length.
     EXTRACT_SUBVECTOR,
 
     /// VECTOR_SHUFFLE(VEC1, VEC2) - Returns a vector, of the same type as
@@ -482,6 +482,7 @@ namespace ISD {
     //   Operand #0   : Input chain.
     //   Operand #1   : a ExternalSymbolSDNode with a pointer to the asm string.
     //   Operand #2   : a MDNodeSDNode with the !srcloc metadata.
+    //   Operand #3   : HasSideEffect, IsAlignStack bits.
     //   After this, it is followed by a list of operands with this format:
     //     ConstantSDNode: Flags that encode whether it is a mem or not, the
     //                     of operands that follow, etc.  See InlineAsm.h.

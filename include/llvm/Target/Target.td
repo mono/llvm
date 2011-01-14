@@ -418,6 +418,7 @@ def INLINEASM : Instruction {
   let OutOperandList = (outs);
   let InOperandList = (ins variable_ops);
   let AsmString = "";
+  let neverHasSideEffects = 1;  // Note side effect is encoded in an operand.
 }
 def PROLOG_LABEL : Instruction {
   let OutOperandList = (outs);
@@ -484,7 +485,7 @@ def DBG_VALUE : Instruction {
   let OutOperandList = (outs);
   let InOperandList = (ins variable_ops);
   let AsmString = "DBG_VALUE";
-  let isAsCheapAsAMove = 1;
+  let neverHasSideEffects = 1;
 }
 def REG_SEQUENCE : Instruction {
   let OutOperandList = (outs unknown:$dst);

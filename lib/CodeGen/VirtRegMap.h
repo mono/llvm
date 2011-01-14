@@ -80,7 +80,7 @@ namespace llvm {
 
     /// Virt2SplitKillMap - This is splitted virtual register to its last use
     /// (kill) index mapping.
-    IndexedMap<SlotIndex> Virt2SplitKillMap;
+    IndexedMap<SlotIndex, VirtReg2IndexFunctor> Virt2SplitKillMap;
 
     /// ReMatMap - This is virtual register to re-materialized instruction
     /// mapping. Each virtual register whose definition is going to be
@@ -432,12 +432,12 @@ namespace llvm {
 
     /// @brief Mark the specified register as being implicitly defined.
     void setIsImplicitlyDefined(unsigned VirtReg) {
-      ImplicitDefed.set(VirtReg-TargetRegisterInfo::FirstVirtualRegister);
+      ImplicitDefed.set(TargetRegisterInfo::virtReg2Index(VirtReg));
     }
 
     /// @brief Returns true if the virtual register is implicitly defined.
     bool isImplicitlyDefined(unsigned VirtReg) const {
-      return ImplicitDefed[VirtReg-TargetRegisterInfo::FirstVirtualRegister];
+      return ImplicitDefed[TargetRegisterInfo::virtReg2Index(VirtReg)];
     }
 
     /// @brief Updates information about the specified virtual register's value

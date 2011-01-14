@@ -74,8 +74,7 @@ bool VirtRegMap::runOnMachineFunction(MachineFunction &mf) {
   EmergencySpillSlots.clear();
   
   SpillSlotToUsesMap.resize(8);
-  ImplicitDefed.resize(MF->getRegInfo().getLastVirtReg()+1-
-                       TargetRegisterInfo::FirstVirtualRegister);
+  ImplicitDefed.resize(MF->getRegInfo().getNumVirtRegs());
 
   allocatableRCRegs.clear();
   for (TargetRegisterInfo::regclass_iterator I = TRI->regclass_begin(),
@@ -89,14 +88,14 @@ bool VirtRegMap::runOnMachineFunction(MachineFunction &mf) {
 }
 
 void VirtRegMap::grow() {
-  unsigned LastVirtReg = MF->getRegInfo().getLastVirtReg();
-  Virt2PhysMap.grow(LastVirtReg);
-  Virt2StackSlotMap.grow(LastVirtReg);
-  Virt2ReMatIdMap.grow(LastVirtReg);
-  Virt2SplitMap.grow(LastVirtReg);
-  Virt2SplitKillMap.grow(LastVirtReg);
-  ReMatMap.grow(LastVirtReg);
-  ImplicitDefed.resize(LastVirtReg-TargetRegisterInfo::FirstVirtualRegister+1);
+  unsigned NumRegs = MF->getRegInfo().getNumVirtRegs();
+  Virt2PhysMap.resize(NumRegs);
+  Virt2StackSlotMap.resize(NumRegs);
+  Virt2ReMatIdMap.resize(NumRegs);
+  Virt2SplitMap.resize(NumRegs);
+  Virt2SplitKillMap.resize(NumRegs);
+  ReMatMap.resize(NumRegs);
+  ImplicitDefed.resize(NumRegs);
 }
 
 unsigned VirtRegMap::createSpillSlot(const TargetRegisterClass *RC) {
@@ -116,11 +115,10 @@ unsigned VirtRegMap::createSpillSlot(const TargetRegisterClass *RC) {
 unsigned VirtRegMap::getRegAllocPref(unsigned virtReg) {
   std::pair<unsigned, unsigned> Hint = MRI->getRegAllocationHint(virtReg);
   unsigned physReg = Hint.second;
-  if (physReg &&
-      TargetRegisterInfo::isVirtualRegister(physReg) && hasPhys(physReg))
+  if (TargetRegisterInfo::isVirtualRegister(physReg) && hasPhys(physReg))
     physReg = getPhys(physReg);
   if (Hint.first == 0)
-    return (physReg && TargetRegisterInfo::isPhysicalRegister(physReg))
+    return (TargetRegisterInfo::isPhysicalRegister(physReg))
       ? physReg : 0;
   return TRI->ResolveRegAllocHint(Hint.first, physReg, *MF);
 }
@@ -229,10 +227,11 @@ bool VirtRegMap::FindUnusedRegisters(LiveIntervals* LIs) {
   UnusedRegs.resize(NumRegs);
 
   BitVector Used(NumRegs);
-  for (unsigned i = TargetRegisterInfo::FirstVirtualRegister,
-         e = MF->getRegInfo().getLastVirtReg(); i <= e; ++i)
-    if (Virt2PhysMap[i] != (unsigned)VirtRegMap::NO_PHYS_REG)
-      Used.set(Virt2PhysMap[i]);
+  for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+    if (Virt2PhysMap[Reg] != (unsigned)VirtRegMap::NO_PHYS_REG)
+      Used.set(Virt2PhysMap[Reg]);
+  }
 
   BitVector Allocatable = TRI->getAllocatableSet(*MF);
   bool AnyUnused = false;
@@ -260,18 +259,22 @@ void VirtRegMap::print(raw_ostream &OS, const Module* M) const {
   const MachineRegisterInfo &MRI = MF->getRegInfo();
 
   OS << "********** REGISTER MAP **********\n";
-  for (unsigned i = TargetRegisterInfo::FirstVirtualRegister,
-         e = MF->getRegInfo().getLastVirtReg(); i <= e; ++i) {
-    if (Virt2PhysMap[i] != (unsigned)VirtRegMap::NO_PHYS_REG)
-      OS << "[reg" << i << " -> " << TRI->getName(Virt2PhysMap[i])
-         << "] " << MRI.getRegClass(i)->getName() << "\n";
+  for (unsigned i = 0, e = MRI.getNumVirtRegs(); i != e; ++i) {
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+    if (Virt2PhysMap[Reg] != (unsigned)VirtRegMap::NO_PHYS_REG) {
+      OS << '[' << PrintReg(Reg, TRI) << " -> "
+         << PrintReg(Virt2PhysMap[Reg], TRI) << "] "
+         << MRI.getRegClass(Reg)->getName() << "\n";
+    }
   }
 
-  for (unsigned i = TargetRegisterInfo::FirstVirtualRegister,
-         e = MF->getRegInfo().getLastVirtReg(); i <= e; ++i)
-    if (Virt2StackSlotMap[i] != VirtRegMap::NO_STACK_SLOT)
-      OS << "[reg" << i << " -> fi#" << Virt2StackSlotMap[i]
-         << "] " << MRI.getRegClass(i)->getName() << "\n";
+  for (unsigned i = 0, e = MRI.getNumVirtRegs(); i != e; ++i) {
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+    if (Virt2StackSlotMap[Reg] != VirtRegMap::NO_STACK_SLOT) {
+      OS << '[' << PrintReg(Reg, TRI) << " -> fi#" << Virt2StackSlotMap[Reg]
+         << "] " << MRI.getRegClass(Reg)->getName() << "\n";
+    }
+  }
   OS << '\n';
 }
 

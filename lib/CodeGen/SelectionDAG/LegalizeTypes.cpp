@@ -714,6 +714,11 @@ void DAGTypeLegalizer::ReplaceValueWith(SDValue From, SDValue To) {
           if (M->getNodeId() == Processed)
             RemapValue(NewVal);
           DAG.ReplaceAllUsesOfValueWith(OldVal, NewVal, &NUL);
+          // OldVal may be a target of the ReplacedValues map which was marked
+          // NewNode to force reanalysis because it was updated.  Ensure that
+          // anything that ReplacedValues mapped to OldVal will now be mapped
+          // all the way to NewVal.
+          ReplacedValues[OldVal] = NewVal;
         }
         // The original node continues to exist in the DAG, marked NewNode.
       }
@@ -1048,6 +1053,39 @@ SDValue DAGTypeLegalizer::MakeLibCall(RTLIB::Libcall LC, EVT RetVT,
                     /*isReturnValueUsed=*/true,
                     Callee, Args, DAG, dl);
   return CallInfo.first;
+}
+
+// ExpandChainLibCall - Expand a node into a call to a libcall. Similar to
+// ExpandLibCall except that the first operand is the in-chain.
+std::pair<SDValue, SDValue>
+DAGTypeLegalizer::ExpandChainLibCall(RTLIB::Libcall LC,
+                                         SDNode *Node,
+                                         bool isSigned) {
+  SDValue InChain = Node->getOperand(0);
+
+  TargetLowering::ArgListTy Args;
+  TargetLowering::ArgListEntry Entry;
+  for (unsigned i = 1, e = Node->getNumOperands(); i != e; ++i) {
+    EVT ArgVT = Node->getOperand(i).getValueType();
+    const Type *ArgTy = ArgVT.getTypeForEVT(*DAG.getContext());
+    Entry.Node = Node->getOperand(i);
+    Entry.Ty = ArgTy;
+    Entry.isSExt = isSigned;
+    Entry.isZExt = !isSigned;
+    Args.push_back(Entry);
+  }
+  SDValue Callee = DAG.getExternalSymbol(TLI.getLibcallName(LC),
+                                         TLI.getPointerTy());
+
+  // Splice the libcall in wherever FindInputOutputChains tells us to.
+  const Type *RetTy = Node->getValueType(0).getTypeForEVT(*DAG.getContext());
+  std::pair<SDValue, SDValue> CallInfo =
+    TLI.LowerCallTo(InChain, RetTy, isSigned, !isSigned, false, false,
+                    0, TLI.getLibcallCallingConv(LC), /*isTailCall=*/false,
+                    /*isReturnValueUsed=*/true,
+                    Callee, Args, DAG, Node->getDebugLoc());
+
+  return CallInfo;
 }
 
 /// PromoteTargetBoolean - Promote the given target boolean to a target boolean

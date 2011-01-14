@@ -74,6 +74,8 @@ namespace {
     RegVector regsDefined, regsDead, regsKilled;
     RegSet regsLiveInButUnused;
 
+    SlotIndex lastIndex;
+
     // Add Reg and any sub-registers to RV
     void addRegWithSubRegs(RegVector &RV, unsigned Reg) {
       RV.push_back(Reg);
@@ -273,6 +275,11 @@ bool MachineVerifier::runOnMachineFunction(MachineFunction &MF) {
     visitMachineBasicBlockBefore(MFI);
     for (MachineBasicBlock::const_iterator MBBI = MFI->begin(),
            MBBE = MFI->end(); MBBI != MBBE; ++MBBI) {
+      if (MBBI->getParent() != MFI) {
+        report("Bad instruction parent pointer", MFI);
+        *OS << "Instruction: " << *MBBI;
+        continue;
+      }
       visitMachineInstrBefore(MBBI);
       for (unsigned I = 0, E = MBBI->getNumOperands(); I != E; ++I)
         visitMachineOperand(&MBBI->getOperand(I), I);
@@ -351,6 +358,7 @@ void MachineVerifier::markReachable(const MachineBasicBlock *MBB) {
 }
 
 void MachineVerifier::visitMachineFunctionBefore() {
+  lastIndex = SlotIndex();
   regsReserved = TRI->getReservedRegs(*MF);
 
   // A sub-register of a reserved register is also reserved
@@ -519,6 +527,9 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
 
   regsKilled.clear();
   regsDefined.clear();
+
+  if (Indexes)
+    lastIndex = Indexes->getMBBStartIdx(MBB);
 }
 
 void MachineVerifier::visitMachineInstrBefore(const MachineInstr *MI) {
@@ -788,12 +799,31 @@ void MachineVerifier::visitMachineInstrAfter(const MachineInstr *MI) {
   set_subtract(regsLive, regsKilled); regsKilled.clear();
   set_subtract(regsLive, regsDead);   regsDead.clear();
   set_union(regsLive, regsDefined);   regsDefined.clear();
+
+  if (Indexes && Indexes->hasIndex(MI)) {
+    SlotIndex idx = Indexes->getInstructionIndex(MI);
+    if (!(idx > lastIndex)) {
+      report("Instruction index out of order", MI);
+      *OS << "Last instruction was at " << lastIndex << '\n';
+    }
+    lastIndex = idx;
+  }
 }
 
 void
 MachineVerifier::visitMachineBasicBlockAfter(const MachineBasicBlock *MBB) {
   MBBInfoMap[MBB].regsLiveOut = regsLive;
   regsLive.clear();
+
+  if (Indexes) {
+    SlotIndex stop = Indexes->getMBBEndIdx(MBB);
+    if (!(stop > lastIndex)) {
+      report("Block ends before last instruction index", MBB);
+      *OS << "Block ends at " << stop
+          << " last instruction was at " << lastIndex << '\n';
+    }
+    lastIndex = stop;
+  }
 }
 
 // Calculate the largest possible vregsPassed sets. These are the registers that
@@ -925,8 +955,8 @@ void MachineVerifier::visitMachineFunctionAfter() {
 
 void MachineVerifier::verifyLiveVariables() {
   assert(LiveVars && "Don't call verifyLiveVariables without LiveVars");
-  for (unsigned Reg = TargetRegisterInfo::FirstVirtualRegister,
-         RegE = MRI->getLastVirtReg()-1; Reg != RegE; ++Reg) {
+  for (unsigned i = 0, e = MRI->getNumVirtRegs(); i != e; ++i) {
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
     LiveVariables::VarInfo &VI = LiveVars->getVarInfo(Reg);
     for (MachineFunction::const_iterator MFI = MF->begin(), MFE = MF->end();
          MFI != MFE; ++MFI) {
@@ -936,13 +966,13 @@ void MachineVerifier::verifyLiveVariables() {
       if (MInfo.vregsRequired.count(Reg)) {
         if (!VI.AliveBlocks.test(MFI->getNumber())) {
           report("LiveVariables: Block missing from AliveBlocks", MFI);
-          *OS << "Virtual register %reg" << Reg
+          *OS << "Virtual register " << PrintReg(Reg)
               << " must be live through the block.\n";
         }
       } else {
         if (VI.AliveBlocks.test(MFI->getNumber())) {
           report("LiveVariables: Block should not be in AliveBlocks", MFI);
-          *OS << "Virtual register %reg" << Reg
+          *OS << "Virtual register " << PrintReg(Reg)
               << " is not needed live through the block.\n";
         }
       }

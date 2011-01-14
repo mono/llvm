@@ -262,7 +262,7 @@ private:
 };
 
 template <>
-struct OperandTraits<StoreInst> : public FixedNumOperandTraits<2> {
+struct OperandTraits<StoreInst> : public FixedNumOperandTraits<StoreInst, 2> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(StoreInst, Value)
@@ -458,6 +458,9 @@ public:
                                     Value* const *Idx, unsigned NumIdx);
 
   static const Type *getIndexedType(const Type *Ptr,
+                                    Constant* const *Idx, unsigned NumIdx);
+
+  static const Type *getIndexedType(const Type *Ptr,
                                     uint64_t const *Idx, unsigned NumIdx);
 
   static const Type *getIndexedType(const Type *Ptr, Value *Idx);
@@ -524,7 +527,8 @@ public:
 };
 
 template <>
-struct OperandTraits<GetElementPtrInst> : public VariadicOperandTraits<1> {
+struct OperandTraits<GetElementPtrInst> :
+  public VariadicOperandTraits<GetElementPtrInst, 1> {
 };
 
 template<typename RandomAccessIterator>
@@ -1087,7 +1091,7 @@ private:
 };
 
 template <>
-struct OperandTraits<CallInst> : public VariadicOperandTraits<1> {
+struct OperandTraits<CallInst> : public VariadicOperandTraits<CallInst, 1> {
 };
 
 template<typename RandomAccessIterator>
@@ -1195,7 +1199,7 @@ public:
 };
 
 template <>
-struct OperandTraits<SelectInst> : public FixedNumOperandTraits<3> {
+struct OperandTraits<SelectInst> : public FixedNumOperandTraits<SelectInst, 3> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(SelectInst, Value)
@@ -1292,7 +1296,8 @@ public:
 };
 
 template <>
-struct OperandTraits<ExtractElementInst> : public FixedNumOperandTraits<2> {
+struct OperandTraits<ExtractElementInst> :
+  public FixedNumOperandTraits<ExtractElementInst, 2> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ExtractElementInst, Value)
@@ -1350,7 +1355,8 @@ public:
 };
 
 template <>
-struct OperandTraits<InsertElementInst> : public FixedNumOperandTraits<3> {
+struct OperandTraits<InsertElementInst> :
+  public FixedNumOperandTraits<InsertElementInst, 3> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(InsertElementInst, Value)
@@ -1407,7 +1413,8 @@ public:
 };
 
 template <>
-struct OperandTraits<ShuffleVectorInst> : public FixedNumOperandTraits<3> {
+struct OperandTraits<ShuffleVectorInst> :
+  public FixedNumOperandTraits<ShuffleVectorInst, 3> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ShuffleVectorInst, Value)
@@ -1751,7 +1758,8 @@ public:
 };
 
 template <>
-struct OperandTraits<InsertValueInst> : public FixedNumOperandTraits<2> {
+struct OperandTraits<InsertValueInst> :
+  public FixedNumOperandTraits<InsertValueInst, 2> {
 };
 
 template<typename RandomAccessIterator>
@@ -2032,7 +2040,7 @@ public:
 };
 
 template <>
-struct OperandTraits<ReturnInst> : public VariadicOperandTraits<> {
+struct OperandTraits<ReturnInst> : public VariadicOperandTraits<ReturnInst> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(ReturnInst, Value)
@@ -2068,21 +2076,19 @@ protected:
   virtual BranchInst *clone_impl() const;
 public:
   static BranchInst *Create(BasicBlock *IfTrue, Instruction *InsertBefore = 0) {
-    return new(1, true) BranchInst(IfTrue, InsertBefore);
+    return new(1) BranchInst(IfTrue, InsertBefore);
   }
   static BranchInst *Create(BasicBlock *IfTrue, BasicBlock *IfFalse,
                             Value *Cond, Instruction *InsertBefore = 0) {
     return new(3) BranchInst(IfTrue, IfFalse, Cond, InsertBefore);
   }
   static BranchInst *Create(BasicBlock *IfTrue, BasicBlock *InsertAtEnd) {
-    return new(1, true) BranchInst(IfTrue, InsertAtEnd);
+    return new(1) BranchInst(IfTrue, InsertAtEnd);
   }
   static BranchInst *Create(BasicBlock *IfTrue, BasicBlock *IfFalse,
                             Value *Cond, BasicBlock *InsertAtEnd) {
     return new(3) BranchInst(IfTrue, IfFalse, Cond, InsertAtEnd);
   }
-
-  ~BranchInst();
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
@@ -2098,19 +2104,6 @@ public:
   void setCondition(Value *V) {
     assert(isConditional() && "Cannot set condition of unconditional branch!");
     Op<-3>() = V;
-  }
-
-  // setUnconditionalDest - Change the current branch to an unconditional branch
-  // targeting the specified block.
-  // FIXME: Eliminate this ugly method.
-  void setUnconditionalDest(BasicBlock *Dest) {
-    Op<-1>() = (Value*)Dest;
-    if (isConditional()) {  // Convert this to an uncond branch.
-      Op<-2>() = 0;
-      Op<-3>() = 0;
-      NumOperands = 1;
-      OperandList = op_begin();
-    }
   }
 
   unsigned getNumSuccessors() const { return 1+isConditional(); }
@@ -2140,7 +2133,8 @@ private:
 };
 
 template <>
-struct OperandTraits<BranchInst> : public VariadicOperandTraits<1> {};
+struct OperandTraits<BranchInst> : public VariadicOperandTraits<BranchInst, 1> {
+};
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(BranchInst, Value)
 
@@ -2631,7 +2625,7 @@ private:
 };
 
 template <>
-struct OperandTraits<InvokeInst> : public VariadicOperandTraits<3> {
+struct OperandTraits<InvokeInst> : public VariadicOperandTraits<InvokeInst, 3> {
 };
 
 template<typename RandomAccessIterator>

@@ -428,31 +428,47 @@ void InstrEmitter::EmitSubregNode(SDNode *Node,
 
     // Figure out the register class to create for the destreg.
     unsigned VReg = getVR(Node->getOperand(0), VRBaseMap);
-    const TargetRegisterClass *TRC = MRI->getRegClass(VReg);
-    const TargetRegisterClass *SRC = TRC->getSubRegisterRegClass(SubIdx);
-    assert(SRC && "Invalid subregister index in EXTRACT_SUBREG");
+    MachineInstr *DefMI = MRI->getVRegDef(VReg);
+    unsigned SrcReg, DstReg, DefSubIdx;
+    if (DefMI &&
+        TII->isCoalescableExtInstr(*DefMI, SrcReg, DstReg, DefSubIdx) &&
+        SubIdx == DefSubIdx) {
+      // Optimize these:
+      // r1025 = s/zext r1024, 4
+      // r1026 = extract_subreg r1025, 4
+      // to a copy
+      // r1026 = copy r1024
+      const TargetRegisterClass *TRC = MRI->getRegClass(SrcReg);
+      VRBase = MRI->createVirtualRegister(TRC);
+      BuildMI(*MBB, InsertPos, Node->getDebugLoc(),
+              TII->get(TargetOpcode::COPY), VRBase).addReg(SrcReg);
+    } else {
+      const TargetRegisterClass *TRC = MRI->getRegClass(VReg);
+      const TargetRegisterClass *SRC = TRC->getSubRegisterRegClass(SubIdx);
+      assert(SRC && "Invalid subregister index in EXTRACT_SUBREG");
 
-    // Figure out the register class to create for the destreg.
-    // Note that if we're going to directly use an existing register,
-    // it must be precisely the required class, and not a subclass
-    // thereof.
-    if (VRBase == 0 || SRC != MRI->getRegClass(VRBase)) {
-      // Create the reg
-      assert(SRC && "Couldn't find source register class");
-      VRBase = MRI->createVirtualRegister(SRC);
+      // Figure out the register class to create for the destreg.
+      // Note that if we're going to directly use an existing register,
+      // it must be precisely the required class, and not a subclass
+      // thereof.
+      if (VRBase == 0 || SRC != MRI->getRegClass(VRBase)) {
+        // Create the reg
+        assert(SRC && "Couldn't find source register class");
+        VRBase = MRI->createVirtualRegister(SRC);
+      }
+
+      // Create the extract_subreg machine instruction.
+      MachineInstr *MI = BuildMI(*MF, Node->getDebugLoc(),
+                                 TII->get(TargetOpcode::COPY), VRBase);
+
+      // Add source, and subreg index
+      AddOperand(MI, Node->getOperand(0), 0, 0, VRBaseMap, /*IsDebug=*/false,
+                 IsClone, IsCloned);
+      assert(TargetRegisterInfo::isVirtualRegister(MI->getOperand(1).getReg())&&
+             "Cannot yet extract from physregs");
+      MI->getOperand(1).setSubReg(SubIdx);
+      MBB->insert(InsertPos, MI);
     }
-
-    // Create the extract_subreg machine instruction.
-    MachineInstr *MI = BuildMI(*MF, Node->getDebugLoc(),
-                               TII->get(TargetOpcode::COPY), VRBase);
-
-    // Add source, and subreg index
-    AddOperand(MI, Node->getOperand(0), 0, 0, VRBaseMap, /*IsDebug=*/false,
-               IsClone, IsCloned);
-    assert(TargetRegisterInfo::isVirtualRegister(MI->getOperand(1).getReg()) &&
-           "Cannot yet extract from physregs");
-    MI->getOperand(1).setSubReg(SubIdx);
-    MBB->insert(InsertPos, MI);
   } else if (Opc == TargetOpcode::INSERT_SUBREG ||
              Opc == TargetOpcode::SUBREG_TO_REG) {
     SDValue N0 = Node->getOperand(0);
@@ -687,7 +703,7 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
         for (unsigned i = 0, e = F->getNumOperands(); i != e; ++i)
           if (RegisterSDNode *R = dyn_cast<RegisterSDNode>(F->getOperand(i))) {
             unsigned Reg = R->getReg();
-            if (Reg != 0 && TargetRegisterInfo::isPhysicalRegister(Reg))
+            if (TargetRegisterInfo::isPhysicalRegister(Reg))
               UsedRegs.push_back(Reg);
           }
       }
@@ -805,11 +821,11 @@ EmitSpecialNode(SDNode *Node, bool IsClone, bool IsCloned,
     const char *AsmStr = cast<ExternalSymbolSDNode>(AsmStrV)->getSymbol();
     MI->addOperand(MachineOperand::CreateES(AsmStr));
       
-    // Add the isAlignStack bit.
-    int64_t isAlignStack =
-      cast<ConstantSDNode>(Node->getOperand(InlineAsm::Op_IsAlignStack))->
+    // Add the HasSideEffect and isAlignStack bits.
+    int64_t ExtraInfo =
+      cast<ConstantSDNode>(Node->getOperand(InlineAsm::Op_ExtraInfo))->
                           getZExtValue();
-    MI->addOperand(MachineOperand::CreateImm(isAlignStack));
+    MI->addOperand(MachineOperand::CreateImm(ExtraInfo));
 
     // Add all of the operand registers to the instruction.
     for (unsigned i = InlineAsm::Op_FirstOperand; i != NumOps;) {

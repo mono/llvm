@@ -10,8 +10,11 @@
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h"
+#include "llvm/GlobalAlias.h"
+#include "llvm/GlobalVariable.h"
 #include "llvm/Instructions.h"
 #include "llvm/LLVMContext.h"
+#include "llvm/Module.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/Analysis/Verifier.h"
 #include "gtest/gtest.h"
@@ -41,5 +44,48 @@ TEST(VerifierTest, Branch_i1) {
   EXPECT_TRUE(verifyFunction(*F, ReturnStatusAction));
 }
 
+TEST(VerifierTest, AliasUnnamedAddr) {
+  LLVMContext &C = getGlobalContext();
+  Module M("M", C);
+  const Type *Ty = Type::getInt8Ty(C);
+  Constant *Init = Constant::getNullValue(Ty);
+  GlobalVariable *Aliasee = new GlobalVariable(M, Ty, true,
+                                               GlobalValue::ExternalLinkage,
+                                               Init, "foo");
+  GlobalAlias *GA = new GlobalAlias(Type::getInt8PtrTy(C),
+                                    GlobalValue::ExternalLinkage,
+                                    "bar", Aliasee, &M);
+  GA->setUnnamedAddr(true);
+  std::string Error;
+  EXPECT_TRUE(verifyModule(M, ReturnStatusAction, &Error));
+  EXPECT_TRUE(StringRef(Error).startswith("Alias cannot have unnamed_addr"));
+}
+
+TEST(VerifierTest, ExternalUnnamedAddr) {
+  LLVMContext &C = getGlobalContext();
+  Module M("M", C);
+  const Type *Ty = Type::getInt8Ty(C);
+  GlobalVariable *GV = new GlobalVariable(M, Ty, true,
+                                          GlobalValue::ExternalLinkage,
+                                          NULL, "foo");
+  GV->setUnnamedAddr(true);
+  std::string Error;
+  EXPECT_TRUE(verifyModule(M, ReturnStatusAction, &Error));
+  EXPECT_TRUE(StringRef(Error)
+              .startswith("only definitions can have unnamed_addr"));
+}
+
+TEST(VerifierTest, DeclarationUnnamedAddr) {
+  LLVMContext &C = getGlobalContext();
+  Module M("M", C);
+  FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg=*/false);
+  Function *F = Function::Create(FTy, GlobalValue::ExternalLinkage,
+                                 "foo", &M);
+  F->setUnnamedAddr(true);
+  std::string Error;
+  EXPECT_TRUE(verifyModule(M, ReturnStatusAction, &Error));
+  EXPECT_TRUE(StringRef(Error)
+              .startswith("only definitions can have unnamed_addr"));
+}
 }
 }

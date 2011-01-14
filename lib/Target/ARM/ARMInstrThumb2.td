@@ -553,7 +553,7 @@ multiclass T2I_rbin_irs<bits<4> opcod, string opc, PatFrag opnode> {
 
 /// T2I_bin_s_irs - Similar to T2I_bin_irs except it sets the 's' bit so the
 /// instruction modifies the CPSR register.
-let Defs = [CPSR] in {
+let isCodeGenOnly = 1, Defs = [CPSR] in {
 multiclass T2I_bin_s_irs<bits<4> opcod, string opc,
                      InstrItinClass iii, InstrItinClass iir, InstrItinClass iis,
                          PatFrag opnode, bit Commutable = 0> {
@@ -700,7 +700,7 @@ multiclass T2I_adde_sube_irs<bits<4> opcod, string opc, PatFrag opnode,
 }
 
 // Carry setting variants
-let Defs = [CPSR] in {
+let isCodeGenOnly = 1, Defs = [CPSR] in {
 multiclass T2I_adde_sube_s_irs<bits<4> opcod, string opc, PatFrag opnode,
                                bit Commutable = 0> {
    // shifted imm
@@ -746,7 +746,7 @@ multiclass T2I_adde_sube_s_irs<bits<4> opcod, string opc, PatFrag opnode,
 
 /// T2I_rbin_s_is - Same as T2I_rbin_irs except sets 's' bit and the register
 /// version is not needed since this is only for codegen.
-let Defs = [CPSR] in {
+let isCodeGenOnly = 1, Defs = [CPSR] in {
 multiclass T2I_rbin_s_is<bits<4> opcod, string opc, PatFrag opnode> {
    // shifted imm
    def ri : T2TwoRegImm<
@@ -1677,7 +1677,7 @@ def t2MOVi : T2sOneRegImm<(outs rGPR:$Rd), (ins t2_so_imm:$imm), IIC_iMOVi,
 }
 
 let isReMaterializable = 1, isAsCheapAsAMove = 1, isMoveImm = 1 in
-def t2MOVi16 : T2I<(outs rGPR:$Rd), (ins i32imm:$imm), IIC_iMOVi,
+def t2MOVi16 : T2I<(outs rGPR:$Rd), (ins i32imm_hilo16:$imm), IIC_iMOVi,
                    "movw", "\t$Rd, $imm",
                    [(set rGPR:$Rd, imm0_65535:$imm)]> {
   let Inst{31-27} = 0b11110;
@@ -1697,7 +1697,8 @@ def t2MOVi16 : T2I<(outs rGPR:$Rd), (ins i32imm:$imm), IIC_iMOVi,
 }
 
 let Constraints = "$src = $Rd" in
-def t2MOVTi16 : T2I<(outs rGPR:$Rd), (ins rGPR:$src, i32imm:$imm), IIC_iMOVi,
+def t2MOVTi16 : T2I<(outs rGPR:$Rd),
+                    (ins rGPR:$src, i32imm_hilo16:$imm), IIC_iMOVi,
                     "movt", "\t$Rd, $imm",
                     [(set rGPR:$Rd,
                           (or (and rGPR:$src, 0xffff), lo16AllZero:$imm))]> {
@@ -2035,7 +2036,7 @@ def t2RRX : T2sTwoReg<(outs rGPR:$Rd), (ins rGPR:$Rm), IIC_iMOVsi,
 }
 }
 
-let Defs = [CPSR] in {
+let isCodeGenOnly = 1, Defs = [CPSR] in {
 def t2MOVsrl_flag : T2TwoRegShiftImm<
                         (outs rGPR:$Rd), (ins rGPR:$Rm), IIC_iMOVsi,
                         "lsrs", ".w\t$Rd, $Rm, #1",
@@ -2684,7 +2685,7 @@ def t2MOVCCi : T2OneRegImm<(outs rGPR:$Rd), (ins rGPR:$false, t2_so_imm:$imm),
 }
 
 let isMoveImm = 1 in
-def t2MOVCCi16 : T2I<(outs rGPR:$Rd), (ins rGPR:$false, i32imm:$imm),
+def t2MOVCCi16 : T2I<(outs rGPR:$Rd), (ins rGPR:$false, i32imm_hilo16:$imm),
                       IIC_iCMOVi,
                       "movw", "\t$Rd, $imm", []>,
                       RegConstraint<"$false = $Rd"> {

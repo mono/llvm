@@ -116,7 +116,7 @@ bool MachineCSE::PerformTrivialCoalescing(MachineInstr *MI,
     if (!MO.isReg() || !MO.isUse())
       continue;
     unsigned Reg = MO.getReg();
-    if (!Reg || TargetRegisterInfo::isPhysicalRegister(Reg))
+    if (!TargetRegisterInfo::isVirtualRegister(Reg))
       continue;
     if (!MRI->hasOneNonDBGUse(Reg))
       // Only coalesce single use copies. This ensure the copy will be
@@ -262,7 +262,7 @@ bool MachineCSE::isCSECandidate(MachineInstr *MI) {
   // Ignore stuff that we obviously can't move.
   const TargetInstrDesc &TID = MI->getDesc();  
   if (TID.mayStore() || TID.isCall() || TID.isTerminator() ||
-      TID.hasUnmodeledSideEffects())
+      MI->hasUnmodeledSideEffects())
     return false;
 
   if (TID.mayLoad()) {
@@ -284,14 +284,13 @@ bool MachineCSE::isProfitableToCSE(unsigned CSReg, unsigned Reg,
                                    MachineInstr *CSMI, MachineInstr *MI) {
   // FIXME: Heuristics that works around the lack the live range splitting.
 
-  // Heuristics #1: Don't cse "cheap" computating if the def is not local or in an
-  // immediate predecessor. We don't want to increase register pressure and end up
-  // causing other computation to be spilled.
+  // Heuristics #1: Don't CSE "cheap" computation if the def is not local or in
+  // an immediate predecessor. We don't want to increase register pressure and
+  // end up causing other computation to be spilled.
   if (MI->getDesc().isAsCheapAsAMove()) {
     MachineBasicBlock *CSBB = CSMI->getParent();
     MachineBasicBlock *BB = MI->getParent();
-    if (CSBB != BB && 
-        find(CSBB->succ_begin(), CSBB->succ_end(), BB) == CSBB->succ_end())
+    if (CSBB != BB && !CSBB->isSuccessor(BB))
       return false;
   }
 
@@ -300,7 +299,7 @@ bool MachineCSE::isProfitableToCSE(unsigned CSReg, unsigned Reg,
   bool HasVRegUse = false;
   for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = MI->getOperand(i);
-    if (MO.isReg() && MO.isUse() && MO.getReg() &&
+    if (MO.isReg() && MO.isUse() &&
         TargetRegisterInfo::isVirtualRegister(MO.getReg())) {
       HasVRegUse = true;
       break;

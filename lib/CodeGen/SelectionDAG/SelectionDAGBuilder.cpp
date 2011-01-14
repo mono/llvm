@@ -44,9 +44,8 @@
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/Analysis/DebugInfo.h"
-#include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetData.h"
-#include "llvm/Target/TargetFrameInfo.h"
+#include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetIntrinsicInfo.h"
 #include "llvm/Target/TargetLowering.h"
@@ -642,14 +641,12 @@ SDValue RegsForValue::getCopyFromRegs(SelectionDAG &DAG,
       // If the source register was virtual and if we know something about it,
       // add an assert node.
       if (!TargetRegisterInfo::isVirtualRegister(Regs[Part+i]) ||
-          !RegisterVT.isInteger() || RegisterVT.isVector())
+          !RegisterVT.isInteger() || RegisterVT.isVector() ||
+          !FuncInfo.LiveOutRegInfo.inBounds(Regs[Part+i]))
         continue;
       
-      unsigned SlotNo = Regs[Part+i]-TargetRegisterInfo::FirstVirtualRegister;
-      if (SlotNo >= FuncInfo.LiveOutRegInfo.size()) continue;
-      
       const FunctionLoweringInfo::LiveOutInfo &LOI =
-        FuncInfo.LiveOutRegInfo[SlotNo];
+        FuncInfo.LiveOutRegInfo[Regs[Part+i]];
 
       unsigned RegSize = RegisterVT.getSizeInBits();
       unsigned NumSignBits = LOI.NumSignBits;
@@ -1615,12 +1612,28 @@ void SelectionDAGBuilder::visitBitTestHeader(BitTestBlock &B,
                                   Sub, DAG.getConstant(B.Range, VT),
                                   ISD::SETUGT);
 
-  SDValue ShiftOp = DAG.getZExtOrTrunc(Sub, getCurDebugLoc(),
-                                       TLI.getPointerTy());
+  // Determine the type of the test operands.
+  bool UsePtrType = false;
+  if (!TLI.isTypeLegal(VT))
+    UsePtrType = true;
+  else {
+    for (unsigned i = 0, e = B.Cases.size(); i != e; ++i)
+      if ((uint64_t)((int64_t)B.Cases[i].Mask >> VT.getSizeInBits()) + 1 >= 2) {
+        // Switch table case range are encoded into series of masks.
+        // Just use pointer type, it's guaranteed to fit.
+        UsePtrType = true;
+        break;
+      }
+  }
+  if (UsePtrType) {
+    VT = TLI.getPointerTy();
+    Sub = DAG.getZExtOrTrunc(Sub, getCurDebugLoc(), VT);
+  }
 
-  B.Reg = FuncInfo.CreateReg(TLI.getPointerTy());
+  B.RegVT = VT;
+  B.Reg = FuncInfo.CreateReg(VT);
   SDValue CopyTo = DAG.getCopyToReg(getControlRoot(), getCurDebugLoc(),
-                                    B.Reg, ShiftOp);
+                                    B.Reg, Sub);
 
   // Set NextBlock to be the MBB immediately after the current one, if any.
   // This is used to avoid emitting unnecessary branches to the next block.
@@ -1646,36 +1659,34 @@ void SelectionDAGBuilder::visitBitTestHeader(BitTestBlock &B,
 }
 
 /// visitBitTestCase - this function produces one "bit test"
-void SelectionDAGBuilder::visitBitTestCase(MachineBasicBlock* NextMBB,
+void SelectionDAGBuilder::visitBitTestCase(BitTestBlock &BB,
+                                           MachineBasicBlock* NextMBB,
                                            unsigned Reg,
                                            BitTestCase &B,
                                            MachineBasicBlock *SwitchBB) {
-  SDValue ShiftOp = DAG.getCopyFromReg(getControlRoot(), getCurDebugLoc(), Reg,
-                                       TLI.getPointerTy());
+  EVT VT = BB.RegVT;
+  SDValue ShiftOp = DAG.getCopyFromReg(getControlRoot(), getCurDebugLoc(),
+                                       Reg, VT);
   SDValue Cmp;
   if (CountPopulation_64(B.Mask) == 1) {
     // Testing for a single bit; just compare the shift count with what it
     // would need to be to shift a 1 bit in that position.
     Cmp = DAG.getSetCC(getCurDebugLoc(),
-                       TLI.getSetCCResultType(ShiftOp.getValueType()),
+                       TLI.getSetCCResultType(VT),
                        ShiftOp,
-                       DAG.getConstant(CountTrailingZeros_64(B.Mask),
-                                       TLI.getPointerTy()),
+                       DAG.getConstant(CountTrailingZeros_64(B.Mask), VT),
                        ISD::SETEQ);
   } else {
     // Make desired shift
-    SDValue SwitchVal = DAG.getNode(ISD::SHL, getCurDebugLoc(),
-                                    TLI.getPointerTy(),
-                                    DAG.getConstant(1, TLI.getPointerTy()),
-                                    ShiftOp);
+    SDValue SwitchVal = DAG.getNode(ISD::SHL, getCurDebugLoc(), VT,
+                                    DAG.getConstant(1, VT), ShiftOp);
 
     // Emit bit tests and jumps
     SDValue AndOp = DAG.getNode(ISD::AND, getCurDebugLoc(),
-                                TLI.getPointerTy(), SwitchVal,
-                                DAG.getConstant(B.Mask, TLI.getPointerTy()));
+                                VT, SwitchVal, DAG.getConstant(B.Mask, VT));
     Cmp = DAG.getSetCC(getCurDebugLoc(),
-                       TLI.getSetCCResultType(AndOp.getValueType()),
-                       AndOp, DAG.getConstant(0, TLI.getPointerTy()),
+                       TLI.getSetCCResultType(VT),
+                       AndOp, DAG.getConstant(0, VT),
                        ISD::SETNE);
   }
 
@@ -2341,7 +2352,7 @@ bool SelectionDAGBuilder::handleBitTestsSwitchCase(CaseRec& CR,
   }
 
   BitTestBlock BTB(lowBound, cmpRange, SV,
-                   -1U, (CR.CaseBB == SwitchBB),
+                   -1U, MVT::Other, (CR.CaseBB == SwitchBB),
                    CR.CaseBB, Default, BTC);
 
   if (CR.CaseBB == SwitchBB)
@@ -2853,7 +2864,7 @@ void SelectionDAGBuilder::visitShuffleVector(const User &I) {
         } else {
           StartIdx[Input] = (MinRange[Input]/MaskNumElts)*MaskNumElts;
           if (MaxRange[Input] - StartIdx[Input] < (int)MaskNumElts &&
-              StartIdx[Input] + MaskNumElts < SrcNumElts)
+              StartIdx[Input] + MaskNumElts <= SrcNumElts)
             RangeUse[Input] = 1; // Extract from a multiple of the mask length.
         }
       }
@@ -3085,7 +3096,7 @@ void SelectionDAGBuilder::visitAlloca(const AllocaInst &I) {
   // Handle alignment.  If the requested alignment is less than or equal to
   // the stack alignment, ignore it.  If the size is greater than or equal to
   // the stack alignment, we note this in the DYNAMIC_STACKALLOC node.
-  unsigned StackAlign = TM.getFrameInfo()->getStackAlignment();
+  unsigned StackAlign = TM.getFrameLowering()->getStackAlignment();
   if (Align <= StackAlign)
     Align = 0;
 
@@ -4181,7 +4192,7 @@ SelectionDAGBuilder::EmitFuncArgumentDbgValue(const Value *V, MDNode *Variable,
 
   if (N.getNode() && N.getOpcode() == ISD::CopyFromReg) {
     Reg = cast<RegisterSDNode>(N.getOperand(1))->getReg();
-    if (Reg && TargetRegisterInfo::isVirtualRegister(Reg)) {
+    if (TargetRegisterInfo::isVirtualRegister(Reg)) {
       MachineRegisterInfo &RegInfo = MF.getRegInfo();
       unsigned PR = RegInfo.getLiveInPhysReg(Reg);
       if (PR)
@@ -5865,9 +5876,14 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
   const MDNode *SrcLoc = CS.getInstruction()->getMetadata("srcloc");
   AsmNodeOperands.push_back(DAG.getMDNode(SrcLoc));
 
-  // Remember the AlignStack bit as operand 3.
-  AsmNodeOperands.push_back(DAG.getTargetConstant(IA->isAlignStack() ? 1 : 0,
-                                            MVT::i1));
+  // Remember the HasSideEffect and AlignStack bits as operand 3.
+  unsigned ExtraInfo = 0;
+  if (IA->hasSideEffects())
+    ExtraInfo |= InlineAsm::Extra_HasSideEffects;
+  if (IA->isAlignStack())
+    ExtraInfo |= InlineAsm::Extra_IsAlignStack;
+  AsmNodeOperands.push_back(DAG.getTargetConstant(ExtraInfo,
+                                                  TLI.getPointerTy()));
 
   // Loop over all of the inputs, copying the operand values into the
   // appropriate registers and processing the output regs.

@@ -19,8 +19,9 @@
 #include "llvm/Constant.h"
 #include "llvm/Type.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/DominanceFrontier.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Scalar.h"
@@ -63,12 +64,27 @@ void llvm::DeleteDeadBlock(BasicBlock *BB) {
 /// any single-entry PHI nodes in it, fold them away.  This handles the case
 /// when all entries to the PHI nodes in a block are guaranteed equal, such as
 /// when the block has exactly one predecessor.
-void llvm::FoldSingleEntryPHINodes(BasicBlock *BB) {
+void llvm::FoldSingleEntryPHINodes(BasicBlock *BB, Pass *P) {
+  if (!isa<PHINode>(BB->begin())) return;
+  
+  AliasAnalysis *AA = 0;
+  MemoryDependenceAnalysis *MemDep = 0;
+  if (P) {
+    AA = P->getAnalysisIfAvailable<AliasAnalysis>();
+    MemDep = P->getAnalysisIfAvailable<MemoryDependenceAnalysis>();
+  }
+  
   while (PHINode *PN = dyn_cast<PHINode>(BB->begin())) {
     if (PN->getIncomingValue(0) != PN)
       PN->replaceAllUsesWith(PN->getIncomingValue(0));
     else
       PN->replaceAllUsesWith(UndefValue::get(PN->getType()));
+    
+    if (MemDep)
+      MemDep->removeInstruction(PN);  // Memdep updates AA itself.
+    else if (AA && isa<PointerType>(PN->getType()))
+      AA->deleteValue(PN);
+    
     PN->eraseFromParent();
   }
 }
@@ -110,7 +126,7 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, Pass *P) {
   if (isa<InvokeInst>(PredBB->getTerminator())) return false;
   
   succ_iterator SI(succ_begin(PredBB)), SE(succ_end(PredBB));
-  BasicBlock* OnlySucc = BB;
+  BasicBlock *OnlySucc = BB;
   for (; SI != SE; ++SI)
     if (*SI != OnlySucc) {
       OnlySucc = 0;     // There are multiple distinct successors!
@@ -131,10 +147,8 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, Pass *P) {
   }
 
   // Begin by getting rid of unneeded PHIs.
-  while (PHINode *PN = dyn_cast<PHINode>(&BB->front())) {
-    PN->replaceAllUsesWith(PN->getIncomingValue(0));
-    BB->getInstList().pop_front();  // Delete the phi node...
-  }
+  if (isa<PHINode>(BB->front()))
+    FoldSingleEntryPHINodes(BB, P);
   
   // Delete the unconditional branch from the predecessor...
   PredBB->getInstList().pop_back();
@@ -152,24 +166,27 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, Pass *P) {
   
   // Finally, erase the old block and update dominator info.
   if (P) {
-    if (DominatorTree* DT = P->getAnalysisIfAvailable<DominatorTree>()) {
-      DomTreeNode* DTN = DT->getNode(BB);
-      DomTreeNode* PredDTN = DT->getNode(PredBB);
-  
-      if (DTN) {
-        SmallPtrSet<DomTreeNode*, 8> Children(DTN->begin(), DTN->end());
-        for (SmallPtrSet<DomTreeNode*, 8>::iterator DI = Children.begin(),
+    if (DominatorTree *DT = P->getAnalysisIfAvailable<DominatorTree>()) {
+      if (DomTreeNode *DTN = DT->getNode(BB)) {
+        DomTreeNode *PredDTN = DT->getNode(PredBB);
+        SmallVector<DomTreeNode*, 8> Children(DTN->begin(), DTN->end());
+        for (SmallVector<DomTreeNode*, 8>::iterator DI = Children.begin(),
              DE = Children.end(); DI != DE; ++DI)
           DT->changeImmediateDominator(*DI, PredDTN);
 
         DT->eraseNode(BB);
       }
+      
+      if (LoopInfo *LI = P->getAnalysisIfAvailable<LoopInfo>())
+        LI->removeBlock(BB);
+      
+      if (MemoryDependenceAnalysis *MD =
+            P->getAnalysisIfAvailable<MemoryDependenceAnalysis>())
+        MD->invalidateCachedPredecessors();
     }
   }
   
   BB->eraseFromParent();
-  
-  
   return true;
 }
 
@@ -254,13 +271,13 @@ BasicBlock *llvm::SplitEdge(BasicBlock *BB, BasicBlock *Succ, Pass *P) {
     assert(SP == BB && "CFG broken");
     SP = NULL;
     return SplitBlock(Succ, Succ->begin(), P);
-  } else {
-    // Otherwise, if BB has a single successor, split it at the bottom of the
-    // block.
-    assert(BB->getTerminator()->getNumSuccessors() == 1 &&
-           "Should have a single succ!"); 
-    return SplitBlock(BB, BB->getTerminator(), P);
   }
+  
+  // Otherwise, if BB has a single successor, split it at the bottom of the
+  // block.
+  assert(BB->getTerminator()->getNumSuccessors() == 1 &&
+         "Should have a single succ!"); 
+  return SplitBlock(BB, BB->getTerminator(), P);
 }
 
 /// SplitBlock - Split the specified block at the specified instruction - every
@@ -276,7 +293,7 @@ BasicBlock *llvm::SplitBlock(BasicBlock *Old, Instruction *SplitPt, Pass *P) {
 
   // The new block lives in whichever loop the old one did. This preserves
   // LCSSA as well, because we force the split point to be after any PHI nodes.
-  if (LoopInfo* LI = P->getAnalysisIfAvailable<LoopInfo>())
+  if (LoopInfo *LI = P->getAnalysisIfAvailable<LoopInfo>())
     if (Loop *L = LI->getLoopFor(Old))
       L->addBasicBlockToLoop(New, LI->getBase());
 

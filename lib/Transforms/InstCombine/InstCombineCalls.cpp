@@ -250,82 +250,73 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     if (!TD) break;
     
     const Type *ReturnTy = CI.getType();
-    bool Min = (cast<ConstantInt>(II->getArgOperand(1))->getZExtValue() == 1);
+    uint64_t DontKnow = II->getArgOperand(1) == Builder->getTrue() ? 0 : -1ULL;
 
     // Get to the real allocated thing and offset as fast as possible.
     Value *Op1 = II->getArgOperand(0)->stripPointerCasts();
-    
+
+    uint64_t Offset = 0;
+    uint64_t Size = -1ULL;
+
+    // Try to look through constant GEPs.
+    if (GEPOperator *GEP = dyn_cast<GEPOperator>(Op1)) {
+      if (!GEP->hasAllConstantIndices()) break;
+
+      // Get the current byte offset into the thing. Use the original
+      // operand in case we're looking through a bitcast.
+      SmallVector<Value*, 8> Ops(GEP->idx_begin(), GEP->idx_end());
+      Offset = TD->getIndexedOffset(GEP->getPointerOperandType(),
+                                    Ops.data(), Ops.size());
+
+      Op1 = GEP->getPointerOperand()->stripPointerCasts();
+
+      // Make sure we're not a constant offset from an external
+      // global.
+      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(Op1))
+        if (!GV->hasDefinitiveInitializer()) break;
+    }
+
     // If we've stripped down to a single global variable that we
     // can know the size of then just return that.
     if (GlobalVariable *GV = dyn_cast<GlobalVariable>(Op1)) {
       if (GV->hasDefinitiveInitializer()) {
         Constant *C = GV->getInitializer();
-        uint64_t GlobalSize = TD->getTypeAllocSize(C->getType());
-        return ReplaceInstUsesWith(CI, ConstantInt::get(ReturnTy, GlobalSize));
+        Size = TD->getTypeAllocSize(C->getType());
       } else {
         // Can't determine size of the GV.
-        Constant *RetVal = ConstantInt::get(ReturnTy, Min ? 0 : -1ULL);
+        Constant *RetVal = ConstantInt::get(ReturnTy, DontKnow);
         return ReplaceInstUsesWith(CI, RetVal);
       }
     } else if (AllocaInst *AI = dyn_cast<AllocaInst>(Op1)) {
       // Get alloca size.
       if (AI->getAllocatedType()->isSized()) {
-        uint64_t AllocaSize = TD->getTypeAllocSize(AI->getAllocatedType());
+        Size = TD->getTypeAllocSize(AI->getAllocatedType());
         if (AI->isArrayAllocation()) {
           const ConstantInt *C = dyn_cast<ConstantInt>(AI->getArraySize());
           if (!C) break;
-          AllocaSize *= C->getZExtValue();
+          Size *= C->getZExtValue();
         }
-        return ReplaceInstUsesWith(CI, ConstantInt::get(ReturnTy, AllocaSize));
       }
     } else if (CallInst *MI = extractMallocCall(Op1)) {
+      // Get allocation size.
       const Type* MallocType = getMallocAllocatedType(MI);
-      // Get alloca size.
-      if (MallocType && MallocType->isSized()) {
-        if (Value *NElems = getMallocArraySize(MI, TD, true)) {
+      if (MallocType && MallocType->isSized())
+        if (Value *NElems = getMallocArraySize(MI, TD, true))
           if (ConstantInt *NElements = dyn_cast<ConstantInt>(NElems))
-        return ReplaceInstUsesWith(CI, ConstantInt::get(ReturnTy,
-               (NElements->getZExtValue() * TD->getTypeAllocSize(MallocType))));
-        }
-      }
-    } else if (ConstantExpr *CE = dyn_cast<ConstantExpr>(Op1)) {      
-      // Only handle constant GEPs here.
-      if (CE->getOpcode() != Instruction::GetElementPtr) break;
-      GEPOperator *GEP = cast<GEPOperator>(CE);
-      
-      // Make sure we're not a constant offset from an external
-      // global.
-      Value *Operand = GEP->getPointerOperand();
-      Operand = Operand->stripPointerCasts();
-      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(Operand))
-        if (!GV->hasDefinitiveInitializer()) break;
-        
-      // Get what we're pointing to and its size. 
-      const PointerType *BaseType = 
-        cast<PointerType>(Operand->getType());
-      uint64_t Size = TD->getTypeAllocSize(BaseType->getElementType());
-      
-      // Get the current byte offset into the thing. Use the original
-      // operand in case we're looking through a bitcast.
-      SmallVector<Value*, 8> Ops(CE->op_begin()+1, CE->op_end());
-      const PointerType *OffsetType =
-        cast<PointerType>(GEP->getPointerOperand()->getType());
-      uint64_t Offset = TD->getIndexedOffset(OffsetType, &Ops[0], Ops.size());
-
-      if (Size < Offset) {
-        // Out of bound reference? Negative index normalized to large
-        // index? Just return "I don't know".
-        Constant *RetVal = ConstantInt::get(ReturnTy, Min ? 0 : -1ULL);
-        return ReplaceInstUsesWith(CI, RetVal);
-      }
-      
-      Constant *RetVal = ConstantInt::get(ReturnTy, Size-Offset);
-      return ReplaceInstUsesWith(CI, RetVal);
-    } 
+            Size = NElements->getZExtValue() * TD->getTypeAllocSize(MallocType);
+    }
 
     // Do not return "I don't know" here. Later optimization passes could
     // make it possible to evaluate objectsize to a constant.
-    break;
+    if (Size == -1ULL)
+      break;
+
+    if (Size < Offset) {
+      // Out of bound reference? Negative index normalized to large
+      // index? Just return "I don't know".
+      return ReplaceInstUsesWith(CI, ConstantInt::get(ReturnTy, DontKnow));
+    }
+    return ReplaceInstUsesWith(CI, ConstantInt::get(ReturnTy, Size-Offset));
   }
   case Intrinsic::bswap:
     // bswap(bswap(x)) -> x
@@ -549,9 +540,16 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
       return new StoreInst(II->getArgOperand(1), Ptr);
     }
     break;
-    
-  case Intrinsic::x86_sse_cvttss2si: {
-    // These intrinsics only demands the 0th element of its input vector.  If
+
+  case Intrinsic::x86_sse_cvtss2si:
+  case Intrinsic::x86_sse_cvtss2si64:
+  case Intrinsic::x86_sse_cvttss2si:
+  case Intrinsic::x86_sse_cvttss2si64:
+  case Intrinsic::x86_sse2_cvtsd2si:
+  case Intrinsic::x86_sse2_cvtsd2si64:
+  case Intrinsic::x86_sse2_cvttsd2si:
+  case Intrinsic::x86_sse2_cvttsd2si64: {
+    // These intrinsics only demand the 0th element of their input vectors. If
     // we can simplify the input based on that, do so now.
     unsigned VWidth =
       cast<VectorType>(II->getArgOperand(0)->getType())->getNumElements();
@@ -564,7 +562,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     }
     break;
   }
-    
+
   case Intrinsic::ppc_altivec_vperm:
     // Turn vperm(V1,V2,mask) -> shuffle(V1,V2,mask) if mask is a constant.
     if (ConstantVector *Mask = dyn_cast<ConstantVector>(II->getArgOperand(2))) {
@@ -727,6 +725,8 @@ protected:
     NewInstruction = IC->ReplaceInstUsesWith(*CI, With);
   }
   bool isFoldable(unsigned SizeCIOp, unsigned SizeArgOp, bool isString) const {
+    if (CI->getArgOperand(SizeCIOp) == CI->getArgOperand(SizeArgOp))
+      return true;
     if (ConstantInt *SizeCI =
                            dyn_cast<ConstantInt>(CI->getArgOperand(SizeCIOp))) {
       if (SizeCI->isAllOnesValue())

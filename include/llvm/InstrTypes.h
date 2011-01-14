@@ -128,7 +128,8 @@ public:
 };
 
 template <>
-struct OperandTraits<UnaryInstruction> : public FixedNumOperandTraits<1> {
+struct OperandTraits<UnaryInstruction> :
+  public FixedNumOperandTraits<UnaryInstruction, 1> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(UnaryInstruction, Value)
@@ -432,7 +433,8 @@ public:
 };
 
 template <>
-struct OperandTraits<BinaryOperator> : public FixedNumOperandTraits<2> {
+struct OperandTraits<BinaryOperator> :
+  public FixedNumOperandTraits<BinaryOperator, 2> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(BinaryOperator, Value)
@@ -824,11 +826,11 @@ public:
 
   /// This is just a convenience that dispatches to the subclasses.
   /// @brief Determine if this CmpInst is commutative.
-  bool isCommutative();
+  bool isCommutative() const;
 
   /// This is just a convenience that dispatches to the subclasses.
   /// @brief Determine if this is an equals/not equals predicate.
-  bool isEquality();
+  bool isEquality() const;
 
   /// @returns true if the comparison is signed, false otherwise.
   /// @brief Determine if this instruction is using a signed comparison.
@@ -903,7 +905,7 @@ private:
 
 // FIXME: these are redundant if CmpInst < BinaryOperator
 template <>
-struct OperandTraits<CmpInst> : public FixedNumOperandTraits<2> {
+struct OperandTraits<CmpInst> : public FixedNumOperandTraits<CmpInst, 2> {
 };
 
 DEFINE_TRANSPARENT_OPERAND_ACCESSORS(CmpInst, Value)

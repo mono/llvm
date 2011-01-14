@@ -469,6 +469,8 @@ void Verifier::visitGlobalVariable(GlobalVariable &GV) {
     Assert1(GV.hasExternalLinkage() || GV.hasDLLImportLinkage() ||
             GV.hasExternalWeakLinkage(),
             "invalid linkage type for global declaration", &GV);
+    Assert1(!GV.hasUnnamedAddr(), "only definitions can have unnamed_addr",
+            &GV);
   }
 
   visitGlobalValue(GV);
@@ -484,6 +486,7 @@ void Verifier::visitGlobalAlias(GlobalAlias &GA) {
           "Aliasee cannot be NULL!", &GA);
   Assert1(GA.getType() == GA.getAliasee()->getType(),
           "Alias and aliasee types should match!", &GA);
+  Assert1(!GA.hasUnnamedAddr(), "Alias cannot have unnamed_addr!", &GA);
 
   if (!isa<GlobalValue>(GA.getAliasee())) {
     const ConstantExpr *CE = dyn_cast<ConstantExpr>(GA.getAliasee());
@@ -724,6 +727,7 @@ void Verifier::visitFunction(Function &F) {
     Assert1(F.hasExternalLinkage() || F.hasDLLImportLinkage() ||
             F.hasExternalWeakLinkage(),
             "invalid linkage type for function declaration", &F);
+    Assert1(!F.hasUnnamedAddr(), "only definitions can have unnamed_addr", &F);
   } else {
     // Verify that this function (which has a body) is not named "llvm.*".  It
     // is not legal to define intrinsics.

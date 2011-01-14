@@ -180,7 +180,8 @@ TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
 // SelectionDAGISel code
 //===----------------------------------------------------------------------===//
 
-SelectionDAGISel::SelectionDAGISel(const TargetMachine &tm, CodeGenOpt::Level OL) :
+SelectionDAGISel::SelectionDAGISel(const TargetMachine &tm,
+                                   CodeGenOpt::Level OL) :
   MachineFunctionPass(ID), TM(tm), TLI(*tm.getTargetLowering()),
   FuncInfo(new FunctionLoweringInfo(TLI)),
   CurDAG(new SelectionDAG(tm)),
@@ -379,10 +380,8 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
              II = MBB->begin(), IE = MBB->end(); II != IE; ++II) {
         const TargetInstrDesc &TID = TM.getInstrInfo()->get(II->getOpcode());
 
-        // Operand 1 of an inline asm instruction indicates whether the asm
-        // needs stack or not.
-        if ((II->isInlineAsm() && II->getOperand(1).getImm()) ||
-            (TID.isCall() && !TID.isReturn())) {
+        if ((TID.isCall() && !TID.isReturn()) ||
+            II->isStackAligningInlineAsm()) {
           MFI->setHasCalls(true);
           goto done;
         }
@@ -483,9 +482,7 @@ void SelectionDAGISel::ComputeLiveOutVRegInfo() {
 
     // Only install this information if it tells us something.
     if (NumSignBits != 1 || KnownZero != 0 || KnownOne != 0) {
-      DestReg -= TargetRegisterInfo::FirstVirtualRegister;
-      if (DestReg >= FuncInfo->LiveOutRegInfo.size())
-        FuncInfo->LiveOutRegInfo.resize(DestReg+1);
+      FuncInfo->LiveOutRegInfo.grow(DestReg);
       FunctionLoweringInfo::LiveOutInfo &LOI =
         FuncInfo->LiveOutRegInfo[DestReg];
       LOI.NumSignBits = NumSignBits;
@@ -893,10 +890,10 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
           if (Inst != Begin)
             BeforeInst = llvm::prior(llvm::prior(BI));
           if (BeforeInst && isa<LoadInst>(BeforeInst) &&
-              BeforeInst->hasOneUse() && *BeforeInst->use_begin() == Inst &&
-              TryToFoldFastISelLoad(cast<LoadInst>(BeforeInst), FastIS)) {
-            // If we succeeded, don't re-select the load.
-            --BI;
+              BeforeInst->hasOneUse() && *BeforeInst->use_begin() == Inst) {
+            FastIS->recomputeInsertPt();
+            if (TryToFoldFastISelLoad(cast<LoadInst>(BeforeInst), FastIS))
+              --BI; // If we succeeded, don't re-select the load.
           }
           continue;
         }
@@ -1016,12 +1013,14 @@ SelectionDAGISel::FinishBasicBlock() {
       FuncInfo->InsertPt = FuncInfo->MBB->end();
       // Emit the code
       if (j+1 != ej)
-        SDB->visitBitTestCase(SDB->BitTestCases[i].Cases[j+1].ThisBB,
+        SDB->visitBitTestCase(SDB->BitTestCases[i],
+                              SDB->BitTestCases[i].Cases[j+1].ThisBB,
                               SDB->BitTestCases[i].Reg,
                               SDB->BitTestCases[i].Cases[j],
                               FuncInfo->MBB);
       else
-        SDB->visitBitTestCase(SDB->BitTestCases[i].Default,
+        SDB->visitBitTestCase(SDB->BitTestCases[i],
+                              SDB->BitTestCases[i].Default,
                               SDB->BitTestCases[i].Reg,
                               SDB->BitTestCases[i].Cases[j],
                               FuncInfo->MBB);
@@ -1280,7 +1279,7 @@ SelectInlineAsmMemoryOperands(std::vector<SDValue> &Ops) {
   Ops.push_back(InOps[InlineAsm::Op_InputChain]); // 0
   Ops.push_back(InOps[InlineAsm::Op_AsmString]);  // 1
   Ops.push_back(InOps[InlineAsm::Op_MDNode]);     // 2, !srcloc
-  Ops.push_back(InOps[InlineAsm::Op_IsAlignStack]);  // 3
+  Ops.push_back(InOps[InlineAsm::Op_ExtraInfo]);  // 3 (SideEffect, AlignStack)
 
   unsigned i = InlineAsm::Op_FirstOperand, e = InOps.size();
   if (InOps[e-1].getValueType() == MVT::Glue)

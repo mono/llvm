@@ -22,6 +22,7 @@
 #include "llvm/IntrinsicInst.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/ProfileInfo.h"
@@ -67,9 +68,9 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB) {
       assert(BI->getParent() && "Terminator not inserted in block!");
       OldDest->removePredecessor(BI->getParent());
 
-      // Set the unconditional destination, and change the insn to be an
-      // unconditional branch.
-      BI->setUnconditionalDest(Destination);
+      // Replace the conditional branch with an unconditional one.
+      BranchInst::Create(Destination, BI);
+      BI->eraseFromParent();
       return true;
     }
     
@@ -82,8 +83,9 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB) {
       assert(BI->getParent() && "Terminator not inserted in block!");
       Dest1->removePredecessor(BI->getParent());
 
-      // Change a conditional branch to unconditional.
-      BI->setUnconditionalDest(Dest1);
+      // Replace the conditional branch with an unconditional one.
+      BranchInst::Create(Dest1, BI);
+      BI->eraseFromParent();
       return true;
     }
     return false;
@@ -400,6 +402,12 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB, Pass *P) {
   PredBB->replaceAllUsesWith(DestBB);
   
   if (P) {
+    DominatorTree *DT = P->getAnalysisIfAvailable<DominatorTree>();
+    if (DT) {
+      BasicBlock *PredBBIDom = DT->getNode(PredBB)->getIDom()->getBlock();
+      DT->changeImmediateDominator(DestBB, PredBBIDom);
+      DT->eraseNode(PredBB);
+    }
     ProfileInfo *PI = P->getAnalysisIfAvailable<ProfileInfo>();
     if (PI) {
       PI->replaceAllUses(PredBB, DestBB);

@@ -54,6 +54,10 @@ namespace llvm {
   ///
   extern char &MachineDominatorsID;
 
+  /// EdgeBundles analysis - Bundle machine CFG edges.
+  ///
+  extern char &EdgeBundlesID;
+
   /// PHIElimination pass - This pass eliminates machine instruction PHI nodes
   /// by inserting copy instructions.  This destroys SSA information, but is the
   /// desired input for some register allocators.  This pass is "required" by
@@ -83,6 +87,11 @@ namespace llvm {
   /// use two operands. This destroys SSA information but it is desired by
   /// register allocators.
   extern char &TwoAddressInstructionPassID;
+
+  /// SpillPlacement analysis. Suggest optimal placement of spill code between
+  /// basic blocks.
+  ///
+  extern char &SpillPlacementID;
 
   /// UnreachableMachineBlockElimination pass - This pass removes unreachable
   /// machine basic blocks.

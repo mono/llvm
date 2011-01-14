@@ -17,13 +17,9 @@
 
 #define DEBUG_TYPE "gvn"
 #include "llvm/Transforms/Scalar.h"
-#include "llvm/Constants.h"
-#include "llvm/DerivedTypes.h"
 #include "llvm/GlobalVariable.h"
-#include "llvm/Function.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/LLVMContext.h"
-#include "llvm/Operator.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/Dominators.h"
@@ -36,21 +32,15 @@
 #include "llvm/Assembly/Writer.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Support/CFG.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/IRBuilder.h"
-#include <list>
 using namespace llvm;
 
 STATISTIC(NumGVNInstr,  "Number of instructions deleted");
@@ -90,10 +80,6 @@ namespace {
         return false;
       return true;
     }
-
-    /*bool operator!=(const Expression &other) const {
-      return !(*this == other);
-    }*/
   };
 
   class ValueTable {
@@ -422,38 +408,38 @@ namespace {
 
     ValueTable VN;
     
-    /// NumberTable - A mapping from value numers to lists of Value*'s that
-    /// have that value number.  Use lookupNumber to query it.
-    struct NumberTableEntry {
+    /// LeaderTable - A mapping from value numbers to lists of Value*'s that
+    /// have that value number.  Use findLeader to query it.
+    struct LeaderTableEntry {
       Value *Val;
       BasicBlock *BB;
-      NumberTableEntry *Next;
+      LeaderTableEntry *Next;
     };
-    DenseMap<uint32_t, NumberTableEntry> NumberTable;
+    DenseMap<uint32_t, LeaderTableEntry> LeaderTable;
     BumpPtrAllocator TableAllocator;
     
-    /// insert_table - Push a new Value to the NumberTable onto the list for
+    /// addToLeaderTable - Push a new Value to the LeaderTable onto the list for
     /// its value number.
-    void insert_table(uint32_t N, Value *V, BasicBlock *BB) {
-      NumberTableEntry& Curr = NumberTable[N];
+    void addToLeaderTable(uint32_t N, Value *V, BasicBlock *BB) {
+      LeaderTableEntry& Curr = LeaderTable[N];
       if (!Curr.Val) {
         Curr.Val = V;
         Curr.BB = BB;
         return;
       }
       
-      NumberTableEntry* Node = TableAllocator.Allocate<NumberTableEntry>();
+      LeaderTableEntry* Node = TableAllocator.Allocate<LeaderTableEntry>();
       Node->Val = V;
       Node->BB = BB;
       Node->Next = Curr.Next;
       Curr.Next = Node;
     }
     
-    /// erase_table - Scan the list of values corresponding to a given value
-    /// number, and remove the given value if encountered.
-    void erase_table(uint32_t N, Value *V, BasicBlock *BB) {
-      NumberTableEntry* Prev = 0;
-      NumberTableEntry* Curr = &NumberTable[N];
+    /// removeFromLeaderTable - Scan the list of values corresponding to a given
+    /// value number, and remove the given value if encountered.
+    void removeFromLeaderTable(uint32_t N, Value *V, BasicBlock *BB) {
+      LeaderTableEntry* Prev = 0;
+      LeaderTableEntry* Curr = &LeaderTable[N];
 
       while (Curr->Val != V || Curr->BB != BB) {
         Prev = Curr;
@@ -467,9 +453,10 @@ namespace {
           Curr->Val = 0;
           Curr->BB = 0;
         } else {
-          NumberTableEntry* Next = Curr->Next;
+          LeaderTableEntry* Next = Curr->Next;
           Curr->Val = Next->Val;
           Curr->BB = Next->BB;
+          Curr->Next = Next->Next;
         }
       }
     }
@@ -500,7 +487,7 @@ namespace {
     void dump(DenseMap<uint32_t, Value*>& d);
     bool iterateOnFunction(Function &F);
     bool performPRE(Function& F);
-    Value *lookupNumber(BasicBlock *BB, uint32_t num);
+    Value *findLeader(BasicBlock *BB, uint32_t num);
     void cleanupGlobalSets();
     void verifyRemoved(const Instruction *I) const;
     bool splitCriticalEdges();
@@ -1378,8 +1365,8 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
     //  @1 = getelementptr (i8* p, ...
     //  test p and branch if == 0
     //  load @1
-    // It is valid to have the getelementptr before the test, even if p can be 0,
-    // as getelementptr only does address arithmetic.
+    // It is valid to have the getelementptr before the test, even if p can
+    // be 0, as getelementptr only does address arithmetic.
     // If we are not pushing the value through any multiple-successor blocks
     // we do not have this case.  Otherwise, check that the load is safe to
     // put anywhere; this can be improved, but should be conservatively safe.
@@ -1396,8 +1383,11 @@ bool GVN::processNonLocalLoad(LoadInst *LI,
   }
 
   if (!CanDoPRE) {
-    while (!NewInsts.empty())
-      NewInsts.pop_back_val()->eraseFromParent();
+    while (!NewInsts.empty()) {
+      Instruction *I = NewInsts.pop_back_val();
+      if (MD) MD->removeInstruction(I);
+      I->eraseFromParent();
+    }
     return false;
   }
 
@@ -1613,13 +1603,13 @@ bool GVN::processLoad(LoadInst *L, SmallVectorImpl<Instruction*> &toErase) {
   return false;
 }
 
-// lookupNumber - In order to find a leader for a given value number at a 
+// findLeader - In order to find a leader for a given value number at a 
 // specific basic block, we first obtain the list of all Values for that number,
 // and then scan the list to find one whose block dominates the block in 
 // question.  This is fast because dominator tree queries consist of only
 // a few comparisons of DFS numbers.
-Value *GVN::lookupNumber(BasicBlock *BB, uint32_t num) {
-  NumberTableEntry Vals = NumberTable[num];
+Value *GVN::findLeader(BasicBlock *BB, uint32_t num) {
+  LeaderTableEntry Vals = LeaderTable[num];
   if (!Vals.Val) return 0;
   
   Value *Val = 0;
@@ -1628,7 +1618,7 @@ Value *GVN::lookupNumber(BasicBlock *BB, uint32_t num) {
     if (isa<Constant>(Val)) return Val;
   }
   
-  NumberTableEntry* Next = Vals.Next;
+  LeaderTableEntry* Next = Vals.Next;
   while (Next) {
     if (DT->dominates(Next->BB, BB)) {
       if (isa<Constant>(Next->Val)) return Next->Val;
@@ -1668,20 +1658,15 @@ bool GVN::processInstruction(Instruction *I,
 
     if (!Changed) {
       unsigned Num = VN.lookup_or_add(LI);
-      insert_table(Num, LI, LI->getParent());
+      addToLeaderTable(Num, LI, LI->getParent());
     }
 
     return Changed;
   }
 
-  uint32_t NextNum = VN.getNextUnusedValueNumber();
-  unsigned Num = VN.lookup_or_add(I);
-
   // For conditions branches, we can perform simple conditional propagation on
   // the condition value itself.
   if (BranchInst *BI = dyn_cast<BranchInst>(I)) {
-    insert_table(Num, I, I->getParent());
-  
     if (!BI->isConditional() || isa<Constant>(BI->getCondition()))
       return false;
     
@@ -1692,21 +1677,28 @@ bool GVN::processInstruction(Instruction *I,
     BasicBlock *FalseSucc = BI->getSuccessor(1);
   
     if (TrueSucc->getSinglePredecessor())
-      insert_table(CondVN,
+      addToLeaderTable(CondVN,
                    ConstantInt::getTrue(TrueSucc->getContext()),
                    TrueSucc);
     if (FalseSucc->getSinglePredecessor())
-      insert_table(CondVN,
+      addToLeaderTable(CondVN,
                    ConstantInt::getFalse(TrueSucc->getContext()),
                    FalseSucc);
     
     return false;
   }
+  
+  // Instructions with void type don't return a value, so there's
+  // no point in trying to find redudancies in them.
+  if (I->getType()->isVoidTy()) return false;
+  
+  uint32_t NextNum = VN.getNextUnusedValueNumber();
+  unsigned Num = VN.lookup_or_add(I);
 
   // Allocations are always uniquely numbered, so we can save time and memory
   // by fast failing them.
   if (isa<AllocaInst>(I) || isa<TerminatorInst>(I) || isa<PHINode>(I)) {
-    insert_table(Num, I, I->getParent());
+    addToLeaderTable(Num, I, I->getParent());
     return false;
   }
 
@@ -1714,16 +1706,16 @@ bool GVN::processInstruction(Instruction *I,
   // need to do a lookup to see if the number already exists
   // somewhere in the domtree: it can't!
   if (Num == NextNum) {
-    insert_table(Num, I, I->getParent());
+    addToLeaderTable(Num, I, I->getParent());
     return false;
   }
   
   // Perform fast-path value-number based elimination of values inherited from
   // dominators.
-  Value *repl = lookupNumber(I->getParent(), Num);
+  Value *repl = findLeader(I->getParent(), Num);
   if (repl == 0) {
     // Failure, just remember this instance for future use.
-    insert_table(Num, I, I->getParent());
+    addToLeaderTable(Num, I, I->getParent());
     return false;
   }
   
@@ -1752,8 +1744,8 @@ bool GVN::runOnFunction(Function& F) {
   // Merge unconditional branches, allowing PRE to catch more
   // optimization opportunities.
   for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ) {
-    BasicBlock *BB = FI;
-    ++FI;
+    BasicBlock *BB = FI++;
+    
     bool removedBlock = MergeBlockIntoPredecessor(BB, this);
     if (removedBlock) ++NumGVNBlocks;
 
@@ -1761,7 +1753,6 @@ bool GVN::runOnFunction(Function& F) {
   }
 
   unsigned Iteration = 0;
-
   while (ShouldContinue) {
     DEBUG(dbgs() << "GVN iteration: " << Iteration << "\n");
     ShouldContinue = iterateOnFunction(F);
@@ -1884,7 +1875,7 @@ bool GVN::performPRE(Function &F) {
           break;
         }
 
-        Value* predV = lookupNumber(P, ValNo);
+        Value* predV = findLeader(P, ValNo);
         if (predV == 0) {
           PREPred = P;
           ++NumWithout;
@@ -1926,7 +1917,7 @@ bool GVN::performPRE(Function &F) {
         if (isa<Argument>(Op) || isa<Constant>(Op) || isa<GlobalValue>(Op))
           continue;
 
-        if (Value *V = lookupNumber(PREPred, VN.lookup(Op))) {
+        if (Value *V = findLeader(PREPred, VN.lookup(Op))) {
           PREInstr->setOperand(i, V);
         } else {
           success = false;
@@ -1950,7 +1941,7 @@ bool GVN::performPRE(Function &F) {
       ++NumGVNPRE;
 
       // Update the availability map to include the new instruction.
-      insert_table(ValNo, PREInstr, PREPred);
+      addToLeaderTable(ValNo, PREInstr, PREPred);
 
       // Create a PHI to make the value available in this block.
       PHINode* Phi = PHINode::Create(CurInst->getType(),
@@ -1963,7 +1954,7 @@ bool GVN::performPRE(Function &F) {
       }
 
       VN.add(Phi, ValNo);
-      insert_table(ValNo, Phi, CurrentBlock);
+      addToLeaderTable(ValNo, Phi, CurrentBlock);
 
       CurInst->replaceAllUsesWith(Phi);
       if (Phi->getType()->isPointerTy()) {
@@ -1977,7 +1968,7 @@ bool GVN::performPRE(Function &F) {
           MD->invalidateCachedPointerInfo(Phi);
       }
       VN.erase(CurInst);
-      erase_table(ValNo, CurInst, CurrentBlock);
+      removeFromLeaderTable(ValNo, CurInst, CurrentBlock);
 
       DEBUG(dbgs() << "GVN PRE removed: " << *CurInst << '\n');
       if (MD) MD->removeInstruction(CurInst);
@@ -2029,7 +2020,7 @@ bool GVN::iterateOnFunction(Function &F) {
 
 void GVN::cleanupGlobalSets() {
   VN.clear();
-  NumberTable.clear();
+  LeaderTable.clear();
   TableAllocator.Reset();
 }
 
@@ -2040,9 +2031,9 @@ void GVN::verifyRemoved(const Instruction *Inst) const {
 
   // Walk through the value number scope to make sure the instruction isn't
   // ferreted away in it.
-  for (DenseMap<uint32_t, NumberTableEntry>::const_iterator
-       I = NumberTable.begin(), E = NumberTable.end(); I != E; ++I) {
-    const NumberTableEntry *Node = &I->second;
+  for (DenseMap<uint32_t, LeaderTableEntry>::const_iterator
+       I = LeaderTable.begin(), E = LeaderTable.end(); I != E; ++I) {
+    const LeaderTableEntry *Node = &I->second;
     assert(Node->Val != Inst && "Inst still in value numbering scope!");
     
     while (Node->Next) {

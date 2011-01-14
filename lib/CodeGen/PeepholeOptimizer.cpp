@@ -295,7 +295,7 @@ bool PeepholeOptimizer::FoldImmediate(MachineInstr *MI, MachineBasicBlock *MBB,
     if (!MO.isReg() || MO.isDef())
       continue;
     unsigned Reg = MO.getReg();
-    if (!Reg || TargetRegisterInfo::isPhysicalRegister(Reg))
+    if (!TargetRegisterInfo::isVirtualRegister(Reg))
       continue;
     if (ImmDefRegs.count(Reg) == 0)
       continue;
@@ -336,7 +336,9 @@ bool PeepholeOptimizer::runOnMachineFunction(MachineFunction &MF) {
       MachineInstr *MI = &*MII++;
       LocalMIs.insert(MI);
 
-      if (MI->getDesc().hasUnmodeledSideEffects())
+      if (MI->isLabel() || MI->isPHI() || MI->isImplicitDef() ||
+          MI->isKill() || MI->isInlineAsm() || MI->isDebugValue() ||
+          MI->hasUnmodeledSideEffects())
         continue;
 
       if (MI->getDesc().isCompare()) {

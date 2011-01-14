@@ -6,11 +6,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-/* Define if dlopen(0) will open the symbols of the program */
-#undef CAN_DLOPEN_SELF
-
 /* Define if CBE is enabled for printf %a output */
-#undef ENABLE_CBE_PRINTF_A
+#cmakedefine ENABLE_CBE_PRINTF_A ${ENABLE_CBE_PRINTF_A}
 
 /* Relative directory for resource files */
 #define CLANG_RESOURCE_DIR "${CLANG_RESOURCE_DIR}"
@@ -31,28 +28,31 @@
 #define CXX_INCLUDE_64BIT_DIR "${CXX_INCLUDE_64BIT_DIR}"
 
 /* Define if position independent code is enabled */
-#cmakedefine ENABLE_PIC ${ENABLE_PIC}
+#cmakedefine ENABLE_PIC
+
+/* Define if timestamp information (e.g., __DATE___) is allowed */
+#cmakedefine ENABLE_TIMESTAMPS ${ENABLE_TIMESTAMPS}
 
 /* Define if threads enabled */
 #cmakedefine ENABLE_THREADS ${ENABLE_THREADS}
 
 /* Define to 1 if you have the `argz_append' function. */
-#undef HAVE_ARGZ_APPEND
+#cmakedefine HAVE_ARGZ_APPEND ${HAVE_ARGZ_APPEND}
 
 /* Define to 1 if you have the `argz_create_sep' function. */
-#undef HAVE_ARGZ_CREATE_SEP
+#cmakedefine HAVE_ARGZ_CREATE_SEP ${HAVE_ARGZ_CREATE_SEP}
 
 /* Define to 1 if you have the <argz.h> header file. */
 #cmakedefine HAVE_ARGZ_H ${HAVE_ARGZ_H}
 
 /* Define to 1 if you have the `argz_insert' function. */
-#undef HAVE_ARGZ_INSERT
+#cmakedefine HAVE_ARGZ_INSERT ${HAVE_ARGZ_INSERT}
 
 /* Define to 1 if you have the `argz_next' function. */
-#undef HAVE_ARGZ_NEXT
+#cmakedefine HAVE_ARGZ_NEXT ${HAVE_ARGZ_NEXT}
 
 /* Define to 1 if you have the `argz_stringify' function. */
-#undef HAVE_ARGZ_STRINGIFY
+#cmakedefine HAVE_ARGZ_STRINGIFY ${HAVE_ARGZ_STRINGIFY}
 
 /* Define to 1 if you have the <assert.h> header file. */
 #cmakedefine HAVE_ASSERT_H ${HAVE_ASSERT_H}
@@ -73,10 +73,10 @@
 #cmakedefine HAVE_CIRCO ${HAVE_CIRCO}
 
 /* Define to 1 if you have the `closedir' function. */
-#undef HAVE_CLOSEDIR
+#cmakedefine HAVE_CLOSEDIR ${HAVE_CLOSEDIR}
 
 /* Define to 1 if you have the <ctype.h> header file. */
-#undef HAVE_CTYPE_H
+#cmakedefine HAVE_CTYPE_H ${HAVE_CTYPE_H}
 
 /* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
    */
@@ -130,23 +130,26 @@
 /* Define to 1 if you have the `floorf' function. */
 #cmakedefine HAVE_FLOORF ${HAVE_FLOORF}
 
+/* Define to 1 if you have the `fmodf' function. */
+#cmakedefine HAVE_FMODF ${HAVE_FMODF}
+
 /* Does not have forward iterator */
 #undef HAVE_FWD_ITERATOR
 
 /* Define to 1 if you have the `getcwd' function. */
-#undef HAVE_GETCWD
+#cmakedefine HAVE_GETCWD ${HAVE_GETCWD}
 
 /* Define to 1 if you have the `getpagesize' function. */
 #cmakedefine HAVE_GETPAGESIZE ${HAVE_GETPAGESIZE}
 
 /* Define to 1 if you have the `getrlimit' function. */
-#undef HAVE_GETRLIMIT
+#cmakedefine HAVE_GETRLIMIT ${HAVE_GETRLIMIT}
 
 /* Define to 1 if you have the `getrusage' function. */
 #cmakedefine HAVE_GETRUSAGE ${HAVE_GETRUSAGE}
 
 /* Define to 1 if you have the `gettimeofday' function. */
-#undef HAVE_GETTIMEOFDAY
+#cmakedefine HAVE_GETTIMEOFDAY ${HAVE_GETTIMEOFDAY}
 
 /* Does not have <hash_map> */
 #undef HAVE_GLOBAL_HASH_MAP
@@ -170,7 +173,7 @@
 #undef HAVE_INDEX
 
 /* Define to 1 if the system has the type `int64_t'. */
-#undef HAVE_INT64_T
+#cmakedefine HAVE_INT64_T ${HAVE_INT64_T}
 
 /* Define to 1 if you have the <inttypes.h> header file. */
 #cmakedefine HAVE_INTTYPES_H ${HAVE_INTTYPES_H}
@@ -240,10 +243,10 @@
 #cmakedefine HAVE_MALLOC_ZONE_STATISTICS ${HAVE_MALLOC_ZONE_STATISTICS}
 
 /* Define to 1 if you have the `memcpy' function. */
-#undef HAVE_MEMCPY
+#cmakedefine HAVE_MEMCPY ${HAVE_MEMCPY}
 
 /* Define to 1 if you have the `memmove' function. */
-#undef HAVE_MEMMOVE
+#cmakedefine HAVE_MEMMOVE ${HAVE_MEMMOVE}
 
 /* Define to 1 if you have the <memory.h> header file. */
 #cmakedefine HAVE_MEMORY_H ${HAVE_MEMORY_H}
@@ -280,7 +283,7 @@
 #cmakedefine HAVE_NEATO ${HAVE_NEATO}
 
 /* Define to 1 if you have the `opendir' function. */
-#undef HAVE_OPENDIR
+#cmakedefine HAVE_OPENDIR ${HAVE_OPENDIR}
 
 /* Define if libtool can extract symbol lists from object files. */
 #undef HAVE_PRELOADED_SYMBOLS
@@ -450,7 +453,7 @@
 #cmakedefine HAVE_TWOPI ${HAVE_TWOPI}
 
 /* Define to 1 if the system has the type `uint64_t'. */
-#undef HAVE_UINT64_T
+#cmakedefine HAVE_UINT64_T ${HAVE_UINT64_T}
 
 /* Define to 1 if you have the <termios.h> header file. */
 #cmakedefine HAVE_TERMIOS_H ${HAVE_TERMIOS_H}
@@ -462,7 +465,7 @@
 #cmakedefine HAVE_UTIME_H ${HAVE_UTIME_H}
 
 /* Define to 1 if the system has the type `u_int64_t'. */
-#undef HAVE_U_INT64_T
+#cmakedefine HAVE_U_INT64_T ${HAVE_U_INT64_T}
 
 /* Define to 1 if you have the <valgrind/valgrind.h> header file. */
 #cmakedefine HAVE_VALGRIND_VALGRIND_H ${HAVE_VALGRIND_VALGRIND_H}

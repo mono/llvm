@@ -380,19 +380,22 @@ namespace sys {
       /// directory.
       /// @brief Determines if the path is a file or directory in
       /// the file system.
-      bool exists() const;
+      LLVM_ATTRIBUTE_DEPRECATED(bool exists() const,
+        LLVM_PATH_DEPRECATED_MSG(fs::exists));
 
       /// This function determines if the path name references an
       /// existing directory.
       /// @returns true if the pathname references an existing directory.
       /// @brief Determines if the path is a directory in the file system.
-      bool isDirectory() const;
+      LLVM_ATTRIBUTE_DEPRECATED(bool isDirectory() const,
+        LLVM_PATH_DEPRECATED_MSG(fs::is_directory));
 
       /// This function determines if the path name references an
       /// existing symbolic link.
       /// @returns true if the pathname references an existing symlink.
       /// @brief Determines if the path is a symlink in the file system.
-      bool isSymLink() const;
+      LLVM_ATTRIBUTE_DEPRECATED(bool isSymLink() const,
+        LLVM_PATH_DEPRECATED_MSG(fs::is_symlink));
 
       /// This function determines if the path name references a readable file
       /// or directory in the file system. This function checks for

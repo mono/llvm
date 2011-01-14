@@ -405,7 +405,8 @@ public:
 };
 
 template <>
-struct OperandTraits<ConstantArray> : public VariadicOperandTraits<> {
+struct OperandTraits<ConstantArray> :
+  public VariadicOperandTraits<ConstantArray> {
 };
 
 DEFINE_TRANSPARENT_CASTED_OPERAND_ACCESSORS(ConstantArray, Constant)
@@ -454,7 +455,8 @@ public:
 };
 
 template <>
-struct OperandTraits<ConstantStruct> : public VariadicOperandTraits<> {
+struct OperandTraits<ConstantStruct> :
+  public VariadicOperandTraits<ConstantStruct> {
 };
 
 DEFINE_TRANSPARENT_CASTED_OPERAND_ACCESSORS(ConstantStruct, Constant)
@@ -511,7 +513,8 @@ public:
 };
 
 template <>
-struct OperandTraits<ConstantVector> : public VariadicOperandTraits<> {
+struct OperandTraits<ConstantVector> :
+  public VariadicOperandTraits<ConstantVector> {
 };
 
 DEFINE_TRANSPARENT_CASTED_OPERAND_ACCESSORS(ConstantVector, Constant)
@@ -592,7 +595,8 @@ public:
 };
 
 template <>
-struct OperandTraits<BlockAddress> : public FixedNumOperandTraits<2> {
+struct OperandTraits<BlockAddress> :
+  public FixedNumOperandTraits<BlockAddress, 2> {
 };
 
 DEFINE_TRANSPARENT_CASTED_OPERAND_ACCESSORS(BlockAddress, Value)
@@ -625,10 +629,12 @@ protected:
                                 Constant *C2);
   static Constant *getSelectTy(const Type *Ty,
                                Constant *C1, Constant *C2, Constant *C3);
+  template<typename IndexTy>
   static Constant *getGetElementPtrTy(const Type *Ty, Constant *C,
-                                      Value* const *Idxs, unsigned NumIdxs);
+                                      IndexTy const *Idxs, unsigned NumIdxs);
+  template<typename IndexTy>
   static Constant *getInBoundsGetElementPtrTy(const Type *Ty, Constant *C,
-                                              Value* const *Idxs,
+                                              IndexTy const *Idxs,
                                               unsigned NumIdxs);
   static Constant *getExtractElementTy(const Type *Ty, Constant *Val,
                                        Constant *Idx);
@@ -641,6 +647,14 @@ protected:
   static Constant *getInsertValueTy(const Type *Ty, Constant *Agg,
                                     Constant *Val,
                                     const unsigned *Idxs, unsigned NumIdxs);
+  template<typename IndexTy>
+  static Constant *getGetElementPtrImpl(Constant *C,
+                                        IndexTy const *IdxList,
+                                        unsigned NumIdx);
+  template<typename IndexTy>
+  static Constant *getInBoundsGetElementPtrImpl(Constant *C,
+                                                IndexTy const *IdxList,
+                                                unsigned NumIdx);
 
 public:
   // Static methods to construct a ConstantExpr of different kinds.  Note that
@@ -871,7 +885,8 @@ private:
 };
 
 template <>
-struct OperandTraits<ConstantExpr> : public VariadicOperandTraits<1> {
+struct OperandTraits<ConstantExpr> :
+  public VariadicOperandTraits<ConstantExpr, 1> {
 };
 
 DEFINE_TRANSPARENT_CASTED_OPERAND_ACCESSORS(ConstantExpr, Constant)

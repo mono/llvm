@@ -805,6 +805,8 @@ void MCAsmStreamer::AddEncodingComment(const MCInst &Inst) {
     }
   }
 
+  // FIXME: Node the fixup comments for Thumb2 are completely bogus since the
+  // high order halfword of a 32-bit Thumb2 instruction is emitted first.
   OS << "encoding: [";
   for (unsigned i = 0, e = Code.size(); i != e; ++i) {
     if (i)
@@ -824,8 +826,12 @@ void MCAsmStreamer::AddEncodingComment(const MCInst &Inst) {
       if (MapEntry == 0) {
         OS << format("0x%02x", uint8_t(Code[i]));
       } else {
-        assert(Code[i] == 0 && "Encoder wrote into fixed up bit!");
-        OS << char('A' + MapEntry - 1);
+        if (Code[i]) {
+          // FIXME: Some of the 8 bits require fix up.
+          OS << format("0x%02x", uint8_t(Code[i])) << '\''
+             << char('A' + MapEntry - 1) << '\'';
+        } else
+          OS << char('A' + MapEntry - 1);
       }
     } else {
       // Otherwise, write out in binary.

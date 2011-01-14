@@ -452,6 +452,8 @@ def parseIntegratedTestScript(test, normalize_slashes=False):
     def processLine(ln):
         # Apply substitutions
         for a,b in substitutions:
+            if kIsWindows:
+                b = b.replace("\\","\\\\")
             ln = re.sub(a, b, ln)
 
         # Strip the trailing newline and any extra whitespace.

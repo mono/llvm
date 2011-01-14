@@ -1036,8 +1036,8 @@ bool X86FastISel::X86SelectBranch(const Instruction *I) {
           }
 
           const TargetInstrDesc &TID = MI.getDesc();
-          if (TID.hasUnmodeledSideEffects() ||
-              TID.hasImplicitDefOfPhysReg(X86::EFLAGS))
+          if (TID.hasImplicitDefOfPhysReg(X86::EFLAGS) ||
+              MI.hasUnmodeledSideEffects())
             break;
         }
 
@@ -1547,16 +1547,14 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
     case CCValAssign::SExt: {
       bool Emitted = X86FastEmitExtend(ISD::SIGN_EXTEND, VA.getLocVT(),
                                        Arg, ArgVT, Arg);
-      assert(Emitted && "Failed to emit a sext!"); Emitted=Emitted;
-      Emitted = true;
+      assert(Emitted && "Failed to emit a sext!"); (void)Emitted;
       ArgVT = VA.getLocVT();
       break;
     }
     case CCValAssign::ZExt: {
       bool Emitted = X86FastEmitExtend(ISD::ZERO_EXTEND, VA.getLocVT(),
                                        Arg, ArgVT, Arg);
-      assert(Emitted && "Failed to emit a zext!"); Emitted=Emitted;
-      Emitted = true;
+      assert(Emitted && "Failed to emit a zext!"); (void)Emitted;
       ArgVT = VA.getLocVT();
       break;
     }
@@ -1573,7 +1571,7 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
         Emitted = X86FastEmitExtend(ISD::SIGN_EXTEND, VA.getLocVT(),
                                     Arg, ArgVT, Arg);
 
-      assert(Emitted && "Failed to emit a aext!"); Emitted=Emitted;
+      assert(Emitted && "Failed to emit a aext!"); (void)Emitted;
       ArgVT = VA.getLocVT();
       break;
     }

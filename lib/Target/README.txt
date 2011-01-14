@@ -1075,6 +1075,77 @@ int test (int a, int b, int c, int g) {
 It would be better to do the mul once to reduce codesize above the if.
 This is GCC PR38204.
 
+
+//===---------------------------------------------------------------------===//
+This simple function from 179.art:
+
+int winner, numf2s;
+struct { double y; int   reset; } *Y;
+
+void find_match() {
+   int i;
+   winner = 0;
+   for (i=0;i<numf2s;i++)
+       if (Y[i].y > Y[winner].y)
+              winner =i;
+}
+
+Compiles into (with clang TBAA):
+
+for.body:                                         ; preds = %for.inc, %bb.nph
+  %indvar = phi i64 [ 0, %bb.nph ], [ %indvar.next, %for.inc ]
+  %i.01718 = phi i32 [ 0, %bb.nph ], [ %i.01719, %for.inc ]
+  %tmp4 = getelementptr inbounds %struct.anon* %tmp3, i64 %indvar, i32 0
+  %tmp5 = load double* %tmp4, align 8, !tbaa !4
+  %idxprom7 = sext i32 %i.01718 to i64
+  %tmp10 = getelementptr inbounds %struct.anon* %tmp3, i64 %idxprom7, i32 0
+  %tmp11 = load double* %tmp10, align 8, !tbaa !4
+  %cmp12 = fcmp ogt double %tmp5, %tmp11
+  br i1 %cmp12, label %if.then, label %for.inc
+
+if.then:                                          ; preds = %for.body
+  %i.017 = trunc i64 %indvar to i32
+  br label %for.inc
+
+for.inc:                                          ; preds = %for.body, %if.then
+  %i.01719 = phi i32 [ %i.01718, %for.body ], [ %i.017, %if.then ]
+  %indvar.next = add i64 %indvar, 1
+  %exitcond = icmp eq i64 %indvar.next, %tmp22
+  br i1 %exitcond, label %for.cond.for.end_crit_edge, label %for.body
+
+
+It is good that we hoisted the reloads of numf2's, and Y out of the loop and
+sunk the store to winner out.
+
+However, this is awful on several levels: the conditional truncate in the loop
+(-indvars at fault? why can't we completely promote the IV to i64?).
+
+Beyond that, we have a partially redundant load in the loop: if "winner" (aka 
+%i.01718) isn't updated, we reload Y[winner].y the next time through the loop.
+Similarly, the addressing that feeds it (including the sext) is redundant. In
+the end we get this generated assembly:
+
+LBB0_2:                                 ## %for.body
+                                        ## =>This Inner Loop Header: Depth=1
+	movsd	(%rdi), %xmm0
+	movslq	%edx, %r8
+	shlq	$4, %r8
+	ucomisd	(%rcx,%r8), %xmm0
+	jbe	LBB0_4
+	movl	%esi, %edx
+LBB0_4:                                 ## %for.inc
+	addq	$16, %rdi
+	incq	%rsi
+	cmpq	%rsi, %rax
+	jne	LBB0_2
+
+All things considered this isn't too bad, but we shouldn't need the movslq or
+the shlq instruction, or the load folded into ucomisd every time through the
+loop.
+
+On an x86-specific topic, if the loop can't be restructure, the movl should be a
+cmov.
+
 //===---------------------------------------------------------------------===//
 
 [STORE SINKING]
@@ -1556,21 +1627,6 @@ int bar() { return foo("abcd"); }
 
 //===---------------------------------------------------------------------===//
 
-InstCombine should use SimplifyDemandedBits to remove the or instruction:
-
-define i1 @test(i8 %x, i8 %y) {
-  %A = or i8 %x, 1
-  %B = icmp ugt i8 %A, 3
-  ret i1 %B
-}
-
-Currently instcombine calls SimplifyDemandedBits with either all bits or just
-the sign bit, if the comparison is obviously a sign test. In this case, we only
-need all but the bottom two bits from %A, and if we gave that mask to SDB it
-would delete the or instruction for us.
-
-//===---------------------------------------------------------------------===//
-
 functionattrs doesn't know much about memcpy/memset.  This function should be
 marked readnone rather than readonly, since it only twiddles local memory, but
 functionattrs doesn't handle memset/memcpy/memmove aggressively:
@@ -1938,17 +1994,6 @@ entry:
 
 //===---------------------------------------------------------------------===//
 
-This compare could fold to false:
-
-define i1 @g(i32 a) nounwind readnone {
-       %add = shl i32 %a, 1
-       %mul = shl i32 %a, 1
-       %cmp = icmp ugt i32 %add, %mul
-       ret i1 %cmp
-}
-
-//===---------------------------------------------------------------------===//
-
 This code can be seen in viterbi:
 
   %64 = call noalias i8* @malloc(i64 %62) nounwind
@@ -1962,6 +2007,303 @@ and also a performance win by exposing more memsets to the optimizer.
 
 This occurs several times in viterbi.
 
+Note that this would change the semantics of @llvm.objectsize which by its
+current definition always folds to a constant. We also should make sure that
+we remove checking in code like
+
+  char *p = malloc(strlen(s)+1);
+  __strcpy_chk(p, s, __builtin_objectsize(p, 0));
+
 //===---------------------------------------------------------------------===//
 
+This code (from Benchmarks/Dhrystone/dry.c):
+
+define i32 @Func1(i32, i32) nounwind readnone optsize ssp {
+entry:
+  %sext = shl i32 %0, 24
+  %conv = ashr i32 %sext, 24
+  %sext6 = shl i32 %1, 24
+  %conv4 = ashr i32 %sext6, 24
+  %cmp = icmp eq i32 %conv, %conv4
+  %. = select i1 %cmp, i32 10000, i32 0
+  ret i32 %.
+}
+
+Should be simplified into something like:
+
+define i32 @Func1(i32, i32) nounwind readnone optsize ssp {
+entry:
+  %sext = shl i32 %0, 24
+  %conv = and i32 %sext, 0xFF000000
+  %sext6 = shl i32 %1, 24
+  %conv4 = and i32 %sext6, 0xFF000000
+  %cmp = icmp eq i32 %conv, %conv4
+  %. = select i1 %cmp, i32 10000, i32 0
+  ret i32 %.
+}
+
+and then to:
+
+define i32 @Func1(i32, i32) nounwind readnone optsize ssp {
+entry:
+  %conv = and i32 %0, 0xFF
+  %conv4 = and i32 %1, 0xFF
+  %cmp = icmp eq i32 %conv, %conv4
+  %. = select i1 %cmp, i32 10000, i32 0
+  ret i32 %.
+}
+//===---------------------------------------------------------------------===//
+
+clang -O3 currently compiles this code
+
+int g(unsigned int a) {
+  unsigned int c[100];
+  c[10] = a;
+  c[11] = a;
+  unsigned int b = c[10] + c[11];
+  if(b > a*2) a = 4;
+  else a = 8;
+  return a + 7;
+}
+
+into
+
+define i32 @g(i32 a) nounwind readnone {
+  %add = shl i32 %a, 1
+  %mul = shl i32 %a, 1
+  %cmp = icmp ugt i32 %add, %mul
+  %a.addr.0 = select i1 %cmp, i32 11, i32 15
+  ret i32 %a.addr.0
+}
+
+The icmp should fold to false. This CSE opportunity is only available
+after GVN and InstCombine have run.
+
+//===---------------------------------------------------------------------===//
+
+memcpyopt should turn this:
+
+define i8* @test10(i32 %x) {
+  %alloc = call noalias i8* @malloc(i32 %x) nounwind
+  call void @llvm.memset.p0i8.i32(i8* %alloc, i8 0, i32 %x, i32 1, i1 false)
+  ret i8* %alloc
+}
+
+into a call to calloc.  We should make sure that we analyze calloc as
+aggressively as malloc though.
+
+//===---------------------------------------------------------------------===//
+
+clang -O3 doesn't optimize this:
+
+void f1(int* begin, int* end) {
+  std::fill(begin, end, 0);
+}
+
+into a memset.  This is PR8942.
+
+//===---------------------------------------------------------------------===//
+
+clang -O3 -fno-exceptions currently compiles this code:
+
+void f(int N) {
+  std::vector<int> v(N);
+
+  extern void sink(void*); sink(&v);
+}
+
+into
+
+define void @_Z1fi(i32 %N) nounwind {
+entry:
+  %v2 = alloca [3 x i32*], align 8
+  %v2.sub = getelementptr inbounds [3 x i32*]* %v2, i64 0, i64 0
+  %tmpcast = bitcast [3 x i32*]* %v2 to %"class.std::vector"*
+  %conv = sext i32 %N to i64
+  store i32* null, i32** %v2.sub, align 8, !tbaa !0
+  %tmp3.i.i.i.i.i = getelementptr inbounds [3 x i32*]* %v2, i64 0, i64 1
+  store i32* null, i32** %tmp3.i.i.i.i.i, align 8, !tbaa !0
+  %tmp4.i.i.i.i.i = getelementptr inbounds [3 x i32*]* %v2, i64 0, i64 2
+  store i32* null, i32** %tmp4.i.i.i.i.i, align 8, !tbaa !0
+  %cmp.i.i.i.i = icmp eq i32 %N, 0
+  br i1 %cmp.i.i.i.i, label %_ZNSt12_Vector_baseIiSaIiEEC2EmRKS0_.exit.thread.i.i, label %cond.true.i.i.i.i
+
+_ZNSt12_Vector_baseIiSaIiEEC2EmRKS0_.exit.thread.i.i: ; preds = %entry
+  store i32* null, i32** %v2.sub, align 8, !tbaa !0
+  store i32* null, i32** %tmp3.i.i.i.i.i, align 8, !tbaa !0
+  %add.ptr.i5.i.i = getelementptr inbounds i32* null, i64 %conv
+  store i32* %add.ptr.i5.i.i, i32** %tmp4.i.i.i.i.i, align 8, !tbaa !0
+  br label %_ZNSt6vectorIiSaIiEEC1EmRKiRKS0_.exit
+
+cond.true.i.i.i.i:                                ; preds = %entry
+  %cmp.i.i.i.i.i = icmp slt i32 %N, 0
+  br i1 %cmp.i.i.i.i.i, label %if.then.i.i.i.i.i, label %_ZNSt12_Vector_baseIiSaIiEEC2EmRKS0_.exit.i.i
+
+if.then.i.i.i.i.i:                                ; preds = %cond.true.i.i.i.i
+  call void @_ZSt17__throw_bad_allocv() noreturn nounwind
+  unreachable
+
+_ZNSt12_Vector_baseIiSaIiEEC2EmRKS0_.exit.i.i:    ; preds = %cond.true.i.i.i.i
+  %mul.i.i.i.i.i = shl i64 %conv, 2
+  %call3.i.i.i.i.i = call noalias i8* @_Znwm(i64 %mul.i.i.i.i.i) nounwind
+  %0 = bitcast i8* %call3.i.i.i.i.i to i32*
+  store i32* %0, i32** %v2.sub, align 8, !tbaa !0
+  store i32* %0, i32** %tmp3.i.i.i.i.i, align 8, !tbaa !0
+  %add.ptr.i.i.i = getelementptr inbounds i32* %0, i64 %conv
+  store i32* %add.ptr.i.i.i, i32** %tmp4.i.i.i.i.i, align 8, !tbaa !0
+  call void @llvm.memset.p0i8.i64(i8* %call3.i.i.i.i.i, i8 0, i64 %mul.i.i.i.i.i, i32 4, i1 false)
+  br label %_ZNSt6vectorIiSaIiEEC1EmRKiRKS0_.exit
+
+This is just the handling the construction of the vector. Most surprising here
+is the fact that all three null stores in %entry are dead, but not eliminated.
+Also surprising is that %conv isn't simplified to 0 in %....exit.thread.i.i.
+
+//===---------------------------------------------------------------------===//
+
+clang -O3 -fno-exceptions currently compiles this code:
+
+void f(int N) {
+  std::vector<int> v(N);
+  for (int k = 0; k < N; ++k)
+    v[k] = 0;
+
+  extern void sink(void*); sink(&v);
+}
+
+into almost the same as the previous note, but replace its final BB with:
+
+for.body.lr.ph:                                   ; preds = %cond.true.i.i.i.i
+  %mul.i.i.i.i.i = shl i64 %conv, 2
+  %call3.i.i.i.i.i = call noalias i8* @_Znwm(i64 %mul.i.i.i.i.i) nounwind
+  %0 = bitcast i8* %call3.i.i.i.i.i to i32*
+  store i32* %0, i32** %v8.sub, align 8, !tbaa !0
+  %add.ptr.i.i.i = getelementptr inbounds i32* %0, i64 %conv
+  store i32* %add.ptr.i.i.i, i32** %tmp4.i.i.i.i.i, align 8, !tbaa !0
+  call void @llvm.memset.p0i8.i64(i8* %call3.i.i.i.i.i, i8 0, i64 %mul.i.i.i.i.i, i32 4, i1 false)
+  store i32* %add.ptr.i.i.i, i32** %tmp3.i.i.i.i.i, align 8, !tbaa !0
+  %tmp18 = add i32 %N, -1
+  %tmp19 = zext i32 %tmp18 to i64
+  %tmp20 = shl i64 %tmp19, 2
+  %tmp21 = add i64 %tmp20, 4
+  call void @llvm.memset.p0i8.i64(i8* %call3.i.i.i.i.i, i8 0, i64 %tmp21, i32 4, i1 false)
+  br label %for.end
+
+First off, why (((zext %N - 1) << 2) + 4) instead of the ((sext %N) << 2) done
+previously? (or better yet, re-use that one?)
+
+Then, the really painful one is the second memset, of the same memory, to the
+same value.
+
+//===---------------------------------------------------------------------===//
+
+clang -O3 -fno-exceptions currently compiles this code:
+
+struct S {
+  unsigned short m1, m2;
+  unsigned char m3, m4;
+};
+
+void f(int N) {
+  std::vector<S> v(N);
+  extern void sink(void*); sink(&v);
+}
+
+into poor code for zero-initializing 'v' when N is >0. The problem is that
+S is only 6 bytes, but each element is 8 byte-aligned. We generate a loop and
+4 stores on each iteration. If the struct were 8 bytes, this gets turned into
+a memset.
+
+//===---------------------------------------------------------------------===//
+
+clang -O3 currently compiles this code:
+
+extern const int magic;
+double f() { return 0.0 * magic; }
+
+into
+
+@magic = external constant i32
+
+define double @_Z1fv() nounwind readnone {
+entry:
+  %tmp = load i32* @magic, align 4, !tbaa !0
+  %conv = sitofp i32 %tmp to double
+  %mul = fmul double %conv, 0.000000e+00
+  ret double %mul
+}
+
+We should be able to fold away this fmul to 0.0.  More generally, fmul(x,0.0)
+can be folded to 0.0 if we can prove that the LHS is not -0.0, not a NaN, and
+not an INF.  The CannotBeNegativeZero predicate in value tracking should be
+extended to support general "fpclassify" operations that can return 
+yes/no/unknown for each of these predicates.
+
+In this predicate, we know that uitofp is trivially never NaN or -0.0, and
+we know that it isn't +/-Inf if the floating point type has enough exponent bits
+to represent the largest integer value as < inf.
+
+//===---------------------------------------------------------------------===//
+
+When optimizing a transformation that can change the sign of 0.0 (such as the
+0.0*val -> 0.0 transformation above), it might be provable that the sign of the
+expression doesn't matter.  For example, by the above rules, we can't transform
+fmul(sitofp(x), 0.0) into 0.0, because x might be -1 and the result of the
+expression is defined to be -0.0.
+
+If we look at the uses of the fmul for example, we might be able to prove that
+all uses don't care about the sign of zero.  For example, if we have:
+
+  fadd(fmul(sitofp(x), 0.0), 2.0)
+
+Since we know that x+2.0 doesn't care about the sign of any zeros in X, we can
+transform the fmul to 0.0, and then the fadd to 2.0.
+
+//===---------------------------------------------------------------------===//
+
+We should enhance memcpy/memcpy/memset to allow a metadata node on them
+indicating that some bytes of the transfer are undefined.  This is useful for
+frontends like clang when lowering struct copies, when some elements of the
+struct are undefined.  Consider something like this:
+
+struct x {
+  char a;
+  int b[4];
+};
+void foo(struct x*P);
+struct x testfunc() {
+  struct x V1, V2;
+  foo(&V1);
+  V2 = V1;
+
+  return V2;
+}
+
+We currently compile this to:
+$ clang t.c -S -o - -O0 -emit-llvm | opt -scalarrepl -S
+
+
+%struct.x = type { i8, [4 x i32] }
+
+define void @testfunc(%struct.x* sret %agg.result) nounwind ssp {
+entry:
+  %V1 = alloca %struct.x, align 4
+  call void @foo(%struct.x* %V1)
+  %tmp1 = bitcast %struct.x* %V1 to i8*
+  %0 = bitcast %struct.x* %V1 to i160*
+  %srcval1 = load i160* %0, align 4
+  %tmp2 = bitcast %struct.x* %agg.result to i8*
+  %1 = bitcast %struct.x* %agg.result to i160*
+  store i160 %srcval1, i160* %1, align 4
+  ret void
+}
+
+This happens because SRoA sees that the temp alloca has is being memcpy'd into
+and out of and it has holes and it has to be conservative.  If we knew about the
+holes, then this could be much much better.
+
+Having information about these holes would also improve memcpy (etc) lowering at
+llc time when it gets inlined, because we can use smaller transfers.  This also
+avoids partial register stalls in some important cases.
+
+//===---------------------------------------------------------------------===//
 

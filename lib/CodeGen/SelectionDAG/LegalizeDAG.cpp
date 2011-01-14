@@ -19,7 +19,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/CodeGen/SelectionDAG.h"
-#include "llvm/Target/TargetFrameInfo.h"
+#include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetMachine.h"
@@ -1378,7 +1378,7 @@ SDValue SelectionDAGLegalize::LegalizeOp(SDValue Op) {
                                Result.getValueType(),
                                Result, DAG.getValueType(SrcVT));
         else
-          ValRes = DAG.getZeroExtendInReg(Result, dl, SrcVT);
+          ValRes = DAG.getZeroExtendInReg(Result, dl, SrcVT.getScalarType());
         Tmp1 = LegalizeOp(ValRes);  // Relegalize new nodes.
         Tmp2 = LegalizeOp(Result.getValue(1));  // Relegalize new nodes.
         break;
@@ -1719,7 +1719,7 @@ void SelectionDAGLegalize::ExpandDYNAMIC_STACKALLOC(SDNode* Node,
   SDValue SP = DAG.getCopyFromReg(Chain, dl, SPReg, VT);
   Chain = SP.getValue(1);
   unsigned Align = cast<ConstantSDNode>(Tmp3)->getZExtValue();
-  unsigned StackAlign = TM.getFrameInfo()->getStackAlignment();
+  unsigned StackAlign = TM.getFrameLowering()->getStackAlignment();
   if (Align > StackAlign)
     SP = DAG.getNode(ISD::AND, dl, VT, SP,
                       DAG.getConstant(-(uint64_t)Align, VT));
@@ -2600,7 +2600,6 @@ void SelectionDAGLegalize::ExpandNode(SDNode *Node,
   // By default, atomic intrinsics are marked Legal and lowered. Targets
   // which don't support them directly, however, may want libcalls, in which
   // case they mark them Expand, and we get here.
-  // FIXME: Unimplemented for now. Add libcalls.
   case ISD::ATOMIC_SWAP:
   case ISD::ATOMIC_LOAD_ADD:
   case ISD::ATOMIC_LOAD_SUB:

@@ -29,7 +29,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineLocation.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Target/TargetFrameInfo.h"
+#include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -290,7 +290,7 @@ static void emitSPUpdate(MachineBasicBlock &MBB,
 void Thumb1RegisterInfo::
 eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
                               MachineBasicBlock::iterator I) const {
-  const TargetFrameInfo *TFI = MF.getTarget().getFrameInfo();
+  const TargetFrameLowering *TFI = MF.getTarget().getFrameLowering();
 
   if (!TFI->hasReservedCallFrame(MF)) {
     // If we have alloca, convert as follows:
@@ -303,7 +303,7 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
       // We need to keep the stack aligned properly.  To do this, we round the
       // amount of space needed for the outgoing arguments up to the next
       // alignment boundary.
-      unsigned Align = MF.getTarget().getFrameInfo()->getStackAlignment();
+      unsigned Align = TFI->getStackAlignment();
       Amount = (Amount+Align-1)/Align*Align;
 
       // Replace the pseudo instruction with a new instruction...
@@ -602,7 +602,7 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   else if (AFI->isGPRCalleeSavedArea2Frame(FrameIndex))
     Offset -= AFI->getGPRCalleeSavedArea2Offset();
   else if (MF.getFrameInfo()->hasVarSizedObjects()) {
-    assert(SPAdj == 0 && MF.getTarget().getFrameInfo()->hasFP(MF) &&
+    assert(SPAdj == 0 && MF.getTarget().getFrameLowering()->hasFP(MF) &&
            "Unexpected");
     // There are alloca()'s in this function, must reference off the frame
     // pointer or base pointer instead.
@@ -659,8 +659,9 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     MI.setDesc(TII.get(UseRR ? ARM::tLDRr : ARM::tLDRi));
     MI.getOperand(i).ChangeToRegister(TmpReg, false, false, true);
     if (UseRR)
-      // Use [reg, reg] addrmode.
-      MI.addOperand(MachineOperand::CreateReg(FrameReg, false));
+      // Use [reg, reg] addrmode. Replace the immediate operand w/ the frame
+      // register. The offset is already handled in the vreg value.
+      MI.getOperand(i+1).ChangeToRegister(FrameReg, false, false, false);
   } else if (Desc.mayStore()) {
       VReg = MF.getRegInfo().createVirtualRegister(ARM::tGPRRegisterClass);
       bool UseRR = false;
@@ -678,8 +679,10 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                                   *this, dl);
       MI.setDesc(TII.get(UseRR ? ARM::tSTRr : ARM::tSTRi));
       MI.getOperand(i).ChangeToRegister(VReg, false, false, true);
-      if (UseRR)  // Use [reg, reg] addrmode.
-        MI.addOperand(MachineOperand::CreateReg(FrameReg, false));
+      if (UseRR)
+        // Use [reg, reg] addrmode. Replace the immediate operand w/ the frame
+        // register. The offset is already handled in the vreg value.
+        MI.getOperand(i+1).ChangeToRegister(FrameReg, false, false, false);
   } else {
     assert(false && "Unexpected opcode!");
   }

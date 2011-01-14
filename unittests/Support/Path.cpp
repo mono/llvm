@@ -10,11 +10,22 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/PathV2.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include "gtest/gtest.h"
 
 using namespace llvm;
 using namespace llvm::sys;
+
+#define ASSERT_NO_ERROR(x) \
+  if (error_code ASSERT_NO_ERROR_ec = x) { \
+    SmallString<128> MessageStorage; \
+    raw_svector_ostream Message(MessageStorage); \
+    Message << #x ": did not return errc::success.\n" \
+            << "error number: " << ASSERT_NO_ERROR_ec.value() << "\n" \
+            << "error message: " << ASSERT_NO_ERROR_ec.message() << "\n"; \
+    GTEST_FATAL_FAILURE_(MessageStorage.c_str()); \
+  } else {}
 
 namespace {
 
@@ -100,9 +111,9 @@ TEST(Support, Path) {
     path::is_absolute(*i);
     path::is_relative(*i);
 
-    SmallString<16> temp_store;
+    SmallString<128> temp_store;
     temp_store = *i;
-    ASSERT_FALSE(fs::make_absolute(temp_store));
+    ASSERT_NO_ERROR(fs::make_absolute(temp_store));
     temp_store = *i;
     path::remove_filename(temp_store);
 
@@ -114,71 +125,116 @@ TEST(Support, Path) {
     EXPECT_EQ(*(--sys::path::end(filename)), (stem + ext).str());
 
     path::native(*i, temp_store);
+  }
+}
 
-    outs().flush();
+class FileSystemTest : public testing::Test {
+protected:
+  /// Unique temporary directory in which all created filesystem entities must
+  /// be placed. It is recursively removed at the end of each test.
+  SmallString<128> TestDirectory;
+
+  virtual void SetUp() {
+    int fd;
+    ASSERT_NO_ERROR(
+      fs::unique_file("file-system-test-%%-%%-%%-%%/test-directory.anchor", fd,
+                      TestDirectory));
+    // We don't care about this specific file.
+    ::close(fd);
+    TestDirectory = path::parent_path(TestDirectory);
+    errs() << "Test Directory: " << TestDirectory << '\n';
+    errs().flush();
   }
 
+  virtual void TearDown() {
+    uint32_t removed;
+    ASSERT_NO_ERROR(fs::remove_all(TestDirectory.str(), removed));
+  }
+};
+
+TEST_F(FileSystemTest, TempFiles) {
   // Create a temp file.
   int FileDescriptor;
   SmallString<64> TempPath;
-  ASSERT_FALSE(fs::unique_file("%%-%%-%%-%%.temp", FileDescriptor, TempPath));
+  ASSERT_NO_ERROR(
+    fs::unique_file("%%-%%-%%-%%.temp", FileDescriptor, TempPath));
 
   // Make sure it exists.
   bool TempFileExists;
-  ASSERT_FALSE(sys::fs::exists(Twine(TempPath), TempFileExists));
+  ASSERT_NO_ERROR(sys::fs::exists(Twine(TempPath), TempFileExists));
   EXPECT_TRUE(TempFileExists);
 
   // Create another temp tile.
   int FD2;
   SmallString<64> TempPath2;
-  ASSERT_FALSE(fs::unique_file("%%-%%-%%-%%.temp", FD2, TempPath2));
+  ASSERT_NO_ERROR(fs::unique_file("%%-%%-%%-%%.temp", FD2, TempPath2));
   ASSERT_NE(TempPath.str(), TempPath2.str());
 
   // Try to copy the first to the second.
-  EXPECT_EQ(fs::copy_file(Twine(TempPath), Twine(TempPath2)), errc::file_exists);
+  EXPECT_EQ(
+    fs::copy_file(Twine(TempPath), Twine(TempPath2)), errc::file_exists);
 
   ::close(FD2);
   // Try again with the proper options.
-  ASSERT_FALSE(fs::copy_file(Twine(TempPath), Twine(TempPath2),
-                             fs::copy_option::overwrite_if_exists));
+  ASSERT_NO_ERROR(fs::copy_file(Twine(TempPath), Twine(TempPath2),
+                                fs::copy_option::overwrite_if_exists));
   // Remove Temp2.
-  ASSERT_FALSE(fs::remove(Twine(TempPath2), TempFileExists));
+  ASSERT_NO_ERROR(fs::remove(Twine(TempPath2), TempFileExists));
   EXPECT_TRUE(TempFileExists);
 
   // Make sure Temp2 doesn't exist.
-  ASSERT_FALSE(fs::exists(Twine(TempPath2), TempFileExists));
+  ASSERT_NO_ERROR(fs::exists(Twine(TempPath2), TempFileExists));
   EXPECT_FALSE(TempFileExists);
 
   // Create a hard link to Temp1.
-  ASSERT_FALSE(fs::create_hard_link(Twine(TempPath), Twine(TempPath2)));
+  ASSERT_NO_ERROR(fs::create_hard_link(Twine(TempPath), Twine(TempPath2)));
   bool equal;
-  ASSERT_FALSE(fs::equivalent(Twine(TempPath), Twine(TempPath2), equal));
+  ASSERT_NO_ERROR(fs::equivalent(Twine(TempPath), Twine(TempPath2), equal));
   EXPECT_TRUE(equal);
 
   // Remove Temp1.
   ::close(FileDescriptor);
-  ASSERT_FALSE(fs::remove(Twine(TempPath), TempFileExists));
+  ASSERT_NO_ERROR(fs::remove(Twine(TempPath), TempFileExists));
   EXPECT_TRUE(TempFileExists);
 
   // Remove the hard link.
-  ASSERT_FALSE(fs::remove(Twine(TempPath2), TempFileExists));
+  ASSERT_NO_ERROR(fs::remove(Twine(TempPath2), TempFileExists));
   EXPECT_TRUE(TempFileExists);
 
   // Make sure Temp1 doesn't exist.
-  ASSERT_FALSE(fs::exists(Twine(TempPath), TempFileExists));
+  ASSERT_NO_ERROR(fs::exists(Twine(TempPath), TempFileExists));
   EXPECT_FALSE(TempFileExists);
+}
 
-  // I've yet to do directory iteration on Unix.
-#ifdef LLVM_ON_WIN32
+TEST_F(FileSystemTest, DirectoryIteration) {
   error_code ec;
-  for (fs::directory_iterator i(".", ec), e; i != e; i.increment(ec)) {
-    if (ec) {
-      errs() << ec.message() << '\n';
-      errs().flush();
-      report_fatal_error("Directory iteration failed!");
-    }
+  for (fs::directory_iterator i(".", ec), e; i != e; i.increment(ec))
+    ASSERT_NO_ERROR(ec);
+}
+
+TEST_F(FileSystemTest, Magic) {
+  struct type {
+    const char *filename;
+    const char *magic_str;
+    size_t      magic_str_len;
+  } types [] = {{"magic.archive", "!<arch>\x0A", 8}};
+
+  // Create some files filled with magic.
+  for (type *i = types, *e = types + (sizeof(types) / sizeof(type)); i != e;
+                                                                     ++i) {
+    SmallString<128> file_pathname(TestDirectory);
+    path::append(file_pathname, i->filename);
+    std::string ErrMsg;
+    raw_fd_ostream file(file_pathname.c_str(), ErrMsg,
+                        raw_fd_ostream::F_Binary);
+    ASSERT_FALSE(file.has_error());
+    StringRef magic(i->magic_str, i->magic_str_len);
+    file << magic;
+    file.flush();
+    bool res = false;
+    ASSERT_NO_ERROR(fs::has_magic(file_pathname.c_str(), magic, res));
+    EXPECT_TRUE(res);
   }
-#endif
 }
 
 } // anonymous namespace

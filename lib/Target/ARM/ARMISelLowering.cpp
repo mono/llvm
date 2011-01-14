@@ -33,6 +33,7 @@
 #include "llvm/Intrinsics.h"
 #include "llvm/Type.h"
 #include "llvm/CodeGen/CallingConvLower.h"
+#include "llvm/CodeGen/IntrinsicLowering.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -43,6 +44,7 @@
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/ADT/VectorExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -94,7 +96,7 @@ void ARMTargetLowering::addTypeForNEON(EVT VT, EVT PromotedLdStVT,
   setOperationAction(ISD::BUILD_VECTOR, VT.getSimpleVT(), Custom);
   setOperationAction(ISD::VECTOR_SHUFFLE, VT.getSimpleVT(), Custom);
   setOperationAction(ISD::CONCAT_VECTORS, VT.getSimpleVT(), Legal);
-  setOperationAction(ISD::EXTRACT_SUBVECTOR, VT.getSimpleVT(), Expand);
+  setOperationAction(ISD::EXTRACT_SUBVECTOR, VT.getSimpleVT(), Legal);
   setOperationAction(ISD::SELECT, VT.getSimpleVT(), Expand);
   setOperationAction(ISD::SELECT_CC, VT.getSimpleVT(), Expand);
   if (VT.isInteger()) {
@@ -692,7 +694,8 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   else
     setSchedulingPreference(Sched::Hybrid);
 
-  maxStoresPerMemcpy = 1;   //// temporary - rewrite interface to use type
+  //// temporary - rewrite interface to use type
+  maxStoresPerMemcpy = maxStoresPerMemcpyOptSize = 1;
 
   // On ARM arguments smaller than 4 bytes are extended, so all arguments
   // are at least 4 bytes aligned.
@@ -904,10 +907,11 @@ Sched::Preference ARMTargetLowering::getSchedulingPreference(SDNode *N) const {
   return Sched::RegPressure;
 }
 
+// FIXME: Move to RegInfo
 unsigned
 ARMTargetLowering::getRegPressureLimit(const TargetRegisterClass *RC,
                                        MachineFunction &MF) const {
-  const TargetFrameInfo *TFI = MF.getTarget().getFrameInfo();
+  const TargetFrameLowering *TFI = MF.getTarget().getFrameLowering();
 
   switch (RC->getID()) {
   default:
@@ -1470,7 +1474,7 @@ bool MatchingStackOffset(SDValue Arg, unsigned Offset, ISD::ArgFlagsTy Flags,
   int FI = INT_MAX;
   if (Arg.getOpcode() == ISD::CopyFromReg) {
     unsigned VR = cast<RegisterSDNode>(Arg.getOperand(1))->getReg();
-    if (!VR || TargetRegisterInfo::isPhysicalRegister(VR))
+    if (!TargetRegisterInfo::isVirtualRegister(VR))
       return false;
     MachineInstr *Def = MRI->getVRegDef(VR);
     if (!Def)
@@ -2329,7 +2333,7 @@ ARMTargetLowering::LowerFormalArguments(SDValue Chain,
     unsigned NumGPRs = CCInfo.getFirstUnallocated
       (GPRArgRegs, sizeof(GPRArgRegs) / sizeof(GPRArgRegs[0]));
 
-    unsigned Align = MF.getTarget().getFrameInfo()->getStackAlignment();
+    unsigned Align = MF.getTarget().getFrameLowering()->getStackAlignment();
     unsigned VARegSize = (4 - NumGPRs) * 4;
     unsigned VARegSaveSize = (VARegSize + Align - 1) & ~(Align - 1);
     unsigned ArgOffset = CCInfo.getNextStackOffset();
@@ -3544,8 +3548,8 @@ static SDValue IsSingleInstrConstant(SDValue N, SelectionDAG &DAG,
 
 // If this is a case we can't handle, return null and let the default
 // expansion code take care of it.
-static SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG,
-                                 const ARMSubtarget *ST) {
+SDValue ARMTargetLowering::LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG,
+                                             const ARMSubtarget *ST) const {
   BuildVectorSDNode *BVN = cast<BuildVectorSDNode>(Op.getNode());
   DebugLoc dl = Op.getDebugLoc();
   EVT VT = Op.getValueType();
@@ -3636,6 +3640,13 @@ static SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG,
   if (isConstant)
     return SDValue();
 
+  // Empirical tests suggest this is rarely worth it for vectors of length <= 2.
+  if (NumElts >= 4) {
+    SDValue shuffle = ReconstructShuffle(Op, DAG);
+    if (shuffle != SDValue())
+      return shuffle;
+  }
+
   // Vectors with 32- or 64-bit elements can be built by directly assigning
   // the subregisters.  Lower it to an ARMISD::BUILD_VECTOR so the operands
   // will be legalized.
@@ -3651,6 +3662,129 @@ static SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG,
     return DAG.getNode(ISD::BITCAST, dl, VT, Val);
   }
 
+  return SDValue();
+}
+
+// Gather data to see if the operation can be modelled as a
+// shuffle in combination with VEXTs. 
+SDValue ARMTargetLowering::ReconstructShuffle(SDValue Op, SelectionDAG &DAG) const {
+  DebugLoc dl = Op.getDebugLoc();
+  EVT VT = Op.getValueType();
+  unsigned NumElts = VT.getVectorNumElements();
+
+  SmallVector<SDValue, 2> SourceVecs;
+  SmallVector<unsigned, 2> MinElts;
+  SmallVector<unsigned, 2> MaxElts;
+    
+  for (unsigned i = 0; i < NumElts; ++i) {
+    SDValue V = Op.getOperand(i);
+    if (V.getOpcode() == ISD::UNDEF)
+      continue;
+    else if (V.getOpcode() != ISD::EXTRACT_VECTOR_ELT) {
+      // A shuffle can only come from building a vector from various
+      // elements of other vectors.
+      return SDValue();
+    }
+      
+    // Record this extraction against the appropriate vector if possible...
+    SDValue SourceVec = V.getOperand(0);
+    unsigned EltNo = cast<ConstantSDNode>(V.getOperand(1))->getZExtValue();
+    bool FoundSource = false;
+    for (unsigned j = 0; j < SourceVecs.size(); ++j) {
+      if (SourceVecs[j] == SourceVec) {
+        if (MinElts[j] > EltNo)
+          MinElts[j] = EltNo;
+        if (MaxElts[j] < EltNo)
+          MaxElts[j] = EltNo;
+        FoundSource = true;
+        break;
+      }
+    }
+      
+    // Or record a new source if not...
+    if (!FoundSource) {
+      SourceVecs.push_back(SourceVec);
+      MinElts.push_back(EltNo);
+      MaxElts.push_back(EltNo);
+    }
+  }
+    
+  // Currently only do something sane when at most two source vectors
+  // involved.
+  if (SourceVecs.size() > 2)
+    return SDValue();
+
+  SDValue ShuffleSrcs[2] = {DAG.getUNDEF(VT), DAG.getUNDEF(VT) };
+  int VEXTOffsets[2] = {0, 0};
+      
+  // This loop extracts the usage patterns of the source vectors
+  // and prepares appropriate SDValues for a shuffle if possible.
+  for (unsigned i = 0; i < SourceVecs.size(); ++i) {
+    if (SourceVecs[i].getValueType() == VT) {
+      // No VEXT necessary
+      ShuffleSrcs[i] = SourceVecs[i];
+      VEXTOffsets[i] = 0;
+      continue;
+    } else if (SourceVecs[i].getValueType().getVectorNumElements() < NumElts) {
+      // It probably isn't worth padding out a smaller vector just to
+      // break it down again in a shuffle.
+      return SDValue();
+    }
+    
+    // Since only 64-bit and 128-bit vectors are legal on ARM and
+    // we've eliminated the other cases...
+    assert(SourceVecs[i].getValueType().getVectorNumElements() == 2*NumElts &&
+           "unexpected vector sizes in ReconstructShuffle");
+    
+    if (MaxElts[i] - MinElts[i] >= NumElts) {
+      // Span too large for a VEXT to cope
+      return SDValue();
+    } 
+    
+    if (MinElts[i] >= NumElts) {
+      // The extraction can just take the second half
+      VEXTOffsets[i] = NumElts;
+      ShuffleSrcs[i] = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT, SourceVecs[i],
+                                   DAG.getIntPtrConstant(NumElts));
+    } else if (MaxElts[i] < NumElts) {
+      // The extraction can just take the first half
+      VEXTOffsets[i] = 0;
+      ShuffleSrcs[i] = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT, SourceVecs[i],
+                                   DAG.getIntPtrConstant(0));
+    } else {
+      // An actual VEXT is needed
+      VEXTOffsets[i] = MinElts[i];
+      SDValue VEXTSrc1 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT, SourceVecs[i],
+                                     DAG.getIntPtrConstant(0));
+      SDValue VEXTSrc2 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT, SourceVecs[i],
+                                     DAG.getIntPtrConstant(NumElts));
+      ShuffleSrcs[i] = DAG.getNode(ARMISD::VEXT, dl, VT, VEXTSrc1, VEXTSrc2,
+                                   DAG.getConstant(VEXTOffsets[i], MVT::i32));
+    }
+  }
+      
+  SmallVector<int, 8> Mask;
+  
+  for (unsigned i = 0; i < NumElts; ++i) {
+    SDValue Entry = Op.getOperand(i);
+    if (Entry.getOpcode() == ISD::UNDEF) {
+      Mask.push_back(-1);
+      continue;
+    }
+      
+    SDValue ExtractVec = Entry.getOperand(0);
+    int ExtractElt = cast<ConstantSDNode>(Op.getOperand(i).getOperand(1))->getSExtValue();
+    if (ExtractVec == SourceVecs[0]) {
+      Mask.push_back(ExtractElt - VEXTOffsets[0]);
+    } else {
+      Mask.push_back(ExtractElt + NumElts - VEXTOffsets[1]);
+    }
+  }
+  
+  // Final check before we try to produce nonsense...
+  if (isShuffleMaskLegal(Mask, VT))
+    return DAG.getVectorShuffle(VT, dl, ShuffleSrcs[0], ShuffleSrcs[1], &Mask[0]);
+  
   return SDValue();
 }
 
@@ -5975,6 +6109,37 @@ void ARMTargetLowering::computeMaskedBitsForTargetNode(const SDValue Op,
 //===----------------------------------------------------------------------===//
 //                           ARM Inline Assembly Support
 //===----------------------------------------------------------------------===//
+
+bool ARMTargetLowering::ExpandInlineAsm(CallInst *CI) const {
+  // Looking for "rev" which is V6+.
+  if (!Subtarget->hasV6Ops())
+    return false;
+
+  InlineAsm *IA = cast<InlineAsm>(CI->getCalledValue());
+  std::string AsmStr = IA->getAsmString();
+  SmallVector<StringRef, 4> AsmPieces;
+  SplitString(AsmStr, AsmPieces, ";\n");
+
+  switch (AsmPieces.size()) {
+  default: return false;
+  case 1:
+    AsmStr = AsmPieces[0];
+    AsmPieces.clear();
+    SplitString(AsmStr, AsmPieces, " \t,");
+
+    // rev $0, $1
+    if (AsmPieces.size() == 3 &&
+        AsmPieces[0] == "rev" && AsmPieces[1] == "$0" && AsmPieces[2] == "$1" &&
+        IA->getConstraintString().compare(0, 4, "=l,l") == 0) {
+      const IntegerType *Ty = dyn_cast<IntegerType>(CI->getType());
+      if (Ty && Ty->getBitWidth() == 32)
+        return IntrinsicLowering::LowerToByteSwap(CI);
+    }
+    break;
+  }
+
+  return false;
+}
 
 /// getConstraintType - Given a constraint letter, return the type of
 /// constraint it is for this target.

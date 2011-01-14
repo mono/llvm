@@ -743,7 +743,7 @@ static bool isSafeToDelete(MachineInstr *MI,
   const TargetInstrDesc &TID = MI->getDesc();
   if (TID.mayStore() || TID.isCall())
     return false;
-  if (TID.isTerminator() || TID.hasUnmodeledSideEffects())
+  if (TID.isTerminator() || MI->hasUnmodeledSideEffects())
     return false;
 
   for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
@@ -954,7 +954,7 @@ TryInstructionTransform(MachineBasicBlock::iterator &mi,
           if (LV) {
             for (unsigned i = 0, e = mi->getNumOperands(); i != e; ++i) {
               MachineOperand &MO = mi->getOperand(i);
-              if (MO.isReg() && MO.getReg() != 0 &&
+              if (MO.isReg() && 
                   TargetRegisterInfo::isVirtualRegister(MO.getReg())) {
                 if (MO.isUse()) {
                   if (MO.isKill()) {
@@ -1016,8 +1016,7 @@ bool TwoAddressInstructionPass::runOnMachineFunction(MachineFunction &MF) {
         << MF.getFunction()->getName() << '\n');
 
   // ReMatRegs - Keep track of the registers whose def's are remat'ed.
-  BitVector ReMatRegs;
-  ReMatRegs.resize(MRI->getLastVirtReg()+1);
+  BitVector ReMatRegs(MRI->getNumVirtRegs());
 
   typedef DenseMap<unsigned, SmallVector<std::pair<unsigned, unsigned>, 4> >
     TiedOperandMap;
@@ -1146,7 +1145,7 @@ bool TwoAddressInstructionPass::runOnMachineFunction(MachineFunction &MF) {
             DEBUG(dbgs() << "2addr: REMATTING : " << *DefMI << "\n");
             unsigned regASubIdx = mi->getOperand(DstIdx).getSubReg();
             TII->reMaterialize(*mbbi, mi, regA, regASubIdx, DefMI, *TRI);
-            ReMatRegs.set(regB);
+            ReMatRegs.set(TargetRegisterInfo::virtReg2Index(regB));
             ++NumReMats;
           } else {
             BuildMI(*mbbi, mi, mi->getDebugLoc(), TII->get(TargetOpcode::COPY),
@@ -1232,13 +1231,12 @@ bool TwoAddressInstructionPass::runOnMachineFunction(MachineFunction &MF) {
   }
 
   // Some remat'ed instructions are dead.
-  int VReg = ReMatRegs.find_first();
-  while (VReg != -1) {
+  for (int i = ReMatRegs.find_first(); i != -1; i = ReMatRegs.find_next(i)) {
+    unsigned VReg = TargetRegisterInfo::index2VirtReg(i);
     if (MRI->use_nodbg_empty(VReg)) {
       MachineInstr *DefMI = MRI->getVRegDef(VReg);
       DefMI->eraseFromParent();
     }
-    VReg = ReMatRegs.find_next(VReg);
   }
 
   // Eliminate REG_SEQUENCE instructions. Their whole purpose was to preseve

@@ -2201,6 +2201,10 @@ let neverHasSideEffects = 1 in
 def MOVDQArr : PDI<0x6F, MRMSrcReg, (outs VR128:$dst), (ins VR128:$src),
                    "movdqa\t{$src, $dst|$dst, $src}", []>;
 
+def MOVDQUrr :   I<0x6F, MRMSrcReg, (outs VR128:$dst), (ins VR128:$src),
+                   "movdqu\t{$src, $dst|$dst, $src}",
+                   []>, XS, Requires<[HasSSE2]>;
+
 let canFoldAsLoad = 1, mayLoad = 1 in {
 def MOVDQArm : PDI<0x6F, MRMSrcMem, (outs VR128:$dst), (ins i128mem:$src),
                    "movdqa\t{$src, $dst|$dst, $src}",
@@ -5597,9 +5601,9 @@ def : Pat<(v4f32 (X86Unpckhps VR128:$src1, VR128:$src2)),
 
 // Shuffle with UNPCKLPD
 def : Pat<(v2f64 (X86Unpcklpd VR128:$src1, (memopv2f64 addr:$src2))),
-          (VUNPCKLPSrm VR128:$src1, addr:$src2)>, Requires<[HasAVX]>;
+          (VUNPCKLPDrm VR128:$src1, addr:$src2)>, Requires<[HasAVX]>;
 def : Pat<(v2f64 (X86Unpcklpd VR128:$src1, (memopv2f64 addr:$src2))),
-          (UNPCKLPSrm VR128:$src1, addr:$src2)>;
+          (UNPCKLPDrm VR128:$src1, addr:$src2)>;
 
 def : Pat<(v2f64 (X86Unpcklpd VR128:$src1, VR128:$src2)),
           (VUNPCKLPDrr VR128:$src1, VR128:$src2)>, Requires<[HasAVX]>;
@@ -5608,9 +5612,9 @@ def : Pat<(v2f64 (X86Unpcklpd VR128:$src1, VR128:$src2)),
 
 // Shuffle with UNPCKHPD
 def : Pat<(v2f64 (X86Unpckhpd VR128:$src1, (memopv2f64 addr:$src2))),
-          (VUNPCKLPSrm VR128:$src1, addr:$src2)>, Requires<[HasAVX]>;
+          (VUNPCKHPDrm VR128:$src1, addr:$src2)>, Requires<[HasAVX]>;
 def : Pat<(v2f64 (X86Unpckhpd VR128:$src1, (memopv2f64 addr:$src2))),
-          (UNPCKLPSrm VR128:$src1, addr:$src2)>;
+          (UNPCKHPDrm VR128:$src1, addr:$src2)>;
 
 def : Pat<(v2f64 (X86Unpckhpd VR128:$src1, VR128:$src2)),
           (VUNPCKHPDrr VR128:$src1, VR128:$src2)>, Requires<[HasAVX]>;

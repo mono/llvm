@@ -1351,7 +1351,7 @@ namespace {
 bool ARMLoadStoreOpt::MergeReturnIntoLDM(MachineBasicBlock &MBB) {
   if (MBB.empty()) return false;
 
-  MachineBasicBlock::iterator MBBI = prior(MBB.end());
+  MachineBasicBlock::iterator MBBI = MBB.getLastNonDebugInstr();
   if (MBBI != MBB.begin() &&
       (MBBI->getOpcode() == ARM::BX_RET ||
        MBBI->getOpcode() == ARM::tBX_RET ||
@@ -1390,7 +1390,8 @@ bool ARMLoadStoreOpt::runOnMachineFunction(MachineFunction &Fn) {
        ++MFI) {
     MachineBasicBlock &MBB = *MFI;
     Modified |= LoadStoreMultipleOpti(MBB);
-    Modified |= MergeReturnIntoLDM(MBB);
+    if (TM.getSubtarget<ARMSubtarget>().hasV5TOps())
+      Modified |= MergeReturnIntoLDM(MBB);
   }
 
   delete RS;
@@ -1466,7 +1467,7 @@ static bool IsSafeAndProfitableToMove(bool isLd, unsigned Base,
     if (I->isDebugValue() || MemOps.count(&*I))
       continue;
     const TargetInstrDesc &TID = I->getDesc();
-    if (TID.isCall() || TID.isTerminator() || TID.hasUnmodeledSideEffects())
+    if (TID.isCall() || TID.isTerminator() || I->hasUnmodeledSideEffects())
       return false;
     if (isLd && TID.mayStore())
       return false;

@@ -234,8 +234,7 @@ ARMBaseInstrInfo::convertToThreeAddress(MachineFunction::iterator &MFI,
   if (LV) {
     for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
       MachineOperand &MO = MI->getOperand(i);
-      if (MO.isReg() && MO.getReg() &&
-          TargetRegisterInfo::isVirtualRegister(MO.getReg())) {
+      if (MO.isReg() && TargetRegisterInfo::isVirtualRegister(MO.getReg())) {
         unsigned Reg = MO.getReg();
 
         LiveVariables::VarInfo &VI = LV->getVarInfo(Reg);
@@ -2070,7 +2069,6 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
   const TargetInstrDesc &DefTID = DefMI->getDesc();
   if (!ItinData || ItinData->isEmpty())
     return DefTID.mayLoad() ? 3 : 1;
-
 
   const TargetInstrDesc &UseTID = UseMI->getDesc();
   const MachineOperand &DefMO = DefMI->getOperand(DefIdx);

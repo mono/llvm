@@ -156,25 +156,27 @@ MachineBasicBlock::SkipPHIsAndLabels(MachineBasicBlock::iterator I) {
 
 MachineBasicBlock::iterator MachineBasicBlock::getFirstTerminator() {
   iterator I = end();
-  while (I != begin() && (--I)->getDesc().isTerminator())
+  while (I != begin() && ((--I)->getDesc().isTerminator() || I->isDebugValue()))
     ; /*noop */
-  if (I != end() && !I->getDesc().isTerminator()) ++I;
+  while (I != end() && !I->getDesc().isTerminator())
+    ++I;
   return I;
+}
+
+MachineBasicBlock::iterator MachineBasicBlock::getLastNonDebugInstr() {
+  iterator B = begin(), I = end();
+  while (I != B) {
+    --I;
+    if (I->isDebugValue())
+      continue;
+    return I;
+  }
+  // The block is all debug values.
+  return end();
 }
 
 void MachineBasicBlock::dump() const {
   print(dbgs());
-}
-
-static inline void OutputReg(raw_ostream &os, unsigned RegNo,
-                             const TargetRegisterInfo *TRI = 0) {
-  if (RegNo != 0 && TargetRegisterInfo::isPhysicalRegister(RegNo)) {
-    if (TRI)
-      os << " %" << TRI->get(RegNo).Name;
-    else
-      os << " %physreg" << RegNo;
-  } else
-    os << " %reg" << RegNo;
 }
 
 StringRef MachineBasicBlock::getName() const {
@@ -214,7 +216,7 @@ void MachineBasicBlock::print(raw_ostream &OS, SlotIndexes *Indexes) const {
     if (Indexes) OS << '\t';
     OS << "    Live Ins:";
     for (livein_iterator I = livein_begin(),E = livein_end(); I != E; ++I)
-      OutputReg(OS, *I, TRI);
+      OS << ' ' << PrintReg(*I, TRI);
     OS << '\n';
   }
   // Print the preds of this block according to the CFG.

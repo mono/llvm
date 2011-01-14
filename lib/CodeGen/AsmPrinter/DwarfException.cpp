@@ -28,7 +28,7 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/Mangler.h"
 #include "llvm/Target/TargetData.h"
-#include "llvm/Target/TargetFrameInfo.h"
+#include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -59,8 +59,8 @@ DwarfException::~DwarfException() {}
 void DwarfException::EmitCIE(const Function *PersonalityFn, unsigned Index) {
   // Size and sign of stack growth.
   int stackGrowth = Asm->getTargetData().getPointerSize();
-  if (Asm->TM.getFrameInfo()->getStackGrowthDirection() ==
-      TargetFrameInfo::StackGrowsDown)
+  if (Asm->TM.getFrameLowering()->getStackGrowthDirection() ==
+      TargetFrameLowering::StackGrowsDown)
     stackGrowth *= -1;
 
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
@@ -136,7 +136,7 @@ void DwarfException::EmitCIE(const Function *PersonalityFn, unsigned Index) {
   Asm->OutStreamer.AddComment("CIE Return Address Column");
 
   const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
-  const TargetFrameInfo *TFI = Asm->TM.getFrameInfo();
+  const TargetFrameLowering *TFI = Asm->TM.getFrameLowering();
   Asm->EmitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
 
   if (Augmentation[0]) {
