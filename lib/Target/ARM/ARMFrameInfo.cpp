@@ -294,6 +294,25 @@ void ARMFrameInfo::emitPrologue(MachineFunction &MF) const {
   // Move past area 2.
   if (GPRCS2Size > 0) MBBI++;
 
+  if (NeedsFrameMoves) {
+    MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+
+    // Emit moves for the registers in spill area 2
+    for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+      unsigned Reg = CSI[i].getReg();
+      int FI = CSI[i].getFrameIdx();
+      int64_t Offset = MFI->getObjectOffset(FI);
+
+      // The offset is relative to the incoming stack pointer which is 
+      // the cfa
+      if (AFI->isGPRCalleeSavedArea2Frame(FI)) {
+        // Reg is saved at cfa + offset
+        emitCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, FrameLabel, Reg, Offset);
+      }
+    }
+  }
+
   // Determine starting offsets of spill areas.
   unsigned DPRCSOffset  = NumBytes - (GPRCS1Size + GPRCS2Size + DPRCSSize);
   unsigned GPRCS2Offset = DPRCSOffset + DPRCSSize;
