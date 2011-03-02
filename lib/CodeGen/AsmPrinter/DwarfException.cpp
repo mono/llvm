@@ -41,12 +41,6 @@
 #include "llvm/ADT/Twine.h"
 using namespace llvm;
 
-static cl::opt<bool> EnableMonoEH("enable-mono-eh-frame", cl::NotHidden,
-     cl::desc("Enable generation of Mono specific EH tables"));
-
-static cl::opt<bool> DisableGNUEH("disable-gnu-eh-frame", cl::NotHidden,
-     cl::desc("Disable generation of GNU .eh_frame"));
-
 DwarfException::DwarfException(AsmPrinter *A)
   : Asm(A), MMI(Asm->MMI) {}
 
@@ -417,13 +411,7 @@ void DwarfException::EmitExceptionTable() {
   }
 
   // Type infos.
-  const MCSection *LSDASection;
-
-  if (EnableMonoEH)
-    // Put into text section, the type info it references is also there
-    LSDASection = Asm->getObjFileLowering().getTextSection();
-  else
-    LSDASection = Asm->getObjFileLowering().getLSDASection();
+  const MCSection *LSDASection = Asm->getObjFileLowering().getLSDASection();
   unsigned TTypeEncoding;
   unsigned TypeFormatSize;
 
@@ -461,11 +449,7 @@ void DwarfException::EmitExceptionTable() {
     // somewhere.  This predicate should be moved to a shared location that is
     // in target-independent code.
     //
-    if (EnableMonoEH)
-      // The type info is in the text section too
-      TTypeEncoding = dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
-    else
-      TTypeEncoding = Asm->getObjFileLowering().getTTypeEncoding();
+    TTypeEncoding = Asm->getObjFileLowering().getTTypeEncoding();
     TypeFormatSize = Asm->GetSizeOfEncodedValue(TTypeEncoding);
   }
 
