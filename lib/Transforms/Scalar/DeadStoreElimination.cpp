@@ -69,10 +69,7 @@ namespace {
     bool handleEndBlock(BasicBlock &BB);
     void RemoveAccessedObjects(const AliasAnalysis::Location &LoadedLoc,
                                SmallPtrSet<Value*, 16> &DeadStackObjects);
-    
 
-    // getAnalysisUsage - We require post dominance frontiers (aka Control
-    // Dependence Graph)
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesCFG();
       AU.addRequired<DominatorTree>();
@@ -324,7 +321,8 @@ static bool isCompleteOverwrite(const AliasAnalysis::Location &Later,
   // other store to the same object.
   const TargetData &TD = *AA.getTargetData();
   
-  const Value *UO1 = GetUnderlyingObject(P1), *UO2 = GetUnderlyingObject(P2);
+  const Value *UO1 = GetUnderlyingObject(P1, &TD),
+              *UO2 = GetUnderlyingObject(P2, &TD);
   
   // If we can't resolve the same pointers to the same object, then we can't
   // analyze them at all.

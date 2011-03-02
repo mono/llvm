@@ -564,6 +564,38 @@ static bool DisassembleThumb1LdPC(MCInst &MI, unsigned Opcode, uint32_t insn,
 // t_addrmode_sp := sp + imm8 * 4
 //
 
+// A8.6.63 LDRB (literal)
+// A8.6.79 LDRSB (literal)
+// A8.6.75 LDRH (literal)
+// A8.6.83 LDRSH (literal)
+// A8.6.59 LDR (literal)
+//
+// These instrs calculate an address from the PC value and an immediate offset.
+// Rd Rn=PC (+/-)imm12 (+ if Inst{23} == 0b1)
+static bool DisassembleThumb2Ldpci(MCInst &MI, unsigned Opcode,
+    uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
+
+  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  if (!OpInfo) return false;
+
+  assert(NumOps >= 2 &&
+         OpInfo[0].RegClass == ARM::GPRRegClassID &&
+         OpInfo[1].RegClass < 0 &&
+         "Expect >= 2 operands, first as reg, and second as imm operand");
+
+  // Build the register operand, followed by the (+/-)imm12 immediate.
+
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+                                                     decodeRd(insn))));
+
+  MI.addOperand(MCOperand::CreateImm(decodeImm12(insn)));
+
+  NumOpsAdded = 2;
+
+  return true;
+}
+
+
 // A6.2.4 Load/store single data item
 //
 // Load/Store Register (reg|imm):      tRd tRn imm5 tRm
@@ -796,14 +828,13 @@ static bool DisassembleThumb1Misc(MCInst &MI, unsigned Opcode, uint32_t insn,
   }
 
   // CPS has a singleton $opt operand that contains the following information:
-  // opt{4-0} = don't care
-  // opt{5} = 0 (false)
-  // opt{8-6} = AIF from Inst{2-0}
-  // opt{10-9} = 1:imod from Inst{4} with 0b10 as enable and 0b11 as disable
+  // The first op would be 0b10 as enable and 0b11 as disable in regular ARM,
+  // but in Thumb it's is 0 as enable and 1 as disable. So map it to ARM's
+  // default one. The second get the AIF flags from Inst{2-0}.
   if (Opcode == ARM::tCPS) {
-    unsigned Option = slice(insn, 2, 0) << 6 | slice(insn, 4, 4) << 9 | 1 << 10;
-    MI.addOperand(MCOperand::CreateImm(Option));
-    NumOpsAdded = 1;
+    MI.addOperand(MCOperand::CreateImm(2 + slice(insn, 4, 4)));
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 2, 0)));
+    NumOpsAdded = 2;
     return true;
   }
 
@@ -1627,15 +1658,25 @@ static bool DisassembleThumb2BrMiscCtrl(MCInst &MI, unsigned Opcode,
     break;
   }
 
-  // CPS has a singleton $opt operand that contains the following information:
-  // opt{4-0} = mode from Inst{4-0}
-  // opt{5} = changemode from Inst{8}
-  // opt{8-6} = AIF from Inst{7-5}
-  // opt{10-9} = imod from Inst{10-9} with 0b10 as enable and 0b11 as disable
-  if (Opcode == ARM::t2CPS) {
-    unsigned Option = slice(insn, 4, 0) | slice(insn, 8, 8) << 5 |
-      slice(insn, 7, 5) << 6 | slice(insn, 10, 9) << 9;
-    MI.addOperand(MCOperand::CreateImm(Option));
+  // FIXME: To enable correct asm parsing and disasm of CPS we need 3 different
+  // opcodes which match the same real instruction. This is needed since there's
+  // no current handling of optional arguments. Fix here when a better handling
+  // of optional arguments is implemented.
+  if (Opcode == ARM::t2CPS3p) {
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 10, 9))); // imod
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 7, 5)));  // iflags
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 4, 0)));  // mode
+    NumOpsAdded = 3;
+    return true;
+  }
+  if (Opcode == ARM::t2CPS2p) {
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 10, 9))); // imod
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 7, 5)));  // iflags
+    NumOpsAdded = 2;
+    return true;
+  }
+  if (Opcode == ARM::t2CPS1p) {
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 4, 0))); // mode
     NumOpsAdded = 1;
     return true;
   }
@@ -1661,11 +1702,13 @@ static bool DisassembleThumb2BrMiscCtrl(MCInst &MI, unsigned Opcode,
     NumOpsAdded = 1;
     return true;
   }
-  // MSR and MSRsys take one GPR reg Rn, followed by the mask.
-  if (Opcode == ARM::t2MSR || Opcode == ARM::t2MSRsys || Opcode == ARM::t2BXJ) {
+  // MSR take a mask, followed by one GPR reg Rn. The mask contains the R Bit in
+  // bit 4, and the special register fields in bits 3-0.
+  if (Opcode == ARM::t2MSR) {
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 20, 20) << 4 /* R Bit */ |
+                                       slice(insn, 11, 8) /* Special Reg */));
     MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
                                                        decodeRn(insn))));
-    MI.addOperand(MCOperand::CreateImm(slice(insn, 11, 8)));
     NumOpsAdded = 2;
     return true;
   }
@@ -1674,6 +1717,17 @@ static bool DisassembleThumb2BrMiscCtrl(MCInst &MI, unsigned Opcode,
     MI.addOperand(MCOperand::CreateImm(slice(insn, 19, 16)));
     NumOpsAdded = 1;
     return true;
+  }
+
+  // Some instructions have predicate operands first before the immediate.
+  if (Opcode == ARM::tBLXi_r9 || Opcode == ARM::tBLr9) {
+    // Handling the two predicate operands before the imm operand.
+    if (B->DoPredicateOperands(MI, Opcode, insn, NumOps))
+      NumOpsAdded += 2;
+    else {
+      DEBUG(errs() << "Expected predicate operands not found.\n");
+      return false;
+    }
   }
 
   // Add the imm operand.
@@ -1702,7 +1756,8 @@ static bool DisassembleThumb2BrMiscCtrl(MCInst &MI, unsigned Opcode,
   // to compensate.
   MI.addOperand(MCOperand::CreateImm(Offset + 4));
 
-  NumOpsAdded = 1;
+  // This is an increment as some predicate operands may have been added first.
+  NumOpsAdded += 1;
 
   return true;
 }
@@ -1755,7 +1810,7 @@ static bool DisassembleThumb2PreLoad(MCInst &MI, unsigned Opcode, uint32_t insn,
     if (slice(insn, 19, 16) == 0xFF) {
       bool Negative = slice(insn, 23, 23) == 0;
       unsigned Imm12 = getImm12(insn);
-      Offset = Negative ? -1 - Imm12 : 1 * Imm12;      
+      Offset = Negative ? -1 - Imm12 : 1 * Imm12;
     } else if (Opcode == ARM::t2PLDi8 || Opcode == ARM::t2PLDWi8 ||
                Opcode == ARM::t2PLIi8) {
       // A8.6.117 Encoding T2: add = FALSE
@@ -1812,6 +1867,9 @@ static bool DisassembleThumb2LdSt(bool Load, MCInst &MI, unsigned Opcode,
   if (Thumb2PreloadOpcode(Opcode))
     return DisassembleThumb2PreLoad(MI, Opcode, insn, NumOps, NumOpsAdded, B);
 
+  // See, for example, A6.3.7 Load word: Table A6-18 Load word.
+  if (Load && Rn == 15)
+    return DisassembleThumb2Ldpci(MI, Opcode, insn, NumOps, NumOpsAdded, B);
   const TargetInstrDesc &TID = ARMInsts[Opcode];
   const TargetOperandInfo *OpInfo = TID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
@@ -1858,7 +1916,7 @@ static bool DisassembleThumb2LdSt(bool Load, MCInst &MI, unsigned Opcode,
     else
       Imm = decodeImm8(insn);
   }
-  
+
   MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
                                                      R0)));
   ++OpIdx;
@@ -2183,7 +2241,7 @@ static bool DisassembleThumbFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
   }
 
   // A6.3 32-bit Thumb instruction encoding
-  
+
   uint16_t op1 = slice(HalfWord, 12, 11);
   uint16_t op2 = slice(HalfWord, 10, 4);
   uint16_t op = slice(insn, 15, 15);

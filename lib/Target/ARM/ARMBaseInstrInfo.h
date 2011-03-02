@@ -155,10 +155,11 @@ namespace ARMII {
     //===------------------------------------------------------------------===//
     // Code domain.
     DomainShift   = 18,
-    DomainMask    = 3 << DomainShift,
+    DomainMask    = 7 << DomainShift,
     DomainGeneral = 0 << DomainShift,
     DomainVFP     = 1 << DomainShift,
     DomainNEON    = 2 << DomainShift,
+    DomainNEONA8  = 4 << DomainShift,
 
     //===------------------------------------------------------------------===//
     // Field shifts - such shifts are used to set field while generating
@@ -298,7 +299,8 @@ public:
   MachineInstr *duplicate(MachineInstr *Orig, MachineFunction &MF) const;
 
   virtual bool produceSameValue(const MachineInstr *MI0,
-                                const MachineInstr *MI1) const;
+                                const MachineInstr *MI1,
+                                const MachineRegisterInfo *MRI) const;
 
   /// areLoadsFromSameBasePtr - This is used by the pre-regalloc scheduler to
   /// determine if two loads are loading from the same base address. It should

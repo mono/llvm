@@ -96,8 +96,7 @@ PHINode::PHINode(const PHINode &PN)
 }
 
 PHINode::~PHINode() {
-  if (OperandList)
-    dropHungoffUses(OperandList);
+  dropHungoffUses();
 }
 
 // removeIncomingValue - Remove an incoming value.  This is useful if a
@@ -158,7 +157,7 @@ void PHINode::resizeOperands(unsigned NumOps) {
   Use *NewOps = allocHungoffUses(NumOps);
   std::copy(OldOps, OldOps + e, NewOps);
   OperandList = NewOps;
-  if (OldOps) Use::zap(OldOps, OldOps + e, true);
+  Use::zap(OldOps, OldOps + e, true);
 }
 
 /// hasConstantValue - If the specified PHI node always merges together the same
@@ -1823,7 +1822,7 @@ void BinaryOperator::setHasNoSignedWrap(bool b) {
 }
 
 void BinaryOperator::setIsExact(bool b) {
-  cast<SDivOperator>(this)->setIsExact(b);
+  cast<PossiblyExactOperator>(this)->setIsExact(b);
 }
 
 bool BinaryOperator::hasNoUnsignedWrap() const {
@@ -1835,7 +1834,7 @@ bool BinaryOperator::hasNoSignedWrap() const {
 }
 
 bool BinaryOperator::isExact() const {
-  return cast<SDivOperator>(this)->isExact();
+  return cast<PossiblyExactOperator>(this)->isExact();
 }
 
 //===----------------------------------------------------------------------===//
@@ -2982,7 +2981,7 @@ SwitchInst::SwitchInst(const SwitchInst &SI)
 }
 
 SwitchInst::~SwitchInst() {
-  dropHungoffUses(OperandList);
+  dropHungoffUses();
 }
 
 
@@ -3010,14 +3009,10 @@ void SwitchInst::removeCase(unsigned idx) {
   unsigned NumOps = getNumOperands();
   Use *OL = OperandList;
 
-  // Move everything after this operand down.
-  //
-  // FIXME: we could just swap with the end of the list, then erase.  However,
-  // client might not expect this to happen.  The code as it is thrashes the
-  // use/def lists, which is kinda lame.
-  for (unsigned i = (idx+1)*2; i != NumOps; i += 2) {
-    OL[i-2] = OL[i];
-    OL[i-2+1] = OL[i+1];
+  // Overwrite this case with the end of the list.
+  if ((idx + 1) * 2 != NumOps) {
+    OL[idx * 2] = OL[NumOps - 2];
+    OL[idx * 2 + 1] = OL[NumOps - 1];
   }
 
   // Nuke the last value.
@@ -3053,7 +3048,7 @@ void SwitchInst::resizeOperands(unsigned NumOps) {
       NewOps[i] = OldOps[i];
   }
   OperandList = NewOps;
-  if (OldOps) Use::zap(OldOps, OldOps + e, true);
+  Use::zap(OldOps, OldOps + e, true);
 }
 
 
@@ -3068,7 +3063,7 @@ void SwitchInst::setSuccessorV(unsigned idx, BasicBlock *B) {
 }
 
 //===----------------------------------------------------------------------===//
-//                        SwitchInst Implementation
+//                        IndirectBrInst Implementation
 //===----------------------------------------------------------------------===//
 
 void IndirectBrInst::init(Value *Address, unsigned NumDests) {
@@ -3108,7 +3103,7 @@ void IndirectBrInst::resizeOperands(unsigned NumOps) {
   for (unsigned i = 0; i != e; ++i)
     NewOps[i] = OldOps[i];
   OperandList = NewOps;
-  if (OldOps) Use::zap(OldOps, OldOps + e, true);
+  Use::zap(OldOps, OldOps + e, true);
 }
 
 IndirectBrInst::IndirectBrInst(Value *Address, unsigned NumCases,
@@ -3136,7 +3131,7 @@ IndirectBrInst::IndirectBrInst(const IndirectBrInst &IBI)
 }
 
 IndirectBrInst::~IndirectBrInst() {
-  dropHungoffUses(OperandList);
+  dropHungoffUses();
 }
 
 /// addDestination - Add a destination.

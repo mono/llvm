@@ -42,6 +42,7 @@
 #include "llvm/Support/PatternMatch.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/IRBuilder.h"
+#include "llvm/Support/ValueHandle.h"
 using namespace llvm;
 using namespace llvm::PatternMatch;
 
@@ -57,11 +58,6 @@ STATISTIC(NumMemoryInsts, "Number of memory instructions whose address "
 STATISTIC(NumExtsMoved, "Number of [s|z]ext instructions combined with loads");
 STATISTIC(NumExtUses, "Number of uses of [s|z]ext instructions optimized");
 
-static cl::opt<bool>
-CriticalEdgeSplit("cgp-critical-edge-splitting",
-                  cl::desc("Split critical edges during codegen prepare"),
-                  cl::init(false), cl::Hidden);
-
 namespace {
   class CodeGenPrepare : public FunctionPass {
     /// TLI - Keep a pointer of a TargetLowering to consult for determining
@@ -69,10 +65,11 @@ namespace {
     const TargetLowering *TLI;
     DominatorTree *DT;
     ProfileInfo *PFI;
-
-    /// BackEdges - Keep a set of all the loop back edges.
-    ///
-    SmallSet<std::pair<const BasicBlock*, const BasicBlock*>, 8> BackEdges;
+    
+    /// CurInstIterator - As we scan instructions optimizing them, this is the
+    /// next instruction to optimize.  Xforms that can invalidate this should
+    /// update it.
+    BasicBlock::iterator CurInstIterator;
 
     // Keeps track of non-local addresses that have been sunk into a block. This
     // allows us to avoid inserting duplicate code for blocks with multiple
@@ -92,24 +89,17 @@ namespace {
       AU.addPreserved<ProfileInfo>();
     }
 
-    virtual void releaseMemory() {
-      BackEdges.clear();
-    }
-
   private:
     bool EliminateMostlyEmptyBlocks(Function &F);
     bool CanMergeBlocks(const BasicBlock *BB, const BasicBlock *DestBB) const;
     void EliminateMostlyEmptyBlock(BasicBlock *BB);
     bool OptimizeBlock(BasicBlock &BB);
     bool OptimizeInst(Instruction *I);
-    bool OptimizeMemoryInst(Instruction *I, Value *Addr, const Type *AccessTy,
-                            DenseMap<Value*,Value*> &SunkAddrs);
-    bool OptimizeInlineAsmInst(Instruction *I, CallSite CS,
-                               DenseMap<Value*,Value*> &SunkAddrs);
+    bool OptimizeMemoryInst(Instruction *I, Value *Addr, const Type *AccessTy);
+    bool OptimizeInlineAsmInst(CallInst *CS);
     bool OptimizeCallInst(CallInst *CI);
     bool MoveExtToFormExtLoad(Instruction *I);
     bool OptimizeExtUses(Instruction *I);
-    void findLoopBackEdges(const Function &F);
   };
 }
 
@@ -121,16 +111,6 @@ FunctionPass *llvm::createCodeGenPreparePass(const TargetLowering *TLI) {
   return new CodeGenPrepare(TLI);
 }
 
-/// findLoopBackEdges - Do a DFS walk to find loop back edges.
-///
-void CodeGenPrepare::findLoopBackEdges(const Function &F) {
-  SmallVector<std::pair<const BasicBlock*,const BasicBlock*>, 32> Edges;
-  FindFunctionBackedges(F, Edges);
-  
-  BackEdges.insert(Edges.begin(), Edges.end());
-}
-
-
 bool CodeGenPrepare::runOnFunction(Function &F) {
   bool EverMadeChange = false;
 
@@ -139,11 +119,6 @@ bool CodeGenPrepare::runOnFunction(Function &F) {
   // First pass, eliminate blocks that contain only PHI nodes and an
   // unconditional branch.
   EverMadeChange |= EliminateMostlyEmptyBlocks(F);
-
-  // Now find loop back edges, but only if they are being used to decide which
-  // critical edges to split.
-  if (CriticalEdgeSplit)
-    findLoopBackEdges(F);
 
   bool MadeChange = true;
   while (MadeChange) {
@@ -346,110 +321,6 @@ void CodeGenPrepare::EliminateMostlyEmptyBlock(BasicBlock *BB) {
   DEBUG(dbgs() << "AFTER:\n" << *DestBB << "\n\n\n");
 }
 
-/// FindReusablePredBB - Check all of the predecessors of the block DestPHI
-/// lives in to see if there is a block that we can reuse as a critical edge
-/// from TIBB.
-static BasicBlock *FindReusablePredBB(PHINode *DestPHI, BasicBlock *TIBB) {
-  BasicBlock *Dest = DestPHI->getParent();
-  
-  /// TIPHIValues - This array is lazily computed to determine the values of
-  /// PHIs in Dest that TI would provide.
-  SmallVector<Value*, 32> TIPHIValues;
-  
-  /// TIBBEntryNo - This is a cache to speed up pred queries for TIBB.
-  unsigned TIBBEntryNo = 0;
-  
-  // Check to see if Dest has any blocks that can be used as a split edge for
-  // this terminator.
-  for (unsigned pi = 0, e = DestPHI->getNumIncomingValues(); pi != e; ++pi) {
-    BasicBlock *Pred = DestPHI->getIncomingBlock(pi);
-    // To be usable, the pred has to end with an uncond branch to the dest.
-    BranchInst *PredBr = dyn_cast<BranchInst>(Pred->getTerminator());
-    if (!PredBr || !PredBr->isUnconditional())
-      continue;
-    // Must be empty other than the branch and debug info.
-    BasicBlock::iterator I = Pred->begin();
-    while (isa<DbgInfoIntrinsic>(I))
-      I++;
-    if (&*I != PredBr)
-      continue;
-    // Cannot be the entry block; its label does not get emitted.
-    if (Pred == &Dest->getParent()->getEntryBlock())
-      continue;
-    
-    // Finally, since we know that Dest has phi nodes in it, we have to make
-    // sure that jumping to Pred will have the same effect as going to Dest in
-    // terms of PHI values.
-    PHINode *PN;
-    unsigned PHINo = 0;
-    unsigned PredEntryNo = pi;
-    
-    bool FoundMatch = true;
-    for (BasicBlock::iterator I = Dest->begin();
-         (PN = dyn_cast<PHINode>(I)); ++I, ++PHINo) {
-      if (PHINo == TIPHIValues.size()) {
-        if (PN->getIncomingBlock(TIBBEntryNo) != TIBB)
-          TIBBEntryNo = PN->getBasicBlockIndex(TIBB);
-        TIPHIValues.push_back(PN->getIncomingValue(TIBBEntryNo));
-      }
-      
-      // If the PHI entry doesn't work, we can't use this pred.
-      if (PN->getIncomingBlock(PredEntryNo) != Pred)
-        PredEntryNo = PN->getBasicBlockIndex(Pred);
-      
-      if (TIPHIValues[PHINo] != PN->getIncomingValue(PredEntryNo)) {
-        FoundMatch = false;
-        break;
-      }
-    }
-    
-    // If we found a workable predecessor, change TI to branch to Succ.
-    if (FoundMatch)
-      return Pred;
-  }
-  return 0;  
-}
-
-
-/// SplitEdgeNicely - Split the critical edge from TI to its specified
-/// successor if it will improve codegen.  We only do this if the successor has
-/// phi nodes (otherwise critical edges are ok).  If there is already another
-/// predecessor of the succ that is empty (and thus has no phi nodes), use it
-/// instead of introducing a new block.
-static void SplitEdgeNicely(TerminatorInst *TI, unsigned SuccNum,
-                     SmallSet<std::pair<const BasicBlock*,
-                                        const BasicBlock*>, 8> &BackEdges,
-                             Pass *P) {
-  BasicBlock *TIBB = TI->getParent();
-  BasicBlock *Dest = TI->getSuccessor(SuccNum);
-  assert(isa<PHINode>(Dest->begin()) &&
-         "This should only be called if Dest has a PHI!");
-  PHINode *DestPHI = cast<PHINode>(Dest->begin());
-
-  // Do not split edges to EH landing pads.
-  if (InvokeInst *Invoke = dyn_cast<InvokeInst>(TI))
-    if (Invoke->getSuccessor(1) == Dest)
-      return;
-
-  // As a hack, never split backedges of loops.  Even though the copy for any
-  // PHIs inserted on the backedge would be dead for exits from the loop, we
-  // assume that the cost of *splitting* the backedge would be too high.
-  if (BackEdges.count(std::make_pair(TIBB, Dest)))
-    return;
-
-  if (BasicBlock *ReuseBB = FindReusablePredBB(DestPHI, TIBB)) {
-    ProfileInfo *PFI = P->getAnalysisIfAvailable<ProfileInfo>();
-    if (PFI)
-      PFI->splitEdge(TIBB, Dest, ReuseBB);
-    Dest->removePredecessor(TIBB);
-    TI->setSuccessor(SuccNum, ReuseBB);
-    return;
-  }
-
-  SplitCriticalEdge(TI, SuccNum, P, true);
-}
-
-
 /// OptimizeNoopCopyExpression - If the specified cast instruction is a noop
 /// copy (e.g. it's casting from one pointer type to another, i32->i8 on PPC),
 /// sink it into user blocks to reduce the number of virtual
@@ -605,14 +476,45 @@ protected:
 } // end anonymous namespace
 
 bool CodeGenPrepare::OptimizeCallInst(CallInst *CI) {
+  BasicBlock *BB = CI->getParent();
+  
+  // Lower inline assembly if we can.
+  // If we found an inline asm expession, and if the target knows how to
+  // lower it to normal LLVM code, do so now.
+  if (TLI && isa<InlineAsm>(CI->getCalledValue())) {
+    if (TLI->ExpandInlineAsm(CI)) {
+      // Avoid invalidating the iterator.
+      CurInstIterator = BB->begin();
+      // Avoid processing instructions out of order, which could cause
+      // reuse before a value is defined.
+      SunkAddrs.clear();
+      return true;
+    }
+    // Sink address computing for memory operands into the block.
+    if (OptimizeInlineAsmInst(CI))
+      return true;
+  }
+  
   // Lower all uses of llvm.objectsize.*
   IntrinsicInst *II = dyn_cast<IntrinsicInst>(CI);
   if (II && II->getIntrinsicID() == Intrinsic::objectsize) {
     bool Min = (cast<ConstantInt>(II->getArgOperand(1))->getZExtValue() == 1);
     const Type *ReturnTy = CI->getType();
     Constant *RetVal = ConstantInt::get(ReturnTy, Min ? 0 : -1ULL);    
-    CI->replaceAllUsesWith(RetVal);
-    CI->eraseFromParent();
+    
+    // Substituting this can cause recursive simplifications, which can
+    // invalidate our iterator.  Use a WeakVH to hold onto it in case this
+    // happens.
+    WeakVH IterHandle(CurInstIterator);
+    
+    ReplaceAndSimplifyAllUses(CI, RetVal, TLI ? TLI->getTargetData() : 0, DT);
+
+    // If the iterator instruction was recursively deleted, start over at the
+    // start of the block.
+    if (IterHandle != CurInstIterator) {
+      CurInstIterator = BB->begin();
+      SunkAddrs.clear();
+    }
     return true;
   }
 
@@ -630,6 +532,7 @@ bool CodeGenPrepare::OptimizeCallInst(CallInst *CI) {
   CodeGenPrepareFortifiedLibCalls Simplifier;
   return Simplifier.fold(CI, TD);
 }
+
 //===----------------------------------------------------------------------===//
 // Memory Optimization
 //===----------------------------------------------------------------------===//
@@ -652,8 +555,7 @@ static bool IsNonLocalValue(Value *V, BasicBlock *BB) {
 /// This method is used to optimize both load/store and inline asms with memory
 /// operands.
 bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
-                                        const Type *AccessTy,
-                                        DenseMap<Value*,Value*> &SunkAddrs) {
+                                        const Type *AccessTy) {
   Value *Repl = Addr;
   
   // Try to collapse single-value PHI nodes.  This is necessary to undo 
@@ -666,7 +568,7 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
   // the addressing mode obtained from the non-PHI roots of the graph
   // are equivalent.
   Value *Consensus = 0;
-  unsigned NumUses = 0;
+  unsigned NumUsesConsensus = 0;
   SmallVector<Instruction*, 16> AddrModeInsts;
   ExtAddrMode AddrMode;
   while (!worklist.empty()) {
@@ -699,9 +601,10 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
     // such root as representative, select the one with the most uses in order
     // to keep the cost modeling heuristics in AddressingModeMatcher applicable.
     if (!Consensus || NewAddrMode == AddrMode) {
-      if (V->getNumUses() > NumUses) {
+      unsigned NumUses = V->getNumUses();
+      if (NumUses > NumUsesConsensus) {
         Consensus = V;
-        NumUses = V->getNumUses();
+        NumUsesConsensus = NumUses;
         AddrMode = NewAddrMode;
         AddrModeInsts = NewAddrModeInsts;
       }
@@ -833,11 +736,11 @@ bool CodeGenPrepare::OptimizeMemoryInst(Instruction *MemoryInst, Value *Addr,
 /// OptimizeInlineAsmInst - If there are any memory operands, use
 /// OptimizeMemoryInst to sink their address computing into the block when
 /// possible / profitable.
-bool CodeGenPrepare::OptimizeInlineAsmInst(Instruction *I, CallSite CS,
-                                           DenseMap<Value*,Value*> &SunkAddrs) {
+bool CodeGenPrepare::OptimizeInlineAsmInst(CallInst *CS) {
   bool MadeChange = false;
 
-  TargetLowering::AsmOperandInfoVector TargetConstraints = TLI->ParseConstraints(CS);
+  TargetLowering::AsmOperandInfoVector 
+    TargetConstraints = TLI->ParseConstraints(CS);
   unsigned ArgNo = 0;
   for (unsigned i = 0, e = TargetConstraints.size(); i != e; ++i) {
     TargetLowering::AsmOperandInfo &OpInfo = TargetConstraints[i];
@@ -847,8 +750,8 @@ bool CodeGenPrepare::OptimizeInlineAsmInst(Instruction *I, CallSite CS,
 
     if (OpInfo.ConstraintType == TargetLowering::C_Memory &&
         OpInfo.isIndirect) {
-      Value *OpVal = const_cast<Value *>(CS.getArgument(ArgNo++));
-      MadeChange |= OptimizeMemoryInst(I, OpVal, OpVal->getType(), SunkAddrs);
+      Value *OpVal = CS->getArgOperand(ArgNo++);
+      MadeChange |= OptimizeMemoryInst(CS, OpVal, OpVal->getType());
     } else if (OpInfo.Type == InlineAsm::isInput)
       ArgNo++;
   }
@@ -972,8 +875,6 @@ bool CodeGenPrepare::OptimizeExtUses(Instruction *I) {
 }
 
 bool CodeGenPrepare::OptimizeInst(Instruction *I) {
-  bool MadeChange = false;
-
   if (PHINode *P = dyn_cast<PHINode>(I)) {
     // It is possible for very late stage optimizations (such as SimplifyCFG)
     // to introduce PHI nodes too late to be cleaned up.  If we detect such a
@@ -982,8 +883,12 @@ bool CodeGenPrepare::OptimizeInst(Instruction *I) {
       P->replaceAllUsesWith(V);
       P->eraseFromParent();
       ++NumPHIsElim;
+      return true;
     }
-  } else if (CastInst *CI = dyn_cast<CastInst>(I)) {
+    return false;
+  }
+  
+  if (CastInst *CI = dyn_cast<CastInst>(I)) {
     // If the source of the cast is a constant, then this should have
     // already been constant folded.  The only reason NOT to constant fold
     // it is if something (e.g. LSR) was careful to place the constant
@@ -993,28 +898,33 @@ bool CodeGenPrepare::OptimizeInst(Instruction *I) {
     if (isa<Constant>(CI->getOperand(0)))
       return false;
 
-    bool Change = false;
-    if (TLI) {
-      Change = OptimizeNoopCopyExpression(CI, *TLI);
-      MadeChange |= Change;
-    }
+    if (TLI && OptimizeNoopCopyExpression(CI, *TLI))
+      return true;
 
-    if (!Change && (isa<ZExtInst>(I) || isa<SExtInst>(I))) {
-      MadeChange |= MoveExtToFormExtLoad(I);
-      MadeChange |= OptimizeExtUses(I);
+    if (isa<ZExtInst>(I) || isa<SExtInst>(I)) {
+      bool MadeChange = MoveExtToFormExtLoad(I);
+      return MadeChange | OptimizeExtUses(I);
     }
-  } else if (CmpInst *CI = dyn_cast<CmpInst>(I)) {
-    MadeChange |= OptimizeCmpExpression(CI);
-  } else if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
+    return false;
+  }
+  
+  if (CmpInst *CI = dyn_cast<CmpInst>(I))
+    return OptimizeCmpExpression(CI);
+  
+  if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
     if (TLI)
-      MadeChange |= OptimizeMemoryInst(I, I->getOperand(0), LI->getType(),
-                                       SunkAddrs);
-  } else if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
+      return OptimizeMemoryInst(I, I->getOperand(0), LI->getType());
+    return false;
+  }
+  
+  if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
     if (TLI)
-      MadeChange |= OptimizeMemoryInst(I, SI->getOperand(1),
-                                       SI->getOperand(0)->getType(),
-                                       SunkAddrs);
-  } else if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(I)) {
+      return OptimizeMemoryInst(I, SI->getOperand(1),
+                                SI->getOperand(0)->getType());
+    return false;
+  }
+  
+  if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(I)) {
     if (GEPI->hasAllZeroIndices()) {
       /// The GEP operand must be a pointer, so must its result -> BitCast
       Instruction *NC = new BitCastInst(GEPI->getOperand(0), GEPI->getType(),
@@ -1022,65 +932,28 @@ bool CodeGenPrepare::OptimizeInst(Instruction *I) {
       GEPI->replaceAllUsesWith(NC);
       GEPI->eraseFromParent();
       ++NumGEPsElim;
-      MadeChange = true;
       OptimizeInst(NC);
+      return true;
     }
-  } else if (CallInst *CI = dyn_cast<CallInst>(I)) {
-    if (TLI && isa<InlineAsm>(CI->getCalledValue())) {
-      // Sink address computing for memory operands into the block.
-      MadeChange |= OptimizeInlineAsmInst(I, &(*CI), SunkAddrs);
-    } else {
-      MadeChange |= OptimizeCallInst(CI);
-    }
+    return false;
   }
+  
+  if (CallInst *CI = dyn_cast<CallInst>(I))
+    return OptimizeCallInst(CI);
 
-  return MadeChange;
+  return false;
 }
 
 // In this pass we look for GEP and cast instructions that are used
 // across basic blocks and rewrite them to improve basic-block-at-a-time
 // selection.
 bool CodeGenPrepare::OptimizeBlock(BasicBlock &BB) {
+  SunkAddrs.clear();
   bool MadeChange = false;
 
-  // Split all critical edges where the dest block has a PHI.
-  if (CriticalEdgeSplit) {
-    TerminatorInst *BBTI = BB.getTerminator();
-    if (BBTI->getNumSuccessors() > 1 && !isa<IndirectBrInst>(BBTI)) {
-      for (unsigned i = 0, e = BBTI->getNumSuccessors(); i != e; ++i) {
-        BasicBlock *SuccBB = BBTI->getSuccessor(i);
-        if (isa<PHINode>(SuccBB->begin()) && isCriticalEdge(BBTI, i, true))
-          SplitEdgeNicely(BBTI, i, BackEdges, this);
-      }
-    }
-  }
-
-  SunkAddrs.clear();
-
-  for (BasicBlock::iterator BBI = BB.begin(), E = BB.end(); BBI != E; ) {
-    Instruction *I = BBI++;
-
-    if (CallInst *CI = dyn_cast<CallInst>(I)) {
-      // If we found an inline asm expession, and if the target knows how to
-      // lower it to normal LLVM code, do so now.
-      if (TLI && isa<InlineAsm>(CI->getCalledValue())) {
-        if (TLI->ExpandInlineAsm(CI)) {
-          BBI = BB.begin();
-          // Avoid processing instructions out of order, which could cause
-          // reuse before a value is defined.
-          SunkAddrs.clear();
-        } else
-          // Sink address computing for memory operands into the block.
-          MadeChange |= OptimizeInlineAsmInst(I, &(*CI), SunkAddrs);
-      } else {
-        // Other CallInst optimizations that don't need to muck with the
-        // enclosing iterator here.
-        MadeChange |= OptimizeCallInst(CI);
-      }
-    } else {
-      MadeChange |= OptimizeInst(I);
-    }
-  }
+  CurInstIterator = BB.begin();
+  for (BasicBlock::iterator E = BB.end(); CurInstIterator != E; )
+    MadeChange |= OptimizeInst(CurInstIterator++);
 
   return MadeChange;
 }

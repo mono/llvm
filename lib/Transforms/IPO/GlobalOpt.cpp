@@ -40,6 +40,7 @@
 using namespace llvm;
 
 STATISTIC(NumMarked    , "Number of globals marked constant");
+STATISTIC(NumUnnamed   , "Number of globals marked unnamed_addr");
 STATISTIC(NumSRA       , "Number of aggregate globals broken into scalars");
 STATISTIC(NumHeapSRA   , "Number of heap objects SRA'd");
 STATISTIC(NumSubstitute,"Number of globals with initializers stored into them");
@@ -55,6 +56,7 @@ STATISTIC(NumAliasesResolved, "Number of global aliases resolved");
 STATISTIC(NumAliasesRemoved, "Number of global aliases eliminated");
 
 namespace {
+  struct GlobalStatus;
   struct GlobalOpt : public ModulePass {
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
     }
@@ -71,7 +73,10 @@ namespace {
     bool OptimizeGlobalVars(Module &M);
     bool OptimizeGlobalAliases(Module &M);
     bool OptimizeGlobalCtorsList(GlobalVariable *&GCL);
-    bool ProcessInternalGlobal(GlobalVariable *GV,Module::global_iterator &GVI);
+    bool ProcessGlobal(GlobalVariable *GV,Module::global_iterator &GVI);
+    bool ProcessInternalGlobal(GlobalVariable *GV,Module::global_iterator &GVI,
+                               const SmallPtrSet<const PHINode*, 16> &PHIUsers,
+                               const GlobalStatus &GS);
   };
 }
 
@@ -87,6 +92,9 @@ namespace {
 /// about it.  If we find out that the address of the global is taken, none of
 /// this info will be accurate.
 struct GlobalStatus {
+  /// isCompared - True if the global's address is used in a comparison.
+  bool isCompared;
+
   /// isLoaded - True if the global is ever loaded.  If the global isn't ever
   /// loaded it can be deleted.
   bool isLoaded;
@@ -132,9 +140,10 @@ struct GlobalStatus {
   /// HasPHIUser - Set to true if this global has a user that is a PHI node.
   bool HasPHIUser;
 
-  GlobalStatus() : isLoaded(false), StoredType(NotStored), StoredOnceValue(0),
-                   AccessingFunction(0), HasMultipleAccessingFunctions(false),
-                   HasNonInstructionUser(false), HasPHIUser(false) {}
+  GlobalStatus() : isCompared(false), isLoaded(false), StoredType(NotStored),
+                   StoredOnceValue(0), AccessingFunction(0),
+                   HasMultipleAccessingFunctions(false), HasNonInstructionUser(false),
+                   HasPHIUser(false) {}
 };
 
 }
@@ -228,7 +237,7 @@ static bool AnalyzeGlobal(const Value *V, GlobalStatus &GS,
           if (AnalyzeGlobal(I, GS, PHIUsers)) return true;
         GS.HasPHIUser = true;
       } else if (isa<CmpInst>(I)) {
-        // Nothing to analyse.
+        GS.isCompared = true;
       } else if (isa<MemTransferInst>(I)) {
         const MemTransferInst *MTI = cast<MemTransferInst>(I);
         if (MTI->getArgOperand(0) == V)
@@ -1691,10 +1700,12 @@ static bool TryToShrinkGlobalToBoolean(GlobalVariable *GV, Constant *OtherVal) {
 
 /// ProcessInternalGlobal - Analyze the specified global variable and optimize
 /// it if possible.  If we make a change, return true.
-bool GlobalOpt::ProcessInternalGlobal(GlobalVariable *GV,
-                                      Module::global_iterator &GVI) {
-  SmallPtrSet<const PHINode*, 16> PHIUsers;
-  GlobalStatus GS;
+bool GlobalOpt::ProcessGlobal(GlobalVariable *GV,
+                              Module::global_iterator &GVI) {
+  if (!GV->hasLocalLinkage())
+    return false;
+
+  // Do more involved optimizations if the global is internal.
   GV->removeDeadConstantUsers();
 
   if (GV->use_empty()) {
@@ -1704,140 +1715,139 @@ bool GlobalOpt::ProcessInternalGlobal(GlobalVariable *GV,
     return true;
   }
 
-  if (!AnalyzeGlobal(GV, GS, PHIUsers)) {
-#if 0
-    DEBUG(dbgs() << "Global: " << *GV);
-    DEBUG(dbgs() << "  isLoaded = " << GS.isLoaded << "\n");
-    DEBUG(dbgs() << "  StoredType = ");
-    switch (GS.StoredType) {
-    case GlobalStatus::NotStored: DEBUG(dbgs() << "NEVER STORED\n"); break;
-    case GlobalStatus::isInitializerStored: DEBUG(dbgs() << "INIT STORED\n");
-                                            break;
-    case GlobalStatus::isStoredOnce: DEBUG(dbgs() << "STORED ONCE\n"); break;
-    case GlobalStatus::isStored: DEBUG(dbgs() << "stored\n"); break;
-    }
-    if (GS.StoredType == GlobalStatus::isStoredOnce && GS.StoredOnceValue)
-      DEBUG(dbgs() << "  StoredOnceValue = " << *GS.StoredOnceValue << "\n");
-    if (GS.AccessingFunction && !GS.HasMultipleAccessingFunctions)
-      DEBUG(dbgs() << "  AccessingFunction = "
-                   << GS.AccessingFunction->getName() << "\n");
-    DEBUG(dbgs() << "  HasMultipleAccessingFunctions =  "
-                 << GS.HasMultipleAccessingFunctions << "\n");
-    DEBUG(dbgs() << "  HasNonInstructionUser = "
-                 << GS.HasNonInstructionUser<<"\n");
-    DEBUG(dbgs() << "\n");
-#endif
+  SmallPtrSet<const PHINode*, 16> PHIUsers;
+  GlobalStatus GS;
 
-    // If this is a first class global and has only one accessing function
-    // and this function is main (which we know is not recursive we can make
-    // this global a local variable) we replace the global with a local alloca
-    // in this function.
-    //
-    // NOTE: It doesn't make sense to promote non single-value types since we
-    // are just replacing static memory to stack memory.
-    //
-    // If the global is in different address space, don't bring it to stack.
-    if (!GS.HasMultipleAccessingFunctions &&
-        GS.AccessingFunction && !GS.HasNonInstructionUser &&
-        GV->getType()->getElementType()->isSingleValueType() &&
-        GS.AccessingFunction->getName() == "main" &&
-        GS.AccessingFunction->hasExternalLinkage() &&
-        GV->getType()->getAddressSpace() == 0) {
-      DEBUG(dbgs() << "LOCALIZING GLOBAL: " << *GV);
-      Instruction& FirstI = const_cast<Instruction&>(*GS.AccessingFunction
-                                                     ->getEntryBlock().begin());
-      const Type* ElemTy = GV->getType()->getElementType();
-      // FIXME: Pass Global's alignment when globals have alignment
-      AllocaInst* Alloca = new AllocaInst(ElemTy, NULL, GV->getName(), &FirstI);
-      if (!isa<UndefValue>(GV->getInitializer()))
-        new StoreInst(GV->getInitializer(), Alloca, &FirstI);
+  if (AnalyzeGlobal(GV, GS, PHIUsers))
+    return false;
 
-      GV->replaceAllUsesWith(Alloca);
-      GV->eraseFromParent();
-      ++NumLocalized;
-      return true;
-    }
-
-    // If the global is never loaded (but may be stored to), it is dead.
-    // Delete it now.
-    if (!GS.isLoaded) {
-      DEBUG(dbgs() << "GLOBAL NEVER LOADED: " << *GV);
-
-      // Delete any stores we can find to the global.  We may not be able to
-      // make it completely dead though.
-      bool Changed = CleanupConstantGlobalUsers(GV, GV->getInitializer());
-
-      // If the global is dead now, delete it.
-      if (GV->use_empty()) {
-        GV->eraseFromParent();
-        ++NumDeleted;
-        Changed = true;
-      }
-      return Changed;
-
-    } else if (GS.StoredType <= GlobalStatus::isInitializerStored) {
-      DEBUG(dbgs() << "MARKING CONSTANT: " << *GV);
-      GV->setConstant(true);
-
-      // Clean up any obviously simplifiable users now.
-      CleanupConstantGlobalUsers(GV, GV->getInitializer());
-
-      // If the global is dead now, just nuke it.
-      if (GV->use_empty()) {
-        DEBUG(dbgs() << "   *** Marking constant allowed us to simplify "
-                     << "all users and delete global!\n");
-        GV->eraseFromParent();
-        ++NumDeleted;
-      }
-
-      ++NumMarked;
-      return true;
-    } else if (!GV->getInitializer()->getType()->isSingleValueType()) {
-      if (TargetData *TD = getAnalysisIfAvailable<TargetData>())
-        if (GlobalVariable *FirstNewGV = SRAGlobal(GV, *TD)) {
-          GVI = FirstNewGV;  // Don't skip the newly produced globals!
-          return true;
-        }
-    } else if (GS.StoredType == GlobalStatus::isStoredOnce) {
-      // If the initial value for the global was an undef value, and if only
-      // one other value was stored into it, we can just change the
-      // initializer to be the stored value, then delete all stores to the
-      // global.  This allows us to mark it constant.
-      if (Constant *SOVConstant = dyn_cast<Constant>(GS.StoredOnceValue))
-        if (isa<UndefValue>(GV->getInitializer())) {
-          // Change the initial value here.
-          GV->setInitializer(SOVConstant);
-
-          // Clean up any obviously simplifiable users now.
-          CleanupConstantGlobalUsers(GV, GV->getInitializer());
-
-          if (GV->use_empty()) {
-            DEBUG(dbgs() << "   *** Substituting initializer allowed us to "
-                         << "simplify all users and delete global!\n");
-            GV->eraseFromParent();
-            ++NumDeleted;
-          } else {
-            GVI = GV;
-          }
-          ++NumSubstitute;
-          return true;
-        }
-
-      // Try to optimize globals based on the knowledge that only one value
-      // (besides its initializer) is ever stored to the global.
-      if (OptimizeOnceStoredGlobal(GV, GS.StoredOnceValue, GVI,
-                                   getAnalysisIfAvailable<TargetData>()))
-        return true;
-
-      // Otherwise, if the global was not a boolean, we can shrink it to be a
-      // boolean.
-      if (Constant *SOVConstant = dyn_cast<Constant>(GS.StoredOnceValue))
-        if (TryToShrinkGlobalToBoolean(GV, SOVConstant)) {
-          ++NumShrunkToBool;
-          return true;
-        }
-    }
+  if (!GS.isCompared && !GV->hasUnnamedAddr()) {
+    GV->setUnnamedAddr(true);
+    NumUnnamed++;
   }
+
+  if (GV->isConstant() || !GV->hasInitializer())
+    return false;
+
+  return ProcessInternalGlobal(GV, GVI, PHIUsers, GS);
+}
+
+/// ProcessInternalGlobal - Analyze the specified global variable and optimize
+/// it if possible.  If we make a change, return true.
+bool GlobalOpt::ProcessInternalGlobal(GlobalVariable *GV,
+                                      Module::global_iterator &GVI,
+                                      const SmallPtrSet<const PHINode*, 16> &PHIUsers,
+                                      const GlobalStatus &GS) {
+  // If this is a first class global and has only one accessing function
+  // and this function is main (which we know is not recursive we can make
+  // this global a local variable) we replace the global with a local alloca
+  // in this function.
+  //
+  // NOTE: It doesn't make sense to promote non single-value types since we
+  // are just replacing static memory to stack memory.
+  //
+  // If the global is in different address space, don't bring it to stack.
+  if (!GS.HasMultipleAccessingFunctions &&
+      GS.AccessingFunction && !GS.HasNonInstructionUser &&
+      GV->getType()->getElementType()->isSingleValueType() &&
+      GS.AccessingFunction->getName() == "main" &&
+      GS.AccessingFunction->hasExternalLinkage() &&
+      GV->getType()->getAddressSpace() == 0) {
+    DEBUG(dbgs() << "LOCALIZING GLOBAL: " << *GV);
+    Instruction& FirstI = const_cast<Instruction&>(*GS.AccessingFunction
+                                                   ->getEntryBlock().begin());
+    const Type* ElemTy = GV->getType()->getElementType();
+    // FIXME: Pass Global's alignment when globals have alignment
+    AllocaInst* Alloca = new AllocaInst(ElemTy, NULL, GV->getName(), &FirstI);
+    if (!isa<UndefValue>(GV->getInitializer()))
+      new StoreInst(GV->getInitializer(), Alloca, &FirstI);
+
+    GV->replaceAllUsesWith(Alloca);
+    GV->eraseFromParent();
+    ++NumLocalized;
+    return true;
+  }
+
+  // If the global is never loaded (but may be stored to), it is dead.
+  // Delete it now.
+  if (!GS.isLoaded) {
+    DEBUG(dbgs() << "GLOBAL NEVER LOADED: " << *GV);
+
+    // Delete any stores we can find to the global.  We may not be able to
+    // make it completely dead though.
+    bool Changed = CleanupConstantGlobalUsers(GV, GV->getInitializer());
+
+    // If the global is dead now, delete it.
+    if (GV->use_empty()) {
+      GV->eraseFromParent();
+      ++NumDeleted;
+      Changed = true;
+    }
+    return Changed;
+
+  } else if (GS.StoredType <= GlobalStatus::isInitializerStored) {
+    DEBUG(dbgs() << "MARKING CONSTANT: " << *GV);
+    GV->setConstant(true);
+
+    // Clean up any obviously simplifiable users now.
+    CleanupConstantGlobalUsers(GV, GV->getInitializer());
+
+    // If the global is dead now, just nuke it.
+    if (GV->use_empty()) {
+      DEBUG(dbgs() << "   *** Marking constant allowed us to simplify "
+            << "all users and delete global!\n");
+      GV->eraseFromParent();
+      ++NumDeleted;
+    }
+
+    ++NumMarked;
+    return true;
+  } else if (!GV->getInitializer()->getType()->isSingleValueType()) {
+    if (TargetData *TD = getAnalysisIfAvailable<TargetData>())
+      if (GlobalVariable *FirstNewGV = SRAGlobal(GV, *TD)) {
+        GVI = FirstNewGV;  // Don't skip the newly produced globals!
+        return true;
+      }
+  } else if (GS.StoredType == GlobalStatus::isStoredOnce) {
+    // If the initial value for the global was an undef value, and if only
+    // one other value was stored into it, we can just change the
+    // initializer to be the stored value, then delete all stores to the
+    // global.  This allows us to mark it constant.
+    if (Constant *SOVConstant = dyn_cast<Constant>(GS.StoredOnceValue))
+      if (isa<UndefValue>(GV->getInitializer())) {
+        // Change the initial value here.
+        GV->setInitializer(SOVConstant);
+
+        // Clean up any obviously simplifiable users now.
+        CleanupConstantGlobalUsers(GV, GV->getInitializer());
+
+        if (GV->use_empty()) {
+          DEBUG(dbgs() << "   *** Substituting initializer allowed us to "
+                << "simplify all users and delete global!\n");
+          GV->eraseFromParent();
+          ++NumDeleted;
+        } else {
+          GVI = GV;
+        }
+        ++NumSubstitute;
+        return true;
+      }
+
+    // Try to optimize globals based on the knowledge that only one value
+    // (besides its initializer) is ever stored to the global.
+    if (OptimizeOnceStoredGlobal(GV, GS.StoredOnceValue, GVI,
+                                 getAnalysisIfAvailable<TargetData>()))
+      return true;
+
+    // Otherwise, if the global was not a boolean, we can shrink it to be a
+    // boolean.
+    if (Constant *SOVConstant = dyn_cast<Constant>(GS.StoredOnceValue))
+      if (TryToShrinkGlobalToBoolean(GV, SOVConstant)) {
+        ++NumShrunkToBool;
+        return true;
+      }
+  }
+
   return false;
 }
 
@@ -1924,10 +1934,8 @@ bool GlobalOpt::OptimizeGlobalVars(Module &M) {
         if (New && New != CE)
           GV->setInitializer(New);
       }
-    // Do more involved optimizations if the global is internal.
-    if (!GV->isConstant() && GV->hasLocalLinkage() &&
-        GV->hasInitializer())
-      Changed |= ProcessInternalGlobal(GV, GVI);
+
+    Changed |= ProcessGlobal(GV, GVI);
   }
   return Changed;
 }
@@ -2128,8 +2136,9 @@ isSimpleEnoughValueToCommit(Constant *C,
 
 
 /// isSimpleEnoughPointerToCommit - Return true if this constant is simple
-/// enough for us to understand.  In particular, if it is a cast of something,
-/// we punt.  We basically just support direct accesses to globals and GEP's of
+/// enough for us to understand.  In particular, if it is a cast to anything
+/// other than from one pointer type to another pointer type, we punt.
+/// We basically just support direct accesses to globals and GEP's of
 /// globals.  This should be kept up to date with CommitValueTo.
 static bool isSimpleEnoughPointerToCommit(Constant *C) {
   // Conservatively, avoid aggregate types. This is because we don't
@@ -2142,7 +2151,7 @@ static bool isSimpleEnoughPointerToCommit(Constant *C) {
     // external globals.
     return GV->hasUniqueInitializer();
 
-  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(C))
+  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(C)) {
     // Handle a constantexpr gep.
     if (CE->getOpcode() == Instruction::GetElementPtr &&
         isa<GlobalVariable>(CE->getOperand(0)) &&
@@ -2163,7 +2172,18 @@ static bool isSimpleEnoughPointerToCommit(Constant *C) {
         return false;
 
       return ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(), CE);
+    
+    // A constantexpr bitcast from a pointer to another pointer is a no-op,
+    // and we know how to evaluate it by moving the bitcast from the pointer
+    // operand to the value operand.
+    } else if (CE->getOpcode() == Instruction::BitCast &&
+               isa<GlobalVariable>(CE->getOperand(0))) {
+      // Do not allow weak/*_odr/linkonce/dllimport/dllexport linkage or
+      // external globals.
+      return cast<GlobalVariable>(CE->getOperand(0))->hasUniqueInitializer();
     }
+  }
+  
   return false;
 }
 
@@ -2237,8 +2257,7 @@ static Constant *EvaluateStoreInto(Constant *Init, Constant *Val,
 
     if (Init->getType()->isArrayTy())
       return ConstantArray::get(cast<ArrayType>(InitTy), Elts);
-    else
-      return ConstantVector::get(&Elts[0], Elts.size());
+    return ConstantVector::get(Elts);
   }
 }
 
@@ -2336,6 +2355,44 @@ static bool EvaluateFunction(Function *F, Constant *&RetVal,
       // of one global variable divided by another) then we can't commit it.
       if (!isSimpleEnoughValueToCommit(Val, SimpleConstants))
         return false;
+        
+      if (ConstantExpr *CE = dyn_cast<ConstantExpr>(Ptr))
+        if (CE->getOpcode() == Instruction::BitCast) {
+          // If we're evaluating a store through a bitcast, then we need
+          // to pull the bitcast off the pointer type and push it onto the
+          // stored value.
+          Ptr = CE->getOperand(0);
+          
+          const Type *NewTy=cast<PointerType>(Ptr->getType())->getElementType();
+          
+          // In order to push the bitcast onto the stored value, a bitcast
+          // from NewTy to Val's type must be legal.  If it's not, we can try
+          // introspecting NewTy to find a legal conversion.
+          while (!Val->getType()->canLosslesslyBitCastTo(NewTy)) {
+            // If NewTy is a struct, we can convert the pointer to the struct
+            // into a pointer to its first member.
+            // FIXME: This could be extended to support arrays as well.
+            if (const StructType *STy = dyn_cast<StructType>(NewTy)) {
+              NewTy = STy->getTypeAtIndex(0U);
+
+              const IntegerType *IdxTy =IntegerType::get(NewTy->getContext(), 32);
+              Constant *IdxZero = ConstantInt::get(IdxTy, 0, false);
+              Constant * const IdxList[] = {IdxZero, IdxZero};
+
+              Ptr = ConstantExpr::getGetElementPtr(Ptr, IdxList, 2);
+            
+            // If we can't improve the situation by introspecting NewTy,
+            // we have to give up.
+            } else {
+              return 0;
+            }
+          }
+          
+          // If we found compatible types, go ahead and push the bitcast
+          // onto the stored value.
+          Val = ConstantExpr::getBitCast(Val, NewTy);
+        }
+          
       MutatedMemory[Ptr] = Val;
     } else if (BinaryOperator *BO = dyn_cast<BinaryOperator>(CurInst)) {
       InstResult = ConstantExpr::get(BO->getOpcode(),

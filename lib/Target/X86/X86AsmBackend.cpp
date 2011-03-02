@@ -297,7 +297,7 @@ public:
 
   virtual bool doesSectionRequireSymbols(const MCSection &Section) const {
     const MCSectionELF &ES = static_cast<const MCSectionELF&>(Section);
-    return ES.getFlags() & MCSectionELF::SHF_MERGE;
+    return ES.getFlags() & ELF::SHF_MERGE;
   }
 };
 
@@ -414,7 +414,10 @@ TargetAsmBackend *llvm::createX86_32AsmBackend(const Target &T,
   case Triple::MinGW32:
   case Triple::Cygwin:
   case Triple::Win32:
-    return new WindowsX86AsmBackend(T, false);
+    if (Triple(TT).getEnvironment() == Triple::MachO)
+      return new DarwinX86_32AsmBackend(T);
+    else
+      return new WindowsX86AsmBackend(T, false);
   default:
     return new ELFX86_32AsmBackend(T, Triple(TT).getOS());
   }
@@ -425,10 +428,13 @@ TargetAsmBackend *llvm::createX86_64AsmBackend(const Target &T,
   switch (Triple(TT).getOS()) {
   case Triple::Darwin:
     return new DarwinX86_64AsmBackend(T);
-  case Triple::MinGW64:
+  case Triple::MinGW32:
   case Triple::Cygwin:
   case Triple::Win32:
-    return new WindowsX86AsmBackend(T, true);
+    if (Triple(TT).getEnvironment() == Triple::MachO)
+      return new DarwinX86_64AsmBackend(T);
+    else
+      return new WindowsX86AsmBackend(T, true);
   default:
     return new ELFX86_64AsmBackend(T, Triple(TT).getOS());
   }

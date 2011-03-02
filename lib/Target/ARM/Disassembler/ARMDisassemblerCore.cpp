@@ -720,25 +720,29 @@ static bool DisassembleBrFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     NumOpsAdded = 1;
     return true;
   }
-  // MSR and MSRsys take one GPR reg Rm, followed by the mask.
-  if (Opcode == ARM::MSR || Opcode == ARM::MSRsys) {
-    assert(NumOps >= 1 && OpInfo[0].RegClass == ARM::GPRRegClassID &&
+  // MSR take a mask, followed by one GPR reg Rm. The mask contains the R Bit in
+  // bit 4, and the special register fields in bits 3-0.
+  if (Opcode == ARM::MSR) {
+    assert(NumOps >= 1 && OpInfo[1].RegClass == ARM::GPRRegClassID &&
            "Reg operand expected");
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 22, 22) << 4 /* R Bit */ |
+                                       slice(insn, 19, 16) /* Special Reg */ ));
     MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
                                                        decodeRm(insn))));
-    MI.addOperand(MCOperand::CreateImm(slice(insn, 19, 16)));
     NumOpsAdded = 2;
     return true;
   }
-  // MSRi and MSRsysi take one so_imm operand, followed by the mask.
-  if (Opcode == ARM::MSRi || Opcode == ARM::MSRsysi) {
+  // MSRi take a mask, followed by one so_imm operand. The mask contains the
+  // R Bit in bit 4, and the special register fields in bits 3-0.
+  if (Opcode == ARM::MSRi) {
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 22, 22) << 4 /* R Bit */ |
+                                       slice(insn, 19, 16) /* Special Reg */ ));
     // SOImm is 4-bit rotate amount in bits 11-8 with 8-bit imm in bits 7-0.
     // A5.2.4 Rotate amount is twice the numeric value of Inst{11-8}.
     // See also ARMAddressingModes.h: getSOImmValImm() and getSOImmValRot().
     unsigned Rot = (insn >> ARMII::SoRotImmShift) & 0xF;
     unsigned Imm = insn & 0xFF;
     MI.addOperand(MCOperand::CreateImm(ARM_AM::rotr32(Imm, 2*Rot)));
-    MI.addOperand(MCOperand::CreateImm(slice(insn, 19, 16)));
     NumOpsAdded = 2;
     return true;
   }
@@ -801,8 +805,8 @@ static bool DisassembleBrMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
 
   OpIdx = 0;
 
-  // BX_RET has only two predicate operands, do an early return.
-  if (Opcode == ARM::BX_RET)
+  // BX_RET and MOVPCLR have only two predicate operands; do an early return.
+  if (Opcode == ARM::BX_RET || Opcode == ARM::MOVPCLR)
     return true;
 
   // BLXr9 and BX take one GPR reg.
@@ -2942,15 +2946,25 @@ static bool DisassembleMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     return true;
   }
 
-  // CPS has a singleton $opt operand that contains the following information:
-  // opt{4-0} = mode from Inst{4-0}
-  // opt{5} = changemode from Inst{17}
-  // opt{8-6} = AIF from Inst{8-6}
-  // opt{10-9} = imod from Inst{19-18} with 0b10 as enable and 0b11 as disable
-  if (Opcode == ARM::CPS) {
-    unsigned Option = slice(insn, 4, 0) | slice(insn, 17, 17) << 5 |
-      slice(insn, 8, 6) << 6 | slice(insn, 19, 18) << 9;
-    MI.addOperand(MCOperand::CreateImm(Option));
+  // FIXME: To enable correct asm parsing and disasm of CPS we need 3 different
+  // opcodes which match the same real instruction. This is needed since there's
+  // no current handling of optional arguments. Fix here when a better handling
+  // of optional arguments is implemented.
+  if (Opcode == ARM::CPS3p) {
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 19, 18))); // imod
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 8, 6)));   // iflags
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 4, 0)));   // mode
+    NumOpsAdded = 3;
+    return true;
+  }
+  if (Opcode == ARM::CPS2p) {
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 19, 18))); // imod
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 8, 6)));   // iflags
+    NumOpsAdded = 2;
+    return true;
+  }
+  if (Opcode == ARM::CPS1p) {
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 4, 0))); // mode
     NumOpsAdded = 1;
     return true;
   }

@@ -1420,7 +1420,7 @@ SDValue SelectionDAG::getMDNode(const MDNode *MD) {
 /// the target's desired shift amount type.
 SDValue SelectionDAG::getShiftAmountOperand(SDValue Op) {
   EVT OpTy = Op.getValueType();
-  MVT ShTy = TLI.getShiftAmountTy();
+  MVT ShTy = TLI.getShiftAmountTy(OpTy);
   if (OpTy == ShTy || OpTy.isVector()) return Op;
 
   ISD::NodeType Opcode = OpTy.bitsGT(ShTy) ?  ISD::TRUNCATE : ISD::ZERO_EXTEND;
@@ -2040,6 +2040,15 @@ void SelectionDAG::ComputeMaskedBits(SDValue Op, const APInt &Mask,
     KnownZero = APInt::getHighBitsSet(BitWidth, Leaders) & Mask;
     return;
   }
+  case ISD::FrameIndex:
+  case ISD::TargetFrameIndex:
+    if (unsigned Align = InferPtrAlignment(Op)) {
+      // The low bits are known zero if the pointer is aligned.
+      KnownZero = APInt::getLowBitsSet(BitWidth, Log2_32(Align));
+      return;
+    }
+    break;
+
   default:
     // Allow the target to implement this method for its nodes.
     if (Op.getOpcode() >= ISD::BUILTIN_OP_END) {
@@ -2079,12 +2088,7 @@ unsigned SelectionDAG::ComputeNumSignBits(SDValue Op, unsigned Depth) const{
 
   case ISD::Constant: {
     const APInt &Val = cast<ConstantSDNode>(Op)->getAPIntValue();
-    // If negative, return # leading ones.
-    if (Val.isNegative())
-      return Val.countLeadingOnes();
-
-    // Return # leading zeros.
-    return Val.countLeadingZeros();
+    return Val.getNumSignBits();
   }
 
   case ISD::SIGN_EXTEND:
@@ -2278,6 +2282,25 @@ unsigned SelectionDAG::ComputeNumSignBits(SDValue Op, unsigned Depth) const{
   // shifting.  We don't want to return '64' as for an i32 "0".
   return std::max(FirstAnswer, std::min(VTBits, Mask.countLeadingZeros()));
 }
+
+/// isBaseWithConstantOffset - Return true if the specified operand is an
+/// ISD::ADD with a ConstantSDNode on the right-hand side, or if it is an
+/// ISD::OR with a ConstantSDNode that is guaranteed to have the same
+/// semantics as an ADD.  This handles the equivalence:
+///     X|Cst == X+Cst iff X&Cst = 0.
+bool SelectionDAG::isBaseWithConstantOffset(SDValue Op) const {
+  if ((Op.getOpcode() != ISD::ADD && Op.getOpcode() != ISD::OR) ||
+      !isa<ConstantSDNode>(Op.getOperand(1)))
+    return false;
+
+  if (Op.getOpcode() == ISD::OR &&
+      !MaskedValueIsZero(Op.getOperand(0),
+                     cast<ConstantSDNode>(Op.getOperand(1))->getAPIntValue()))
+    return false;
+
+  return true;
+}
+
 
 bool SelectionDAG::isKnownNeverNaN(SDValue Op) const {
   // If we're told that NaNs won't happen, assume they won't.
@@ -2720,6 +2743,13 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
            "Shift operators return type must be the same as their first arg");
     assert(VT.isInteger() && N2.getValueType().isInteger() &&
            "Shifts only work on integers");
+    // Verify that the shift amount VT is bit enough to hold valid shift
+    // amounts.  This catches things like trying to shift an i1024 value by an
+    // i8, which is easy to fall into in generic code that uses
+    // TLI.getShiftAmount().
+    assert(N2.getValueType().getSizeInBits() >=
+                   Log2_32_Ceil(N1.getValueType().getSizeInBits()) &&
+           "Invalid use of small shift amount with oversized value!");
 
     // Always fold shifts of i1 values so the code generator doesn't need to
     // handle them.  Since we know the size of the shift has to be less than the
@@ -2864,10 +2894,29 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
       return getConstant(ShiftedVal.trunc(ElementSize), VT);
     }
     break;
-  case ISD::EXTRACT_SUBVECTOR:
-    if (N1.getValueType() == VT) // Trivial extraction.
-      return N1;
+  case ISD::EXTRACT_SUBVECTOR: {
+    SDValue Index = N2;
+    if (VT.isSimple() && N1.getValueType().isSimple()) {
+      assert(VT.isVector() && N1.getValueType().isVector() &&
+             "Extract subvector VTs must be a vectors!");
+      assert(VT.getVectorElementType() == N1.getValueType().getVectorElementType() &&
+             "Extract subvector VTs must have the same element type!");
+      assert(VT.getSimpleVT() <= N1.getValueType().getSimpleVT() &&
+             "Extract subvector must be from larger vector to smaller vector!");
+
+      if (isa<ConstantSDNode>(Index.getNode())) {
+        assert((VT.getVectorNumElements() +
+                cast<ConstantSDNode>(Index.getNode())->getZExtValue()
+                <= N1.getValueType().getVectorNumElements())
+               && "Extract subvector overflow!");
+      }
+
+      // Trivial extraction.
+      if (VT.getSimpleVT() == N1.getValueType().getSimpleVT())
+        return N1;
+    }
     break;
+  }
   }
 
   if (N1C) {
@@ -3063,6 +3112,30 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL, EVT VT,
   case ISD::VECTOR_SHUFFLE:
     llvm_unreachable("should use getVectorShuffle constructor!");
     break;
+  case ISD::INSERT_SUBVECTOR: {
+    SDValue Index = N3;
+    if (VT.isSimple() && N1.getValueType().isSimple()
+        && N2.getValueType().isSimple()) {
+      assert(VT.isVector() && N1.getValueType().isVector() &&
+             N2.getValueType().isVector() &&
+             "Insert subvector VTs must be a vectors");
+      assert(VT == N1.getValueType() &&
+             "Dest and insert subvector source types must match!");
+      assert(N2.getValueType().getSimpleVT() <= N1.getValueType().getSimpleVT() &&
+             "Insert subvector must be from smaller vector to larger vector!");
+      if (isa<ConstantSDNode>(Index.getNode())) {
+        assert((N2.getValueType().getVectorNumElements() +
+                cast<ConstantSDNode>(Index.getNode())->getZExtValue()
+                <= VT.getVectorNumElements())
+               && "Insert subvector overflow!");
+      }
+
+      // Trivial insertion.
+      if (VT.getSimpleVT() == N2.getValueType().getSimpleVT())
+        return N2;
+    }
+    break;
+  }
   case ISD::BITCAST:
     // Fold bit_convert nodes from a type to themselves.
     if (N1.getValueType() == VT)
@@ -3384,7 +3457,7 @@ static SDValue getMemcpyLoadsAndStores(SelectionDAG &DAG, DebugLoc dl,
       // FIXME does the case above also need this?
       EVT NVT = TLI.getTypeToTransformTo(*DAG.getContext(), VT);
       assert(NVT.bitsGE(VT));
-      Value = DAG.getExtLoad(ISD::EXTLOAD, NVT, dl, Chain,
+      Value = DAG.getExtLoad(ISD::EXTLOAD, dl, NVT, Chain,
                              getMemBasePlusOffset(Src, SrcOff, DAG),
                              SrcPtrInfo.getWithOffset(SrcOff), VT, isVol, false,
                              MinAlign(SrcAlign, SrcOff));
@@ -3836,7 +3909,6 @@ SDValue SelectionDAG::getAtomic(unsigned Opcode, DebugLoc dl, EVT MemVT,
 }
 
 /// getMergeValues - Create a MERGE_VALUES node from the given operands.
-/// Allowed to return something different (and simpler) if Simplify is true.
 SDValue SelectionDAG::getMergeValues(const SDValue *Ops, unsigned NumOps,
                                      DebugLoc dl) {
   if (NumOps == 1)
@@ -4036,7 +4108,7 @@ SDValue SelectionDAG::getLoad(EVT VT, DebugLoc dl,
                  PtrInfo, VT, isVolatile, isNonTemporal, Alignment, TBAAInfo);
 }
 
-SDValue SelectionDAG::getExtLoad(ISD::LoadExtType ExtType, EVT VT, DebugLoc dl,
+SDValue SelectionDAG::getExtLoad(ISD::LoadExtType ExtType, DebugLoc dl, EVT VT,
                                  SDValue Chain, SDValue Ptr,
                                  MachinePointerInfo PtrInfo, EVT MemVT,
                                  bool isVolatile, bool isNonTemporal,
@@ -4931,7 +5003,7 @@ SelectionDAG::getMachineNode(unsigned Opcode, DebugLoc DL, SDVTList VTs,
                              const SDValue *Ops, unsigned NumOps) {
   bool DoCSE = VTs.VTs[VTs.NumVTs-1] != MVT::Glue;
   MachineSDNode *N;
-  void *IP;
+  void *IP = 0;
 
   if (DoCSE) {
     FoldingSetNodeID ID;
@@ -5424,6 +5496,29 @@ void SelectionDAG::AddDbgValue(SDDbgValue *DB, SDNode *SD, bool isParameter) {
     SD->setHasDebugValue(true);
 }
 
+/// TransferDbgValues - Transfer SDDbgValues.
+void SelectionDAG::TransferDbgValues(SDValue From, SDValue To) {
+  if (From == To || !From.getNode()->getHasDebugValue())
+    return;
+  SDNode *FromNode = From.getNode();
+  SDNode *ToNode = To.getNode();
+  SmallVector<SDDbgValue *, 2> &DVs = GetDbgValues(FromNode);
+  SmallVector<SDDbgValue *, 2> ClonedDVs;
+  for (SmallVector<SDDbgValue *, 2>::iterator I = DVs.begin(), E = DVs.end();
+       I != E; ++I) {
+    SDDbgValue *Dbg = *I;
+    if (Dbg->getKind() == SDDbgValue::SDNODE) {
+      SDDbgValue *Clone = getDbgValue(Dbg->getMDPtr(), ToNode, To.getResNo(),
+                                      Dbg->getOffset(), Dbg->getDebugLoc(),
+                                      Dbg->getOrder());
+      ClonedDVs.push_back(Clone);
+    }
+  }
+  for (SmallVector<SDDbgValue *, 2>::iterator I = ClonedDVs.begin(),
+         E = ClonedDVs.end(); I != E; ++I)
+    AddDbgValue(*I, ToNode, false);
+}
+
 //===----------------------------------------------------------------------===//
 //                              SDNode Class
 //===----------------------------------------------------------------------===//
@@ -5775,6 +5870,7 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::INSERT_VECTOR_ELT:   return "insert_vector_elt";
   case ISD::EXTRACT_VECTOR_ELT:  return "extract_vector_elt";
   case ISD::CONCAT_VECTORS:      return "concat_vectors";
+  case ISD::INSERT_SUBVECTOR:    return "insert_subvector";
   case ISD::EXTRACT_SUBVECTOR:   return "extract_subvector";
   case ISD::SCALAR_TO_VECTOR:    return "scalar_to_vector";
   case ISD::VECTOR_SHUFFLE:      return "vector_shuffle";
@@ -6260,11 +6356,11 @@ bool SelectionDAG::isConsecutiveLoad(LoadSDNode *LD, LoadSDNode *Base,
     if (FS != BFS || FS != (int)Bytes) return false;
     return MFI->getObjectOffset(FI) == (MFI->getObjectOffset(BFI) + Dist*Bytes);
   }
-  if (Loc.getOpcode() == ISD::ADD && Loc.getOperand(0) == BaseLoc) {
-    ConstantSDNode *V = dyn_cast<ConstantSDNode>(Loc.getOperand(1));
-    if (V && (V->getSExtValue() == Dist*Bytes))
-      return true;
-  }
+
+  // Handle X+C
+  if (isBaseWithConstantOffset(Loc) && Loc.getOperand(0) == BaseLoc &&
+      cast<ConstantSDNode>(Loc.getOperand(1))->getSExtValue() == Dist*Bytes)
+    return true;
 
   const GlobalValue *GV1 = NULL;
   const GlobalValue *GV2 = NULL;
@@ -6305,15 +6401,14 @@ unsigned SelectionDAG::InferPtrAlignment(SDValue Ptr) const {
   int64_t FrameOffset = 0;
   if (FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(Ptr)) {
     FrameIdx = FI->getIndex();
-  } else if (Ptr.getOpcode() == ISD::ADD &&
-             isa<ConstantSDNode>(Ptr.getOperand(1)) &&
+  } else if (isBaseWithConstantOffset(Ptr) &&
              isa<FrameIndexSDNode>(Ptr.getOperand(0))) {
+    // Handle FI+Cst
     FrameIdx = cast<FrameIndexSDNode>(Ptr.getOperand(0))->getIndex();
     FrameOffset = Ptr.getConstantOperandVal(1);
   }
 
   if (FrameIdx != (1 << 31)) {
-    // FIXME: Handle FI+CST.
     const MachineFrameInfo &MFI = *getMachineFunction().getFrameInfo();
     unsigned FIInfoAlign = MinAlign(MFI.getObjectAlignment(FrameIdx),
                                     FrameOffset);

@@ -74,7 +74,7 @@ FunctionPass *createAggressiveDCEPass();
 // if possible.
 //
 FunctionPass *createScalarReplAggregatesPass(signed Threshold = -1,
-                                             bool UseDomFrontier = true);
+                                             bool UseDomTree = true);
 
 //===----------------------------------------------------------------------===//
 //
@@ -298,12 +298,6 @@ Pass *createLoopDeletionPass();
 /// createSimplifyLibCallsPass - This pass optimizes specific calls to
 /// specific well-known (library) functions.
 FunctionPass *createSimplifyLibCallsPass();
-
-//===----------------------------------------------------------------------===//
-//
-/// createSimplifyHalfPowrLibCallsPass - This is an experimental pass that
-/// optimizes specific half_pow functions.
-FunctionPass *createSimplifyHalfPowrLibCallsPass();
 
 //===----------------------------------------------------------------------===//
 //

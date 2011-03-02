@@ -87,30 +87,40 @@ def print_vars (tag, vars, fname, line, file, frame, target, thread):
                 bp_loc.SetEnabled(False);
 
     for i in range(vars.GetSize()):
-        file.write(tag)
-        file.write(fname)
-        file.write(':')
-        file.write(str(line))
-        file.write(' ')
-        file.write(str(tid))
-        file.write(':')
-        file.write(str(bid))
-        file.write(' ')
-        v = vars.GetValueAtIndex(i)
-        file.write(v.GetName())
-        file.write(' ')
-        AlreadyPrintedValues.clear()
-        print_var_value (v, file, frame)
-        file.write('\n')
+            v = vars.GetValueAtIndex(i)
+            if v.GetName() is not None:
+                    file.write(tag)
+                    file.write(fname)
+                    file.write(':')
+                    file.write(str(line))
+                    file.write(' ')
+                    file.write(str(tid))
+                    file.write(':')
+                    file.write(str(bid))
+                    file.write(' ')
+                    file.write(v.GetName())
+                    file.write(' ')
+                    AlreadyPrintedValues.clear()
+                    print_var_value (v, file, frame)
+                    file.write('\n')
 
 # set_breakpoints - set breakpoints as listed in input file.
-def set_breakpoints (target, breakpoint_filename):
+def set_breakpoints (target, breakpoint_filename, file):
     f = open(breakpoint_filename, "r")
     lines = f.readlines()
     for l in range(len(lines)):
         c = lines[l].split()
         # print "setting break point - ", c
         bp = target.BreakpointCreateByLocation (str(c[0]), int(c[1]))
+        file.write("#Breakpoint ")
+        file.write(str(c[0]))
+        file.write(':')
+        file.write(str(c[1]))
+        file.write(' ')
+        file.write(str(bp.GetThreadID()))
+        file.write(':')
+        file.write(str(bp.GetID()))
+        file.write('\n')
     f.close()
 
 # stopeed_at_breakpoint - Return True if process is stopeed at a
@@ -139,16 +149,13 @@ target = debugger.CreateTargetWithFileAndArch (sys.argv[1], lldb.LLDB_ARCH_DEFAU
 
 if target.IsValid():
     #print "target is valid"
-    set_breakpoints (target, sys.argv[2])
-    #main_bp = target.BreakpointCreateByLocation ("byval-alignment.c", 11)
-    #main_bp2 = target.BreakpointCreateByLocation ("byval-alignment.c", 20)
-
-    ##print main_bp
+    file=open(str(sys.argv[3]), 'w')    
+    set_breakpoints (target, sys.argv[2], file)
 
     # Launch the process. Since we specified synchronous mode, we won't return
     # from this function until we hit the breakpoint at main
-    process = target.LaunchProcess ([''], [''], "/dev/stdout", 0, False)
-    file=open(str(sys.argv[3]), 'w')    
+    sberror = lldb.SBError()
+    process = target.Launch (None, None, os.ctermid(), os.ctermid(), os.ctermid(), None, 0, False, sberror)
     # Make sure the launch went ok
     while stopped_at_breakpoint(process):
         thread = process.GetThreadAtIndex (0)
@@ -166,8 +173,8 @@ if target.IsValid():
                 line = frame.GetLineEntry().GetLine()
                 vars = frame.GetVariables(1,0,0,0)
                 print_vars ("#Argument ", vars, fname, line, file, frame, target, thread)
-                vars = frame.GetVariables(0,1,0,0)
-                print_vars ("#Variables ", vars, fname, line, file, frame, target, thread)
+                # vars = frame.GetVariables(0,1,0,0)
+                # print_vars ("#Variables ", vars, fname, line, file, frame, target, thread)
 
         process.Continue()
     file.close()

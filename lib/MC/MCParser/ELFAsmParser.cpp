@@ -16,6 +16,7 @@
 #include "llvm/MC/MCParser/MCAsmLexer.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/Support/ELF.h"
 using namespace llvm;
 
 namespace {
@@ -29,9 +30,12 @@ class ELFAsmParser : public MCAsmParserExtension {
 
   bool ParseSectionSwitch(StringRef Section, unsigned Type,
                           unsigned Flags, SectionKind Kind);
+  bool SeenIdent;
 
 public:
-  ELFAsmParser() {}
+  ELFAsmParser() : SeenIdent(false) {
+    BracketExpressionsSupported = true;
+  }
 
   virtual void Initialize(MCAsmParser &Parser) {
     // Call the base implementation.
@@ -48,6 +52,8 @@ public:
     AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveDataRelRoLocal>(".data.rel.ro.local");
     AddDirectiveHandler<&ELFAsmParser::ParseSectionDirectiveEhFrame>(".eh_frame");
     AddDirectiveHandler<&ELFAsmParser::ParseDirectiveSection>(".section");
+    AddDirectiveHandler<&ELFAsmParser::ParseDirectivePushSection>(".pushsection");
+    AddDirectiveHandler<&ELFAsmParser::ParseDirectivePopSection>(".popsection");
     AddDirectiveHandler<&ELFAsmParser::ParseDirectiveSize>(".size");
     AddDirectiveHandler<&ELFAsmParser::ParseDirectivePrevious>(".previous");
     AddDirectiveHandler<&ELFAsmParser::ParseDirectiveType>(".type");
@@ -59,61 +65,63 @@ public:
   // FIXME: Part of this logic is duplicated in the MCELFStreamer. What is
   // the best way for us to get access to it?
   bool ParseSectionDirectiveData(StringRef, SMLoc) {
-    return ParseSectionSwitch(".data", MCSectionELF::SHT_PROGBITS,
-                              MCSectionELF::SHF_WRITE |MCSectionELF::SHF_ALLOC,
+    return ParseSectionSwitch(".data", ELF::SHT_PROGBITS,
+                              ELF::SHF_WRITE |ELF::SHF_ALLOC,
                               SectionKind::getDataRel());
   }
   bool ParseSectionDirectiveText(StringRef, SMLoc) {
-    return ParseSectionSwitch(".text", MCSectionELF::SHT_PROGBITS,
-                              MCSectionELF::SHF_EXECINSTR |
-                              MCSectionELF::SHF_ALLOC, SectionKind::getText());
+    return ParseSectionSwitch(".text", ELF::SHT_PROGBITS,
+                              ELF::SHF_EXECINSTR |
+                              ELF::SHF_ALLOC, SectionKind::getText());
   }
   bool ParseSectionDirectiveBSS(StringRef, SMLoc) {
-    return ParseSectionSwitch(".bss", MCSectionELF::SHT_NOBITS,
-                              MCSectionELF::SHF_WRITE |
-                              MCSectionELF::SHF_ALLOC, SectionKind::getBSS());
+    return ParseSectionSwitch(".bss", ELF::SHT_NOBITS,
+                              ELF::SHF_WRITE |
+                              ELF::SHF_ALLOC, SectionKind::getBSS());
   }
   bool ParseSectionDirectiveRoData(StringRef, SMLoc) {
-    return ParseSectionSwitch(".rodata", MCSectionELF::SHT_PROGBITS,
-                              MCSectionELF::SHF_ALLOC,
+    return ParseSectionSwitch(".rodata", ELF::SHT_PROGBITS,
+                              ELF::SHF_ALLOC,
                               SectionKind::getReadOnly());
   }
   bool ParseSectionDirectiveTData(StringRef, SMLoc) {
-    return ParseSectionSwitch(".tdata", MCSectionELF::SHT_PROGBITS,
-                              MCSectionELF::SHF_ALLOC |
-                              MCSectionELF::SHF_TLS | MCSectionELF::SHF_WRITE,
+    return ParseSectionSwitch(".tdata", ELF::SHT_PROGBITS,
+                              ELF::SHF_ALLOC |
+                              ELF::SHF_TLS | ELF::SHF_WRITE,
                               SectionKind::getThreadData());
   }
   bool ParseSectionDirectiveTBSS(StringRef, SMLoc) {
-    return ParseSectionSwitch(".tbss", MCSectionELF::SHT_NOBITS,
-                              MCSectionELF::SHF_ALLOC |
-                              MCSectionELF::SHF_TLS | MCSectionELF::SHF_WRITE,
+    return ParseSectionSwitch(".tbss", ELF::SHT_NOBITS,
+                              ELF::SHF_ALLOC |
+                              ELF::SHF_TLS | ELF::SHF_WRITE,
                               SectionKind::getThreadBSS());
   }
   bool ParseSectionDirectiveDataRel(StringRef, SMLoc) {
-    return ParseSectionSwitch(".data.rel", MCSectionELF::SHT_PROGBITS,
-                              MCSectionELF::SHF_ALLOC |
-                              MCSectionELF::SHF_WRITE,
+    return ParseSectionSwitch(".data.rel", ELF::SHT_PROGBITS,
+                              ELF::SHF_ALLOC |
+                              ELF::SHF_WRITE,
                               SectionKind::getDataRel());
   }
   bool ParseSectionDirectiveDataRelRo(StringRef, SMLoc) {
-    return ParseSectionSwitch(".data.rel.ro", MCSectionELF::SHT_PROGBITS,
-                              MCSectionELF::SHF_ALLOC |
-                              MCSectionELF::SHF_WRITE,
+    return ParseSectionSwitch(".data.rel.ro", ELF::SHT_PROGBITS,
+                              ELF::SHF_ALLOC |
+                              ELF::SHF_WRITE,
                               SectionKind::getReadOnlyWithRel());
   }
   bool ParseSectionDirectiveDataRelRoLocal(StringRef, SMLoc) {
-    return ParseSectionSwitch(".data.rel.ro.local", MCSectionELF::SHT_PROGBITS,
-                              MCSectionELF::SHF_ALLOC |
-                              MCSectionELF::SHF_WRITE,
+    return ParseSectionSwitch(".data.rel.ro.local", ELF::SHT_PROGBITS,
+                              ELF::SHF_ALLOC |
+                              ELF::SHF_WRITE,
                               SectionKind::getReadOnlyWithRelLocal());
   }
   bool ParseSectionDirectiveEhFrame(StringRef, SMLoc) {
-    return ParseSectionSwitch(".eh_frame", MCSectionELF::SHT_PROGBITS,
-                              MCSectionELF::SHF_ALLOC |
-                              MCSectionELF::SHF_WRITE,
+    return ParseSectionSwitch(".eh_frame", ELF::SHT_PROGBITS,
+                              ELF::SHF_ALLOC |
+                              ELF::SHF_WRITE,
                               SectionKind::getDataRel());
   }
+  bool ParseDirectivePushSection(StringRef, SMLoc);
+  bool ParseDirectivePopSection(StringRef, SMLoc);
   bool ParseDirectiveSection(StringRef, SMLoc);
   bool ParseDirectiveSize(StringRef, SMLoc);
   bool ParseDirectivePrevious(StringRef, SMLoc);
@@ -167,6 +175,12 @@ bool ELFAsmParser::ParseSectionName(StringRef &SectionName) {
   SMLoc FirstLoc = getLexer().getLoc();
   unsigned Size = 0;
 
+  if (getLexer().is(AsmToken::String)) {
+    SectionName = getTok().getIdentifier();
+    Lex();
+    return false;
+  }
+
   for (;;) {
     StringRef Tmp;
     unsigned CurSize;
@@ -175,10 +189,15 @@ bool ELFAsmParser::ParseSectionName(StringRef &SectionName) {
     if (getLexer().is(AsmToken::Minus)) {
       CurSize = 1;
       Lex(); // Consume the "-".
-    } else if (!getParser().ParseIdentifier(Tmp))
-      CurSize = Tmp.size();
-    else
+    } else if (getLexer().is(AsmToken::String)) {
+      CurSize = getTok().getIdentifier().size() + 2;
+      Lex();
+    } else if (getLexer().is(AsmToken::Identifier)) {
+      CurSize = getTok().getIdentifier().size();
+      Lex();
+    } else {
       break;
+    }
 
     Size += CurSize;
     SectionName = StringRef(FirstLoc.getPointer(), Size);
@@ -194,9 +213,9 @@ bool ELFAsmParser::ParseSectionName(StringRef &SectionName) {
 }
 
 static SectionKind computeSectionKind(unsigned Flags) {
-  if (Flags & MCSectionELF::SHF_EXECINSTR)
+  if (Flags & ELF::SHF_EXECINSTR)
     return SectionKind::getText();
-  if (Flags & MCSectionELF::SHF_TLS)
+  if (Flags & ELF::SHF_TLS)
     return SectionKind::getThreadData();
   return SectionKind::getDataRel();
 }
@@ -207,31 +226,31 @@ static int parseSectionFlags(StringRef flagsStr) {
   for (unsigned i = 0; i < flagsStr.size(); i++) {
     switch (flagsStr[i]) {
     case 'a':
-      flags |= MCSectionELF::SHF_ALLOC;
+      flags |= ELF::SHF_ALLOC;
       break;
     case 'x':
-      flags |= MCSectionELF::SHF_EXECINSTR;
+      flags |= ELF::SHF_EXECINSTR;
       break;
     case 'w':
-      flags |= MCSectionELF::SHF_WRITE;
+      flags |= ELF::SHF_WRITE;
       break;
     case 'M':
-      flags |= MCSectionELF::SHF_MERGE;
+      flags |= ELF::SHF_MERGE;
       break;
     case 'S':
-      flags |= MCSectionELF::SHF_STRINGS;
+      flags |= ELF::SHF_STRINGS;
       break;
     case 'T':
-      flags |= MCSectionELF::SHF_TLS;
+      flags |= ELF::SHF_TLS;
       break;
     case 'c':
-      flags |= MCSectionELF::XCORE_SHF_CP_SECTION;
+      flags |= ELF::XCORE_SHF_CP_SECTION;
       break;
     case 'd':
-      flags |= MCSectionELF::XCORE_SHF_DP_SECTION;
+      flags |= ELF::XCORE_SHF_DP_SECTION;
       break;
     case 'G':
-      flags |= MCSectionELF::SHF_GROUP;
+      flags |= ELF::SHF_GROUP;
       break;
     default:
       return -1;
@@ -239,6 +258,23 @@ static int parseSectionFlags(StringRef flagsStr) {
   }
 
   return flags;
+}
+
+bool ELFAsmParser::ParseDirectivePushSection(StringRef s, SMLoc loc) {
+  getStreamer().PushSection();
+
+  if (ParseDirectiveSection(s, loc)) {
+    getStreamer().PopSection();
+    return true;
+  }
+
+  return false;
+}
+
+bool ELFAsmParser::ParseDirectivePopSection(StringRef, SMLoc) {
+  if (!getStreamer().PopSection())
+    return TokError(".popsection without corresponding .pushsection");
+  return false;
 }
 
 // FIXME: This is a work in progress.
@@ -256,9 +292,9 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
   // Set the defaults first.
   if (SectionName == ".fini" || SectionName == ".init" ||
       SectionName == ".rodata")
-    Flags |= MCSectionELF::SHF_ALLOC;
+    Flags |= ELF::SHF_ALLOC;
   if (SectionName == ".fini" || SectionName == ".init")
-    Flags |= MCSectionELF::SHF_EXECINSTR;
+    Flags |= ELF::SHF_EXECINSTR;
 
   if (getLexer().is(AsmToken::Comma)) {
     Lex();
@@ -274,8 +310,8 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
       return TokError("unknown flag");
     Flags |= extraFlags;
 
-    bool Mergeable = Flags & MCSectionELF::SHF_MERGE;
-    bool Group = Flags & MCSectionELF::SHF_GROUP;
+    bool Mergeable = Flags & ELF::SHF_MERGE;
+    bool Group = Flags & ELF::SHF_GROUP;
 
     if (getLexer().isNot(AsmToken::Comma)) {
       if (Mergeable)
@@ -322,21 +358,23 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
   if (getLexer().isNot(AsmToken::EndOfStatement))
     return TokError("unexpected token in directive");
 
-  unsigned Type = MCSectionELF::SHT_PROGBITS;
+  unsigned Type = ELF::SHT_PROGBITS;
 
   if (!TypeName.empty()) {
     if (TypeName == "init_array")
-      Type = MCSectionELF::SHT_INIT_ARRAY;
+      Type = ELF::SHT_INIT_ARRAY;
     else if (TypeName == "fini_array")
-      Type = MCSectionELF::SHT_FINI_ARRAY;
+      Type = ELF::SHT_FINI_ARRAY;
     else if (TypeName == "preinit_array")
-      Type = MCSectionELF::SHT_PREINIT_ARRAY;
+      Type = ELF::SHT_PREINIT_ARRAY;
     else if (TypeName == "nobits")
-      Type = MCSectionELF::SHT_NOBITS;
+      Type = ELF::SHT_NOBITS;
     else if (TypeName == "progbits")
-      Type = MCSectionELF::SHT_PROGBITS;
+      Type = ELF::SHT_PROGBITS;
     else if (TypeName == "note")
-      Type = MCSectionELF::SHT_NOTE;
+      Type = ELF::SHT_NOTE;
+    else if (TypeName == "unwind")
+      Type = ELF::SHT_X86_64_UNWIND;
     else
       return TokError("unknown section type");
   }
@@ -350,8 +388,9 @@ bool ELFAsmParser::ParseDirectiveSection(StringRef, SMLoc) {
 
 bool ELFAsmParser::ParseDirectivePrevious(StringRef DirName, SMLoc) {
   const MCSection *PreviousSection = getStreamer().getPreviousSection();
-  if (PreviousSection != NULL)
-    getStreamer().SwitchSection(PreviousSection);
+  if (PreviousSection == NULL)
+      return TokError(".previous without corresponding .section");
+  getStreamer().SwitchSection(PreviousSection);
 
   return false;
 }
@@ -413,23 +452,22 @@ bool ELFAsmParser::ParseDirectiveIdent(StringRef, SMLoc) {
 
   Lex();
 
-  const MCSection *OldSection = getStreamer().getCurrentSection();
   const MCSection *Comment =
-    getContext().getELFSection(".comment", MCSectionELF::SHT_PROGBITS,
-                               MCSectionELF::SHF_MERGE |
-                               MCSectionELF::SHF_STRINGS,
+    getContext().getELFSection(".comment", ELF::SHT_PROGBITS,
+                               ELF::SHF_MERGE |
+                               ELF::SHF_STRINGS,
                                SectionKind::getReadOnly(),
                                1, "");
 
-  static bool First = true;
-
+  getStreamer().PushSection();
   getStreamer().SwitchSection(Comment);
-  if (First)
+  if (!SeenIdent) {
     getStreamer().EmitIntValue(0, 1);
-  First = false;
+    SeenIdent = true;
+  }
   getStreamer().EmitBytes(Data, 0);
   getStreamer().EmitIntValue(0, 1);
-  getStreamer().SwitchSection(OldSection);
+  getStreamer().PopSection();
   return false;
 }
 

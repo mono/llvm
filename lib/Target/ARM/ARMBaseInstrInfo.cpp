@@ -41,14 +41,6 @@ static cl::opt<bool>
 EnableARM3Addr("enable-arm-3-addr-conv", cl::Hidden,
                cl::desc("Enable ARM 2-addr to 3-addr conv"));
 
-// Other targets already have a hazard recognizer enabled by default, so this
-// flag currently only affects ARM. It will be generalized when it becomes a
-// disabled flag.
-static cl::opt<bool> EnableHazardRecognizer(
-  "enable-sched-hazard", cl::Hidden,
-  cl::desc("Enable hazard detection during preRA scheduling"),
-  cl::init(false));
-
 /// ARM_MLxEntry - Record information about MLA / MLS instructions.
 struct ARM_MLxEntry {
   unsigned MLxOpc;     // MLA / MLS opcode
@@ -97,7 +89,7 @@ ARMBaseInstrInfo::ARMBaseInstrInfo(const ARMSubtarget& STI)
 ScheduleHazardRecognizer *ARMBaseInstrInfo::
 CreateTargetHazardRecognizer(const TargetMachine *TM,
                              const ScheduleDAG *DAG) const {
-  if (EnableHazardRecognizer) {
+  if (usePreRAHazardRecognizer()) {
     const InstrItineraryData *II = TM->getInstrItineraryData();
     return new ScoreboardHazardRecognizer(II, DAG, "pre-RA-sched");
   }
@@ -561,6 +553,11 @@ unsigned ARMBaseInstrInfo::GetInstSizeInBytes(const MachineInstr *MI) const {
   case ARMII::Size2Bytes: return 2;          // Thumb1 instruction.
   case ARMII::SizeSpecial: {
     switch (Opc) {
+    case ARM::MOVi16_ga_pcrel:
+    case ARM::MOVTi16_ga_pcrel:
+    case ARM::t2MOVi16_ga_pcrel:
+    case ARM::t2MOVTi16_ga_pcrel:
+      return 4;
     case ARM::MOVi32imm:
     case ARM::t2MOVi32imm:
       return 8;
@@ -977,7 +974,7 @@ static unsigned duplicateCPV(MachineFunction &MF, unsigned &CPI) {
   ARMConstantPoolValue *ACPV =
     static_cast<ARMConstantPoolValue*>(MCPE.Val.MachineCPVal);
 
-  unsigned PCLabelId = AFI->createConstPoolEntryUId();
+  unsigned PCLabelId = AFI->createPICLabelUId();
   ARMConstantPoolValue *NewCPV = 0;
   // FIXME: The below assumes PIC relocation model and that the function
   // is Thumb mode (t1 or t2). PCAdjustment would be 8 for ARM mode PIC, and
@@ -1047,12 +1044,18 @@ ARMBaseInstrInfo::duplicate(MachineInstr *Orig, MachineFunction &MF) const {
 }
 
 bool ARMBaseInstrInfo::produceSameValue(const MachineInstr *MI0,
-                                        const MachineInstr *MI1) const {
+                                        const MachineInstr *MI1,
+                                        const MachineRegisterInfo *MRI) const {
   int Opcode = MI0->getOpcode();
   if (Opcode == ARM::t2LDRpci ||
       Opcode == ARM::t2LDRpci_pic ||
       Opcode == ARM::tLDRpci ||
-      Opcode == ARM::tLDRpci_pic) {
+      Opcode == ARM::tLDRpci_pic ||
+      Opcode == ARM::MOV_ga_dyn ||
+      Opcode == ARM::MOV_ga_pcrel ||
+      Opcode == ARM::MOV_ga_pcrel_ldr ||
+      Opcode == ARM::t2MOV_ga_dyn ||
+      Opcode == ARM::t2MOV_ga_pcrel) {
     if (MI1->getOpcode() != Opcode)
       return false;
     if (MI0->getNumOperands() != MI1->getNumOperands())
@@ -1062,6 +1065,14 @@ bool ARMBaseInstrInfo::produceSameValue(const MachineInstr *MI0,
     const MachineOperand &MO1 = MI1->getOperand(1);
     if (MO0.getOffset() != MO1.getOffset())
       return false;
+
+    if (Opcode == ARM::MOV_ga_dyn ||
+        Opcode == ARM::MOV_ga_pcrel ||
+        Opcode == ARM::MOV_ga_pcrel_ldr ||
+        Opcode == ARM::t2MOV_ga_dyn ||
+        Opcode == ARM::t2MOV_ga_pcrel)
+      // Ignore the PC labels.
+      return MO0.getGlobal() == MO1.getGlobal();
 
     const MachineFunction *MF = MI0->getParent()->getParent();
     const MachineConstantPool *MCP = MF->getConstantPool();
@@ -1074,6 +1085,37 @@ bool ARMBaseInstrInfo::produceSameValue(const MachineInstr *MI0,
     ARMConstantPoolValue *ACPV1 =
       static_cast<ARMConstantPoolValue*>(MCPE1.Val.MachineCPVal);
     return ACPV0->hasSameValue(ACPV1);
+  } else if (Opcode == ARM::PICLDR) {
+    if (MI1->getOpcode() != Opcode)
+      return false;
+    if (MI0->getNumOperands() != MI1->getNumOperands())
+      return false;
+
+    unsigned Addr0 = MI0->getOperand(1).getReg();
+    unsigned Addr1 = MI1->getOperand(1).getReg();
+    if (Addr0 != Addr1) {
+      if (!MRI ||
+          !TargetRegisterInfo::isVirtualRegister(Addr0) ||
+          !TargetRegisterInfo::isVirtualRegister(Addr1))
+        return false;
+
+      // This assumes SSA form.
+      MachineInstr *Def0 = MRI->getVRegDef(Addr0);
+      MachineInstr *Def1 = MRI->getVRegDef(Addr1);
+      // Check if the loaded value, e.g. a constantpool of a global address, are
+      // the same.
+      if (!produceSameValue(Def0, Def1, MRI))
+        return false;
+    }
+
+    for (unsigned i = 3, e = MI0->getNumOperands(); i != e; ++i) {
+      // %vreg12<def> = PICLDR %vreg11, 0, pred:14, pred:%noreg
+      const MachineOperand &MO0 = MI0->getOperand(i);
+      const MachineOperand &MO1 = MI1->getOperand(i);
+      if (!MO0.isIdenticalTo(MO1))
+        return false;
+    }
+    return true;
   }
 
   return MI0->isIdenticalTo(MI1, MachineInstr::IgnoreVRegDefs);
@@ -2129,6 +2171,10 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     return 1;
 
   const TargetInstrDesc &DefTID = get(DefNode->getMachineOpcode());
+
+  if (isZeroCost(DefTID.Opcode))
+    return 0;
+
   if (!ItinData || ItinData->isEmpty())
     return DefTID.mayLoad() ? 3 : 1;
 

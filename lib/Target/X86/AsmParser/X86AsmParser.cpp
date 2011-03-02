@@ -44,8 +44,6 @@ private:
 
   bool Error(SMLoc L, const Twine &Msg) { return Parser.Error(L, Msg); }
 
-  bool ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc);
-
   X86Operand *ParseOperand();
   X86Operand *ParseMemOperand(unsigned SegReg, SMLoc StartLoc);
 
@@ -71,6 +69,7 @@ public:
     setAvailableFeatures(ComputeAvailableFeatures(
                            &TM.getSubtarget<X86Subtarget>()));
   }
+  virtual bool ParseRegister(unsigned &RegNo, SMLoc &StartLoc, SMLoc &EndLoc);
 
   virtual bool ParseInstruction(StringRef Name, SMLoc NameLoc,
                                 SmallVectorImpl<MCParsedAsmOperand*> &Operands);
@@ -776,6 +775,19 @@ ParseInstruction(StringRef Name, SMLoc NameLoc,
       delete &Op;
     }
   }
+  // Same hack for "in[bwl]? (%dx), %al" -> "inb %dx, %al".
+  if ((Name == "inb" || Name == "inw" || Name == "inl" || Name == "in") &&
+      Operands.size() == 3) {
+    X86Operand &Op = *(X86Operand*)Operands.begin()[1];
+    if (Op.isMem() && Op.Mem.SegReg == 0 &&
+        isa<MCConstantExpr>(Op.Mem.Disp) &&
+        cast<MCConstantExpr>(Op.Mem.Disp)->getValue() == 0 &&
+        Op.Mem.BaseReg == MatchRegisterName("dx") && Op.Mem.IndexReg == 0) {
+      SMLoc Loc = Op.getEndLoc();
+      Operands.begin()[1] = X86Operand::CreateReg(Op.Mem.BaseReg, Loc, Loc);
+      delete &Op;
+    }
+  }
   
   // FIXME: Hack to handle recognize s{hr,ar,hl} $1, <op>.  Canonicalize to
   // "shift <op>".
@@ -843,6 +855,8 @@ MatchAndEmitInstruction(SMLoc IDLoc,
   case Match_MissingFeature:
     Error(IDLoc, "instruction requires a CPU feature not currently enabled");
     return true;
+  case Match_ConversionFail:
+    return Error(IDLoc, "unable to convert operands to instruction");
   case Match_InvalidOperand:
     WasOriginallyInvalidOperand = true;
     break;

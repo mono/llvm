@@ -125,7 +125,7 @@ Exit:           ; preds = %Loop
 
 define i32* @test8({ i32, i32 } *%A, i1 %b) {
 BB0:
-        %X = getelementptr { i32, i32 } *%A, i32 0, i32 1
+        %X = getelementptr inbounds { i32, i32 } *%A, i32 0, i32 1
         br i1 %b, label %BB1, label %BB2
 
 BB1:
@@ -139,7 +139,7 @@ BB2:
 ; CHECK: @test8
 ; CHECK-NOT: phi
 ; CHECK: BB2:
-; CHECK-NEXT: %B = getelementptr 
+; CHECK-NEXT: %B = getelementptr %0 
 ; CHECK-NEXT: ret i32* %B
 }
 
@@ -502,4 +502,45 @@ loop:
 ; CHECK: br i1 %e
 ret:
   ret void
+}
+
+define i32 @test23(i32 %A, i1 %b, i32 * %P) {
+BB0:
+        br label %Loop
+
+Loop:           ; preds = %Loop, %BB0
+        ; PHI has same value always.
+        %B = phi i32 [ %A, %BB0 ], [ 42, %Loop ]
+        %D = add i32 %B, 19
+        store i32 %D, i32* %P
+        br i1 %b, label %Loop, label %Exit
+
+Exit:           ; preds = %Loop
+        %E = add i32 %B, 19
+        ret i32 %E
+; CHECK: @test23
+; CHECK: %phitmp = add i32 %A, 19
+; CHECK: Loop:
+; CHECK-NEXT: %B = phi i32 [ %phitmp, %BB0 ], [ 61, %Loop ]
+; CHECK: Exit:
+; CHECK-NEXT: ret i32 %B
+}
+
+define i32 @test24(i32 %A, i1 %cond) {
+BB0:
+        %X = add nuw nsw i32 %A, 1
+        br i1 %cond, label %BB1, label %BB2
+
+BB1:
+        %Y = add nuw i32 %A, 1
+        br label %BB2
+
+BB2:
+        %C = phi i32 [ %X, %BB0 ], [ %Y, %BB1 ]
+        ret i32 %C
+; CHECK: @test24
+; CHECK-NOT: phi
+; CHECK: BB2:
+; CHECK-NEXT: %C = add nuw i32 %A, 1
+; CHECK-NEXT: ret i32 %C
 }

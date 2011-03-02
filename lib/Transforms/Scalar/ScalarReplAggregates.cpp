@@ -30,7 +30,8 @@
 #include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
-#include "llvm/Analysis/DominanceFrontier.h"
+#include "llvm/Analysis/Dominators.h"
+#include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
@@ -43,19 +44,21 @@
 #include "llvm/Support/IRBuilder.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 using namespace llvm;
 
 STATISTIC(NumReplaced,  "Number of allocas broken up");
 STATISTIC(NumPromoted,  "Number of allocas promoted");
+STATISTIC(NumAdjusted,  "Number of scalar allocas adjusted to allow promotion");
 STATISTIC(NumConverted, "Number of aggregates converted to scalar");
 STATISTIC(NumGlobals,   "Number of allocas copied from constant global");
 
 namespace {
   struct SROA : public FunctionPass {
-    SROA(int T, bool hasDF, char &ID)
-      : FunctionPass(ID), HasDomFrontiers(hasDF) {
+    SROA(int T, bool hasDT, char &ID)
+      : FunctionPass(ID), HasDomTree(hasDT) {
       if (T == -1)
         SRThreshold = 128;
       else
@@ -68,7 +71,7 @@ namespace {
     bool performPromotion(Function &F);
 
   private:
-    bool HasDomFrontiers;
+    bool HasDomTree;
     TargetData *TD;
 
     /// DeadInsts - Keep track of instructions we have made dead, so that
@@ -79,6 +82,13 @@ namespace {
     /// information about the uses.  All these fields are initialized to false
     /// and set to true when something is learned.
     struct AllocaInfo {
+      /// The alloca to promote.
+      AllocaInst *AI;
+      
+      /// CheckedPHIs - This is a set of verified PHI nodes, to prevent infinite
+      /// looping and avoid redundant work.
+      SmallPtrSet<PHINode*, 8> CheckedPHIs;
+      
       /// isUnsafe - This is set to true if the alloca cannot be SROA'd.
       bool isUnsafe : 1;
 
@@ -88,22 +98,37 @@ namespace {
       /// isMemCpyDst - This is true if this aggregate is memcpy'd into.
       bool isMemCpyDst : 1;
 
-      AllocaInfo()
-        : isUnsafe(false), isMemCpySrc(false), isMemCpyDst(false) {}
+      /// hasSubelementAccess - This is true if a subelement of the alloca is
+      /// ever accessed, or false if the alloca is only accessed with mem
+      /// intrinsics or load/store that only access the entire alloca at once.
+      bool hasSubelementAccess : 1;
+      
+      /// hasALoadOrStore - This is true if there are any loads or stores to it.
+      /// The alloca may just be accessed with memcpy, for example, which would
+      /// not set this.
+      bool hasALoadOrStore : 1;
+      
+      explicit AllocaInfo(AllocaInst *ai)
+        : AI(ai), isUnsafe(false), isMemCpySrc(false), isMemCpyDst(false),
+          hasSubelementAccess(false), hasALoadOrStore(false) {}
     };
 
     unsigned SRThreshold;
 
-    void MarkUnsafe(AllocaInfo &I) { I.isUnsafe = true; }
+    void MarkUnsafe(AllocaInfo &I, Instruction *User) {
+      I.isUnsafe = true;
+      DEBUG(dbgs() << "  Transformation preventing inst: " << *User << '\n');
+    }
 
     bool isSafeAllocaToScalarRepl(AllocaInst *AI);
 
-    void isSafeForScalarRepl(Instruction *I, AllocaInst *AI, uint64_t Offset,
-                             AllocaInfo &Info);
-    void isSafeGEP(GetElementPtrInst *GEPI, AllocaInst *AI, uint64_t &Offset,
-                   AllocaInfo &Info);
-    void isSafeMemAccess(AllocaInst *AI, uint64_t Offset, uint64_t MemSize,
-                         const Type *MemOpType, bool isStore, AllocaInfo &Info);
+    void isSafeForScalarRepl(Instruction *I, uint64_t Offset, AllocaInfo &Info);
+    void isSafePHISelectUseForScalarRepl(Instruction *User, uint64_t Offset,
+                                         AllocaInfo &Info);
+    void isSafeGEP(GetElementPtrInst *GEPI, uint64_t &Offset, AllocaInfo &Info);
+    void isSafeMemAccess(uint64_t Offset, uint64_t MemSize,
+                         const Type *MemOpType, bool isStore, AllocaInfo &Info,
+                         Instruction *TheAccess, bool AllowWholeAccess);
     bool TypeHasComponent(const Type *T, uint64_t Offset, uint64_t Size);
     uint64_t FindElementAndOffset(const Type *&T, uint64_t &Offset,
                                   const Type *&IdxTy);
@@ -129,19 +154,18 @@ namespace {
     static MemTransferInst *isOnlyCopiedFromConstantGlobal(AllocaInst *AI);
   };
   
-  // SROA_DF - SROA that uses DominanceFrontier.
-  struct SROA_DF : public SROA {
+  // SROA_DT - SROA that uses DominatorTree.
+  struct SROA_DT : public SROA {
     static char ID;
   public:
-    SROA_DF(int T = -1) : SROA(T, true, ID) {
-      initializeSROA_DFPass(*PassRegistry::getPassRegistry());
+    SROA_DT(int T = -1) : SROA(T, true, ID) {
+      initializeSROA_DTPass(*PassRegistry::getPassRegistry());
     }
     
     // getAnalysisUsage - This pass does not require any passes, but we know it
     // will not alter the CFG, so say so.
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.addRequired<DominatorTree>();
-      AU.addRequired<DominanceFrontier>();
       AU.setPreservesCFG();
     }
   };
@@ -163,15 +187,14 @@ namespace {
   
 }
 
-char SROA_DF::ID = 0;
+char SROA_DT::ID = 0;
 char SROA_SSAUp::ID = 0;
 
-INITIALIZE_PASS_BEGIN(SROA_DF, "scalarrepl",
-                "Scalar Replacement of Aggregates (DF)", false, false)
+INITIALIZE_PASS_BEGIN(SROA_DT, "scalarrepl",
+                "Scalar Replacement of Aggregates (DT)", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTree)
-INITIALIZE_PASS_DEPENDENCY(DominanceFrontier)
-INITIALIZE_PASS_END(SROA_DF, "scalarrepl",
-                "Scalar Replacement of Aggregates (DF)", false, false)
+INITIALIZE_PASS_END(SROA_DT, "scalarrepl",
+                "Scalar Replacement of Aggregates (DT)", false, false)
 
 INITIALIZE_PASS_BEGIN(SROA_SSAUp, "scalarrepl-ssa",
                       "Scalar Replacement of Aggregates (SSAUp)", false, false)
@@ -180,9 +203,9 @@ INITIALIZE_PASS_END(SROA_SSAUp, "scalarrepl-ssa",
 
 // Public interface to the ScalarReplAggregates pass
 FunctionPass *llvm::createScalarReplAggregatesPass(int Threshold,
-                                                   bool UseDomFrontier) {
-  if (UseDomFrontier)
-    return new SROA_DF(Threshold);
+                                                   bool UseDomTree) {
+  if (UseDomTree)
+    return new SROA_DT(Threshold);
   return new SROA_SSAUp(Threshold);
 }
 
@@ -238,26 +261,6 @@ private:
 } // end anonymous namespace.
 
 
-/// IsVerbotenVectorType - Return true if this is a vector type ScalarRepl isn't
-/// allowed to form.  We do this to avoid MMX types, which is a complete hack,
-/// but is required until the backend is fixed.
-static bool IsVerbotenVectorType(const VectorType *VTy, const Instruction *I) {
-  StringRef Triple(I->getParent()->getParent()->getParent()->getTargetTriple());
-  if (!Triple.startswith("i386") &&
-      !Triple.startswith("x86_64"))
-    return false;
-
-  // Reject all the MMX vector types.
-  switch (VTy->getNumElements()) {
-  default: return false;
-  case 1: return VTy->getElementType()->isIntegerTy(64);
-  case 2: return VTy->getElementType()->isIntegerTy(32);
-  case 4: return VTy->getElementType()->isIntegerTy(16);
-  case 8: return VTy->getElementType()->isIntegerTy(8);
-  }
-}
-
-
 /// TryConvert - Analyze the specified alloca, and if it is safe to do so,
 /// rewrite it to be a new alloca which is mem2reg'able.  This returns the new
 /// alloca if possible or null if not.
@@ -274,8 +277,7 @@ AllocaInst *ConvertToScalarInfo::TryConvert(AllocaInst *AI) {
   // we just get a lot of insert/extracts.  If at least one vector is
   // involved, then we probably really do have a union of vector/array.
   const Type *NewTy;
-  if (VectorTy && VectorTy->isVectorTy() && HadAVector &&
-      !IsVerbotenVectorType(cast<VectorType>(VectorTy), AI)) {
+  if (VectorTy && VectorTy->isVectorTy() && HadAVector) {
     DEBUG(dbgs() << "CONVERT TO VECTOR: " << *AI << "\n  TYPE = "
           << *VectorTy << '\n');
     NewTy = VectorTy;  // Use the vector type.
@@ -527,9 +529,9 @@ void ConvertToScalarInfo::ConvertUsesToScalar(Value *Ptr, AllocaInst *NewAI,
       // If the source and destination are both to the same alloca, then this is
       // a noop copy-to-self, just delete it.  Otherwise, emit a load and store
       // as appropriate.
-      AllocaInst *OrigAI = cast<AllocaInst>(GetUnderlyingObject(Ptr, 0));
+      AllocaInst *OrigAI = cast<AllocaInst>(GetUnderlyingObject(Ptr, &TD, 0));
 
-      if (GetUnderlyingObject(MTI->getSource(), 0) != OrigAI) {
+      if (GetUnderlyingObject(MTI->getSource(), &TD, 0) != OrigAI) {
         // Dest must be OrigAI, change this to be a load from the original
         // pointer (bitcasted), then a store to our new alloca.
         assert(MTI->getRawDest() == Ptr && "Neither use is of pointer?");
@@ -545,7 +547,7 @@ void ConvertToScalarInfo::ConvertUsesToScalar(Value *Ptr, AllocaInst *NewAI,
         LoadInst *SrcVal = Builder.CreateLoad(SrcPtr, "srcval");
         SrcVal->setAlignment(MTI->getAlignment());
         Builder.CreateStore(SrcVal, NewAI);
-      } else if (GetUnderlyingObject(MTI->getDest(), 0) != OrigAI) {
+      } else if (GetUnderlyingObject(MTI->getDest(), &TD, 0) != OrigAI) {
         // Src must be OrigAI, change this to be a load from NewAI then a store
         // through the original dest pointer (bitcasted).
         assert(MTI->getRawSource() == Ptr && "Neither use is of pointer?");
@@ -840,158 +842,298 @@ bool SROA::runOnFunction(Function &F) {
   return Changed;
 }
 
-/// PromoteAlloca - Promote an alloca to registers, using SSAUpdater.
-static void PromoteAlloca(AllocaInst *AI, SSAUpdater &SSA) {
-  SSA.Initialize(AI->getType()->getElementType(), AI->getName());
-
-  // First step: bucket up uses of the alloca by the block they occur in.
-  // This is important because we have to handle multiple defs/uses in a block
-  // ourselves: SSAUpdater is purely for cross-block references.
-  // FIXME: Want a TinyVector<Instruction*> since there is often 0/1 element.
-  DenseMap<BasicBlock*, std::vector<Instruction*> > UsesByBlock;
+namespace {
+class AllocaPromoter : public LoadAndStorePromoter {
+  AllocaInst *AI;
+public:
+  AllocaPromoter(const SmallVectorImpl<Instruction*> &Insts, SSAUpdater &S)
+    : LoadAndStorePromoter(Insts, S), AI(0) {}
   
-  for (Value::use_iterator UI = AI->use_begin(), E = AI->use_end();
-       UI != E; ++UI) {
-    Instruction *User = cast<Instruction>(*UI);
-    UsesByBlock[User->getParent()].push_back(User);
+  void run(AllocaInst *AI, const SmallVectorImpl<Instruction*> &Insts) {
+    // Remember which alloca we're promoting (for isInstInList).
+    this->AI = AI;
+    LoadAndStorePromoter::run(Insts);
+    AI->eraseFromParent();
   }
   
-  // Okay, now we can iterate over all the blocks in the function with uses,
-  // processing them.  Keep track of which loads are loading a live-in value.
-  // Walk the uses in the use-list order to be determinstic.
-  SmallVector<LoadInst*, 32> LiveInLoads;
-  DenseMap<Value*, Value*> ReplacedLoads;
+  virtual bool isInstInList(Instruction *I,
+                            const SmallVectorImpl<Instruction*> &Insts) const {
+    if (LoadInst *LI = dyn_cast<LoadInst>(I))
+      return LI->getOperand(0) == AI;
+    return cast<StoreInst>(I)->getPointerOperand() == AI;
+  }
+};
+} // end anon namespace
+
+/// isSafeSelectToSpeculate - Select instructions that use an alloca and are
+/// subsequently loaded can be rewritten to load both input pointers and then
+/// select between the result, allowing the load of the alloca to be promoted.
+/// From this:
+///   %P2 = select i1 %cond, i32* %Alloca, i32* %Other
+///   %V = load i32* %P2
+/// to:
+///   %V1 = load i32* %Alloca      -> will be mem2reg'd
+///   %V2 = load i32* %Other
+///   %V = select i1 %cond, i32 %V1, i32 %V2
+///
+/// We can do this to a select if its only uses are loads and if the operand to
+/// the select can be loaded unconditionally.
+static bool isSafeSelectToSpeculate(SelectInst *SI, const TargetData *TD) {
+  bool TDerefable = SI->getTrueValue()->isDereferenceablePointer();
+  bool FDerefable = SI->getFalseValue()->isDereferenceablePointer();
   
-  for (Value::use_iterator UI = AI->use_begin(), E = AI->use_end();
-       UI != E; ++UI) {
-    Instruction *User = cast<Instruction>(*UI);
-    BasicBlock *BB = User->getParent();
-    std::vector<Instruction*> &BlockUses = UsesByBlock[BB];
+  for (Value::use_iterator UI = SI->use_begin(), UE = SI->use_end();
+       UI != UE; ++UI) {
+    LoadInst *LI = dyn_cast<LoadInst>(*UI);
+    if (LI == 0 || LI->isVolatile()) return false;
     
-    // If this block has already been processed, ignore this repeat use.
-    if (BlockUses.empty()) continue;
+    // Both operands to the select need to be dereferencable, either absolutely
+    // (e.g. allocas) or at this point because we can see other accesses to it.
+    if (!TDerefable && !isSafeToLoadUnconditionally(SI->getTrueValue(), LI,
+                                                    LI->getAlignment(), TD))
+      return false;
+    if (!FDerefable && !isSafeToLoadUnconditionally(SI->getFalseValue(), LI,
+                                                    LI->getAlignment(), TD))
+      return false;
+  }
+  
+  return true;
+}
+
+/// isSafePHIToSpeculate - PHI instructions that use an alloca and are
+/// subsequently loaded can be rewritten to load both input pointers in the pred
+/// blocks and then PHI the results, allowing the load of the alloca to be
+/// promoted.
+/// From this:
+///   %P2 = phi [i32* %Alloca, i32* %Other]
+///   %V = load i32* %P2
+/// to:
+///   %V1 = load i32* %Alloca      -> will be mem2reg'd
+///   ...
+///   %V2 = load i32* %Other
+///   ...
+///   %V = phi [i32 %V1, i32 %V2]
+///
+/// We can do this to a select if its only uses are loads and if the operand to
+/// the select can be loaded unconditionally.
+static bool isSafePHIToSpeculate(PHINode *PN, const TargetData *TD) {
+  // For now, we can only do this promotion if the load is in the same block as
+  // the PHI, and if there are no stores between the phi and load.
+  // TODO: Allow recursive phi users.
+  // TODO: Allow stores.
+  BasicBlock *BB = PN->getParent();
+  unsigned MaxAlign = 0;
+  for (Value::use_iterator UI = PN->use_begin(), UE = PN->use_end();
+       UI != UE; ++UI) {
+    LoadInst *LI = dyn_cast<LoadInst>(*UI);
+    if (LI == 0 || LI->isVolatile()) return false;
     
-    // Okay, this is the first use in the block.  If this block just has a
-    // single user in it, we can rewrite it trivially.
-    if (BlockUses.size() == 1) {
-      // If it is a store, it is a trivial def of the value in the block.
-      if (StoreInst *SI = dyn_cast<StoreInst>(User))
-        SSA.AddAvailableValue(BB, SI->getOperand(0));
-      else 
-        // Otherwise it is a load, queue it to rewrite as a live-in load.
-        LiveInLoads.push_back(cast<LoadInst>(User));
-      BlockUses.clear();
+    // For now we only allow loads in the same block as the PHI.  This is a
+    // common case that happens when instcombine merges two loads through a PHI.
+    if (LI->getParent() != BB) return false;
+    
+    // Ensure that there are no instructions between the PHI and the load that
+    // could store.
+    for (BasicBlock::iterator BBI = PN; &*BBI != LI; ++BBI)
+      if (BBI->mayWriteToMemory())
+        return false;
+    
+    MaxAlign = std::max(MaxAlign, LI->getAlignment());
+  }
+  
+  // Okay, we know that we have one or more loads in the same block as the PHI.
+  // We can transform this if it is safe to push the loads into the predecessor
+  // blocks.  The only thing to watch out for is that we can't put a possibly
+  // trapping load in the predecessor if it is a critical edge.
+  for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
+    BasicBlock *Pred = PN->getIncomingBlock(i);
+
+    // If the predecessor has a single successor, then the edge isn't critical.
+    if (Pred->getTerminator()->getNumSuccessors() == 1)
+      continue;
+    
+    Value *InVal = PN->getIncomingValue(i);
+    
+    // If the InVal is an invoke in the pred, we can't put a load on the edge.
+    if (InvokeInst *II = dyn_cast<InvokeInst>(InVal))
+      if (II->getParent() == Pred)
+        return false;
+
+    // If this pointer is always safe to load, or if we can prove that there is
+    // already a load in the block, then we can move the load to the pred block.
+    if (InVal->isDereferenceablePointer() ||
+        isSafeToLoadUnconditionally(InVal, Pred->getTerminator(), MaxAlign, TD))
+      continue;
+    
+    return false;
+  }
+    
+  return true;
+}
+
+
+/// tryToMakeAllocaBePromotable - This returns true if the alloca only has
+/// direct (non-volatile) loads and stores to it.  If the alloca is close but
+/// not quite there, this will transform the code to allow promotion.  As such,
+/// it is a non-pure predicate.
+static bool tryToMakeAllocaBePromotable(AllocaInst *AI, const TargetData *TD) {
+  SetVector<Instruction*, SmallVector<Instruction*, 4>,
+            SmallPtrSet<Instruction*, 4> > InstsToRewrite;
+  
+  for (Value::use_iterator UI = AI->use_begin(), UE = AI->use_end();
+       UI != UE; ++UI) {
+    User *U = *UI;
+    if (LoadInst *LI = dyn_cast<LoadInst>(U)) {
+      if (LI->isVolatile())
+        return false;
       continue;
     }
     
-    // Otherwise, check to see if this block is all loads.
-    bool HasStore = false;
-    for (unsigned i = 0, e = BlockUses.size(); i != e; ++i) {
-      if (isa<StoreInst>(BlockUses[i])) {
-        HasStore = true;
-        break;
-      }
-    }
-    
-    // If so, we can queue them all as live in loads.  We don't have an
-    // efficient way to tell which on is first in the block and don't want to
-    // scan large blocks, so just add all loads as live ins.
-    if (!HasStore) {
-      for (unsigned i = 0, e = BlockUses.size(); i != e; ++i)
-        LiveInLoads.push_back(cast<LoadInst>(BlockUses[i]));
-      BlockUses.clear();
+    if (StoreInst *SI = dyn_cast<StoreInst>(U)) {
+      if (SI->getOperand(0) == AI || SI->isVolatile())
+        return false;   // Don't allow a store OF the AI, only INTO the AI.
       continue;
     }
-    
-    // Otherwise, we have mixed loads and stores (or just a bunch of stores).
-    // Since SSAUpdater is purely for cross-block values, we need to determine
-    // the order of these instructions in the block.  If the first use in the
-    // block is a load, then it uses the live in value.  The last store defines
-    // the live out value.  We handle this by doing a linear scan of the block.
-    Value *StoredValue = 0;
-    for (BasicBlock::iterator II = BB->begin(), E = BB->end(); II != E; ++II) {
-      if (LoadInst *L = dyn_cast<LoadInst>(II)) {
-        // If this is a load from an unrelated pointer, ignore it.
-        if (L->getOperand(0) != AI) continue;
+
+    if (SelectInst *SI = dyn_cast<SelectInst>(U)) {
+      // If the condition being selected on is a constant, fold the select, yes
+      // this does (rarely) happen early on.
+      if (ConstantInt *CI = dyn_cast<ConstantInt>(SI->getCondition())) {
+        Value *Result = SI->getOperand(1+CI->isZero());
+        SI->replaceAllUsesWith(Result);
+        SI->eraseFromParent();
         
-        // If we haven't seen a store yet, this is a live in use, otherwise
-        // use the stored value.
-        if (StoredValue) {
-          L->replaceAllUsesWith(StoredValue);
-          ReplacedLoads[L] = StoredValue;
-        } else {
-          LiveInLoads.push_back(L);
-        }
+        // This is very rare and we just scrambled the use list of AI, start
+        // over completely.
+        return tryToMakeAllocaBePromotable(AI, TD);
+      }
+
+      // If it is safe to turn "load (select c, AI, ptr)" into a select of two
+      // loads, then we can transform this by rewriting the select.
+      if (!isSafeSelectToSpeculate(SI, TD))
+        return false;
+      
+      InstsToRewrite.insert(SI);
+      continue;
+    }
+    
+    if (PHINode *PN = dyn_cast<PHINode>(U)) {
+      if (PN->use_empty()) {  // Dead PHIs can be stripped.
+        InstsToRewrite.insert(PN);
         continue;
       }
       
-      if (StoreInst *S = dyn_cast<StoreInst>(II)) {
-        // If this is a store to an unrelated pointer, ignore it.
-        if (S->getPointerOperand() != AI) continue;
+      // If it is safe to turn "load (phi [AI, ptr, ...])" into a PHI of loads
+      // in the pred blocks, then we can transform this by rewriting the PHI.
+      if (!isSafePHIToSpeculate(PN, TD))
+        return false;
+      
+      InstsToRewrite.insert(PN);
+      continue;
+    }
+    
+    return false;
+  }
+
+  // If there are no instructions to rewrite, then all uses are load/stores and
+  // we're done!
+  if (InstsToRewrite.empty())
+    return true;
+  
+  // If we have instructions that need to be rewritten for this to be promotable
+  // take care of it now.
+  for (unsigned i = 0, e = InstsToRewrite.size(); i != e; ++i) {
+    if (SelectInst *SI = dyn_cast<SelectInst>(InstsToRewrite[i])) {
+      // Selects in InstsToRewrite only have load uses.  Rewrite each as two
+      // loads with a new select.
+      while (!SI->use_empty()) {
+        LoadInst *LI = cast<LoadInst>(SI->use_back());
+      
+        IRBuilder<> Builder(LI);
+        LoadInst *TrueLoad = 
+          Builder.CreateLoad(SI->getTrueValue(), LI->getName()+".t");
+        LoadInst *FalseLoad = 
+          Builder.CreateLoad(SI->getFalseValue(), LI->getName()+".t");
         
-        // Remember that this is the active value in the block.
-        StoredValue = S->getOperand(0);
+        // Transfer alignment and TBAA info if present.
+        TrueLoad->setAlignment(LI->getAlignment());
+        FalseLoad->setAlignment(LI->getAlignment());
+        if (MDNode *Tag = LI->getMetadata(LLVMContext::MD_tbaa)) {
+          TrueLoad->setMetadata(LLVMContext::MD_tbaa, Tag);
+          FalseLoad->setMetadata(LLVMContext::MD_tbaa, Tag);
+        }
+        
+        Value *V = Builder.CreateSelect(SI->getCondition(), TrueLoad, FalseLoad);
+        V->takeName(LI);
+        LI->replaceAllUsesWith(V);
+        LI->eraseFromParent();
       }
+    
+      // Now that all the loads are gone, the select is gone too.
+      SI->eraseFromParent();
+      continue;
     }
     
-    // The last stored value that happened is the live-out for the block.
-    assert(StoredValue && "Already checked that there is a store in block");
-    SSA.AddAvailableValue(BB, StoredValue);
-    BlockUses.clear();
-  }
-  
-  // Okay, now we rewrite all loads that use live-in values in the loop,
-  // inserting PHI nodes as necessary.
-  for (unsigned i = 0, e = LiveInLoads.size(); i != e; ++i) {
-    LoadInst *ALoad = LiveInLoads[i];
-    Value *NewVal = SSA.GetValueInMiddleOfBlock(ALoad->getParent());
-    ALoad->replaceAllUsesWith(NewVal);
-    ReplacedLoads[ALoad] = NewVal;
-  }
-  
-  // Now that everything is rewritten, delete the old instructions from the
-  // function.  They should all be dead now.
-  for (Value::use_iterator UI = AI->use_begin(), E = AI->use_end(); UI != E; ) {
-    Instruction *User = cast<Instruction>(*UI++);
-    
-    // If this is a load that still has uses, then the load must have been added
-    // as a live value in the SSAUpdate data structure for a block (e.g. because
-    // the loaded value was stored later).  In this case, we need to recursively
-    // propagate the updates until we get to the real value.
-    if (!User->use_empty()) {
-      Value *NewVal = ReplacedLoads[User];
-      assert(NewVal && "not a replaced load?");
-      
-      // Propagate down to the ultimate replacee.  The intermediately loads
-      // could theoretically already have been deleted, so we don't want to
-      // dereference the Value*'s.
-      DenseMap<Value*, Value*>::iterator RLI = ReplacedLoads.find(NewVal);
-      while (RLI != ReplacedLoads.end()) {
-        NewVal = RLI->second;
-        RLI = ReplacedLoads.find(NewVal);
-      }
-      
-      User->replaceAllUsesWith(NewVal);
+    // Otherwise, we have a PHI node which allows us to push the loads into the
+    // predecessors.
+    PHINode *PN = cast<PHINode>(InstsToRewrite[i]);
+    if (PN->use_empty()) {
+      PN->eraseFromParent();
+      continue;
     }
     
-    User->eraseFromParent();
+    const Type *LoadTy = cast<PointerType>(PN->getType())->getElementType();
+    PHINode *NewPN = PHINode::Create(LoadTy, PN->getName()+".ld", PN);
+
+    // Get the TBAA tag and alignment to use from one of the loads.  It doesn't
+    // matter which one we get and if any differ, it doesn't matter.
+    LoadInst *SomeLoad = cast<LoadInst>(PN->use_back());
+    MDNode *TBAATag = SomeLoad->getMetadata(LLVMContext::MD_tbaa);
+    unsigned Align = SomeLoad->getAlignment();
+    
+    // Rewrite all loads of the PN to use the new PHI.
+    while (!PN->use_empty()) {
+      LoadInst *LI = cast<LoadInst>(PN->use_back());
+      LI->replaceAllUsesWith(NewPN);
+      LI->eraseFromParent();
+    }
+    
+    // Inject loads into all of the pred blocks.  Keep track of which blocks we
+    // insert them into in case we have multiple edges from the same block.
+    DenseMap<BasicBlock*, LoadInst*> InsertedLoads;
+    
+    for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
+      BasicBlock *Pred = PN->getIncomingBlock(i);
+      LoadInst *&Load = InsertedLoads[Pred];
+      if (Load == 0) {
+        Load = new LoadInst(PN->getIncomingValue(i),
+                            PN->getName() + "." + Pred->getName(),
+                            Pred->getTerminator());
+        Load->setAlignment(Align);
+        if (TBAATag) Load->setMetadata(LLVMContext::MD_tbaa, TBAATag);
+      }
+      
+      NewPN->addIncoming(Load, Pred);
+    }
+    
+    PN->eraseFromParent();
   }
+    
+  ++NumAdjusted;
+  return true;
 }
 
 
 bool SROA::performPromotion(Function &F) {
   std::vector<AllocaInst*> Allocas;
   DominatorTree *DT = 0;
-  DominanceFrontier *DF = 0;
-  if (HasDomFrontiers) {
+  if (HasDomTree)
     DT = &getAnalysis<DominatorTree>();
-    DF = &getAnalysis<DominanceFrontier>();
-  }
 
   BasicBlock &BB = F.getEntryBlock();  // Get the entry node for the function
 
   bool Changed = false;
-
+  SmallVector<Instruction*, 64> Insts;
   while (1) {
     Allocas.clear();
 
@@ -999,18 +1141,25 @@ bool SROA::performPromotion(Function &F) {
     // the entry node
     for (BasicBlock::iterator I = BB.begin(), E = --BB.end(); I != E; ++I)
       if (AllocaInst *AI = dyn_cast<AllocaInst>(I))       // Is it an alloca?
-        if (isAllocaPromotable(AI))
+        if (tryToMakeAllocaBePromotable(AI, TD))
           Allocas.push_back(AI);
 
     if (Allocas.empty()) break;
 
-    if (HasDomFrontiers)
-      PromoteMemToReg(Allocas, *DT, *DF);
+    if (HasDomTree)
+      PromoteMemToReg(Allocas, *DT);
     else {
       SSAUpdater SSA;
       for (unsigned i = 0, e = Allocas.size(); i != e; ++i) {
-        PromoteAlloca(Allocas[i], SSA);
-        Allocas[i]->eraseFromParent();
+        AllocaInst *AI = Allocas[i];
+        
+        // Build list of instructions to promote.
+        for (Value::use_iterator UI = AI->use_begin(), E = AI->use_end();
+             UI != E; ++UI)
+          Insts.push_back(cast<Instruction>(*UI));
+        
+        AllocaPromoter(Insts, SSA).run(AI, Insts);
+        Insts.clear();
       }
     }
     NumPromoted += Allocas.size();
@@ -1188,43 +1337,101 @@ void SROA::DeleteDeadInstructions() {
 /// performing scalar replacement of alloca AI.  The results are flagged in
 /// the Info parameter.  Offset indicates the position within AI that is
 /// referenced by this instruction.
-void SROA::isSafeForScalarRepl(Instruction *I, AllocaInst *AI, uint64_t Offset,
+void SROA::isSafeForScalarRepl(Instruction *I, uint64_t Offset,
                                AllocaInfo &Info) {
   for (Value::use_iterator UI = I->use_begin(), E = I->use_end(); UI!=E; ++UI) {
     Instruction *User = cast<Instruction>(*UI);
 
     if (BitCastInst *BC = dyn_cast<BitCastInst>(User)) {
-      isSafeForScalarRepl(BC, AI, Offset, Info);
+      isSafeForScalarRepl(BC, Offset, Info);
     } else if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(User)) {
       uint64_t GEPOffset = Offset;
-      isSafeGEP(GEPI, AI, GEPOffset, Info);
+      isSafeGEP(GEPI, GEPOffset, Info);
       if (!Info.isUnsafe)
-        isSafeForScalarRepl(GEPI, AI, GEPOffset, Info);
+        isSafeForScalarRepl(GEPI, GEPOffset, Info);
     } else if (MemIntrinsic *MI = dyn_cast<MemIntrinsic>(User)) {
       ConstantInt *Length = dyn_cast<ConstantInt>(MI->getLength());
-      if (Length)
-        isSafeMemAccess(AI, Offset, Length->getZExtValue(), 0,
-                        UI.getOperandNo() == 0, Info);
-      else
-        MarkUnsafe(Info);
+      if (Length == 0)
+        return MarkUnsafe(Info, User);
+      isSafeMemAccess(Offset, Length->getZExtValue(), 0,
+                      UI.getOperandNo() == 0, Info, MI,
+                      true /*AllowWholeAccess*/);
     } else if (LoadInst *LI = dyn_cast<LoadInst>(User)) {
-      if (!LI->isVolatile()) {
-        const Type *LIType = LI->getType();
-        isSafeMemAccess(AI, Offset, TD->getTypeAllocSize(LIType),
-                        LIType, false, Info);
-      } else
-        MarkUnsafe(Info);
+      if (LI->isVolatile())
+        return MarkUnsafe(Info, User);
+      const Type *LIType = LI->getType();
+      isSafeMemAccess(Offset, TD->getTypeAllocSize(LIType),
+                      LIType, false, Info, LI, true /*AllowWholeAccess*/);
+      Info.hasALoadOrStore = true;
+        
     } else if (StoreInst *SI = dyn_cast<StoreInst>(User)) {
       // Store is ok if storing INTO the pointer, not storing the pointer
-      if (!SI->isVolatile() && SI->getOperand(0) != I) {
-        const Type *SIType = SI->getOperand(0)->getType();
-        isSafeMemAccess(AI, Offset, TD->getTypeAllocSize(SIType),
-                        SIType, true, Info);
-      } else
-        MarkUnsafe(Info);
+      if (SI->isVolatile() || SI->getOperand(0) == I)
+        return MarkUnsafe(Info, User);
+        
+      const Type *SIType = SI->getOperand(0)->getType();
+      isSafeMemAccess(Offset, TD->getTypeAllocSize(SIType),
+                      SIType, true, Info, SI, true /*AllowWholeAccess*/);
+      Info.hasALoadOrStore = true;
+    } else if (isa<PHINode>(User) || isa<SelectInst>(User)) {
+      isSafePHISelectUseForScalarRepl(User, Offset, Info);
     } else {
-      DEBUG(errs() << "  Transformation preventing inst: " << *User << '\n');
-      MarkUnsafe(Info);
+      return MarkUnsafe(Info, User);
+    }
+    if (Info.isUnsafe) return;
+  }
+}
+ 
+
+/// isSafePHIUseForScalarRepl - If we see a PHI node or select using a pointer
+/// derived from the alloca, we can often still split the alloca into elements.
+/// This is useful if we have a large alloca where one element is phi'd
+/// together somewhere: we can SRoA and promote all the other elements even if
+/// we end up not being able to promote this one.
+///
+/// All we require is that the uses of the PHI do not index into other parts of
+/// the alloca.  The most important use case for this is single load and stores
+/// that are PHI'd together, which can happen due to code sinking.
+void SROA::isSafePHISelectUseForScalarRepl(Instruction *I, uint64_t Offset,
+                                           AllocaInfo &Info) {
+  // If we've already checked this PHI, don't do it again.
+  if (PHINode *PN = dyn_cast<PHINode>(I))
+    if (!Info.CheckedPHIs.insert(PN))
+      return;
+  
+  for (Value::use_iterator UI = I->use_begin(), E = I->use_end(); UI!=E; ++UI) {
+    Instruction *User = cast<Instruction>(*UI);
+    
+    if (BitCastInst *BC = dyn_cast<BitCastInst>(User)) {
+      isSafePHISelectUseForScalarRepl(BC, Offset, Info);
+    } else if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(User)) {
+      // Only allow "bitcast" GEPs for simplicity.  We could generalize this,
+      // but would have to prove that we're staying inside of an element being
+      // promoted.
+      if (!GEPI->hasAllZeroIndices())
+        return MarkUnsafe(Info, User);
+      isSafePHISelectUseForScalarRepl(GEPI, Offset, Info);
+    } else if (LoadInst *LI = dyn_cast<LoadInst>(User)) {
+      if (LI->isVolatile())
+        return MarkUnsafe(Info, User);
+      const Type *LIType = LI->getType();
+      isSafeMemAccess(Offset, TD->getTypeAllocSize(LIType),
+                      LIType, false, Info, LI, false /*AllowWholeAccess*/);
+      Info.hasALoadOrStore = true;
+      
+    } else if (StoreInst *SI = dyn_cast<StoreInst>(User)) {
+      // Store is ok if storing INTO the pointer, not storing the pointer
+      if (SI->isVolatile() || SI->getOperand(0) == I)
+        return MarkUnsafe(Info, User);
+      
+      const Type *SIType = SI->getOperand(0)->getType();
+      isSafeMemAccess(Offset, TD->getTypeAllocSize(SIType),
+                      SIType, true, Info, SI, false /*AllowWholeAccess*/);
+      Info.hasALoadOrStore = true;
+    } else if (isa<PHINode>(User) || isa<SelectInst>(User)) {
+      isSafePHISelectUseForScalarRepl(User, Offset, Info);
+    } else {
+      return MarkUnsafe(Info, User);
     }
     if (Info.isUnsafe) return;
   }
@@ -1235,7 +1442,7 @@ void SROA::isSafeForScalarRepl(Instruction *I, AllocaInst *AI, uint64_t Offset,
 /// references, and when the resulting offset corresponds to an element within
 /// the alloca type.  The results are flagged in the Info parameter.  Upon
 /// return, Offset is adjusted as specified by the GEP indices.
-void SROA::isSafeGEP(GetElementPtrInst *GEPI, AllocaInst *AI,
+void SROA::isSafeGEP(GetElementPtrInst *GEPI,
                      uint64_t &Offset, AllocaInfo &Info) {
   gep_type_iterator GEPIt = gep_type_begin(GEPI), E = gep_type_end(GEPI);
   if (GEPIt == E)
@@ -1250,7 +1457,7 @@ void SROA::isSafeGEP(GetElementPtrInst *GEPI, AllocaInst *AI,
 
     ConstantInt *IdxVal = dyn_cast<ConstantInt>(GEPIt.getOperand());
     if (!IdxVal)
-      return MarkUnsafe(Info);
+      return MarkUnsafe(Info, GEPI);
   }
 
   // Compute the offset due to this GEP and check if the alloca has a
@@ -1258,8 +1465,8 @@ void SROA::isSafeGEP(GetElementPtrInst *GEPI, AllocaInst *AI,
   SmallVector<Value*, 8> Indices(GEPI->op_begin() + 1, GEPI->op_end());
   Offset += TD->getIndexedOffset(GEPI->getPointerOperandType(),
                                  &Indices[0], Indices.size());
-  if (!TypeHasComponent(AI->getAllocatedType(), Offset, 0))
-    MarkUnsafe(Info);
+  if (!TypeHasComponent(Info.AI->getAllocatedType(), Offset, 0))
+    MarkUnsafe(Info, GEPI);
 }
 
 /// isHomogeneousAggregate - Check if type T is a struct or array containing
@@ -1306,11 +1513,16 @@ static bool isCompatibleAggregate(const Type *T1, const Type *T2) {
 /// alloca or has an offset and size that corresponds to a component element
 /// within it.  The offset checked here may have been formed from a GEP with a
 /// pointer bitcasted to a different type.
-void SROA::isSafeMemAccess(AllocaInst *AI, uint64_t Offset, uint64_t MemSize,
+///
+/// If AllowWholeAccess is true, then this allows uses of the entire alloca as a
+/// unit.  If false, it only allows accesses known to be in a single element.
+void SROA::isSafeMemAccess(uint64_t Offset, uint64_t MemSize,
                            const Type *MemOpType, bool isStore,
-                           AllocaInfo &Info) {
+                           AllocaInfo &Info, Instruction *TheAccess,
+                           bool AllowWholeAccess) {
   // Check if this is a load/store of the entire alloca.
-  if (Offset == 0 && MemSize == TD->getTypeAllocSize(AI->getAllocatedType())) {
+  if (Offset == 0 && AllowWholeAccess &&
+      MemSize == TD->getTypeAllocSize(Info.AI->getAllocatedType())) {
     // This can be safe for MemIntrinsics (where MemOpType is 0) and integer
     // loads/stores (which are essentially the same as the MemIntrinsics with
     // regard to copying padding between elements).  But, if an alloca is
@@ -1326,15 +1538,19 @@ void SROA::isSafeMemAccess(AllocaInst *AI, uint64_t Offset, uint64_t MemSize,
     // This is also safe for references using a type that is compatible with
     // the type of the alloca, so that loads/stores can be rewritten using
     // insertvalue/extractvalue.
-    if (isCompatibleAggregate(MemOpType, AI->getAllocatedType()))
+    if (isCompatibleAggregate(MemOpType, Info.AI->getAllocatedType())) {
+      Info.hasSubelementAccess = true;
       return;
+    }
   }
   // Check if the offset/size correspond to a component within the alloca type.
-  const Type *T = AI->getAllocatedType();
-  if (TypeHasComponent(T, Offset, MemSize))
+  const Type *T = Info.AI->getAllocatedType();
+  if (TypeHasComponent(T, Offset, MemSize)) {
+    Info.hasSubelementAccess = true;
     return;
+  }
 
-  return MarkUnsafe(Info);
+  return MarkUnsafe(Info, TheAccess);
 }
 
 /// TypeHasComponent - Return true if T has a component type with the
@@ -1371,14 +1587,21 @@ bool SROA::TypeHasComponent(const Type *T, uint64_t Offset, uint64_t Size) {
 /// instruction.
 void SROA::RewriteForScalarRepl(Instruction *I, AllocaInst *AI, uint64_t Offset,
                                 SmallVector<AllocaInst*, 32> &NewElts) {
-  for (Value::use_iterator UI = I->use_begin(), E = I->use_end(); UI!=E; ++UI) {
-    Instruction *User = cast<Instruction>(*UI);
+  for (Value::use_iterator UI = I->use_begin(), E = I->use_end(); UI!=E;) {
+    Use &TheUse = UI.getUse();
+    Instruction *User = cast<Instruction>(*UI++);
 
     if (BitCastInst *BC = dyn_cast<BitCastInst>(User)) {
       RewriteBitCast(BC, AI, Offset, NewElts);
-    } else if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(User)) {
+      continue;
+    }
+    
+    if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(User)) {
       RewriteGEP(GEPI, AI, Offset, NewElts);
-    } else if (MemIntrinsic *MI = dyn_cast<MemIntrinsic>(User)) {
+      continue;
+    }
+    
+    if (MemIntrinsic *MI = dyn_cast<MemIntrinsic>(User)) {
       ConstantInt *Length = dyn_cast<ConstantInt>(MI->getLength());
       uint64_t MemSize = Length->getZExtValue();
       if (Offset == 0 &&
@@ -1386,8 +1609,12 @@ void SROA::RewriteForScalarRepl(Instruction *I, AllocaInst *AI, uint64_t Offset,
         RewriteMemIntrinUserOfAlloca(MI, I, AI, NewElts);
       // Otherwise the intrinsic can only touch a single element and the
       // address operand will be updated, so nothing else needs to be done.
-    } else if (LoadInst *LI = dyn_cast<LoadInst>(User)) {
+      continue;
+    }
+    
+    if (LoadInst *LI = dyn_cast<LoadInst>(User)) {
       const Type *LIType = LI->getType();
+      
       if (isCompatibleAggregate(LIType, AI->getAllocatedType())) {
         // Replace:
         //   %res = load { i32, i32 }* %alloc
@@ -1410,7 +1637,10 @@ void SROA::RewriteForScalarRepl(Instruction *I, AllocaInst *AI, uint64_t Offset,
         // If this is a load of the entire alloca to an integer, rewrite it.
         RewriteLoadUserOfWholeAlloca(LI, AI, NewElts);
       }
-    } else if (StoreInst *SI = dyn_cast<StoreInst>(User)) {
+      continue;
+    }
+    
+    if (StoreInst *SI = dyn_cast<StoreInst>(User)) {
       Value *Val = SI->getOperand(0);
       const Type *SIType = Val->getType();
       if (isCompatibleAggregate(SIType, AI->getAllocatedType())) {
@@ -1433,6 +1663,26 @@ void SROA::RewriteForScalarRepl(Instruction *I, AllocaInst *AI, uint64_t Offset,
         // If this is a store of the entire alloca from an integer, rewrite it.
         RewriteStoreUserOfWholeAlloca(SI, AI, NewElts);
       }
+      continue;
+    }
+    
+    if (isa<SelectInst>(User) || isa<PHINode>(User)) {
+      // If we have a PHI user of the alloca itself (as opposed to a GEP or 
+      // bitcast) we have to rewrite it.  GEP and bitcast uses will be RAUW'd to
+      // the new pointer.
+      if (!isa<AllocaInst>(I)) continue;
+      
+      assert(Offset == 0 && NewElts[0] &&
+             "Direct alloca use should have a zero offset");
+      
+      // If we have a use of the alloca, we know the derived uses will be
+      // utilizing just the first element of the scalarized result.  Insert a
+      // bitcast of the first alloca before the user as required.
+      AllocaInst *NewAI = NewElts[0];
+      BitCastInst *BCI = new BitCastInst(NewAI, AI->getType(), "", NewAI);
+      NewAI->moveBefore(BCI);
+      TheUse = BCI;
+      continue;
     }
   }
 }
@@ -1666,7 +1916,7 @@ void SROA::RewriteMemIntrinUserOfAlloca(MemIntrinsic *MI, Instruction *Inst,
           if (EltTy != ValTy) {
             unsigned NumElts = cast<VectorType>(ValTy)->getNumElements();
             SmallVector<Constant*, 16> Elts(NumElts, StoreVal);
-            StoreVal = ConstantVector::get(&Elts[0], NumElts);
+            StoreVal = ConstantVector::get(Elts);
           }
         }
         new StoreInst(StoreVal, EltPtr, MI);
@@ -1709,11 +1959,12 @@ void SROA::RewriteStoreUserOfWholeAlloca(StoreInst *SI, AllocaInst *AI,
   const Type *AllocaEltTy = AI->getAllocatedType();
   uint64_t AllocaSizeBits = TD->getTypeAllocSizeInBits(AllocaEltTy);
 
+  IRBuilder<> Builder(SI);
+  
   // Handle tail padding by extending the operand
   if (TD->getTypeSizeInBits(SrcVal->getType()) != AllocaSizeBits)
-    SrcVal = new ZExtInst(SrcVal,
-                          IntegerType::get(SI->getContext(), AllocaSizeBits),
-                          "", SI);
+    SrcVal = Builder.CreateZExt(SrcVal,
+                            IntegerType::get(SI->getContext(), AllocaSizeBits));
 
   DEBUG(dbgs() << "PROMOTING STORE TO WHOLE ALLOCA: " << *AI << '\n' << *SI
                << '\n');
@@ -1734,8 +1985,7 @@ void SROA::RewriteStoreUserOfWholeAlloca(StoreInst *SI, AllocaInst *AI,
       Value *EltVal = SrcVal;
       if (Shift) {
         Value *ShiftVal = ConstantInt::get(EltVal->getType(), Shift);
-        EltVal = BinaryOperator::CreateLShr(EltVal, ShiftVal,
-                                            "sroa.store.elt", SI);
+        EltVal = Builder.CreateLShr(EltVal, ShiftVal, "sroa.store.elt");
       }
 
       // Truncate down to an integer of the right size.
@@ -1745,20 +1995,18 @@ void SROA::RewriteStoreUserOfWholeAlloca(StoreInst *SI, AllocaInst *AI,
       if (FieldSizeBits == 0) continue;
 
       if (FieldSizeBits != AllocaSizeBits)
-        EltVal = new TruncInst(EltVal,
-                             IntegerType::get(SI->getContext(), FieldSizeBits),
-                              "", SI);
+        EltVal = Builder.CreateTrunc(EltVal,
+                             IntegerType::get(SI->getContext(), FieldSizeBits));
       Value *DestField = NewElts[i];
       if (EltVal->getType() == FieldTy) {
         // Storing to an integer field of this size, just do it.
       } else if (FieldTy->isFloatingPointTy() || FieldTy->isVectorTy()) {
         // Bitcast to the right element type (for fp/vector values).
-        EltVal = new BitCastInst(EltVal, FieldTy, "", SI);
+        EltVal = Builder.CreateBitCast(EltVal, FieldTy);
       } else {
         // Otherwise, bitcast the dest pointer (for aggregates).
-        DestField = new BitCastInst(DestField,
-                              PointerType::getUnqual(EltVal->getType()),
-                                    "", SI);
+        DestField = Builder.CreateBitCast(DestField,
+                                     PointerType::getUnqual(EltVal->getType()));
       }
       new StoreInst(EltVal, DestField, SI);
     }
@@ -1783,27 +2031,25 @@ void SROA::RewriteStoreUserOfWholeAlloca(StoreInst *SI, AllocaInst *AI,
       Value *EltVal = SrcVal;
       if (Shift) {
         Value *ShiftVal = ConstantInt::get(EltVal->getType(), Shift);
-        EltVal = BinaryOperator::CreateLShr(EltVal, ShiftVal,
-                                            "sroa.store.elt", SI);
+        EltVal = Builder.CreateLShr(EltVal, ShiftVal, "sroa.store.elt");
       }
 
       // Truncate down to an integer of the right size.
       if (ElementSizeBits != AllocaSizeBits)
-        EltVal = new TruncInst(EltVal,
-                               IntegerType::get(SI->getContext(),
-                                                ElementSizeBits), "", SI);
+        EltVal = Builder.CreateTrunc(EltVal,
+                                     IntegerType::get(SI->getContext(),
+                                                      ElementSizeBits));
       Value *DestField = NewElts[i];
       if (EltVal->getType() == ArrayEltTy) {
         // Storing to an integer field of this size, just do it.
       } else if (ArrayEltTy->isFloatingPointTy() ||
                  ArrayEltTy->isVectorTy()) {
         // Bitcast to the right element type (for fp/vector values).
-        EltVal = new BitCastInst(EltVal, ArrayEltTy, "", SI);
+        EltVal = Builder.CreateBitCast(EltVal, ArrayEltTy);
       } else {
         // Otherwise, bitcast the dest pointer (for aggregates).
-        DestField = new BitCastInst(DestField,
-                              PointerType::getUnqual(EltVal->getType()),
-                                    "", SI);
+        DestField = Builder.CreateBitCast(DestField,
+                                     PointerType::getUnqual(EltVal->getType()));
       }
       new StoreInst(EltVal, DestField, SI);
 
@@ -1946,9 +2192,9 @@ static bool HasPadding(const Type *Ty, const TargetData &TD) {
 bool SROA::isSafeAllocaToScalarRepl(AllocaInst *AI) {
   // Loop over the use list of the alloca.  We can only transform it if all of
   // the users are safe to transform.
-  AllocaInfo Info;
+  AllocaInfo Info(AI);
 
-  isSafeForScalarRepl(AI, AI, 0, Info);
+  isSafeForScalarRepl(AI, 0, Info);
   if (Info.isUnsafe) {
     DEBUG(dbgs() << "Cannot transform: " << *AI << '\n');
     return false;
@@ -1963,6 +2209,20 @@ bool SROA::isSafeAllocaToScalarRepl(AllocaInst *AI) {
       HasPadding(AI->getAllocatedType(), *TD))
     return false;
 
+  // If the alloca never has an access to just *part* of it, but is accessed
+  // via loads and stores, then we should use ConvertToScalarInfo to promote
+  // the alloca instead of promoting each piece at a time and inserting fission
+  // and fusion code.
+  if (!Info.hasSubelementAccess && Info.hasALoadOrStore) {
+    // If the struct/array just has one element, use basic SRoA.
+    if (const StructType *ST = dyn_cast<StructType>(AI->getAllocatedType())) {
+      if (ST->getNumElements() > 1) return false;
+    } else {
+      if (cast<ArrayType>(AI->getAllocatedType())->getNumElements() > 1)
+        return false;
+    }
+  }
+  
   return true;
 }
 

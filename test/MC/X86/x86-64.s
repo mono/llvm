@@ -2,6 +2,18 @@
 // RUN: FileCheck < %t %s
 // RUN: FileCheck --check-prefix=CHECK-STDERR < %t.err %s
 
+	monitor
+// CHECK: monitor
+// CHECK: encoding: [0x0f,0x01,0xc8]
+	monitor %rax, %rcx, %rdx
+// CHECK: monitor
+// CHECK: encoding: [0x0f,0x01,0xc8]
+	mwait
+// CHECK: mwait
+// CHECK: encoding: [0x0f,0x01,0xc9]
+	mwait %rax, %rcx
+// CHECK: mwait
+// CHECK: encoding: [0x0f,0x01,0xc9]
 
 // Suffix inference:
 
@@ -229,13 +241,32 @@ inl	%dx
 
 // PR8114
 // CHECK: outb	%al, %dx
+// CHECK: outb	%al, %dx
+// CHECK: outw	%ax, %dx
 // CHECK: outw	%ax, %dx
 // CHECK: outl	%eax, %dx
+// CHECK: outl	%eax, %dx
 
-out %al, (%dx)
-out %ax, (%dx)
-outl %eax, (%dx)
+out	%al, (%dx)
+outb	%al, (%dx)
+out	%ax, (%dx)
+outw	%ax, (%dx)
+out	%eax, (%dx)
+outl	%eax, (%dx)
 
+// CHECK: inb	%dx, %al
+// CHECK: inb	%dx, %al
+// CHECK: inw	%dx, %ax
+// CHECK: inw	%dx, %ax
+// CHECK: inl	%dx, %eax
+// CHECK: inl	%dx, %eax
+
+in	(%dx), %al
+inb	(%dx), %al
+in	(%dx), %ax
+inw	(%dx), %ax
+in	(%dx), %eax
+inl	(%dx), %eax
 
 // rdar://8431422
 
@@ -636,6 +667,10 @@ movl	0, %eax   // CHECK: movl 0, %eax # encoding: [0x8b,0x04,0x25,0x00,0x00,0x00
 // CHECK: encoding: [0x75,A]
         jnz 0
 
+// PR9264
+btl	$1, 0 // CHECK: btl $1, 0 # encoding: [0x0f,0xba,0x24,0x25,0x00,0x00,0x00,0x00,0x01]
+bt	$1, 0 // CHECK: btl $1, 0 # encoding: [0x0f,0xba,0x24,0x25,0x00,0x00,0x00,0x00,0x01]
+
 // rdar://8017515
 btq $0x01,%rdx
 // CHECK: btq	$1, %rdx
@@ -926,3 +961,15 @@ movq 18446744073709551615,%rbx   // CHECK: movq	-1, %rbx
 
 // PR8946
 movdqu	%xmm0, %xmm1 // CHECK: movdqu	%xmm0, %xmm1 # encoding: [0xf3,0x0f,0x6f,0xc8]
+
+// PR8935
+xgetbv // CHECK: xgetbv # encoding: [0x0f,0x01,0xd0]
+xsetbv // CHECK: xsetbv # encoding: [0x0f,0x01,0xd1]
+
+// CHECK: loope 0
+// CHECK: encoding: [0xe1,A]
+	loopz 0
+
+// CHECK: loopne 0
+// CHECK: encoding: [0xe0,A]
+	loopnz 0

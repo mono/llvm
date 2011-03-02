@@ -3544,21 +3544,23 @@ void LSRInstance::RewriteForPHI(PHINode *PN,
       // is the canonical backedge for this loop, which complicates post-inc
       // users.
       if (e != 1 && BB->getTerminator()->getNumSuccessors() > 1 &&
-          !isa<IndirectBrInst>(BB->getTerminator()) &&
-          (PN->getParent() != L->getHeader() || !L->contains(BB))) {
-        // Split the critical edge.
-        BasicBlock *NewBB = SplitCriticalEdge(BB, PN->getParent(), P);
+          !isa<IndirectBrInst>(BB->getTerminator())) {
+        Loop *PNLoop = LI.getLoopFor(PN->getParent());
+        if (!PNLoop || PN->getParent() != PNLoop->getHeader()) {
+          // Split the critical edge.
+          BasicBlock *NewBB = SplitCriticalEdge(BB, PN->getParent(), P);
 
-        // If PN is outside of the loop and BB is in the loop, we want to
-        // move the block to be immediately before the PHI block, not
-        // immediately after BB.
-        if (L->contains(BB) && !L->contains(PN))
-          NewBB->moveBefore(PN->getParent());
+          // If PN is outside of the loop and BB is in the loop, we want to
+          // move the block to be immediately before the PHI block, not
+          // immediately after BB.
+          if (L->contains(BB) && !L->contains(PN))
+            NewBB->moveBefore(PN->getParent());
 
-        // Splitting the edge can reduce the number of PHI entries we have.
-        e = PN->getNumIncomingValues();
-        BB = NewBB;
-        i = PN->getBasicBlockIndex(BB);
+          // Splitting the edge can reduce the number of PHI entries we have.
+          e = PN->getNumIncomingValues();
+          BB = NewBB;
+          i = PN->getBasicBlockIndex(BB);
+        }
       }
 
       std::pair<DenseMap<BasicBlock *, Value *>::iterator, bool> Pair =
@@ -3814,7 +3816,6 @@ void LoopStrengthReduce::getAnalysisUsage(AnalysisUsage &AU) const {
   // We split critical edges, so we change the CFG.  However, we do update
   // many analyses if they are around.
   AU.addPreservedID(LoopSimplifyID);
-  AU.addPreserved("domfrontier");
 
   AU.addRequired<LoopInfo>();
   AU.addPreserved<LoopInfo>();
@@ -3823,6 +3824,9 @@ void LoopStrengthReduce::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addPreserved<DominatorTree>();
   AU.addRequired<ScalarEvolution>();
   AU.addPreserved<ScalarEvolution>();
+  // Requiring LoopSimplify a second time here prevents IVUsers from running
+  // twice, since LoopSimplify was invalidated by running ScalarEvolution.
+  AU.addRequiredID(LoopSimplifyID);
   AU.addRequired<IVUsers>();
   AU.addPreserved<IVUsers>();
 }

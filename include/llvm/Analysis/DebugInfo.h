@@ -122,6 +122,8 @@ namespace llvm {
     bool isType() const;
     bool isGlobal() const;
     bool isUnspecifiedParameter() const;
+    bool isTemplateTypeParameter() const;
+    bool isTemplateValueParameter() const;
   };
 
   /// DISubrange - This is used to represent ranges, for array bounds.
@@ -356,6 +358,7 @@ namespace llvm {
     DICompositeType getContainingType() const {
       return getFieldAs<DICompositeType>(12);
     }
+    DIArray getTemplateParams() const { return getFieldAs<DIArray>(13); }
 
     /// Verify - Verify that a composite type descriptor is well formed.
     bool Verify() const;
@@ -365,6 +368,43 @@ namespace llvm {
 
     /// dump - print composite type to dbgs() with a newline.
     void dump() const;
+  };
+
+  /// DITemplateTypeParameter - This is a wrapper for template type parameter.
+  class DITemplateTypeParameter : public DIDescriptor {
+  public:
+    explicit DITemplateTypeParameter(const MDNode *N = 0) : DIDescriptor(N) {}
+
+    DIScope getContext() const       { return getFieldAs<DIScope>(1); }
+    StringRef getName() const        { return getStringField(2); }
+    DIType getType() const           { return getFieldAs<DIType>(3); }
+    StringRef getFilename() const    { 
+      return getFieldAs<DIFile>(4).getFilename();
+    }
+    StringRef getDirectory() const   { 
+      return getFieldAs<DIFile>(4).getDirectory();
+    }
+    unsigned getLineNumber() const   { return getUnsignedField(5); }
+    unsigned getColumnNumber() const { return getUnsignedField(6); }
+  };
+
+  /// DITemplateValueParameter - This is a wrapper for template value parameter.
+  class DITemplateValueParameter : public DIDescriptor {
+  public:
+    explicit DITemplateValueParameter(const MDNode *N = 0) : DIDescriptor(N) {}
+
+    DIScope getContext() const       { return getFieldAs<DIScope>(1); }
+    StringRef getName() const        { return getStringField(2); }
+    DIType getType() const           { return getFieldAs<DIType>(3); }
+    uint64_t getValue() const         { return getUInt64Field(4); }
+    StringRef getFilename() const    { 
+      return getFieldAs<DIFile>(5).getFilename();
+    }
+    StringRef getDirectory() const   { 
+      return getFieldAs<DIFile>(5).getDirectory();
+    }
+    unsigned getLineNumber() const   { return getUnsignedField(6); }
+    unsigned getColumnNumber() const { return getUnsignedField(7); }
   };
 
   /// DISubprogram - This is a wrapper for a subprogram (e.g. a function).
@@ -524,7 +564,13 @@ namespace llvm {
       DIFile F = getFieldAs<DIFile>(3); 
       return F.getCompileUnit();
     }
-    unsigned getLineNumber() const      { return getUnsignedField(4); }
+    unsigned getLineNumber() const      { 
+      return (getUnsignedField(4) << 8) >> 8; 
+    }
+    unsigned getArgNumber() const       {
+      unsigned L = getUnsignedField(4); 
+      return L >> 24;
+    }
     DIType getType() const              { return getFieldAs<DIType>(5); }
     
     /// isArtificial - Return true if this variable is marked as "artificial".
@@ -827,10 +873,6 @@ namespace llvm {
   private:
     Constant *GetTagConstant(unsigned TAG);
   };
-
-  bool getLocationInfo(const Value *V, std::string &DisplayName,
-                       std::string &Type, unsigned &LineNo, std::string &File,
-                       std::string &Dir);
 
   /// getDISubprogram - Find subprogram that is enclosing this scope.
   DISubprogram getDISubprogram(const MDNode *Scope);

@@ -819,6 +819,36 @@ const SCEV *ScalarEvolution::getTruncateExpr(const SCEV *Op,
   if (const SCEVZeroExtendExpr *SZ = dyn_cast<SCEVZeroExtendExpr>(Op))
     return getTruncateOrZeroExtend(SZ->getOperand(), Ty);
 
+  // trunc(x1+x2+...+xN) --> trunc(x1)+trunc(x2)+...+trunc(xN) if we can
+  // eliminate all the truncates.
+  if (const SCEVAddExpr *SA = dyn_cast<SCEVAddExpr>(Op)) {
+    SmallVector<const SCEV *, 4> Operands;
+    bool hasTrunc = false;
+    for (unsigned i = 0, e = SA->getNumOperands(); i != e && !hasTrunc; ++i) {
+      const SCEV *S = getTruncateExpr(SA->getOperand(i), Ty);
+      hasTrunc = isa<SCEVTruncateExpr>(S);
+      Operands.push_back(S);
+    }
+    if (!hasTrunc)
+      return getAddExpr(Operands, false, false);
+    UniqueSCEVs.FindNodeOrInsertPos(ID, IP);  // Mutates IP, returns NULL.
+  }
+
+  // trunc(x1*x2*...*xN) --> trunc(x1)*trunc(x2)*...*trunc(xN) if we can
+  // eliminate all the truncates.
+  if (const SCEVMulExpr *SM = dyn_cast<SCEVMulExpr>(Op)) {
+    SmallVector<const SCEV *, 4> Operands;
+    bool hasTrunc = false;
+    for (unsigned i = 0, e = SM->getNumOperands(); i != e && !hasTrunc; ++i) {
+      const SCEV *S = getTruncateExpr(SM->getOperand(i), Ty);
+      hasTrunc = isa<SCEVTruncateExpr>(S);
+      Operands.push_back(S);
+    }
+    if (!hasTrunc)
+      return getMulExpr(Operands, false, false);
+    UniqueSCEVs.FindNodeOrInsertPos(ID, IP);  // Mutates IP, returns NULL.
+  }
+
   // If the input value is a chrec scev, truncate the chrec's operands.
   if (const SCEVAddRecExpr *AddRec = dyn_cast<SCEVAddRecExpr>(Op)) {
     SmallVector<const SCEV *, 4> Operands;
@@ -869,6 +899,19 @@ const SCEV *ScalarEvolution::getZeroExtendExpr(const SCEV *Op,
   ID.AddPointer(Ty);
   void *IP = 0;
   if (const SCEV *S = UniqueSCEVs.FindNodeOrInsertPos(ID, IP)) return S;
+
+  // zext(trunc(x)) --> zext(x) or x or trunc(x)
+  if (const SCEVTruncateExpr *ST = dyn_cast<SCEVTruncateExpr>(Op)) {
+    // It's possible the bits taken off by the truncate were all zero bits. If
+    // so, we should be able to simplify this further.
+    const SCEV *X = ST->getOperand();
+    ConstantRange CR = getUnsignedRange(X);
+    unsigned TruncBits = getTypeSizeInBits(ST->getType());
+    unsigned NewBits = getTypeSizeInBits(Ty);
+    if (CR.truncate(TruncBits).zeroExtend(NewBits).contains(
+            CR.zextOrTrunc(NewBits)))
+      return getTruncateOrZeroExtend(X, Ty);
+  }
 
   // If the input value is a chrec scev, and we can prove that the value
   // did not overflow the old, smaller, value, we can zero extend all of the
@@ -994,6 +1037,10 @@ const SCEV *ScalarEvolution::getSignExtendExpr(const SCEV *Op,
   if (const SCEVSignExtendExpr *SS = dyn_cast<SCEVSignExtendExpr>(Op))
     return getSignExtendExpr(SS->getOperand(), Ty);
 
+  // sext(zext(x)) --> zext(x)
+  if (const SCEVZeroExtendExpr *SZ = dyn_cast<SCEVZeroExtendExpr>(Op))
+    return getZeroExtendExpr(SZ->getOperand(), Ty);
+
   // Before doing any expensive analysis, check to see if we've already
   // computed a SCEV for this Op and Ty.
   FoldingSetNodeID ID;
@@ -1002,6 +1049,23 @@ const SCEV *ScalarEvolution::getSignExtendExpr(const SCEV *Op,
   ID.AddPointer(Ty);
   void *IP = 0;
   if (const SCEV *S = UniqueSCEVs.FindNodeOrInsertPos(ID, IP)) return S;
+
+  // If the input value is provably positive, build a zext instead.
+  if (isKnownNonNegative(Op))
+    return getZeroExtendExpr(Op, Ty);
+
+  // sext(trunc(x)) --> sext(x) or x or trunc(x)
+  if (const SCEVTruncateExpr *ST = dyn_cast<SCEVTruncateExpr>(Op)) {
+    // It's possible the bits taken off by the truncate were all sign bits. If
+    // so, we should be able to simplify this further.
+    const SCEV *X = ST->getOperand();
+    ConstantRange CR = getSignedRange(X);
+    unsigned TruncBits = getTypeSizeInBits(ST->getType());
+    unsigned NewBits = getTypeSizeInBits(Ty);
+    if (CR.truncate(TruncBits).signExtend(NewBits).contains(
+            CR.sextOrTrunc(NewBits)))
+      return getTruncateOrSignExtend(X, Ty);
+  }
 
   // If the input value is a chrec scev, and we can prove that the value
   // did not overflow the old, smaller, value, we can sign extend all of the
@@ -2721,10 +2785,21 @@ const SCEV *ScalarEvolution::createNodeForPHI(PHINode *PN) {
                   HasNSW = true;
               } else if (const GEPOperator *GEP = 
                             dyn_cast<GEPOperator>(BEValueV)) {
-                // If the increment is a GEP, then we know it won't perform an
-                // unsigned overflow, because the address space cannot be
+                // If the increment is a GEP, then we know it won't perform a
+                // signed overflow, because the address space cannot be
                 // wrapped around.
-                HasNUW |= GEP->isInBounds();
+                //
+                // NOTE: This isn't strictly true, because you could have an
+                // object straddling the 2G address boundary in a 32-bit address
+                // space (for example).  We really want to model this as a "has
+                // no signed/unsigned wrap" where the base pointer is treated as
+                // unsigned and the increment is known to not have signed
+                // wrapping.
+                //
+                // This is a highly theoretical concern though, and this is good
+                // enough for all cases we know of at this point. :)
+                //                
+                HasNSW |= GEP->isInBounds();
               }
 
               const SCEV *StartVal = getSCEV(StartValueV);
@@ -2795,6 +2870,7 @@ const SCEV *ScalarEvolution::createNodeForGEP(GEPOperator *GEP) {
   // Add expression, because the Instruction may be guarded by control flow
   // and the no-overflow bits may not be valid for the expression in any
   // context.
+  bool isInBounds = GEP->isInBounds();
 
   const Type *IntPtrTy = getEffectiveSCEVType(GEP->getType());
   Value *Base = GEP->getOperand(0);
@@ -2823,7 +2899,8 @@ const SCEV *ScalarEvolution::createNodeForGEP(GEPOperator *GEP) {
       IndexS = getTruncateOrSignExtend(IndexS, IntPtrTy);
 
       // Multiply the index by the element size to compute the element offset.
-      const SCEV *LocalOffset = getMulExpr(IndexS, ElementSize);
+      const SCEV *LocalOffset = getMulExpr(IndexS, ElementSize, /*NUW*/ false,
+                                           /*NSW*/ isInBounds);
 
       // Add the element offset to the running total offset.
       TotalOffset = getAddExpr(TotalOffset, LocalOffset);
@@ -2834,7 +2911,8 @@ const SCEV *ScalarEvolution::createNodeForGEP(GEPOperator *GEP) {
   const SCEV *BaseS = getSCEV(Base);
 
   // Add the total offset from all the GEP indices to the base.
-  return getAddExpr(BaseS, TotalOffset);
+  return getAddExpr(BaseS, TotalOffset, /*NUW*/ false,
+                    /*NSW*/ isInBounds);
 }
 
 /// GetMinTrailingZeros - Determine the minimum number of zero bits that S is
@@ -3064,6 +3142,7 @@ ScalarEvolution::getUnsignedRange(const SCEV *S) {
 ///
 ConstantRange
 ScalarEvolution::getSignedRange(const SCEV *S) {
+  // See if we've computed this range already.
   DenseMap<const SCEV *, ConstantRange>::iterator I = SignedRanges.find(S);
   if (I != SignedRanges.end())
     return I->second;

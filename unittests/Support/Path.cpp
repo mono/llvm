@@ -29,6 +29,19 @@ using namespace llvm::sys;
 
 namespace {
 
+TEST(is_separator, Works) {
+  EXPECT_TRUE(path::is_separator('/'));
+  EXPECT_FALSE(path::is_separator('\0'));
+  EXPECT_FALSE(path::is_separator('-'));
+  EXPECT_FALSE(path::is_separator(' '));
+
+#ifdef LLVM_ON_WIN32
+  EXPECT_TRUE(path::is_separator('\\'));
+#else
+  EXPECT_FALSE(path::is_separator('\\'));
+#endif
+}
+
 TEST(Support, Path) {
   SmallVector<StringRef, 40> paths;
   paths.push_back("");
@@ -230,7 +243,7 @@ TEST_F(FileSystemTest, Magic) {
     ASSERT_FALSE(file.has_error());
     StringRef magic(i->magic_str, i->magic_str_len);
     file << magic;
-    file.flush();
+    file.close();
     bool res = false;
     ASSERT_NO_ERROR(fs::has_magic(file_pathname.c_str(), magic, res));
     EXPECT_TRUE(res);

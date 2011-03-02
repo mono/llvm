@@ -342,6 +342,18 @@ def SHUFFLE_get_palign_imm : SDNodeXForm<vector_shuffle, [{
   return getI8Imm(X86::getShufflePALIGNRImmediate(N));
 }]>;
 
+// EXTRACT_get_vextractf128_imm xform function: convert extract_subvector index
+// to VEXTRACTF128 imm.
+def EXTRACT_get_vextractf128_imm : SDNodeXForm<extract_subvector, [{
+  return getI8Imm(X86::getExtractVEXTRACTF128Immediate(N));
+}]>;
+
+// INSERT_get_vinsertf128_imm xform function: convert insert_subvector index to 
+// VINSERTF128 imm.
+def INSERT_get_vinsertf128_imm : SDNodeXForm<insert_subvector, [{
+  return getI8Imm(X86::getInsertVINSERTF128Immediate(N));
+}]>;
+
 def splat_lo : PatFrag<(ops node:$lhs, node:$rhs),
                        (vector_shuffle node:$lhs, node:$rhs), [{
   ShuffleVectorSDNode *SVOp = cast<ShuffleVectorSDNode>(N);
@@ -432,3 +444,16 @@ def palign : PatFrag<(ops node:$lhs, node:$rhs),
                      (vector_shuffle node:$lhs, node:$rhs), [{
   return X86::isPALIGNRMask(cast<ShuffleVectorSDNode>(N));
 }], SHUFFLE_get_palign_imm>;
+
+def vextractf128_extract : PatFrag<(ops node:$bigvec, node:$index),
+                                   (extract_subvector node:$bigvec,
+                                                      node:$index), [{
+  return X86::isVEXTRACTF128Index(N);
+}], EXTRACT_get_vextractf128_imm>;
+
+def vinsertf128_insert : PatFrag<(ops node:$bigvec, node:$smallvec,
+                                      node:$index),
+                                 (insert_subvector node:$bigvec, node:$smallvec,
+                                                   node:$index), [{
+  return X86::isVINSERTF128Index(N);
+}], INSERT_get_vinsertf128_imm>;

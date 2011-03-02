@@ -116,6 +116,28 @@ namespace llvm {
 
   //===--------------------------------------------------------------------===//
   //
+  // createPathProfileLoaderPass - This pass loads information from a path
+  // profile dump file.
+  //
+  ModulePass *createPathProfileLoaderPass();
+  extern char &PathProfileLoaderPassID;
+
+  //===--------------------------------------------------------------------===//
+  //
+  // createNoPathProfileInfoPass - This pass implements the default
+  // "no path profile".
+  //
+  ImmutablePass *createNoPathProfileInfoPass();
+
+  //===--------------------------------------------------------------------===//
+  //
+  // createPathProfileVerifierPass - This pass verifies path profiling
+  // information.
+  //
+  ModulePass *createPathProfileVerifierPass();
+
+  //===--------------------------------------------------------------------===//
+  //
   // createDSAAPass - This pass implements simple context sensitive alias
   // analysis.
   //
@@ -137,12 +159,6 @@ namespace llvm {
 
   //===--------------------------------------------------------------------===//
   //
-  // createLiveValuesPass - This creates an instance of the LiveValues pass.
-  //
-  FunctionPass *createLiveValuesPass();
-  
-  //===--------------------------------------------------------------------===//
-  //
   /// createLazyValueInfoPass - This creates an instance of the LazyValueInfo
   /// pass.
   FunctionPass *createLazyValueInfoPass();
@@ -153,7 +169,7 @@ namespace llvm {
   // LoopDependenceAnalysis pass.
   //
   LoopPass *createLoopDependenceAnalysisPass();
-  
+
   // Minor pass prototypes, allowing us to expose them through bugpoint and
   // analyze.
   FunctionPass *createInstCountPass();

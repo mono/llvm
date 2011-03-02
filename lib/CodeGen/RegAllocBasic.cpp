@@ -18,8 +18,8 @@
 #include "RenderMachineFunction.h"
 #include "Spiller.h"
 #include "VirtRegMap.h"
-#include "VirtRegRewriter.h"
 #include "llvm/ADT/OwningPtr.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Function.h"
 #include "llvm/PassAnalysisSupport.h"
@@ -45,8 +45,13 @@
 #include "llvm/Support/Timer.h"
 
 #include <cstdlib>
+#include <queue>
 
 using namespace llvm;
+
+STATISTIC(NumAssigned     , "Number of registers assigned");
+STATISTIC(NumUnassigned   , "Number of registers unassigned");
+STATISTIC(NumNewQueued    , "Number of new live ranges queued");
 
 static RegisterRegAlloc basicRegAlloc("basic", "basic register allocator",
                                       createBasicRegisterAllocator);
@@ -59,6 +64,14 @@ VerifyRegAlloc("verify-regalloc", cl::location(RegAllocBase::VerifyEnabled),
 
 const char *RegAllocBase::TimerGroupName = "Register Allocation";
 bool RegAllocBase::VerifyEnabled = false;
+
+namespace {
+  struct CompSpillWeight {
+    bool operator()(LiveInterval *A, LiveInterval *B) const {
+      return A->weight < B->weight;
+    }
+  };
+}
 
 namespace {
 /// RABasic provides a minimal implementation of the basic register allocation
@@ -78,7 +91,8 @@ class RABasic : public MachineFunctionPass, public RegAllocBase
 
   // state
   std::auto_ptr<Spiller> SpillerInstance;
-
+  std::priority_queue<LiveInterval*, std::vector<LiveInterval*>,
+                      CompSpillWeight> Queue;
 public:
   RABasic();
 
@@ -95,6 +109,18 @@ public:
   virtual Spiller &spiller() { return *SpillerInstance; }
 
   virtual float getPriority(LiveInterval *LI) { return LI->weight; }
+
+  virtual void enqueue(LiveInterval *LI) {
+    Queue.push(LI);
+  }
+
+  virtual LiveInterval *dequeue() {
+    if (Queue.empty())
+      return 0;
+    LiveInterval *LI = Queue.top();
+    Queue.pop();
+    return LI;
+  }
 
   virtual unsigned selectOrSplit(LiveInterval &VirtReg,
                                  SmallVectorImpl<LiveInterval*> &SplitVRegs);
@@ -223,60 +249,67 @@ void RegAllocBase::releaseMemory() {
   PhysReg2LiveUnion.clear();
 }
 
-// Visit all the live virtual registers. If they are already assigned to a
-// physical register, unify them with the corresponding LiveIntervalUnion,
-// otherwise push them on the priority queue for later assignment.
-void RegAllocBase::
-seedLiveVirtRegs(std::priority_queue<std::pair<float, unsigned> > &VirtRegQ) {
+// Visit all the live registers. If they are already assigned to a physical
+// register, unify them with the corresponding LiveIntervalUnion, otherwise push
+// them on the priority queue for later assignment.
+void RegAllocBase::seedLiveRegs() {
   for (LiveIntervals::iterator I = LIS->begin(), E = LIS->end(); I != E; ++I) {
     unsigned RegNum = I->first;
     LiveInterval &VirtReg = *I->second;
     if (TargetRegisterInfo::isPhysicalRegister(RegNum))
       PhysReg2LiveUnion[RegNum].unify(VirtReg);
     else
-      VirtRegQ.push(std::make_pair(getPriority(&VirtReg), RegNum));
+      enqueue(&VirtReg);
   }
+}
+
+void RegAllocBase::assign(LiveInterval &VirtReg, unsigned PhysReg) {
+  DEBUG(dbgs() << "assigning " << PrintReg(VirtReg.reg, TRI)
+               << " to " << PrintReg(PhysReg, TRI) << '\n');
+  assert(!VRM->hasPhys(VirtReg.reg) && "Duplicate VirtReg assignment");
+  VRM->assignVirt2Phys(VirtReg.reg, PhysReg);
+  PhysReg2LiveUnion[PhysReg].unify(VirtReg);
+  ++NumAssigned;
+}
+
+void RegAllocBase::unassign(LiveInterval &VirtReg, unsigned PhysReg) {
+  DEBUG(dbgs() << "unassigning " << PrintReg(VirtReg.reg, TRI)
+               << " from " << PrintReg(PhysReg, TRI) << '\n');
+  assert(VRM->getPhys(VirtReg.reg) == PhysReg && "Inconsistent unassign");
+  PhysReg2LiveUnion[PhysReg].extract(VirtReg);
+  VRM->clearVirt(VirtReg.reg);
+  ++NumUnassigned;
 }
 
 // Top-level driver to manage the queue of unassigned VirtRegs and call the
 // selectOrSplit implementation.
 void RegAllocBase::allocatePhysRegs() {
-
-  // Push each vreg onto a queue or "precolor" by adding it to a physreg union.
-  std::priority_queue<std::pair<float, unsigned> > VirtRegQ;
-  seedLiveVirtRegs(VirtRegQ);
+  seedLiveRegs();
 
   // Continue assigning vregs one at a time to available physical registers.
-  while (!VirtRegQ.empty()) {
-    // Pop the highest priority vreg.
-    LiveInterval &VirtReg = LIS->getInterval(VirtRegQ.top().second);
-    VirtRegQ.pop();
-
+  while (LiveInterval *VirtReg = dequeue()) {
     // selectOrSplit requests the allocator to return an available physical
     // register if possible and populate a list of new live intervals that
     // result from splitting.
-    DEBUG(dbgs() << "\nselectOrSplit " << MRI->getRegClass(VirtReg.reg)->getName()
-                 << ':' << VirtReg << '\n');
+    DEBUG(dbgs() << "\nselectOrSplit "
+                 << MRI->getRegClass(VirtReg->reg)->getName()
+                 << ':' << *VirtReg << '\n');
     typedef SmallVector<LiveInterval*, 4> VirtRegVec;
     VirtRegVec SplitVRegs;
-    unsigned AvailablePhysReg = selectOrSplit(VirtReg, SplitVRegs);
+    unsigned AvailablePhysReg = selectOrSplit(*VirtReg, SplitVRegs);
 
-    if (AvailablePhysReg) {
-      DEBUG(dbgs() << "allocating: " << TRI->getName(AvailablePhysReg)
-                   << " for " << VirtReg << '\n');
-      assert(!VRM->hasPhys(VirtReg.reg) && "duplicate vreg in union");
-      VRM->assignVirt2Phys(VirtReg.reg, AvailablePhysReg);
-      PhysReg2LiveUnion[AvailablePhysReg].unify(VirtReg);
-    }
+    if (AvailablePhysReg)
+      assign(*VirtReg, AvailablePhysReg);
+
     for (VirtRegVec::iterator I = SplitVRegs.begin(), E = SplitVRegs.end();
          I != E; ++I) {
-      LiveInterval* SplitVirtReg = *I;
+      LiveInterval *SplitVirtReg = *I;
       if (SplitVirtReg->empty()) continue;
       DEBUG(dbgs() << "queuing new interval: " << *SplitVirtReg << "\n");
       assert(TargetRegisterInfo::isVirtualRegister(SplitVirtReg->reg) &&
              "expect split value in virtual register");
-      VirtRegQ.push(std::make_pair(getPriority(SplitVirtReg),
-                                   SplitVirtReg->reg));
+      enqueue(SplitVirtReg);
+      ++NumNewQueued;
     }
   }
 }
@@ -308,10 +341,7 @@ void RegAllocBase::spillReg(LiveInterval& VirtReg, unsigned PhysReg,
 
     // Deallocate the interfering vreg by removing it from the union.
     // A LiveInterval instance may not be in a union during modification!
-    PhysReg2LiveUnion[PhysReg].extract(SpilledVReg);
-
-    // Clear the vreg assignment.
-    VRM->clearVirt(SpilledVReg.reg);
+    unassign(SpilledVReg, PhysReg);
 
     // Spill the extracted interval.
     spiller().spill(&SpilledVReg, SplitVRegs, PendingSpills);
@@ -493,8 +523,7 @@ bool RABasic::runOnMachineFunction(MachineFunction &mf) {
 #endif // !NDEBUG
 
   // Run rewriter
-  std::auto_ptr<VirtRegRewriter> rewriter(createVirtRegRewriter());
-  rewriter->runOnMachineFunction(*MF, *VRM, LIS);
+  VRM->rewrite(LIS->getSlotIndexes());
 
   // The pass output is in VirtRegMap. Release all the transient data.
   releaseMemory();

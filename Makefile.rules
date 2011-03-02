@@ -840,7 +840,9 @@ $(RecursiveTargets)::
 else
 $(RecursiveTargets)::
 	$(Verb) for dir in $(OPTIONAL_DIRS); do \
-	  ($(MAKE) -C$$dir $@ ) || exit 1; \
+	  if [ -d $(PROJ_SRC_DIR)/$$dir ]; then\
+	    ($(MAKE) -C$$dir $@ ) || exit 1; \
+	  fi \
 	done
 endif
 endif
@@ -971,7 +973,9 @@ $(NativeExportsFile): $(EXPORTED_SYMBOL_FILE) $(ObjDir)/.dir
 	$(Verb) echo "{" > $@
 	$(Verb) grep -q "\<" $< && echo "  global:" >> $@ || :
 	$(Verb) sed -e 's/$$/;/' -e 's/^/    /' < $< >> $@
+ifneq ($(HOST_OS),OpenBSD)
 	$(Verb) echo "  local: *;" >> $@
+endif
 	$(Verb) echo "};" >> $@
 clean-local::
 	-$(Verb) $(RM) -f $(NativeExportsFile)
@@ -1083,12 +1087,14 @@ ifdef LIBRARYNAME
 # Make sure there isn't any extraneous whitespace on the LIBRARYNAME option
 LIBRARYNAME := $(strip $(LIBRARYNAME))
 ifdef LOADABLE_MODULE
-LibName.A  := $(LibDir)/$(LIBRARYNAME).a
-LibName.SO := $(SharedLibDir)/$(LIBRARYNAME)$(SHLIBEXT)
+BaseLibName.A  := $(LIBRARYNAME).a
+BaseLibName.SO := $(LIBRARYNAME)$(SHLIBEXT)
 else
-LibName.A  := $(LibDir)/lib$(LIBRARYNAME).a
-LibName.SO := $(SharedLibDir)/$(SharedPrefix)$(LIBRARYNAME)$(SHLIBEXT)
+BaseLibName.A  := lib$(LIBRARYNAME).a
+BaseLibName.SO := $(SharedPrefix)$(LIBRARYNAME)$(SHLIBEXT)
 endif
+LibName.A  := $(LibDir)/$(BaseLibName.A)
+LibName.SO := $(SharedLibDir)/$(BaseLibName.SO)
 LibName.O  := $(LibDir)/$(LIBRARYNAME).o
 LibName.BCA:= $(LibDir)/lib$(LIBRARYNAME).bca
 
@@ -1142,7 +1148,7 @@ DestSharedLibDir := $(DESTDIR)$(PROJ_bindir)
 else
 DestSharedLibDir := $(DESTDIR)$(PROJ_libdir)
 endif
-DestSharedLib := $(DestSharedLibDir)/$(SharedPrefix)$(LIBRARYNAME)$(SHLIBEXT)
+DestSharedLib := $(DestSharedLibDir)/$(BaseLibName.SO)
 
 install-local:: $(DestSharedLib)
 

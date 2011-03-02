@@ -15,7 +15,13 @@
 	monitor
 // CHECK: monitor
 // CHECK: encoding: [0x0f,0x01,0xc8]
+	monitor %eax, %ecx, %edx
+// CHECK: monitor
+// CHECK: encoding: [0x0f,0x01,0xc8]
 	mwait
+// CHECK: mwait
+// CHECK: encoding: [0x0f,0x01,0xc9]
+	mwait %eax, %ecx
 // CHECK: mwait
 // CHECK: encoding: [0x0f,0x01,0xc9]
 
@@ -802,3 +808,11 @@ pshufw $90, %mm4, %mm0
 // CHECK: ud2b
 // CHECK:  encoding: [0x0f,0xb9]
         	ud2b
+
+// CHECK: loope 0
+// CHECK: encoding: [0xe1,A]
+	loopz 0
+
+// CHECK: loopne 0
+// CHECK: encoding: [0xe0,A]
+	loopnz 0

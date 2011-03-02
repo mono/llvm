@@ -127,9 +127,17 @@
 
 @ CHECK: vmrs r0, fpscr              @ encoding: [0x10,0x0a,0xf1,0xee]
         vmrs    r0, fpscr
+@ CHECK: vmrs  r0, fpexc             @ encoding: [0x10,0x0a,0xf8,0xee]
+        vmrs  r0, fpexc
+@ CHECK: vmrs  r0, fpsid             @ encoding: [0x10,0x0a,0xf0,0xee]
+        vmrs  r0, fpsid
 
 @ CHECK: vmsr fpscr, r0              @ encoding: [0x10,0x0a,0xe1,0xee]
         vmsr    fpscr, r0
+@ CHECK: vmsr  fpexc, r0             @ encoding: [0x10,0x0a,0xe8,0xee]
+        vmsr  fpexc, r0
+@ CHECK: vmsr  fpsid, r0             @ encoding: [0x10,0x0a,0xe0,0xee]
+        vmsr  fpsid, r0
 
 @ FIXME: vmov.f64 d16, #3.000000e+00 @ encoding: [0x08,0x0b,0xf0,0xee]
 @        vmov.f64        d16, #3.000000e+00
@@ -217,3 +225,12 @@
 @ CHECK: vstmia	r1, {s2, s3, s4, s5, s6, s7} @ encoding: [0x06,0x1a,0x81,0xec]
         vstmia  r1, {d2,d3-d6,d7}
         vstmia  r1, {s2,s3-s6,s7}
+
+@ CHECK: vcvtr.s32.f64  s0, d0 @ encoding: [0x40,0x0b,0xbd,0xee]
+@ CHECK: vcvtr.s32.f32  s0, s1 @ encoding: [0x60,0x0a,0xbd,0xee]
+@ CHECK: vcvtr.u32.f64  s0, d0 @ encoding: [0x40,0x0b,0xbc,0xee]
+@ CHECK: vcvtr.u32.f32  s0, s1 @ encoding: [0x60,0x0a,0xbc,0xee]
+        vcvtr.s32.f64  s0, d0
+        vcvtr.s32.f32  s0, s1
+        vcvtr.u32.f64  s0, d0
+        vcvtr.u32.f32  s0, s1

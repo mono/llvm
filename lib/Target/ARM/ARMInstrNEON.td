@@ -176,6 +176,8 @@ class VLDQQWBPseudo<InstrItinClass itin>
   : PseudoNLdSt<(outs QQPR:$dst, GPR:$wb),
                 (ins addrmode6:$addr, am6offset:$offset), itin,
                 "$addr.addr = $wb">;
+class VLDQQQQPseudo<InstrItinClass itin>
+  : PseudoNLdSt<(outs QQQQPR:$dst), (ins addrmode6:$addr, QQQQPR:$src), itin,"">;
 class VLDQQQQWBPseudo<InstrItinClass itin>
   : PseudoNLdSt<(outs QQQQPR:$dst, GPR:$wb),
                 (ins addrmode6:$addr, am6offset:$offset, QQQQPR:$src), itin,
@@ -284,7 +286,7 @@ class VLD1D4<bits<4> op7_4, string Dt>
 class VLD1D4WB<bits<4> op7_4, string Dt>
   : NLdSt<0,0b10,0b0010,op7_4,
           (outs DPR:$Vd, DPR:$dst2, DPR:$dst3, DPR:$dst4, GPR:$wb),
-          (ins addrmode6:$Rn, am6offset:$Rm), IIC_VLD4, "vld1", Dt,
+          (ins addrmode6:$Rn, am6offset:$Rm), IIC_VLD1x4u, "vld1", Dt,
           "\\{$Vd, $dst2, $dst3, $dst4\\}, $Rn$Rm", "$Rn.addr = $wb",
           []> {
   let Inst{5-4} = Rn{5-4};
@@ -412,7 +414,7 @@ def VLD3d8Pseudo_UPD  : VLDQQWBPseudo<IIC_VLD3u>;
 def VLD3d16Pseudo_UPD : VLDQQWBPseudo<IIC_VLD3u>;
 def VLD3d32Pseudo_UPD : VLDQQWBPseudo<IIC_VLD3u>;
 
-// ...with double-spaced registers (non-updating versions for disassembly only):
+// ...with double-spaced registers:
 def VLD3q8      : VLD3D<0b0101, {0,0,0,?}, "8">;
 def VLD3q16     : VLD3D<0b0101, {0,1,0,?}, "16">;
 def VLD3q32     : VLD3D<0b0101, {1,0,0,?}, "32">;
@@ -425,6 +427,10 @@ def VLD3q16Pseudo_UPD : VLDQQQQWBPseudo<IIC_VLD3u>;
 def VLD3q32Pseudo_UPD : VLDQQQQWBPseudo<IIC_VLD3u>;
 
 // ...alternate versions to be allocated odd register numbers:
+def VLD3q8oddPseudo   : VLDQQQQPseudo<IIC_VLD3>;
+def VLD3q16oddPseudo  : VLDQQQQPseudo<IIC_VLD3>;
+def VLD3q32oddPseudo  : VLDQQQQPseudo<IIC_VLD3>;
+
 def VLD3q8oddPseudo_UPD  : VLDQQQQWBPseudo<IIC_VLD3u>;
 def VLD3q16oddPseudo_UPD : VLDQQQQWBPseudo<IIC_VLD3u>;
 def VLD3q32oddPseudo_UPD : VLDQQQQWBPseudo<IIC_VLD3u>;
@@ -451,7 +457,7 @@ def  VLD4d32Pseudo : VLDQQPseudo<IIC_VLD4>;
 class VLD4DWB<bits<4> op11_8, bits<4> op7_4, string Dt>
   : NLdSt<0, 0b10, op11_8, op7_4,
           (outs DPR:$Vd, DPR:$dst2, DPR:$dst3, DPR:$dst4, GPR:$wb),
-          (ins addrmode6:$Rn, am6offset:$Rm), IIC_VLD4,
+          (ins addrmode6:$Rn, am6offset:$Rm), IIC_VLD4u,
           "vld4", Dt, "\\{$Vd, $dst2, $dst3, $dst4\\}, $Rn$Rm",
           "$Rn.addr = $wb", []> {
   let Inst{5-4} = Rn{5-4};
@@ -461,11 +467,11 @@ def VLD4d8_UPD  : VLD4DWB<0b0000, {0,0,?,?}, "8">;
 def VLD4d16_UPD : VLD4DWB<0b0000, {0,1,?,?}, "16">;
 def VLD4d32_UPD : VLD4DWB<0b0000, {1,0,?,?}, "32">;
 
-def VLD4d8Pseudo_UPD  : VLDQQWBPseudo<IIC_VLD4>;
-def VLD4d16Pseudo_UPD : VLDQQWBPseudo<IIC_VLD4>;
-def VLD4d32Pseudo_UPD : VLDQQWBPseudo<IIC_VLD4>;
+def VLD4d8Pseudo_UPD  : VLDQQWBPseudo<IIC_VLD4u>;
+def VLD4d16Pseudo_UPD : VLDQQWBPseudo<IIC_VLD4u>;
+def VLD4d32Pseudo_UPD : VLDQQWBPseudo<IIC_VLD4u>;
 
-// ...with double-spaced registers (non-updating versions for disassembly only):
+// ...with double-spaced registers:
 def VLD4q8      : VLD4D<0b0001, {0,0,?,?}, "8">;
 def VLD4q16     : VLD4D<0b0001, {0,1,?,?}, "16">;
 def VLD4q32     : VLD4D<0b0001, {1,0,?,?}, "32">;
@@ -473,14 +479,18 @@ def VLD4q8_UPD  : VLD4DWB<0b0001, {0,0,?,?}, "8">;
 def VLD4q16_UPD : VLD4DWB<0b0001, {0,1,?,?}, "16">;
 def VLD4q32_UPD : VLD4DWB<0b0001, {1,0,?,?}, "32">;
 
-def VLD4q8Pseudo_UPD  : VLDQQQQWBPseudo<IIC_VLD4>;
-def VLD4q16Pseudo_UPD : VLDQQQQWBPseudo<IIC_VLD4>;
-def VLD4q32Pseudo_UPD : VLDQQQQWBPseudo<IIC_VLD4>;
+def VLD4q8Pseudo_UPD  : VLDQQQQWBPseudo<IIC_VLD4u>;
+def VLD4q16Pseudo_UPD : VLDQQQQWBPseudo<IIC_VLD4u>;
+def VLD4q32Pseudo_UPD : VLDQQQQWBPseudo<IIC_VLD4u>;
 
 // ...alternate versions to be allocated odd register numbers:
-def VLD4q8oddPseudo_UPD  : VLDQQQQWBPseudo<IIC_VLD4>;
-def VLD4q16oddPseudo_UPD : VLDQQQQWBPseudo<IIC_VLD4>;
-def VLD4q32oddPseudo_UPD : VLDQQQQWBPseudo<IIC_VLD4>;
+def VLD4q8oddPseudo   : VLDQQQQPseudo<IIC_VLD4>;
+def VLD4q16oddPseudo  : VLDQQQQPseudo<IIC_VLD4>;
+def VLD4q32oddPseudo  : VLDQQQQPseudo<IIC_VLD4>;
+
+def VLD4q8oddPseudo_UPD  : VLDQQQQWBPseudo<IIC_VLD4u>;
+def VLD4q16oddPseudo_UPD : VLDQQQQWBPseudo<IIC_VLD4u>;
+def VLD4q32oddPseudo_UPD : VLDQQQQWBPseudo<IIC_VLD4u>;
 
 } // mayLoad = 1, neverHasSideEffects = 1, hasExtraDefRegAllocReq = 1
 
@@ -764,7 +774,7 @@ class VLD4LNWB<bits<4> op11_8, bits<4> op7_4, string Dt>
           (outs DPR:$Vd, DPR:$dst2, DPR:$dst3, DPR:$dst4, GPR:$wb),
           (ins addrmode6:$Rn, am6offset:$Rm,
            DPR:$src1, DPR:$src2, DPR:$src3, DPR:$src4, nohash_imm:$lane),
-          IIC_VLD4ln, "vld4", Dt,
+          IIC_VLD4lnu, "vld4", Dt,
 "\\{$Vd[$lane], $dst2[$lane], $dst3[$lane], $dst4[$lane]\\}, $Rn$Rm",
 "$src1 = $Vd, $src2 = $dst2, $src3 = $dst3, $src4 = $dst4, $Rn.addr = $wb",
           []> {
@@ -1013,6 +1023,8 @@ class VSTQQWBPseudo<InstrItinClass itin>
   : PseudoNLdSt<(outs GPR:$wb),
                 (ins addrmode6:$addr, am6offset:$offset, QQPR:$src), itin,
                 "$addr.addr = $wb">;
+class VSTQQQQPseudo<InstrItinClass itin>
+  : PseudoNLdSt<(outs), (ins addrmode6:$addr, QQQQPR:$src), itin, "">;
 class VSTQQQQWBPseudo<InstrItinClass itin>
   : PseudoNLdSt<(outs GPR:$wb),
                 (ins addrmode6:$addr, am6offset:$offset, QQQQPR:$src), itin,
@@ -1248,7 +1260,7 @@ def VST3d8Pseudo_UPD  : VSTQQWBPseudo<IIC_VST3u>;
 def VST3d16Pseudo_UPD : VSTQQWBPseudo<IIC_VST3u>;
 def VST3d32Pseudo_UPD : VSTQQWBPseudo<IIC_VST3u>;
 
-// ...with double-spaced registers (non-updating versions for disassembly only):
+// ...with double-spaced registers:
 def VST3q8      : VST3D<0b0101, {0,0,0,?}, "8">;
 def VST3q16     : VST3D<0b0101, {0,1,0,?}, "16">;
 def VST3q32     : VST3D<0b0101, {1,0,0,?}, "32">;
@@ -1261,6 +1273,10 @@ def VST3q16Pseudo_UPD : VSTQQQQWBPseudo<IIC_VST3u>;
 def VST3q32Pseudo_UPD : VSTQQQQWBPseudo<IIC_VST3u>;
 
 // ...alternate versions to be allocated odd register numbers:
+def VST3q8oddPseudo   : VSTQQQQPseudo<IIC_VST3>;
+def VST3q16oddPseudo  : VSTQQQQPseudo<IIC_VST3>;
+def VST3q32oddPseudo  : VSTQQQQPseudo<IIC_VST3>;
+
 def VST3q8oddPseudo_UPD  : VSTQQQQWBPseudo<IIC_VST3u>;
 def VST3q16oddPseudo_UPD : VSTQQQQWBPseudo<IIC_VST3u>;
 def VST3q32oddPseudo_UPD : VSTQQQQWBPseudo<IIC_VST3u>;
@@ -1301,7 +1317,7 @@ def VST4d8Pseudo_UPD  : VSTQQWBPseudo<IIC_VST4u>;
 def VST4d16Pseudo_UPD : VSTQQWBPseudo<IIC_VST4u>;
 def VST4d32Pseudo_UPD : VSTQQWBPseudo<IIC_VST4u>;
 
-// ...with double-spaced registers (non-updating versions for disassembly only):
+// ...with double-spaced registers:
 def VST4q8      : VST4D<0b0001, {0,0,?,?}, "8">;
 def VST4q16     : VST4D<0b0001, {0,1,?,?}, "16">;
 def VST4q32     : VST4D<0b0001, {1,0,?,?}, "32">;
@@ -1314,6 +1330,10 @@ def VST4q16Pseudo_UPD : VSTQQQQWBPseudo<IIC_VST4u>;
 def VST4q32Pseudo_UPD : VSTQQQQWBPseudo<IIC_VST4u>;
 
 // ...alternate versions to be allocated odd register numbers:
+def VST4q8oddPseudo   : VSTQQQQPseudo<IIC_VST4>;
+def VST4q16oddPseudo  : VSTQQQQPseudo<IIC_VST4>;
+def VST4q32oddPseudo  : VSTQQQQPseudo<IIC_VST4>;
+
 def VST4q8oddPseudo_UPD  : VSTQQQQWBPseudo<IIC_VST4u>;
 def VST4q16oddPseudo_UPD : VSTQQQQWBPseudo<IIC_VST4u>;
 def VST4q32oddPseudo_UPD : VSTQQQQWBPseudo<IIC_VST4u>;
@@ -1382,31 +1402,42 @@ def : Pat<(store (extractelt (v2f32 DPR:$src), imm:$lane), addrmode6:$addr),
 def : Pat<(store (extractelt (v4f32 QPR:$src), imm:$lane), addrmode6:$addr),
           (VST1LNq32Pseudo addrmode6:$addr, QPR:$src, imm:$lane)>;
 
-let mayStore = 1, neverHasSideEffects = 1, hasExtraSrcRegAllocReq = 1 in {
-
 // ...with address register writeback:
-class VST1LNWB<bits<4> op11_8, bits<4> op7_4, string Dt>
+class VST1LNWB<bits<4> op11_8, bits<4> op7_4, string Dt, ValueType Ty,
+               PatFrag StoreOp, SDNode ExtractOp>
   : NLdStLn<1, 0b00, op11_8, op7_4, (outs GPR:$wb),
           (ins addrmode6:$Rn, am6offset:$Rm,
            DPR:$Vd, nohash_imm:$lane), IIC_VST1lnu, "vst1", Dt,
           "\\{$Vd[$lane]\\}, $Rn$Rm",
-          "$Rn.addr = $wb", []>;
+          "$Rn.addr = $wb",
+          [(set GPR:$wb, (StoreOp (ExtractOp (Ty DPR:$Vd), imm:$lane),
+                                  addrmode6:$Rn, am6offset:$Rm))]>;
+class VST1QLNWBPseudo<ValueType Ty, PatFrag StoreOp, SDNode ExtractOp>
+  : VSTQLNWBPseudo<IIC_VST1lnu> {
+  let Pattern = [(set GPR:$wb, (StoreOp (ExtractOp (Ty QPR:$src), imm:$lane),
+                                        addrmode6:$addr, am6offset:$offset))];
+}
 
-def VST1LNd8_UPD  : VST1LNWB<0b0000, {?,?,?,0}, "8"> {
+def VST1LNd8_UPD  : VST1LNWB<0b0000, {?,?,?,0}, "8", v8i8, post_truncsti8,
+                             NEONvgetlaneu> {
   let Inst{7-5} = lane{2-0};
 }
-def VST1LNd16_UPD : VST1LNWB<0b0100, {?,?,0,?}, "16"> {
+def VST1LNd16_UPD : VST1LNWB<0b0100, {?,?,0,?}, "16", v4i16, post_truncsti16,
+                             NEONvgetlaneu> {
   let Inst{7-6} = lane{1-0};
   let Inst{4}   = Rn{5};
 }
-def VST1LNd32_UPD : VST1LNWB<0b1000, {?,0,?,?}, "32"> {
+def VST1LNd32_UPD : VST1LNWB<0b1000, {?,0,?,?}, "32", v2i32, post_store,
+                             extractelt> {
   let Inst{7}   = lane{0};
   let Inst{5-4} = Rn{5-4};
 }
 
-def VST1LNq8Pseudo_UPD  : VSTQLNWBPseudo<IIC_VST1lnu>;
-def VST1LNq16Pseudo_UPD : VSTQLNWBPseudo<IIC_VST1lnu>;
-def VST1LNq32Pseudo_UPD : VSTQLNWBPseudo<IIC_VST1lnu>;
+def VST1LNq8Pseudo_UPD  : VST1QLNWBPseudo<v16i8, post_truncsti8, NEONvgetlaneu>;
+def VST1LNq16Pseudo_UPD : VST1QLNWBPseudo<v8i16, post_truncsti16,NEONvgetlaneu>;
+def VST1LNq32Pseudo_UPD : VST1QLNWBPseudo<v4i32, post_store, extractelt>;
+
+let mayStore = 1, neverHasSideEffects = 1, hasExtraSrcRegAllocReq = 1 in {
 
 //   VST2LN   : Vector Store (single 2-element structure from one lane)
 class VST2LN<bits<4> op11_8, bits<4> op7_4, string Dt>
@@ -2284,9 +2315,9 @@ class N2VLSh<bit op24, bit op23, bits<4> op11_8, bit op7, bit op6, bit op4,
 // Narrow shift by immediate.
 class N2VNSh<bit op24, bit op23, bits<4> op11_8, bit op7, bit op6, bit op4,
              InstrItinClass itin, string OpcodeStr, string Dt,
-             ValueType ResTy, ValueType OpTy, SDNode OpNode>
+             ValueType ResTy, ValueType OpTy, Operand ImmTy, SDNode OpNode>
   : N2VImm<op24, op23, op11_8, op7, op6, op4,
-           (outs DPR:$Vd), (ins QPR:$Vm, i32imm:$SIMM), N2RegVShRFrm, itin,
+           (outs DPR:$Vd), (ins QPR:$Vm, ImmTy:$SIMM), N2RegVShRFrm, itin,
            OpcodeStr, Dt, "$Vd, $Vm, $SIMM", "",
            [(set DPR:$Vd, (ResTy (OpNode (OpTy QPR:$Vm),
                                           (i32 imm:$SIMM))))]>;
@@ -3122,15 +3153,18 @@ multiclass N2VNSh_HSD<bit op24, bit op23, bits<4> op11_8, bit op7, bit op6,
                       bit op4, InstrItinClass itin, string OpcodeStr, string Dt,
                       SDNode OpNode> {
   def v8i8 : N2VNSh<op24, op23, op11_8, op7, op6, op4, itin,
-                    OpcodeStr, !strconcat(Dt, "16"), v8i8, v8i16, OpNode> {
+                    OpcodeStr, !strconcat(Dt, "16"),
+                    v8i8, v8i16, nsr16_imm, OpNode> {
     let Inst{21-19} = 0b001; // imm6 = 001xxx
   }
   def v4i16 : N2VNSh<op24, op23, op11_8, op7, op6, op4, itin,
-                     OpcodeStr, !strconcat(Dt, "32"), v4i16, v4i32, OpNode> {
+                     OpcodeStr, !strconcat(Dt, "32"),
+                     v4i16, v4i32, nsr32_imm, OpNode> {
     let Inst{21-20} = 0b01;  // imm6 = 01xxxx
   }
   def v2i32 : N2VNSh<op24, op23, op11_8, op7, op6, op4, itin,
-                     OpcodeStr, !strconcat(Dt, "64"), v2i32, v2i64, OpNode> {
+                     OpcodeStr, !strconcat(Dt, "64"),
+                     v2i32, v2i64, nsr64_imm, OpNode> {
     let Inst{21} = 0b1;      // imm6 = 1xxxxx
   }
 }

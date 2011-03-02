@@ -3673,6 +3673,14 @@ let Uses = [ECX, EAX] in
 def MWAITrr   : I<0x01, MRM_C9, (outs), (ins), "mwait", []>, TB,
                 Requires<[HasSSE3]>;
 
+def : InstAlias<"mwait %eax, %ecx", (MWAITrr)>, Requires<[In32BitMode]>;
+def : InstAlias<"mwait %rax, %rcx", (MWAITrr)>, Requires<[In64BitMode]>;
+
+def : InstAlias<"monitor %eax, %ecx, %edx", (MONITORrrr)>,
+      Requires<[In32BitMode]>;
+def : InstAlias<"monitor %rax, %rcx, %rdx", (MONITORrrr)>,
+      Requires<[In64BitMode]>;
+
 //===---------------------------------------------------------------------===//
 // Non-Instruction Patterns
 //===---------------------------------------------------------------------===//
@@ -5436,12 +5444,46 @@ def : Pat<(int_x86_avx_vinsertf128_ps_256 VR256:$src1, VR128:$src2, imm:$src3),
 def : Pat<(int_x86_avx_vinsertf128_si_256 VR256:$src1, VR128:$src2, imm:$src3),
           (VINSERTF128rr VR256:$src1, VR128:$src2, imm:$src3)>;
 
+def : Pat<(vinsertf128_insert:$ins (v8f32 VR256:$src1), (v4f32 VR128:$src2),
+                                   (i32 imm)),
+          (VINSERTF128rr VR256:$src1, VR128:$src2,
+                         (INSERT_get_vinsertf128_imm VR256:$ins))>;
+def : Pat<(vinsertf128_insert:$ins (v4f64 VR256:$src1), (v2f64 VR128:$src2),
+                                   (i32 imm)),
+          (VINSERTF128rr VR256:$src1, VR128:$src2,
+                         (INSERT_get_vinsertf128_imm VR256:$ins))>;
+def : Pat<(vinsertf128_insert:$ins (v8i32 VR256:$src1), (v4i32 VR128:$src2),
+                                   (i32 imm)),
+          (VINSERTF128rr VR256:$src1, VR128:$src2,
+                         (INSERT_get_vinsertf128_imm VR256:$ins))>;
+def : Pat<(vinsertf128_insert:$ins (v4i64 VR256:$src1), (v2i64 VR128:$src2),
+                                   (i32 imm)),
+          (VINSERTF128rr VR256:$src1, VR128:$src2,
+                         (INSERT_get_vinsertf128_imm VR256:$ins))>;
+
 def : Pat<(int_x86_avx_vextractf128_pd_256 VR256:$src1, imm:$src2),
           (VEXTRACTF128rr VR256:$src1, imm:$src2)>;
 def : Pat<(int_x86_avx_vextractf128_ps_256 VR256:$src1, imm:$src2),
           (VEXTRACTF128rr VR256:$src1, imm:$src2)>;
 def : Pat<(int_x86_avx_vextractf128_si_256 VR256:$src1, imm:$src2),
           (VEXTRACTF128rr VR256:$src1, imm:$src2)>;
+
+def : Pat<(vextractf128_extract:$ext VR256:$src1, (i32 imm)),
+          (v4f32 (VEXTRACTF128rr
+                    (v8f32 VR256:$src1),
+                    (EXTRACT_get_vextractf128_imm VR128:$ext)))>;
+def : Pat<(vextractf128_extract:$ext VR256:$src1, (i32 imm)),
+          (v2f64 (VEXTRACTF128rr
+                    (v4f64 VR256:$src1),
+                    (EXTRACT_get_vextractf128_imm VR128:$ext)))>;
+def : Pat<(vextractf128_extract:$ext VR256:$src1, (i32 imm)),
+          (v4i32 (VEXTRACTF128rr
+                    (v8i32 VR256:$src1),
+                    (EXTRACT_get_vextractf128_imm VR128:$ext)))>;
+def : Pat<(vextractf128_extract:$ext VR256:$src1, (i32 imm)),
+          (v2i64 (VEXTRACTF128rr
+                    (v4i64 VR256:$src1),
+                    (EXTRACT_get_vextractf128_imm VR128:$ext)))>;
 
 def : Pat<(int_x86_avx_vbroadcastf128_ps_256 addr:$src),
           (VBROADCASTF128 addr:$src)>;
@@ -5798,6 +5840,9 @@ def : Pat<(X86Movlps VR128:$src1,
 // fold opportunity reappears.
 def : Pat<(v4f32 (X86Movlps VR128:$src1, VR128:$src2)),
           (MOVSDrr VR128:$src1, (EXTRACT_SUBREG (v4f32 VR128:$src2), sub_sd))>;
+
+def : Pat<(v4i32 (X86Movlps VR128:$src1, VR128:$src2)), 
+          (MOVSDrr VR128:$src1, (EXTRACT_SUBREG (v4i32 VR128:$src2), sub_sd))>; 
 
 // Shuffle with MOVLPD
 def : Pat<(v2f64 (X86Movlpd VR128:$src1, (load addr:$src2))),

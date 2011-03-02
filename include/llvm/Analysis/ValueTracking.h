@@ -39,6 +39,23 @@ namespace llvm {
                          APInt &KnownOne, const TargetData *TD = 0,
                          unsigned Depth = 0);
   
+  /// ComputeSignBit - Determine whether the sign bit is known to be zero or
+  /// one.  Convenience wrapper around ComputeMaskedBits.
+  void ComputeSignBit(Value *V, bool &KnownZero, bool &KnownOne,
+                      const TargetData *TD = 0, unsigned Depth = 0);
+
+  /// isPowerOfTwo - Return true if the given value is known to have exactly one
+  /// bit set when defined. For vectors return true if every element is known to
+  /// be a power of two when defined.  Supports values with integer or pointer
+  /// type and vectors of integers.
+  bool isPowerOfTwo(Value *V, const TargetData *TD = 0, unsigned Depth = 0);
+
+  /// isKnownNonZero - Return true if the given value is known to be non-zero
+  /// when defined.  For vectors return true if every element is known to be
+  /// non-zero when defined.  Supports values with integer or pointer type and
+  /// vectors of integers.
+  bool isKnownNonZero(Value *V, const TargetData *TD = 0, unsigned Depth = 0);
+
   /// MaskedValueIsZero - Return true if 'V & Mask' is known to be zero.  We use
   /// this predicate to simplify operations downstream.  Mask is known to be
   /// zero for bits that V cannot have.
@@ -133,10 +150,12 @@ namespace llvm {
   /// being addressed.  Note that the returned value has pointer type if the
   /// specified value does.  If the MaxLookup value is non-zero, it limits the
   /// number of instructions to be stripped off.
-  Value *GetUnderlyingObject(Value *V, unsigned MaxLookup = 6);
+  Value *GetUnderlyingObject(Value *V, const TargetData *TD = 0,
+                             unsigned MaxLookup = 6);
   static inline const Value *
-  GetUnderlyingObject(const Value *V, unsigned MaxLookup = 6) {
-    return GetUnderlyingObject(const_cast<Value *>(V), MaxLookup);
+  GetUnderlyingObject(const Value *V, const TargetData *TD = 0,
+                      unsigned MaxLookup = 6) {
+    return GetUnderlyingObject(const_cast<Value *>(V), TD, MaxLookup);
   }
 
 } // end namespace llvm

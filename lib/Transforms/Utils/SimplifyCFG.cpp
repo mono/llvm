@@ -28,6 +28,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CFG.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ConstantRange.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -35,6 +36,10 @@
 #include <set>
 #include <map>
 using namespace llvm;
+
+static cl::opt<bool>
+DupRet("simplifycfg-dup-ret", cl::Hidden, cl::init(false),
+       cl::desc("Duplicate return instructions into unconditional branches"));
 
 STATISTIC(NumSpeculations, "Number of speculative executed instructions");
 
@@ -242,6 +247,11 @@ static bool DominatesMergePoint(Value *V, BasicBlock *BB,
     if (PBB->getFirstNonPHIOrDbg() != I)
       return false;
     break;
+  case Instruction::GetElementPtr:
+    // GEPs are cheap if all indices are constant.
+    if (!cast<GetElementPtrInst>(I)->hasAllConstantIndices())
+      return false;
+    break;
   case Instruction::Add:
   case Instruction::Sub:
   case Instruction::And:
@@ -300,7 +310,7 @@ static ConstantInt *GetConstantInt(Value *V, const TargetData *TD) {
 /// Values vector.
 static Value *
 GatherConstantCompares(Value *V, std::vector<ConstantInt*> &Vals, Value *&Extra,
-                       const TargetData *TD, bool isEQ) {
+                       const TargetData *TD, bool isEQ, unsigned &UsedICmps) {
   Instruction *I = dyn_cast<Instruction>(V);
   if (I == 0) return 0;
   
@@ -308,6 +318,7 @@ GatherConstantCompares(Value *V, std::vector<ConstantInt*> &Vals, Value *&Extra,
   if (ICmpInst *ICI = dyn_cast<ICmpInst>(I)) {
     if (ConstantInt *C = GetConstantInt(I->getOperand(1), TD)) {
       if (ICI->getPredicate() == (isEQ ? ICmpInst::ICMP_EQ:ICmpInst::ICMP_NE)) {
+        UsedICmps++;
         Vals.push_back(C);
         return I->getOperand(0);
       }
@@ -330,6 +341,7 @@ GatherConstantCompares(Value *V, std::vector<ConstantInt*> &Vals, Value *&Extra,
       
       for (APInt Tmp = Span.getLower(); Tmp != Span.getUpper(); ++Tmp)
         Vals.push_back(ConstantInt::get(V->getContext(), Tmp));
+      UsedICmps++;
       return I->getOperand(0);
     }
     return 0;
@@ -340,14 +352,17 @@ GatherConstantCompares(Value *V, std::vector<ConstantInt*> &Vals, Value *&Extra,
     return 0;
   
   unsigned NumValsBeforeLHS = Vals.size();
+  unsigned UsedICmpsBeforeLHS = UsedICmps;
   if (Value *LHS = GatherConstantCompares(I->getOperand(0), Vals, Extra, TD,
-                                          isEQ)) {
+                                          isEQ, UsedICmps)) {
     unsigned NumVals = Vals.size();
+    unsigned UsedICmpsBeforeRHS = UsedICmps;
     if (Value *RHS = GatherConstantCompares(I->getOperand(1), Vals, Extra, TD,
-                                            isEQ)) {
+                                            isEQ, UsedICmps)) {
       if (LHS == RHS)
         return LHS;
       Vals.resize(NumVals);
+      UsedICmps = UsedICmpsBeforeRHS;
     }
 
     // The RHS of the or/and can't be folded in and we haven't used "Extra" yet,
@@ -358,6 +373,7 @@ GatherConstantCompares(Value *V, std::vector<ConstantInt*> &Vals, Value *&Extra,
     }
     
     Vals.resize(NumValsBeforeLHS);
+    UsedICmps = UsedICmpsBeforeLHS;
     return 0;
   }
   
@@ -367,7 +383,7 @@ GatherConstantCompares(Value *V, std::vector<ConstantInt*> &Vals, Value *&Extra,
     Value *OldExtra = Extra;
     Extra = I->getOperand(0);
     if (Value *RHS = GatherConstantCompares(I->getOperand(1), Vals, Extra, TD,
-                                            isEQ))
+                                            isEQ, UsedICmps))
       return RHS;
     assert(Vals.size() == NumValsBeforeLHS);
     Extra = OldExtra;
@@ -1784,6 +1800,26 @@ static bool SimplifyTerminatorOnSelect(TerminatorInst *OldTerm, Value *Cond,
   return true;
 }
 
+// SimplifySwitchOnSelect - Replaces
+//   (switch (select cond, X, Y)) on constant X, Y
+// with a branch - conditional if X and Y lead to distinct BBs,
+// unconditional otherwise.
+static bool SimplifySwitchOnSelect(SwitchInst *SI, SelectInst *Select) {
+  // Check for constant integer values in the select.
+  ConstantInt *TrueVal = dyn_cast<ConstantInt>(Select->getTrueValue());
+  ConstantInt *FalseVal = dyn_cast<ConstantInt>(Select->getFalseValue());
+  if (!TrueVal || !FalseVal)
+    return false;
+
+  // Find the relevant condition and destinations.
+  Value *Condition = Select->getCondition();
+  BasicBlock *TrueBB = SI->getSuccessor(SI->findCaseValue(TrueVal));
+  BasicBlock *FalseBB = SI->getSuccessor(SI->findCaseValue(FalseVal));
+
+  // Perform the actual simplification.
+  return SimplifyTerminatorOnSelect(SI, Condition, TrueBB, FalseBB);
+}
+
 // SimplifyIndirectBrOnSelect - Replaces
 //   (indirectbr (select cond, blockaddress(@fn, BlockA),
 //                             blockaddress(@fn, BlockB)))
@@ -1921,16 +1957,23 @@ static bool SimplifyBranchOnICmpChain(BranchInst *BI, const TargetData *TD) {
   std::vector<ConstantInt*> Values;
   bool TrueWhenEqual = true;
   Value *ExtraCase = 0;
+  unsigned UsedICmps = 0;
   
   if (Cond->getOpcode() == Instruction::Or) {
-    CompVal = GatherConstantCompares(Cond, Values, ExtraCase, TD, true);
+    CompVal = GatherConstantCompares(Cond, Values, ExtraCase, TD, true,
+                                     UsedICmps);
   } else if (Cond->getOpcode() == Instruction::And) {
-    CompVal = GatherConstantCompares(Cond, Values, ExtraCase, TD, false);
+    CompVal = GatherConstantCompares(Cond, Values, ExtraCase, TD, false,
+                                     UsedICmps);
     TrueWhenEqual = false;
   }
   
   // If we didn't have a multiply compared value, fail.
   if (CompVal == 0) return false;
+
+  // Avoid turning single icmps into a switch.
+  if (UsedICmps <= 1)
+    return false;
 
   // There might be duplicate constants in the list, which the switch
   // instruction can't handle, remove them now.
@@ -2027,28 +2070,12 @@ bool SimplifyCFGOpt::SimplifyReturn(ReturnInst *RI) {
   }
   
   // If we found some, do the transformation!
-  if (!UncondBranchPreds.empty()) {
+  if (!UncondBranchPreds.empty() && DupRet) {
     while (!UncondBranchPreds.empty()) {
       BasicBlock *Pred = UncondBranchPreds.pop_back_val();
       DEBUG(dbgs() << "FOLDING: " << *BB
             << "INTO UNCOND BRANCH PRED: " << *Pred);
-      Instruction *UncondBranch = Pred->getTerminator();
-      // Clone the return and add it to the end of the predecessor.
-      Instruction *NewRet = RI->clone();
-      Pred->getInstList().push_back(NewRet);
-      
-      // If the return instruction returns a value, and if the value was a
-      // PHI node in "BB", propagate the right value into the return.
-      for (User::op_iterator i = NewRet->op_begin(), e = NewRet->op_end();
-           i != e; ++i)
-        if (PHINode *PN = dyn_cast<PHINode>(*i))
-          if (PN->getParent() == BB)
-            *i = PN->getIncomingValueForBlock(Pred);
-      
-      // Update any PHI nodes in the returning block to realize that we no
-      // longer branch to them.
-      BB->removePredecessor(Pred);
-      UncondBranch->eraseFromParent();
+      (void)FoldReturnIntoUncondBranch(RI, BB, Pred);
     }
     
     // If we eliminated all predecessors of the block, delete the block now.
@@ -2248,6 +2275,47 @@ bool SimplifyCFGOpt::SimplifyUnreachable(UnreachableInst *UI) {
   return Changed;
 }
 
+/// TurnSwitchRangeIntoICmp - Turns a switch with that contains only a
+/// integer range comparison into a sub, an icmp and a branch.
+static bool TurnSwitchRangeIntoICmp(SwitchInst *SI) {
+  assert(SI->getNumCases() > 2 && "Degenerate switch?");
+
+  // Make sure all cases point to the same destination and gather the values.
+  SmallVector<ConstantInt *, 16> Cases;
+  Cases.push_back(SI->getCaseValue(1));
+  for (unsigned I = 2, E = SI->getNumCases(); I != E; ++I) {
+    if (SI->getSuccessor(I-1) != SI->getSuccessor(I))
+      return false;
+    Cases.push_back(SI->getCaseValue(I));
+  }
+  assert(Cases.size() == SI->getNumCases()-1 && "Not all cases gathered");
+
+  // Sort the case values, then check if they form a range we can transform.
+  array_pod_sort(Cases.begin(), Cases.end(), ConstantIntSortPredicate);
+  for (unsigned I = 1, E = Cases.size(); I != E; ++I) {
+    if (Cases[I-1]->getValue() != Cases[I]->getValue()+1)
+      return false;
+  }
+
+  Constant *Offset = ConstantExpr::getNeg(Cases.back());
+  Constant *NumCases = ConstantInt::get(Offset->getType(), SI->getNumCases()-1);
+
+  Value *Sub = SI->getCondition();
+  if (!Offset->isNullValue())
+    Sub = BinaryOperator::CreateAdd(Sub, Offset, Sub->getName()+".off", SI);
+  Value *Cmp = new ICmpInst(SI, ICmpInst::ICMP_ULT, Sub, NumCases, "switch");
+  BranchInst::Create(SI->getSuccessor(1), SI->getDefaultDest(), Cmp, SI);
+
+  // Prune obsolete incoming values off the successor's PHI nodes.
+  for (BasicBlock::iterator BBI = SI->getSuccessor(1)->begin();
+       isa<PHINode>(BBI); ++BBI) {
+    for (unsigned I = 0, E = SI->getNumCases()-2; I != E; ++I)
+      cast<PHINode>(BBI)->removeIncomingValue(SI->getParent());
+  }
+  SI->eraseFromParent();
+
+  return true;
+}
 
 bool SimplifyCFGOpt::SimplifySwitch(SwitchInst *SI) {
   // If this switch is too complex to want to look at, ignore it.
@@ -2261,7 +2329,12 @@ bool SimplifyCFGOpt::SimplifySwitch(SwitchInst *SI) {
   if (BasicBlock *OnlyPred = BB->getSinglePredecessor())
     if (SimplifyEqualityComparisonWithOnlyPredecessor(SI, OnlyPred))
       return SimplifyCFG(BB) | true;
-  
+
+  Value *Cond = SI->getCondition();
+  if (SelectInst *Select = dyn_cast<SelectInst>(Cond))
+    if (SimplifySwitchOnSelect(SI, Select))
+      return SimplifyCFG(BB) | true;
+
   // If the block only contains the switch, see if we can fold the block
   // away into any preds.
   BasicBlock::iterator BBI = BB->begin();
@@ -2271,6 +2344,10 @@ bool SimplifyCFGOpt::SimplifySwitch(SwitchInst *SI) {
   if (SI == &*BBI)
     if (FoldValueComparisonIntoPredecessors(SI))
       return SimplifyCFG(BB) | true;
+
+  // Try to transform the switch into an icmp and a branch.
+  if (TurnSwitchRangeIntoICmp(SI))
+    return SimplifyCFG(BB) | true;
   
   return false;
 }

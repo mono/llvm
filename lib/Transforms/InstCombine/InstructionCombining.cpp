@@ -157,6 +157,9 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
           // It simplifies to V.  Form "A op V".
           I.setOperand(0, A);
           I.setOperand(1, V);
+          // Conservatively clear the optional flags, since they may not be
+          // preserved by the reassociation.
+          I.clearSubclassOptionalData();
           Changed = true;
           ++NumReassoc;
           continue;
@@ -174,6 +177,9 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
           // It simplifies to V.  Form "V op C".
           I.setOperand(0, V);
           I.setOperand(1, C);
+          // Conservatively clear the optional flags, since they may not be
+          // preserved by the reassociation.
+          I.clearSubclassOptionalData();
           Changed = true;
           ++NumReassoc;
           continue;
@@ -193,6 +199,9 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
           // It simplifies to V.  Form "V op B".
           I.setOperand(0, V);
           I.setOperand(1, B);
+          // Conservatively clear the optional flags, since they may not be
+          // preserved by the reassociation.
+          I.clearSubclassOptionalData();
           Changed = true;
           ++NumReassoc;
           continue;
@@ -210,6 +219,9 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
           // It simplifies to V.  Form "B op V".
           I.setOperand(0, B);
           I.setOperand(1, V);
+          // Conservatively clear the optional flags, since they may not be
+          // preserved by the reassociation.
+          I.clearSubclassOptionalData();
           Changed = true;
           ++NumReassoc;
           continue;
@@ -234,6 +246,9 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
         Worklist.Add(New);
         I.setOperand(0, New);
         I.setOperand(1, Folded);
+        // Conservatively clear the optional flags, since they may not be
+        // preserved by the reassociation.
+        I.clearSubclassOptionalData();
         Changed = true;
         continue;
       }
@@ -455,8 +470,9 @@ Value *InstCombiner::dyn_castFNegVal(Value *V) const {
 
 static Value *FoldOperationIntoSelectOperand(Instruction &I, Value *SO,
                                              InstCombiner *IC) {
-  if (CastInst *CI = dyn_cast<CastInst>(&I))
+  if (CastInst *CI = dyn_cast<CastInst>(&I)) {
     return IC->Builder->CreateCast(CI->getOpcode(), SO, I.getType());
+  }
 
   // Figure out if the constant is the left or the right argument.
   bool ConstIsRHS = isa<Constant>(I.getOperand(1));
@@ -498,11 +514,24 @@ Instruction *InstCombiner::FoldOpIntoSelect(Instruction &Op, SelectInst *SI) {
     // Bool selects with constant operands can be folded to logical ops.
     if (SI->getType()->isIntegerTy(1)) return 0;
 
+    // If it's a bitcast involving vectors, make sure it has the same number of
+    // elements on both sides.
+    if (BitCastInst *BC = dyn_cast<BitCastInst>(&Op)) {
+      const VectorType *DestTy = dyn_cast<VectorType>(BC->getDestTy());
+      const VectorType *SrcTy = dyn_cast<VectorType>(BC->getSrcTy());
+
+      // Verify that either both or neither are vectors.
+      if ((SrcTy == NULL) != (DestTy == NULL)) return 0;
+      // If vectors, verify that they have the same number of elements.
+      if (SrcTy && SrcTy->getNumElements() != DestTy->getNumElements())
+        return 0;
+    }
+    
     Value *SelectTrueVal = FoldOperationIntoSelectOperand(Op, TV, this);
     Value *SelectFalseVal = FoldOperationIntoSelectOperand(Op, FV, this);
 
-    return SelectInst::Create(SI->getCondition(), SelectTrueVal,
-                              SelectFalseVal);
+    return SelectInst::Create(SI->getCondition(),
+                              SelectTrueVal, SelectFalseVal);
   }
   return 0;
 }
@@ -512,20 +541,25 @@ Instruction *InstCombiner::FoldOpIntoSelect(Instruction &Op, SelectInst *SI) {
 /// has a PHI node as operand #0, see if we can fold the instruction into the
 /// PHI (which is only possible if all operands to the PHI are constants).
 ///
-/// If AllowAggressive is true, FoldOpIntoPhi will allow certain transforms
-/// that would normally be unprofitable because they strongly encourage jump
-/// threading.
-Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I,
-                                         bool AllowAggressive) {
-  AllowAggressive = false;
+Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I) {
   PHINode *PN = cast<PHINode>(I.getOperand(0));
   unsigned NumPHIValues = PN->getNumIncomingValues();
-  if (NumPHIValues == 0 ||
-      // We normally only transform phis with a single use, unless we're trying
-      // hard to make jump threading happen.
-      (!PN->hasOneUse() && !AllowAggressive))
+  if (NumPHIValues == 0)
     return 0;
   
+  // We normally only transform phis with a single use.  However, if a PHI has
+  // multiple uses and they are all the same operation, we can fold *all* of the
+  // uses into the PHI.
+  if (!PN->hasOneUse()) {
+    // Walk the use list for the instruction, comparing them to I.
+    for (Value::use_iterator UI = PN->use_begin(), E = PN->use_end();
+         UI != E; ++UI) {
+      Instruction *User = cast<Instruction>(*UI);
+      if (User != &I && !I.isIdenticalTo(User))
+        return 0;
+    }
+    // Otherwise, we can replace *all* users with the new PHI we form.
+  }
   
   // Check to see if all of the operands of the PHI are simple constants
   // (constantint/constantfp/undef).  If there is one non-constant value,
@@ -533,24 +567,34 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I,
   // bail out.  We don't do arbitrary constant expressions here because moving
   // their computation can be expensive without a cost model.
   BasicBlock *NonConstBB = 0;
-  for (unsigned i = 0; i != NumPHIValues; ++i)
-    if (!isa<Constant>(PN->getIncomingValue(i)) ||
-        isa<ConstantExpr>(PN->getIncomingValue(i))) {
-      if (NonConstBB) return 0;  // More than one non-const value.
-      if (isa<PHINode>(PN->getIncomingValue(i))) return 0;  // Itself a phi.
-      NonConstBB = PN->getIncomingBlock(i);
-      
-      // If the incoming non-constant value is in I's block, we have an infinite
-      // loop.
-      if (NonConstBB == I.getParent())
+  for (unsigned i = 0; i != NumPHIValues; ++i) {
+    Value *InVal = PN->getIncomingValue(i);
+    if (isa<Constant>(InVal) && !isa<ConstantExpr>(InVal))
+      continue;
+
+    if (isa<PHINode>(InVal)) return 0;  // Itself a phi.
+    if (NonConstBB) return 0;  // More than one non-const value.
+    
+    NonConstBB = PN->getIncomingBlock(i);
+
+    // If the InVal is an invoke at the end of the pred block, then we can't
+    // insert a computation after it without breaking the edge.
+    if (InvokeInst *II = dyn_cast<InvokeInst>(InVal))
+      if (II->getParent() == NonConstBB)
         return 0;
-    }
+    
+    // If the incoming non-constant value is in I's block, we will remove one
+    // instruction, but insert another equivalent one, leading to infinite
+    // instcombine.
+    if (NonConstBB == I.getParent())
+      return 0;
+  }
   
   // If there is exactly one non-constant value, we can insert a copy of the
   // operation in that block.  However, if this is a critical edge, we would be
   // inserting the computation one some other paths (e.g. inside a loop).  Only
   // do this if the pred block is unconditionally branching into the phi block.
-  if (NonConstBB != 0 && !AllowAggressive) {
+  if (NonConstBB != 0) {
     BranchInst *BI = dyn_cast<BranchInst>(NonConstBB->getTerminator());
     if (!BI || !BI->isUnconditional()) return 0;
   }
@@ -560,7 +604,12 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I,
   NewPN->reserveOperandSpace(PN->getNumOperands()/2);
   InsertNewInstBefore(NewPN, *PN);
   NewPN->takeName(PN);
-
+  
+  // If we are going to have to insert a new computation, do so right before the
+  // predecessors terminator.
+  if (NonConstBB)
+    Builder->SetInsertPoint(NonConstBB->getTerminator());
+  
   // Next, add all of the operands to the PHI.
   if (SelectInst *SI = dyn_cast<SelectInst>(&I)) {
     // We only currently try to fold the condition of a select when it is a phi,
@@ -573,42 +622,36 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I,
       Value *TrueVInPred = TrueV->DoPHITranslation(PhiTransBB, ThisBB);
       Value *FalseVInPred = FalseV->DoPHITranslation(PhiTransBB, ThisBB);
       Value *InV = 0;
-      if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i))) {
+      if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i)))
         InV = InC->isNullValue() ? FalseVInPred : TrueVInPred;
-      } else {
-        assert(PN->getIncomingBlock(i) == NonConstBB);
-        InV = SelectInst::Create(PN->getIncomingValue(i), TrueVInPred,
-                                 FalseVInPred,
-                                 "phitmp", NonConstBB->getTerminator());
-        Worklist.Add(cast<Instruction>(InV));
-      }
+      else
+        InV = Builder->CreateSelect(PN->getIncomingValue(i),
+                                    TrueVInPred, FalseVInPred, "phitmp");
       NewPN->addIncoming(InV, ThisBB);
+    }
+  } else if (CmpInst *CI = dyn_cast<CmpInst>(&I)) {
+    Constant *C = cast<Constant>(I.getOperand(1));
+    for (unsigned i = 0; i != NumPHIValues; ++i) {
+      Value *InV = 0;
+      if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i)))
+        InV = ConstantExpr::getCompare(CI->getPredicate(), InC, C);
+      else if (isa<ICmpInst>(CI))
+        InV = Builder->CreateICmp(CI->getPredicate(), PN->getIncomingValue(i),
+                                  C, "phitmp");
+      else
+        InV = Builder->CreateFCmp(CI->getPredicate(), PN->getIncomingValue(i),
+                                  C, "phitmp");
+      NewPN->addIncoming(InV, PN->getIncomingBlock(i));
     }
   } else if (I.getNumOperands() == 2) {
     Constant *C = cast<Constant>(I.getOperand(1));
     for (unsigned i = 0; i != NumPHIValues; ++i) {
       Value *InV = 0;
-      if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i))) {
-        if (CmpInst *CI = dyn_cast<CmpInst>(&I))
-          InV = ConstantExpr::getCompare(CI->getPredicate(), InC, C);
-        else
-          InV = ConstantExpr::get(I.getOpcode(), InC, C);
-      } else {
-        assert(PN->getIncomingBlock(i) == NonConstBB);
-        if (BinaryOperator *BO = dyn_cast<BinaryOperator>(&I)) 
-          InV = BinaryOperator::Create(BO->getOpcode(),
-                                       PN->getIncomingValue(i), C, "phitmp",
-                                       NonConstBB->getTerminator());
-        else if (CmpInst *CI = dyn_cast<CmpInst>(&I))
-          InV = CmpInst::Create(CI->getOpcode(),
-                                CI->getPredicate(),
-                                PN->getIncomingValue(i), C, "phitmp",
-                                NonConstBB->getTerminator());
-        else
-          llvm_unreachable("Unknown binop!");
-        
-        Worklist.Add(cast<Instruction>(InV));
-      }
+      if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i)))
+        InV = ConstantExpr::get(I.getOpcode(), InC, C);
+      else
+        InV = Builder->CreateBinOp(cast<BinaryOperator>(I).getOpcode(),
+                                   PN->getIncomingValue(i), C, "phitmp");
       NewPN->addIncoming(InV, PN->getIncomingBlock(i));
     }
   } else { 
@@ -616,17 +659,21 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I,
     const Type *RetTy = CI->getType();
     for (unsigned i = 0; i != NumPHIValues; ++i) {
       Value *InV;
-      if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i))) {
+      if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i)))
         InV = ConstantExpr::getCast(CI->getOpcode(), InC, RetTy);
-      } else {
-        assert(PN->getIncomingBlock(i) == NonConstBB);
-        InV = CastInst::Create(CI->getOpcode(), PN->getIncomingValue(i), 
-                               I.getType(), "phitmp", 
-                               NonConstBB->getTerminator());
-        Worklist.Add(cast<Instruction>(InV));
-      }
+      else 
+        InV = Builder->CreateCast(CI->getOpcode(),
+                                PN->getIncomingValue(i), I.getType(), "phitmp");
       NewPN->addIncoming(InV, PN->getIncomingBlock(i));
     }
+  }
+  
+  for (Value::use_iterator UI = PN->use_begin(), E = PN->use_end();
+       UI != E; ) {
+    Instruction *User = cast<Instruction>(*UI++);
+    if (User == &I) continue;
+    ReplaceInstUsesWith(*User, NewPN);
+    EraseInstFromFunction(*User);
   }
   return ReplaceInstUsesWith(I, NewPN);
 }
@@ -1541,6 +1588,7 @@ bool InstCombiner::DoOneIteration(Function &F, unsigned Iteration) {
         DEBUG(errs() << "IC: Old = " << *I << '\n'
                      << "    New = " << *Result << '\n');
 
+        Result->setDebugLoc(I->getDebugLoc());
         // Everything uses the new instruction now.
         I->replaceAllUsesWith(Result);
 

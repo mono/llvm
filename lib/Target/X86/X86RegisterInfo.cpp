@@ -316,10 +316,16 @@ X86RegisterInfo::getPointerRegClass(unsigned Kind) const {
     if (TM.getSubtarget<X86Subtarget>().is64Bit())
       return &X86::GR64RegClass;
     return &X86::GR32RegClass;
-  case 1: // Normal GRPs except the stack pointer (for encoding reasons).
+  case 1: // Normal GPRs except the stack pointer (for encoding reasons).
     if (TM.getSubtarget<X86Subtarget>().is64Bit())
       return &X86::GR64_NOSPRegClass;
     return &X86::GR32_NOSPRegClass;
+  case 2: // Available for tailcall (not callee-saved GPRs).
+    if (TM.getSubtarget<X86Subtarget>().isTargetWin64())
+      return &X86::GR64_TCW64RegClass;
+    if (TM.getSubtarget<X86Subtarget>().is64Bit())
+      return &X86::GR64_TCRegClass;
+    return &X86::GR32_TCRegClass;
   }
 }
 
@@ -445,11 +451,11 @@ bool X86RegisterInfo::needsStackRealignment(const MachineFunction &MF) const {
   if (0 && requiresRealignment && MFI->hasVarSizedObjects())
     report_fatal_error(
       "Stack realignment in presense of dynamic allocas is not supported");
-    
+
   // If we've requested that we force align the stack do so now.
   if (ForceStackAlign)
     return canRealignStack(MF);
-    
+
   return requiresRealignment && canRealignStack(MF);
 }
 
@@ -524,7 +530,7 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
 
       // Factor out the amount the callee already popped.
       Amount -= CalleeAmt;
-  
+
       if (Amount) {
         unsigned Opc = getADDriOpcode(Is64Bit, Amount);
         New = BuildMI(MF, DL, TII.get(Opc), StackPtr)

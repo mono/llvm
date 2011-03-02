@@ -205,3 +205,20 @@ define  <2 x double> @test16(<4 x double> * nocapture %srcA, <2 x double>* nocap
   ret <2 x double> %i7
 }
 
+; PR9009
+define fastcc void @test17() nounwind {
+entry:
+  %0 = insertelement <4 x i32> undef, i32 undef, i32 1
+  %1 = shufflevector <4 x i32> <i32 undef, i32 undef, i32 32768, i32 32768>, <4 x i32> %0, <4 x i32> <i32 4, i32 5, i32 2, i32 3>
+  %2 = bitcast <4 x i32> %1 to <4 x float>
+  store <4 x float> %2, <4 x float> * undef
+  ret void
+}
+
+; PR9210
+define <4 x float> @f(<4 x double>) nounwind {
+entry:
+ %double2float.i = fptrunc <4 x double> %0 to <4 x float>
+ ret <4 x float> %double2float.i
+}
+

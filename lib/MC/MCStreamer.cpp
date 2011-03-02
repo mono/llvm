@@ -19,8 +19,9 @@
 #include <cstdlib>
 using namespace llvm;
 
-MCStreamer::MCStreamer(MCContext &Ctx) : Context(Ctx), CurSection(0),
-                                         PrevSection(0) {
+MCStreamer::MCStreamer(MCContext &Ctx) : Context(Ctx) {
+  const MCSection *section = NULL;
+  SectionStack.push_back(std::make_pair(section, section));
 }
 
 MCStreamer::~MCStreamer() {

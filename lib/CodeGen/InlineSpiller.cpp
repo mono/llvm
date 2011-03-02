@@ -102,8 +102,7 @@ Spiller *createInlineSpiller(MachineFunctionPass &pass,
 }
 }
 
-/// reMaterializeFor - Attempt to rematerialize edit_->getReg() before MI instead of
-/// reloading it.
+/// reMaterializeFor - Attempt to rematerialize before MI instead of reloading.
 bool InlineSpiller::reMaterializeFor(MachineBasicBlock::iterator MI) {
   SlotIndex UseIdx = lis_.getInstructionIndex(MI).getUseIndex();
   VNInfo *OrigVNI = edit_->getParent().getVNInfoAt(UseIdx);
@@ -154,10 +153,15 @@ bool InlineSpiller::reMaterializeFor(MachineBasicBlock::iterator MI) {
   LiveInterval &NewLI = edit_->create(mri_, lis_, vrm_);
   NewLI.markNotSpillable();
 
+  // Rematting for a copy: Set allocation hint to be the destination register.
+  if (MI->isCopy())
+    mri_.setRegAllocationHint(NewLI.reg, 0, MI->getOperand(0).getReg());
+
   // Finally we can rematerialize OrigMI before MI.
   SlotIndex DefIdx = edit_->rematerializeAt(*MI->getParent(), MI, NewLI.reg, RM,
                                             lis_, tii_, tri_);
-  DEBUG(dbgs() << "\tremat:  " << DefIdx << '\n');
+  DEBUG(dbgs() << "\tremat:  " << DefIdx << '\t'
+               << *lis_.getInstructionFromIndex(DefIdx));
 
   // Replace operands
   for (unsigned i = 0, e = Ops.size(); i != e; ++i) {
@@ -270,6 +274,9 @@ bool InlineSpiller::foldMemoryOperand(MachineBasicBlock::iterator MI,
     // FIXME: Teach targets to deal with subregs.
     if (MO.getSubReg())
       return false;
+    // We cannot fold a load instruction into a def.
+    if (LoadMI && MO.isDef())
+      return false;
     // Tied use operands should not be passed to foldMemoryOperand.
     if (!MI->isRegTiedToDefOperand(Idx))
       FoldOps.push_back(Idx);
@@ -338,7 +345,8 @@ void InlineSpiller::spill(LiveRangeEdit &edit) {
          && "Trying to spill a stack slot.");
   DEBUG(dbgs() << "Inline spilling "
                << mri_.getRegClass(edit.getReg())->getName()
-               << ':' << edit.getParent() << "\n");
+               << ':' << edit.getParent() << "\nFrom original "
+               << PrintReg(vrm_.getOriginal(edit.getReg())) << '\n');
   assert(edit.getParent().isSpillable() &&
          "Attempting to spill already spilled value.");
 
@@ -349,12 +357,20 @@ void InlineSpiller::spill(LiveRangeEdit &edit) {
     return;
 
   rc_ = mri_.getRegClass(edit.getReg());
-  stackSlot_ = vrm_.assignVirt2StackSlot(edit_->getReg());
+
+  // Share a stack slot among all descendants of Orig.
+  unsigned Orig = vrm_.getOriginal(edit.getReg());
+  stackSlot_ = vrm_.getStackSlot(Orig);
+  if (stackSlot_ == VirtRegMap::NO_STACK_SLOT)
+    stackSlot_ = vrm_.assignVirt2StackSlot(Orig);
+
+  if (Orig != edit.getReg())
+    vrm_.assignVirt2StackSlot(edit.getReg(), stackSlot_);
 
   // Update LiveStacks now that we are committed to spilling.
   LiveInterval &stacklvr = lss_.getOrCreateInterval(stackSlot_, rc_);
-  assert(stacklvr.empty() && "Just created stack slot not empty");
-  stacklvr.getNextValue(SlotIndex(), 0, lss_.getVNInfoAllocator());
+  if (!stacklvr.hasAtLeastOneValue())
+    stacklvr.getNextValue(SlotIndex(), 0, lss_.getVNInfoAllocator());
   stacklvr.MergeRangesInAsValue(edit_->getParent(), stacklvr.getValNumInfo(0));
 
   // Iterate over instructions using register.

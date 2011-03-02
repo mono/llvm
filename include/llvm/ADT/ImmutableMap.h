@@ -108,7 +108,7 @@ public:
     ImmutableMap getEmptyMap() { return ImmutableMap(F.getEmptyTree()); }
 
     ImmutableMap add(ImmutableMap Old, key_type_ref K, data_type_ref D) {
-      TreeTy *T = F.add(Old.Root, std::make_pair<key_type,data_type>(K,D));
+      TreeTy *T = F.add(Old.Root, std::pair<key_type,data_type>(K,D));
       return ImmutableMap(Canonicalize ? F.getCanonicalTree(T): T);
     }
 
@@ -134,9 +134,21 @@ public:
     return Root && RHS.Root ? Root->isNotEqual(*RHS.Root) : Root != RHS.Root;
   }
 
-  TreeTy* getRoot() const {
+  TreeTy *getRoot() const {
     if (Root) { Root->retain(); }
     return Root;
+  }
+
+  TreeTy *getRootWithoutRetain() const {
+    return Root;
+  }
+  
+  void manualRetain() {
+    if (Root) Root->retain();
+  }
+  
+  void manualRelease() {
+    if (Root) Root->release();
   }
 
   bool isEmpty() const { return !Root; }

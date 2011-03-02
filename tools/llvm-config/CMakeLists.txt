@@ -70,6 +70,8 @@ if( NOT NM_PATH )
   message(FATAL_ERROR "`nm' not found")
 endif()
 
+get_property(llvm_libs GLOBAL PROPERTY LLVM_LIBS)
+
 add_custom_command(OUTPUT ${LIBDEPS_TMP}
   COMMAND ${PERL_EXECUTABLE} ${LLVM_MAIN_SRC_DIR}/utils/GenLibDeps.pl -flat ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/${CMAKE_CFG_INTDIR} ${NM_PATH} > ${LIBDEPS_TMP}
   DEPENDS ${llvm_libs}
@@ -92,6 +94,17 @@ set(C_FLGS "${CMAKE_C_FLAGS_${uppercase_CMAKE_BUILD_TYPE}} ${LLVM_DEFINITIONS}")
 set(CXX_FLGS "${CMAKE_CXX_FLAGS_${uppercase_CMAKE_BUILD_TYPE}} ${LLVM_DEFINITIONS}")
 set(CPP_FLGS "${CMAKE_CPP_FLAGS_${uppercase_CMAKE_BUILD_TYPE}} ${LLVM_DEFINITIONS}")
 
+# We don't want certain flags on the output of
+# llvm-config --cflags --cxxflags
+macro(remove_option_from_llvm_config option)
+  llvm_replace_compiler_option(C_FLGS "${option}" "")
+  llvm_replace_compiler_option(CXX_FLGS "${option}" "")
+  llvm_replace_compiler_option(CPP_FLGS "${option}" "")
+endmacro(remove_option_from_llvm_config)
+remove_option_from_llvm_config("-pedantic")
+remove_option_from_llvm_config("-Wall")
+remove_option_from_llvm_config("-W")
+
 add_custom_command(OUTPUT ${LLVM_CONFIG}
   COMMAND echo 's!@LLVM_CPPFLAGS@!${CPP_FLGS}!' > temp.sed
   COMMAND echo 's!@LLVM_CFLAGS@!${C_FLGS}!' >> temp.sed
@@ -111,7 +124,7 @@ add_custom_command(OUTPUT ${LLVM_CONFIG}
 add_custom_target(llvm-config.target ALL
   DEPENDS ${LLVM_CONFIG})
 
-add_dependencies(llvm-config.target ${llvm_lib_targets})
+add_dependencies( llvm-config.target ${llvm_libs} )
 
 # Make sure that llvm-config builds before the llvm tools, so we have
 # LibDeps.txt and can use it for updating the hard-coded library

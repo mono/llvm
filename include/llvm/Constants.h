@@ -25,7 +25,7 @@
 #include "llvm/OperandTraits.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/APFloat.h"
-#include <vector>
+#include "llvm/ADT/ArrayRef.h"
 
 namespace llvm {
 
@@ -39,8 +39,6 @@ template<class ConstantClass, class TypeClass, class ValType>
 struct ConstantCreator;
 template<class ConstantClass, class TypeClass>
 struct ConvertConstantType;
-template<typename T, unsigned N>
-class SmallVector;
 
 //===----------------------------------------------------------------------===//
 /// This is the shared class of boolean and integer constants. This class 
@@ -427,6 +425,8 @@ public:
                        const std::vector<Constant*> &V, bool Packed);
   static Constant *get(LLVMContext &Context,
                        Constant *const *Vals, unsigned NumVals, bool Packed);
+  static Constant *get(LLVMContext &Context, bool Packed,
+                       Constant * Val, ...) END_WITH_NULL;
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Constant);
@@ -473,9 +473,9 @@ protected:
   ConstantVector(const VectorType *T, const std::vector<Constant*> &Val);
 public:
   // ConstantVector accessors
+  static Constant *get(ArrayRef<Constant*> V);
+  // FIXME: Eliminate this constructor form.
   static Constant *get(const VectorType *T, const std::vector<Constant*> &V);
-  static Constant *get(const std::vector<Constant*> &V);
-  static Constant *get(Constant *const *Vals, unsigned NumVals);
   
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Constant);
@@ -500,7 +500,7 @@ public:
 
   /// getSplatValue - If this is a splat constant, meaning that all of the
   /// elements have the same value, return that value. Otherwise return NULL.
-  Constant *getSplatValue();
+  Constant *getSplatValue() const;
 
   virtual void destroyConstant();
   virtual void replaceUsesOfWithOnConstant(Value *From, Value *To, Use *U);
@@ -631,11 +631,8 @@ protected:
                                Constant *C1, Constant *C2, Constant *C3);
   template<typename IndexTy>
   static Constant *getGetElementPtrTy(const Type *Ty, Constant *C,
-                                      IndexTy const *Idxs, unsigned NumIdxs);
-  template<typename IndexTy>
-  static Constant *getInBoundsGetElementPtrTy(const Type *Ty, Constant *C,
-                                              IndexTy const *Idxs,
-                                              unsigned NumIdxs);
+                                      IndexTy const *Idxs, unsigned NumIdxs,
+                                      bool InBounds);
   static Constant *getExtractElementTy(const Type *Ty, Constant *Val,
                                        Constant *Idx);
   static Constant *getInsertElementTy(const Type *Ty, Constant *Val,
@@ -650,11 +647,7 @@ protected:
   template<typename IndexTy>
   static Constant *getGetElementPtrImpl(Constant *C,
                                         IndexTy const *IdxList,
-                                        unsigned NumIdx);
-  template<typename IndexTy>
-  static Constant *getInBoundsGetElementPtrImpl(Constant *C,
-                                                IndexTy const *IdxList,
-                                                unsigned NumIdx);
+                                        unsigned NumIdx, bool InBounds);
 
 public:
   // Static methods to construct a ConstantExpr of different kinds.  Note that
@@ -664,35 +657,38 @@ public:
 
   /// getAlignOf constant expr - computes the alignment of a type in a target
   /// independent way (Note: the return type is an i64).
-  static Constant *getAlignOf(const Type* Ty);
+  static Constant *getAlignOf(const Type *Ty);
   
   /// getSizeOf constant expr - computes the (alloc) size of a type (in
   /// address-units, not bits) in a target independent way (Note: the return
   /// type is an i64).
   ///
-  static Constant *getSizeOf(const Type* Ty);
+  static Constant *getSizeOf(const Type *Ty);
 
   /// getOffsetOf constant expr - computes the offset of a struct field in a 
   /// target independent way (Note: the return type is an i64).
   ///
-  static Constant *getOffsetOf(const StructType* STy, unsigned FieldNo);
+  static Constant *getOffsetOf(const StructType *STy, unsigned FieldNo);
 
   /// getOffsetOf constant expr - This is a generalized form of getOffsetOf,
   /// which supports any aggregate type, and any Constant index.
   ///
-  static Constant *getOffsetOf(const Type* Ty, Constant *FieldNo);
+  static Constant *getOffsetOf(const Type *Ty, Constant *FieldNo);
   
-  static Constant *getNeg(Constant *C);
+  static Constant *getNeg(Constant *C, bool HasNUW = false, bool HasNSW =false);
   static Constant *getFNeg(Constant *C);
   static Constant *getNot(Constant *C);
-  static Constant *getAdd(Constant *C1, Constant *C2);
+  static Constant *getAdd(Constant *C1, Constant *C2,
+                          bool HasNUW = false, bool HasNSW = false);
   static Constant *getFAdd(Constant *C1, Constant *C2);
-  static Constant *getSub(Constant *C1, Constant *C2);
+  static Constant *getSub(Constant *C1, Constant *C2,
+                          bool HasNUW = false, bool HasNSW = false);
   static Constant *getFSub(Constant *C1, Constant *C2);
-  static Constant *getMul(Constant *C1, Constant *C2);
+  static Constant *getMul(Constant *C1, Constant *C2,
+                          bool HasNUW = false, bool HasNSW = false);
   static Constant *getFMul(Constant *C1, Constant *C2);
-  static Constant *getUDiv(Constant *C1, Constant *C2);
-  static Constant *getSDiv(Constant *C1, Constant *C2);
+  static Constant *getUDiv(Constant *C1, Constant *C2, bool isExact = false);
+  static Constant *getSDiv(Constant *C1, Constant *C2, bool isExact = false);
   static Constant *getFDiv(Constant *C1, Constant *C2);
   static Constant *getURem(Constant *C1, Constant *C2);
   static Constant *getSRem(Constant *C1, Constant *C2);
@@ -700,9 +696,10 @@ public:
   static Constant *getAnd(Constant *C1, Constant *C2);
   static Constant *getOr(Constant *C1, Constant *C2);
   static Constant *getXor(Constant *C1, Constant *C2);
-  static Constant *getShl(Constant *C1, Constant *C2);
-  static Constant *getLShr(Constant *C1, Constant *C2);
-  static Constant *getAShr(Constant *C1, Constant *C2);
+  static Constant *getShl(Constant *C1, Constant *C2,
+                          bool HasNUW = false, bool HasNSW = false);
+  static Constant *getLShr(Constant *C1, Constant *C2, bool isExact = false);
+  static Constant *getAShr(Constant *C1, Constant *C2, bool isExact = false);
   static Constant *getTrunc   (Constant *C, const Type *Ty);
   static Constant *getSExt    (Constant *C, const Type *Ty);
   static Constant *getZExt    (Constant *C, const Type *Ty);
@@ -716,15 +713,44 @@ public:
   static Constant *getIntToPtr(Constant *C, const Type *Ty);
   static Constant *getBitCast (Constant *C, const Type *Ty);
 
-  static Constant *getNSWNeg(Constant *C);
-  static Constant *getNUWNeg(Constant *C);
-  static Constant *getNSWAdd(Constant *C1, Constant *C2);
-  static Constant *getNUWAdd(Constant *C1, Constant *C2);
-  static Constant *getNSWSub(Constant *C1, Constant *C2);
-  static Constant *getNUWSub(Constant *C1, Constant *C2);
-  static Constant *getNSWMul(Constant *C1, Constant *C2);
-  static Constant *getNUWMul(Constant *C1, Constant *C2);
-  static Constant *getExactSDiv(Constant *C1, Constant *C2);
+  static Constant *getNSWNeg(Constant *C) { return getNeg(C, false, true); }
+  static Constant *getNUWNeg(Constant *C) { return getNeg(C, true, false); }
+  static Constant *getNSWAdd(Constant *C1, Constant *C2) {
+    return getAdd(C1, C2, false, true);
+  }
+  static Constant *getNUWAdd(Constant *C1, Constant *C2) {
+    return getAdd(C1, C2, true, false);
+  }
+  static Constant *getNSWSub(Constant *C1, Constant *C2) {
+    return getSub(C1, C2, false, true);
+  }
+  static Constant *getNUWSub(Constant *C1, Constant *C2) {
+    return getSub(C1, C2, true, false);
+  }
+  static Constant *getNSWMul(Constant *C1, Constant *C2) {
+    return getMul(C1, C2, false, true);
+  }
+  static Constant *getNUWMul(Constant *C1, Constant *C2) {
+    return getMul(C1, C2, true, false);
+  }
+  static Constant *getNSWShl(Constant *C1, Constant *C2) {
+    return getShl(C1, C2, false, true);
+  }
+  static Constant *getNUWShl(Constant *C1, Constant *C2) {
+    return getShl(C1, C2, true, false);
+  }
+  static Constant *getExactSDiv(Constant *C1, Constant *C2) {
+    return getSDiv(C1, C2, true);
+  }
+  static Constant *getExactUDiv(Constant *C1, Constant *C2) {
+    return getUDiv(C1, C2, true);
+  }
+  static Constant *getExactAShr(Constant *C1, Constant *C2) {
+    return getAShr(C1, C2, true);
+  }
+  static Constant *getExactLShr(Constant *C1, Constant *C2) {
+    return getLShr(C1, C2, true);
+  }
 
   /// Transparently provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Constant);
@@ -816,18 +842,24 @@ public:
   /// all elements must be Constant's.
   ///
   static Constant *getGetElementPtr(Constant *C,
-                                    Constant *const *IdxList, unsigned NumIdx);
+                                    Constant *const *IdxList, unsigned NumIdx,
+                                    bool InBounds = false);
   static Constant *getGetElementPtr(Constant *C,
-                                    Value* const *IdxList, unsigned NumIdx);
+                                    Value *const *IdxList, unsigned NumIdx,
+                                    bool InBounds = false);
 
   /// Create an "inbounds" getelementptr. See the documentation for the
   /// "inbounds" flag in LangRef.html for details.
   static Constant *getInBoundsGetElementPtr(Constant *C,
                                             Constant *const *IdxList,
-                                            unsigned NumIdx);
+                                            unsigned NumIdx) {
+    return getGetElementPtr(C, IdxList, NumIdx, true);
+  }
   static Constant *getInBoundsGetElementPtr(Constant *C,
                                             Value* const *IdxList,
-                                            unsigned NumIdx);
+                                            unsigned NumIdx) {
+    return getGetElementPtr(C, IdxList, NumIdx, true);
+  }
 
   static Constant *getExtractElement(Constant *Vec, Constant *Idx);
   static Constant *getInsertElement(Constant *Vec, Constant *Elt,Constant *Idx);

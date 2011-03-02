@@ -28,6 +28,7 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializeCFGOnlyViewerPass(Registry);
   initializeCFGOnlyPrinterPass(Registry);
   initializePrintDbgInfoPass(Registry);
+  initializeDominanceFrontierPass(Registry);
   initializeDomViewerPass(Registry);
   initializeDomPrinterPass(Registry);
   initializeDomOnlyViewerPass(Registry);
@@ -42,7 +43,6 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializeLazyValueInfoPass(Registry);
   initializeLibCallAliasAnalysisPass(Registry);
   initializeLintPass(Registry);
-  initializeLiveValuesPass(Registry);
   initializeLoopDependenceAnalysisPass(Registry);
   initializeLoopInfoPass(Registry);
   initializeMemDepPrinterPass(Registry);
@@ -52,9 +52,13 @@ void llvm::initializeAnalysis(PassRegistry &Registry) {
   initializePostDominanceFrontierPass(Registry);
   initializeProfileEstimatorPassPass(Registry);
   initializeNoProfileInfoPass(Registry);
+  initializeNoPathProfileInfoPass(Registry);
   initializeProfileInfoAnalysisGroup(Registry);
+  initializePathProfileInfoAnalysisGroup(Registry);
   initializeLoaderPassPass(Registry);
+  initializePathProfileLoaderPassPass(Registry);
   initializeProfileVerifierPassPass(Registry);
+  initializePathProfileVerifierPass(Registry);
   initializeRegionInfoPass(Registry);
   initializeRegionViewerPass(Registry);
   initializeRegionPrinterPass(Registry);
@@ -72,14 +76,14 @@ void LLVMInitializeAnalysis(LLVMPassRegistryRef R) {
 LLVMBool LLVMVerifyModule(LLVMModuleRef M, LLVMVerifierFailureAction Action,
                           char **OutMessages) {
   std::string Messages;
-  
+
   LLVMBool Result = verifyModule(*unwrap(M),
                             static_cast<VerifierFailureAction>(Action),
                             OutMessages? &Messages : 0);
-  
+
   if (OutMessages)
     *OutMessages = strdup(Messages.c_str());
-  
+
   return Result;
 }
 

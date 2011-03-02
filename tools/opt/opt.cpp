@@ -24,7 +24,9 @@
 #include "llvm/Analysis/RegionPass.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Target/TargetData.h"
+#include "llvm/Target/TargetLibraryInfo.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/PassNameParser.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/Debug.h"
@@ -282,7 +284,7 @@ struct RegionPassPrinter : public RegionPass {
   RegionPassPrinter(const PassInfo *PI, raw_ostream &out) : RegionPass(ID),
     PassToPrint(PI), Out(out) {
     std::string PassToPrintName =  PassToPrint->getPassName();
-    PassName = "LoopPass Printer: " + PassToPrintName;
+    PassName = "RegionPass Printer: " + PassToPrintName;
   }
 
   virtual bool runOnRegion(Region *R, RGPassManager &RGM) {
@@ -297,7 +299,7 @@ struct RegionPassPrinter : public RegionPass {
     return false;
   }
 
-  virtual const char *getPassName() const { return "'Pass' Printer"; }
+  virtual const char *getPassName() const { return PassName.c_str(); }
 
   virtual void getAnalysisUsage(AnalysisUsage &AU) const {
     AU.addRequiredID(PassToPrint->getTypeInfo());
@@ -349,34 +351,19 @@ struct BreakpointPrinter : public FunctionPass {
     }
 
   virtual bool runOnFunction(Function &F) {
-    for (Function::iterator I = F.begin(), E = F.end(); I != E; ++I) {
-      BasicBlock::const_iterator BI = I->end();
-      --BI;
-      do {
-        const Instruction *In = BI;
-        const DebugLoc DL = In->getDebugLoc();
-        if (!DL.isUnknown()) {
-          DIScope S(DL.getScope(getGlobalContext()));
-          Out << S.getFilename() << " " << DL.getLine() << "\n";
-          break;
-        }
-        --BI;
-      } while (BI != I->begin());
-      break;
-    }
     BasicBlock &EntryBB = F.getEntryBlock();
-    for (Function::iterator I = F.begin(), E = F.end(); I != E; ++I) {
-      BasicBlock *BB = I;
-      if (BB == &EntryBB) continue;
-      for (BasicBlock::iterator BI = I->begin(), BE = I->end(); BI != BE; ++BI)
-        if (CallInst *CI = dyn_cast<CallInst>(BI)) {
-          const DebugLoc DL = CI->getDebugLoc();
-          if (!DL.isUnknown()) {
-            DIScope S(DL.getScope(getGlobalContext()));
-            Out << S.getFilename() << " " << DL.getLine() << "\n";
-          }
-        }
-    }
+    BasicBlock::const_iterator BI = EntryBB.end();
+    --BI;
+    do {
+      const Instruction *In = BI;
+      const DebugLoc DL = In->getDebugLoc();
+      if (!DL.isUnknown()) {
+        DIScope S(DL.getScope(getGlobalContext()));
+        Out << S.getFilename() << " " << DL.getLine() << "\n";
+        break;
+      }
+      --BI;
+    } while (BI != EntryBB.begin());
     return false;
   }
 
@@ -442,7 +429,7 @@ void AddStandardCompilePasses(PassManagerBase &PM) {
                              /*OptimizeSize=*/ false,
                              /*UnitAtATime=*/ true,
                              /*UnrollLoops=*/ true,
-                             /*SimplifyLibCalls=*/ true,
+                             !DisableSimplifyLibCalls,
                              /*HaveExceptions=*/ true,
                              InliningPass);
 }
@@ -540,11 +527,19 @@ int main(int argc, char **argv) {
       NoOutput = true;
 
   // Create a PassManager to hold and optimize the collection of passes we are
-  // about to build...
+  // about to build.
   //
   PassManager Passes;
 
-  // Add an appropriate TargetData instance for this module...
+  // Add an appropriate TargetLibraryInfo pass for the module's triple.
+  TargetLibraryInfo *TLI = new TargetLibraryInfo(Triple(M->getTargetTriple()));
+  
+  // The -disable-simplify-libcalls flag actually disables all builtin optzns.
+  if (DisableSimplifyLibCalls)
+    TLI->disableAllFunctions();
+  Passes.add(TLI);
+  
+  // Add an appropriate TargetData instance for this module.
   TargetData *TD = 0;
   const std::string &ModuleDataLayout = M.get()->getDataLayout();
   if (!ModuleDataLayout.empty())

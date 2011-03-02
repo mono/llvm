@@ -67,7 +67,9 @@ bool PTXMFInfoExtract::runOnMachineFunction(MachineFunction &MF) {
 
   // FIXME: This is a slow linear scanning
   for (unsigned reg = PTX::NoRegister + 1; reg < PTX::NUM_TARGET_REGS; ++reg)
-    if (MRI.isPhysRegUsed(reg) && reg != retreg && !MFI->isArgReg(reg))
+    if (MRI.isPhysRegUsed(reg) &&
+        reg != retreg &&
+        (MFI->isKernel() || !MFI->isArgReg(reg)))
       MFI->addLocalVarReg(reg);
 
   // Notify MachineFunctionInfo that I've done adding local var reg
@@ -77,12 +79,12 @@ bool PTXMFInfoExtract::runOnMachineFunction(MachineFunction &MF) {
 
   DEBUG(for (PTXMachineFunctionInfo::reg_iterator
              i = MFI->argRegBegin(), e = MFI->argRegEnd();
-	     i != e; ++i)
+             i != e; ++i)
         dbgs() << "Arg Reg: " << *i << "\n";);
 
   DEBUG(for (PTXMachineFunctionInfo::reg_iterator
              i = MFI->localVarRegBegin(), e = MFI->localVarRegEnd();
-	     i != e; ++i)
+             i != e; ++i)
         dbgs() << "Local Var Reg: " << *i << "\n";);
 
   return false;

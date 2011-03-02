@@ -185,8 +185,8 @@ public:
     if (is64Bit())
       Write32(0); // reserved
 
-    assert(OS.tell() - Start == is64Bit() ? 
-           macho::Header64Size : macho::Header32Size);
+    assert(OS.tell() - Start ==
+           (is64Bit() ? macho::Header64Size : macho::Header32Size));
   }
 
   /// WriteSegmentLoadCommand - Write a segment load command.
@@ -274,8 +274,8 @@ public:
     if (is64Bit())
       Write32(0); // reserved3
 
-    assert(OS.tell() - Start == is64Bit() ? macho::Section64Size :
-           macho::Section32Size);
+    assert(OS.tell() - Start == (is64Bit() ? macho::Section64Size :
+           macho::Section32Size));
   }
 
   void WriteSymtabLoadCommand(uint32_t SymbolOffset, uint32_t NumSymbols,
@@ -940,7 +940,8 @@ public:
     case ARM::fixup_arm_ldst_pcrel_12:
     case ARM::fixup_arm_pcrel_10:
     case ARM::fixup_arm_adr_pcrel_12:
-    case ARM::fixup_arm_branch:
+    case ARM::fixup_arm_condbranch:
+    case ARM::fixup_arm_uncondbranch:
       RelocType = unsigned(macho::RIT_ARM_Branch24Bit);
       // Report as 'long', even though that is not quite accurate.
       Log2Size = llvm::Log2_32(4);

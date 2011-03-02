@@ -42,6 +42,10 @@ using namespace llvm;
 /// input vector constant are all simple integer or FP values.
 static Constant *BitCastConstantVector(ConstantVector *CV,
                                        const VectorType *DstTy) {
+
+  if (CV->isAllOnesValue()) return Constant::getAllOnesValue(DstTy);
+  if (CV->isNullValue()) return Constant::getNullValue(DstTy);
+
   // If this cast changes element count then we can't handle it here:
   // doing so requires endianness information.  This should be handled by
   // Analysis/ConstantFolding.cpp
@@ -145,7 +149,7 @@ static Constant *FoldBitCast(Constant *V, const Type *DestTy) {
     // This allows for other simplifications (although some of them
     // can only be handled by Analysis/ConstantFolding.cpp).
     if (isa<ConstantInt>(V) || isa<ConstantFP>(V))
-      return ConstantExpr::getBitCast(ConstantVector::get(&V, 1), DestPTy);
+      return ConstantExpr::getBitCast(ConstantVector::get(V), DestPTy);
   }
 
   // Finally, implement bitcast folding now.   The code below doesn't handle
@@ -511,9 +515,13 @@ Constant *llvm::ConstantFoldCastInstruction(unsigned opc, Constant *V,
       return Constant::getNullValue(DestTy);
     return UndefValue::get(DestTy);
   }
+
   // No compile-time operations on this type yet.
   if (V->getType()->isPPC_FP128Ty() || DestTy->isPPC_FP128Ty())
     return 0;
+
+  if (V->isNullValue() && !DestTy->isX86_MMXTy())
+    return Constant::getNullValue(DestTy);
 
   // If the cast operand is a constant expression, there's a few things we can
   // do to try to simplify it.
@@ -685,10 +693,58 @@ Constant *llvm::ConstantFoldSelectInstruction(Constant *Cond,
   if (ConstantInt *CB = dyn_cast<ConstantInt>(Cond))
     return CB->getZExtValue() ? V1 : V2;
 
+  // Check for zero aggregate and ConstantVector of zeros
+  if (Cond->isNullValue()) return V2;
+
+  if (ConstantVector* CondV = dyn_cast<ConstantVector>(Cond)) {
+
+    if (CondV->isAllOnesValue()) return V1;
+
+    const VectorType *VTy = cast<VectorType>(V1->getType());
+    ConstantVector *CP1 = dyn_cast<ConstantVector>(V1);
+    ConstantVector *CP2 = dyn_cast<ConstantVector>(V2);
+
+    if ((CP1 || isa<ConstantAggregateZero>(V1)) &&
+        (CP2 || isa<ConstantAggregateZero>(V2))) {
+
+      // Find the element type of the returned vector
+      const Type *EltTy = VTy->getElementType();
+      unsigned NumElem = VTy->getNumElements();
+      std::vector<Constant*> Res(NumElem);
+
+      bool Valid = true;
+      for (unsigned i = 0; i < NumElem; ++i) {
+        ConstantInt* c = dyn_cast<ConstantInt>(CondV->getOperand(i));
+        if (!c) {
+          Valid = false;
+          break;
+        }
+        Constant *C1 = CP1 ? CP1->getOperand(i) : Constant::getNullValue(EltTy);
+        Constant *C2 = CP2 ? CP2->getOperand(i) : Constant::getNullValue(EltTy);
+        Res[i] = c->getZExtValue() ? C1 : C2;
+      }
+      // If we were able to build the vector, return it
+      if (Valid) return ConstantVector::get(Res);
+    }
+  }
+
+
   if (isa<UndefValue>(V1)) return V2;
   if (isa<UndefValue>(V2)) return V1;
   if (isa<UndefValue>(Cond)) return V1;
   if (V1 == V2) return V1;
+
+  if (ConstantExpr *TrueVal = dyn_cast<ConstantExpr>(V1)) {
+    if (TrueVal->getOpcode() == Instruction::Select)
+      if (TrueVal->getOperand(0) == Cond)
+	return ConstantExpr::getSelect(Cond, TrueVal->getOperand(1), V2);
+  }
+  if (ConstantExpr *FalseVal = dyn_cast<ConstantExpr>(V2)) {
+    if (FalseVal->getOpcode() == Instruction::Select)
+      if (FalseVal->getOperand(0) == Cond)
+	return ConstantExpr::getSelect(Cond, V1, FalseVal->getOperand(2));
+  }
+
   return 0;
 }
 
@@ -816,7 +872,7 @@ Constant *llvm::ConstantFoldShuffleVectorInstruction(Constant *V1,
     Result.push_back(InElt);
   }
 
-  return ConstantVector::get(&Result[0], Result.size());
+  return ConstantVector::get(Result);
 }
 
 Constant *llvm::ConstantFoldExtractValueInstruction(Constant *Agg,
@@ -1407,7 +1463,7 @@ static bool isMaybeZeroSizedType(const Type *Ty) {
 /// first is less than the second, return -1, if the second is less than the
 /// first, return 1.  If the constants are not integral, return -2.
 ///
-static int IdxCompare(Constant *C1, Constant *C2,  const Type *ElTy) {
+static int IdxCompare(Constant *C1, Constant *C2, const Type *ElTy) {
   if (C1 == C2) return 0;
 
   // Ok, we found a different index.  If they are not ConstantInt, we can't do
@@ -1890,11 +1946,11 @@ Constant *llvm::ConstantFoldCompareInstruction(unsigned short pred,
     // If we can constant fold the comparison of each element, constant fold
     // the whole vector comparison.
     SmallVector<Constant*, 4> ResElts;
-    for (unsigned i = 0, e = C1Elts.size(); i != e; ++i) {
-      // Compare the elements, producing an i1 result or constant expr.
+    // Compare the elements, producing an i1 result or constant expr.
+    for (unsigned i = 0, e = C1Elts.size(); i != e; ++i)
       ResElts.push_back(ConstantExpr::getCompare(pred, C1Elts[i], C2Elts[i]));
-    }
-    return ConstantVector::get(&ResElts[0], ResElts.size());
+
+    return ConstantVector::get(ResElts);
   }
 
   if (C1->getType()->isFloatingPointTy()) {
@@ -1942,7 +1998,7 @@ Constant *llvm::ConstantFoldCompareInstruction(unsigned short pred,
       else if (pred == FCmpInst::FCMP_UGT || pred == FCmpInst::FCMP_OGT) 
         Result = 1;
       break;
-    case ICmpInst::ICMP_NE: // We know that C1 != C2
+    case FCmpInst::FCMP_ONE: // We know that C1 != C2
       // We can only partially decide this relation.
       if (pred == FCmpInst::FCMP_OEQ || pred == FCmpInst::FCMP_UEQ) 
         Result = 0;
@@ -2114,8 +2170,8 @@ static Constant *ConstantFoldGetElementPtrImpl(Constant *C,
       const Type *Ty = GetElementPtrInst::getIndexedType(Ptr, Idxs,
                                                          Idxs+NumIdx);
       assert(Ty != 0 && "Invalid indices for GEP!");
-      return  ConstantPointerNull::get(
-                            PointerType::get(Ty,Ptr->getAddressSpace()));
+      return ConstantPointerNull::get(PointerType::get(Ty,
+                                                       Ptr->getAddressSpace()));
     }
   }
 
@@ -2166,9 +2222,9 @@ static Constant *ConstantFoldGetElementPtrImpl(Constant *C,
     }
 
     // Implement folding of:
-    //    int* getelementptr ([2 x int]* bitcast ([3 x int]* %X to [2 x int]*),
-    //                        long 0, long 0)
-    // To: int* getelementptr ([3 x int]* %X, long 0, long 0)
+    //    i32* getelementptr ([2 x i32]* bitcast ([3 x i32]* %X to [2 x i32]*),
+    //                        i64 0, i64 0)
+    // To: i32* getelementptr ([3 x i32]* %X, i64 0, i64 0)
     //
     if (CE->isCast() && NumIdx > 1 && Idx0->isNullValue()) {
       if (const PointerType *SPT =

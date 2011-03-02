@@ -389,7 +389,7 @@ namespace llvm {
     /// frame.
     void EmitFrameMoves(const std::vector<MachineMove> &Moves,
                         MCSymbol *BaseLabel, bool isEH) const;
-
+    void EmitCFIFrameMoves(const std::vector<MachineMove> &Moves) const;
 
     //===------------------------------------------------------------------===//
     // Inline Asm Support
@@ -445,7 +445,8 @@ namespace llvm {
 
     /// EmitVisibility - This emits visibility information about symbol, if
     /// this is suported by the target.
-    void EmitVisibility(MCSymbol *Sym, unsigned Visibility) const;
+    void EmitVisibility(MCSymbol *Sym, unsigned Visibility,
+                        bool IsDefinition = true) const;
 
     void EmitLinkage(unsigned Linkage, MCSymbol *GVSym) const;
 

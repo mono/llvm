@@ -19,10 +19,40 @@
 namespace llvm {
   class PTXSubtarget : public TargetSubtarget {
     private:
-      bool is_sm20;
+      enum PTXShaderModelEnum {
+        PTX_SM_1_0,
+        PTX_SM_1_3,
+        PTX_SM_2_0
+      };
+
+      enum PTXVersionEnum {
+        PTX_VERSION_1_4,
+        PTX_VERSION_2_0,
+        PTX_VERSION_2_1
+      };
+
+      /// Shader Model supported on the target GPU.
+      PTXShaderModelEnum PTXShaderModel;
+
+      /// PTX Language Version.
+      PTXVersionEnum PTXVersion;
+
+      // The native .f64 type is supported on the hardware.
+      bool SupportsDouble;
+
+      // Use .u64 instead of .u32 for addresses.
+      bool Use64BitAddresses;
 
     public:
       PTXSubtarget(const std::string &TT, const std::string &FS);
+
+      std::string getTargetString() const;
+
+      std::string getPTXVersionString() const;
+
+      bool supportsDouble() const { return SupportsDouble; }
+
+      bool use64BitAddresses() const { return Use64BitAddresses; }
 
       std::string ParseSubtargetFeatures(const std::string &FS,
                                          const std::string &CPU);

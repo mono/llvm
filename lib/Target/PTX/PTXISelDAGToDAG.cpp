@@ -15,6 +15,7 @@
 #include "PTXTargetMachine.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/DerivedTypes.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -40,8 +41,12 @@ class PTXDAGToDAGISel : public SelectionDAGISel {
 #include "PTXGenDAGISel.inc"
 
   private:
+    SDNode *SelectREAD_PARAM(SDNode *Node);
+
     bool isImm(const SDValue &operand);
     bool SelectImm(const SDValue &operand, SDValue &imm);
+
+    const PTXSubtarget& getSubtarget() const;
 }; // class PTXDAGToDAGISel
 } // namespace
 
@@ -57,8 +62,41 @@ PTXDAGToDAGISel::PTXDAGToDAGISel(PTXTargetMachine &TM,
   : SelectionDAGISel(TM, OptLevel) {}
 
 SDNode *PTXDAGToDAGISel::Select(SDNode *Node) {
-  // SelectCode() is auto'gened
-  return SelectCode(Node);
+  if (Node->getOpcode() == PTXISD::READ_PARAM)
+    return SelectREAD_PARAM(Node);
+  else
+    return SelectCode(Node);
+}
+
+SDNode *PTXDAGToDAGISel::SelectREAD_PARAM(SDNode *Node) {
+  SDValue  index = Node->getOperand(1);
+  DebugLoc dl    = Node->getDebugLoc();
+  unsigned opcode;
+
+  if (index.getOpcode() != ISD::TargetConstant)
+    llvm_unreachable("READ_PARAM: index is not ISD::TargetConstant");
+
+  if (Node->getValueType(0) == MVT::i16) {
+    opcode = PTX::LDpiU16;
+  }
+  else if (Node->getValueType(0) == MVT::i32) {
+    opcode = PTX::LDpiU32;
+  }
+  else if (Node->getValueType(0) == MVT::i64) {
+    opcode = PTX::LDpiU64;
+  }
+  else if (Node->getValueType(0) == MVT::f32) {
+    opcode = PTX::LDpiF32;
+  }
+  else if (Node->getValueType(0) == MVT::f64) {
+    opcode = PTX::LDpiF64;
+  }
+  else {
+    llvm_unreachable("Unknown parameter type for ld.param");
+  }
+
+  return PTXInstrInfo::
+    GetPTXMachineNode(CurDAG, opcode, dl, Node->getValueType(0), index);
 }
 
 // Match memory operand of the form [reg+reg]
@@ -134,3 +172,9 @@ bool PTXDAGToDAGISel::SelectImm(const SDValue &operand, SDValue &imm) {
   imm = CurDAG->getTargetConstant(*CN->getConstantIntValue(), MVT::i32);
   return true;
 }
+
+const PTXSubtarget& PTXDAGToDAGISel::getSubtarget() const
+{
+  return TM.getSubtarget<PTXSubtarget>();
+}
+

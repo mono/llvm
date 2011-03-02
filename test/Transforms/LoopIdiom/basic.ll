@@ -273,3 +273,77 @@ for.end13:                                        ; preds = %for.inc10
 ; CHECK-NOT: store
 ; CHECK: ret void
 }
+
+; On darwin10 (which is the triple in this .ll file) this loop can be turned
+; into a memset_pattern call.
+; rdar://9009151
+define void @test11_pattern(i32* nocapture %P) nounwind ssp {
+entry:
+  br label %for.body
+
+for.body:                                         ; preds = %entry, %for.body
+  %indvar = phi i64 [ 0, %entry ], [ %indvar.next, %for.body ]
+  %arrayidx = getelementptr i32* %P, i64 %indvar
+  store i32 1, i32* %arrayidx, align 4
+  %indvar.next = add i64 %indvar, 1
+  %exitcond = icmp eq i64 %indvar.next, 10000
+  br i1 %exitcond, label %for.end, label %for.body
+
+for.end:                                          ; preds = %for.body
+  ret void
+; CHECK: @test11_pattern
+; CHECK-NEXT: entry:
+; CHECK-NEXT: bitcast
+; CHECK-NEXT: memset_pattern
+; CHECK-NOT: store
+; CHECK: ret void
+}
+
+; Store of null should turn into memset of zero.
+define void @test12(i32** nocapture %P) nounwind ssp {
+entry:
+  br label %for.body
+
+for.body:                                         ; preds = %entry, %for.body
+  %indvar = phi i64 [ 0, %entry ], [ %indvar.next, %for.body ]
+  %arrayidx = getelementptr i32** %P, i64 %indvar
+  store i32* null, i32** %arrayidx, align 4
+  %indvar.next = add i64 %indvar, 1
+  %exitcond = icmp eq i64 %indvar.next, 10000
+  br i1 %exitcond, label %for.end, label %for.body
+
+for.end:                                          ; preds = %for.body
+  ret void
+; CHECK: @test12
+; CHECK-NEXT: entry:
+; CHECK-NEXT: bitcast
+; CHECK-NEXT: call void @llvm.memset.p0i8.i64(i8* %P1, i8 0, i64 80000, i32 4, i1 false)
+; CHECK-NOT: store
+; CHECK: ret void
+}
+
+@G = global i32 5
+
+; This store-of-address loop can be turned into a memset_pattern call.
+; rdar://9009151
+define void @test13_pattern(i32** nocapture %P) nounwind ssp {
+entry:
+  br label %for.body
+
+for.body:                                         ; preds = %entry, %for.body
+  %indvar = phi i64 [ 0, %entry ], [ %indvar.next, %for.body ]
+  %arrayidx = getelementptr i32** %P, i64 %indvar
+  store i32* @G, i32** %arrayidx, align 4
+  %indvar.next = add i64 %indvar, 1
+  %exitcond = icmp eq i64 %indvar.next, 10000
+  br i1 %exitcond, label %for.end, label %for.body
+
+for.end:                                          ; preds = %for.body
+  ret void
+; CHECK: @test13_pattern
+; CHECK-NEXT: entry:
+; CHECK-NEXT: bitcast
+; CHECK-NEXT: memset_pattern
+; CHECK-NOT: store
+; CHECK: ret void
+}

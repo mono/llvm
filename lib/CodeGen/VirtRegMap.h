@@ -35,6 +35,7 @@ namespace llvm {
   class TargetInstrInfo;
   class TargetRegisterInfo;
   class raw_ostream;
+  class SlotIndexes;
 
   class VirtRegMap : public MachineFunctionPass {
   public:
@@ -213,8 +214,17 @@ namespace llvm {
     }
 
     /// @brief returns the live interval virtReg is split from.
-    unsigned getPreSplitReg(unsigned virtReg) {
+    unsigned getPreSplitReg(unsigned virtReg) const {
       return Virt2SplitMap[virtReg];
+    }
+
+    /// getOriginal - Return the original virtual register that VirtReg descends
+    /// from through splitting.
+    /// A register that was not created by splitting is its own original.
+    /// This operation is idempotent.
+    unsigned getOriginal(unsigned VirtReg) const {
+      unsigned Orig = getPreSplitReg(VirtReg);
+      return Orig ? Orig : VirtReg;
     }
 
     /// @brief returns true if the specified virtual register is not
@@ -492,6 +502,13 @@ namespace llvm {
       }
       return 0;
     }
+
+    /// rewrite - Rewrite all instructions in MF to use only physical registers
+    /// by mapping all virtual register operands to their assigned physical
+    /// registers.
+    ///
+    /// @param Indexes Optionally remove deleted instructions from indexes.
+    void rewrite(SlotIndexes *Indexes);
 
     void print(raw_ostream &OS, const Module* M = 0) const;
     void dump() const;

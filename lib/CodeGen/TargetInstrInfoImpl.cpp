@@ -24,10 +24,15 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/ScoreboardHazardRecognizer.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
+
+static cl::opt<bool> DisableHazardRecognizer(
+  "disable-sched-hazard", cl::Hidden, cl::init(false),
+  cl::desc("Disable hazard detection during preRA scheduling"));
 
 /// ReplaceTailWithBranchTo - Delete the instruction OldInst and everything
 /// after it, replacing it with an unconditional branch to NewDest.
@@ -166,8 +171,10 @@ void TargetInstrInfoImpl::reMaterialize(MachineBasicBlock &MBB,
   MBB.insert(I, MI);
 }
 
-bool TargetInstrInfoImpl::produceSameValue(const MachineInstr *MI0,
-                                           const MachineInstr *MI1) const {
+bool
+TargetInstrInfoImpl::produceSameValue(const MachineInstr *MI0,
+                                      const MachineInstr *MI1,
+                                      const MachineRegisterInfo *MRI) const {
   return MI0->isIdenticalTo(MI1, MachineInstr::IgnoreVRegDefs);
 }
 
@@ -419,7 +426,13 @@ bool TargetInstrInfoImpl::isSchedulingBoundary(const MachineInstr *MI,
   return false;
 }
 
-// Default implementation of CreateTargetPreRAHazardRecognizer.
+// Provide a global flag for disabling the PreRA hazard recognizer that targets
+// may choose to honor.
+bool TargetInstrInfoImpl::usePreRAHazardRecognizer() const {
+  return !DisableHazardRecognizer;
+}
+
+// Default implementation of CreateTargetRAHazardRecognizer.
 ScheduleHazardRecognizer *TargetInstrInfoImpl::
 CreateTargetHazardRecognizer(const TargetMachine *TM,
                              const ScheduleDAG *DAG) const {

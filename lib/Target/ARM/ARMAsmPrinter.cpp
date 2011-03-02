@@ -20,6 +20,7 @@
 #include "ARMBaseRegisterInfo.h"
 #include "ARMConstantPoolValue.h"
 #include "ARMMachineFunctionInfo.h"
+#include "ARMMCExpr.h"
 #include "ARMTargetMachine.h"
 #include "ARMTargetObjectFile.h"
 #include "InstPrinter/ARMInstPrinter.h"
@@ -65,6 +66,7 @@ namespace {
   public:
     virtual void MaybeSwitchVendor(StringRef Vendor) = 0;
     virtual void EmitAttribute(unsigned Attribute, unsigned Value) = 0;
+    virtual void EmitTextAttribute(unsigned Attribute, StringRef String) = 0;
     virtual void Finish() = 0;
     virtual ~AttributeEmitter() {}
   };
@@ -81,6 +83,19 @@ namespace {
                            Twine(Attribute) + ", " + Twine(Value));
     }
 
+    void EmitTextAttribute(unsigned Attribute, StringRef String) {
+      switch (Attribute) {
+      case ARMBuildAttrs::CPU_name:
+        Streamer.EmitRawText(StringRef("\t.cpu ") + LowercaseString(String));
+        break;
+      /* GAS requires .fpu to be emitted regardless of EABI attribute */
+      case ARMBuildAttrs::Advanced_SIMD_arch:
+      case ARMBuildAttrs::VFP_arch:
+        Streamer.EmitRawText(StringRef("\t.fpu ") + LowercaseString(String));
+        break;    
+      default: assert(0 && "Unsupported Text attribute in ASM Mode"); break;
+      }
+    }
     void Finish() { }
   };
 
@@ -112,6 +127,12 @@ namespace {
       // FIXME: should be ULEB
       Contents += Attribute;
       Contents += Value;
+    }
+
+    void EmitTextAttribute(unsigned Attribute, StringRef String) {
+      Contents += Attribute;
+      Contents += UppercaseString(String);
+      Contents += 0;
     }
 
     void Finish() {
@@ -458,10 +479,13 @@ void ARMAsmPrinter::emitAttributes() {
 
   emitARMAttributeSection();
 
+  /* GAS expect .fpu to be emitted, regardless of VFP build attribute */
+  bool emitFPU = false;
   AttributeEmitter *AttrEmitter;
-  if (OutStreamer.hasRawTextSupport())
+  if (OutStreamer.hasRawTextSupport()) {
     AttrEmitter = new AsmAttributeEmitter(OutStreamer);
-  else {
+    emitFPU = true;
+  } else {
     MCObjectStreamer &O = static_cast<MCObjectStreamer&>(OutStreamer);
     AttrEmitter = new ObjectAttributeEmitter(O);
   }
@@ -469,32 +493,79 @@ void ARMAsmPrinter::emitAttributes() {
   AttrEmitter->MaybeSwitchVendor("aeabi");
 
   std::string CPUString = Subtarget->getCPUString();
-  if (OutStreamer.hasRawTextSupport()) {
-    if (CPUString != "generic")
-      OutStreamer.EmitRawText(StringRef("\t.cpu ") + CPUString);
-  } else {
-    assert(CPUString == "generic" && "Unsupported .cpu attribute for ELF/.o");
+
+  if (CPUString == "cortex-a8" ||
+      Subtarget->isCortexA8()) {
+    AttrEmitter->EmitTextAttribute(ARMBuildAttrs::CPU_name, "cortex-a8");
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::CPU_arch, ARMBuildAttrs::v7);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::CPU_arch_profile,
+                               ARMBuildAttrs::ApplicationProfile);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ARM_ISA_use,
+                               ARMBuildAttrs::Allowed);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::THUMB_ISA_use,
+                               ARMBuildAttrs::AllowThumb32);
+    // Fixme: figure out when this is emitted.
+    //AttrEmitter->EmitAttribute(ARMBuildAttrs::WMMX_arch,
+    //                           ARMBuildAttrs::AllowWMMXv1);
+    //
+
+    /// ADD additional Else-cases here!
+  } else if (CPUString == "generic") {
     // FIXME: Why these defaults?
     AttrEmitter->EmitAttribute(ARMBuildAttrs::CPU_arch, ARMBuildAttrs::v4T);
-    AttrEmitter->EmitAttribute(ARMBuildAttrs::ARM_ISA_use, 1);
-    AttrEmitter->EmitAttribute(ARMBuildAttrs::THUMB_ISA_use, 1);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ARM_ISA_use,
+                               ARMBuildAttrs::Allowed);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::THUMB_ISA_use,
+                               ARMBuildAttrs::Allowed);
   }
 
-  // FIXME: Emit FPU type
-  if (Subtarget->hasVFP2())
-    AttrEmitter->EmitAttribute(ARMBuildAttrs::VFP_arch, 2);
+  if (Subtarget->hasNEON()) {
+    /* NEON is not exactly a VFP architecture, but GAS emit one of
+     * neon/vfpv3/vfpv2 for .fpu parameters */
+    AttrEmitter->EmitTextAttribute(ARMBuildAttrs::Advanced_SIMD_arch, "neon");
+    /* If emitted for NEON, omit from VFP below, since you can have both
+     * NEON and VFP in build attributes but only one .fpu */
+    emitFPU = false;
+  }
+
+  /* VFPv3 + .fpu */
+  if (Subtarget->hasVFP3()) {
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::VFP_arch,
+                               ARMBuildAttrs::AllowFPv3A);
+    if (emitFPU)
+      AttrEmitter->EmitTextAttribute(ARMBuildAttrs::VFP_arch, "vfpv3");
+
+  /* VFPv2 + .fpu */
+  } else if (Subtarget->hasVFP2()) {
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::VFP_arch,
+                               ARMBuildAttrs::AllowFPv2);
+    if (emitFPU)
+      AttrEmitter->EmitTextAttribute(ARMBuildAttrs::VFP_arch, "vfpv2");
+  }
+
+  /* TODO: ARMBuildAttrs::Allowed is not completely accurate,
+   * since NEON can have 1 (allowed) or 2 (fused MAC operations) */
+  if (Subtarget->hasNEON()) {
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::Advanced_SIMD_arch,
+                               ARMBuildAttrs::Allowed);
+  }
 
   // Signal various FP modes.
   if (!UnsafeFPMath) {
-    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_denormal, 1);
-    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_exceptions, 1);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_denormal,
+                               ARMBuildAttrs::Allowed);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_exceptions,
+                               ARMBuildAttrs::Allowed);
   }
 
   if (NoInfsFPMath && NoNaNsFPMath)
-    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_number_model, 1);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_number_model,
+                               ARMBuildAttrs::Allowed);
   else
-    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_number_model, 3);
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_number_model,
+                               ARMBuildAttrs::AllowIEE754);
 
+  // FIXME: add more flags to ARMBuildAttrs.h
   // 8-bytes alignment stuff.
   AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_align8_needed, 1);
   AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_align8_preserved, 1);
@@ -506,7 +577,8 @@ void ARMAsmPrinter::emitAttributes() {
   }
   // FIXME: Should we signal R9 usage?
 
-  AttrEmitter->EmitAttribute(ARMBuildAttrs::DIV_use, 1);
+  if (Subtarget->hasDivide())
+    AttrEmitter->EmitAttribute(ARMBuildAttrs::DIV_use, 1);
 
   AttrEmitter->Finish();
   delete AttrEmitter;
@@ -558,6 +630,25 @@ getModifierVariantKind(ARMCP::ARMCPModifier Modifier) {
   return MCSymbolRefExpr::VK_None;
 }
 
+MCSymbol *ARMAsmPrinter::GetARMGVSymbol(const GlobalValue *GV) {
+  bool isIndirect = Subtarget->isTargetDarwin() &&
+    Subtarget->GVIsIndirectSymbol(GV, TM.getRelocationModel());
+  if (!isIndirect)
+    return Mang->getSymbol(GV);
+
+  // FIXME: Remove this when Darwin transition to @GOT like syntax.
+  MCSymbol *MCSym = GetSymbolWithGlobalValueBase(GV, "$non_lazy_ptr");
+  MachineModuleInfoMachO &MMIMachO =
+    MMI->getObjFileInfo<MachineModuleInfoMachO>();
+  MachineModuleInfoImpl::StubValueTy &StubSym =
+    GV->hasHiddenVisibility() ? MMIMachO.getHiddenGVStubEntry(MCSym) :
+    MMIMachO.getGVStubEntry(MCSym);
+  if (StubSym.getPointer() == 0)
+    StubSym = MachineModuleInfoImpl::
+      StubValueTy(Mang->getSymbol(GV), !GV->hasInternalLinkage());
+  return MCSym;
+}
+
 void ARMAsmPrinter::
 EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV) {
   int Size = TM.getTargetData()->getTypeAllocSize(MCPV->getType());
@@ -574,23 +665,7 @@ EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV) {
     MCSym = GetBlockAddressSymbol(ACPV->getBlockAddress());
   } else if (ACPV->isGlobalValue()) {
     const GlobalValue *GV = ACPV->getGV();
-    bool isIndirect = Subtarget->isTargetDarwin() &&
-      Subtarget->GVIsIndirectSymbol(GV, TM.getRelocationModel());
-    if (!isIndirect)
-      MCSym = Mang->getSymbol(GV);
-    else {
-      // FIXME: Remove this when Darwin transition to @GOT like syntax.
-      MCSym = GetSymbolWithGlobalValueBase(GV, "$non_lazy_ptr");
-
-      MachineModuleInfoMachO &MMIMachO =
-        MMI->getObjFileInfo<MachineModuleInfoMachO>();
-      MachineModuleInfoImpl::StubValueTy &StubSym =
-        GV->hasHiddenVisibility() ? MMIMachO.getHiddenGVStubEntry(MCSym) :
-        MMIMachO.getGVStubEntry(MCSym);
-      if (StubSym.getPointer() == 0)
-        StubSym = MachineModuleInfoImpl::
-          StubValueTy(Mang->getSymbol(GV), !GV->hasInternalLinkage());
-    }
+    MCSym = GetARMGVSymbol(GV);
   } else {
     assert(ACPV->isExtSymbol() && "unrecognized constant pool value");
     MCSym = GetExternalSymbolSymbol(ACPV->getSymbol());
@@ -758,7 +833,8 @@ void ARMAsmPrinter::EmitPatchedInstruction(const MachineInstr *MI,
 }
 
 void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
-  switch (MI->getOpcode()) {
+  unsigned Opc = MI->getOpcode();
+  switch (Opc) {
   default: break;
   case ARM::t2ADDrSPi:
   case ARM::t2ADDrSPi12:
@@ -877,6 +953,79 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
       TmpInst.addOperand(MCOperand::CreateReg(0));
       OutStreamer.EmitInstruction(TmpInst);
     }
+    return;
+  }
+  case ARM::MOVi16_ga_pcrel:
+  case ARM::t2MOVi16_ga_pcrel: {
+    MCInst TmpInst;
+    TmpInst.setOpcode(Opc == ARM::MOVi16_ga_pcrel? ARM::MOVi16 : ARM::t2MOVi16);
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+
+    unsigned TF = MI->getOperand(1).getTargetFlags();
+    bool isPIC = TF == ARMII::MO_LO16_NONLAZY_PIC;
+    const GlobalValue *GV = MI->getOperand(1).getGlobal();
+    MCSymbol *GVSym = GetARMGVSymbol(GV);
+    const MCExpr *GVSymExpr = MCSymbolRefExpr::Create(GVSym, OutContext);
+    if (isPIC) {
+      MCSymbol *LabelSym = getPICLabel(MAI->getPrivateGlobalPrefix(),
+                                       getFunctionNumber(),
+                                       MI->getOperand(2).getImm(), OutContext);
+      const MCExpr *LabelSymExpr= MCSymbolRefExpr::Create(LabelSym, OutContext);
+      unsigned PCAdj = (Opc == ARM::MOVi16_ga_pcrel) ? 8 : 4;
+      const MCExpr *PCRelExpr =
+        ARMMCExpr::CreateLower16(MCBinaryExpr::CreateSub(GVSymExpr,
+                                  MCBinaryExpr::CreateAdd(LabelSymExpr,
+                                      MCConstantExpr::Create(PCAdj, OutContext),
+                                          OutContext), OutContext), OutContext);
+      TmpInst.addOperand(MCOperand::CreateExpr(PCRelExpr));
+    } else {
+      const MCExpr *RefExpr= ARMMCExpr::CreateLower16(GVSymExpr, OutContext);
+      TmpInst.addOperand(MCOperand::CreateExpr(RefExpr));
+    }
+
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    // Add 's' bit operand (always reg0 for this)
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  case ARM::MOVTi16_ga_pcrel:
+  case ARM::t2MOVTi16_ga_pcrel: {
+    MCInst TmpInst;
+    TmpInst.setOpcode(Opc == ARM::MOVTi16_ga_pcrel
+                      ? ARM::MOVTi16 : ARM::t2MOVTi16);
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(1).getReg()));
+
+    unsigned TF = MI->getOperand(2).getTargetFlags();
+    bool isPIC = TF == ARMII::MO_HI16_NONLAZY_PIC;
+    const GlobalValue *GV = MI->getOperand(2).getGlobal();
+    MCSymbol *GVSym = GetARMGVSymbol(GV);
+    const MCExpr *GVSymExpr = MCSymbolRefExpr::Create(GVSym, OutContext);
+    if (isPIC) {
+      MCSymbol *LabelSym = getPICLabel(MAI->getPrivateGlobalPrefix(),
+                                       getFunctionNumber(),
+                                       MI->getOperand(3).getImm(), OutContext);
+      const MCExpr *LabelSymExpr= MCSymbolRefExpr::Create(LabelSym, OutContext);
+      unsigned PCAdj = (Opc == ARM::MOVTi16_ga_pcrel) ? 8 : 4;
+      const MCExpr *PCRelExpr =
+        ARMMCExpr::CreateUpper16(MCBinaryExpr::CreateSub(GVSymExpr,
+                                   MCBinaryExpr::CreateAdd(LabelSymExpr,
+                                      MCConstantExpr::Create(PCAdj, OutContext),
+                                          OutContext), OutContext), OutContext);
+      TmpInst.addOperand(MCOperand::CreateExpr(PCRelExpr));
+    } else {
+      const MCExpr *RefExpr= ARMMCExpr::CreateUpper16(GVSymExpr, OutContext);
+      TmpInst.addOperand(MCOperand::CreateExpr(RefExpr));
+    }
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    // Add 's' bit operand (always reg0 for this)
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
     return;
   }
   case ARM::tPICADD: {

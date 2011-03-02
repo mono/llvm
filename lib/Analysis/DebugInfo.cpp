@@ -199,7 +199,7 @@ bool DIDescriptor::isGlobal() const {
   return isGlobalVariable();
 }
 
-/// isUnspecifiedParmeter - Return true if the specified tab is
+/// isUnspecifiedParmeter - Return true if the specified tag is
 /// DW_TAG_unspecified_parameters.
 bool DIDescriptor::isUnspecifiedParameter() const {
   return DbgNode && getTag() == dwarf::DW_TAG_unspecified_parameters;
@@ -219,6 +219,18 @@ bool DIDescriptor::isScope() const {
     break;
   }
   return false;
+}
+
+/// isTemplateTypeParameter - Return true if the specified tag is
+/// DW_TAG_template_type_parameter.
+bool DIDescriptor::isTemplateTypeParameter() const {
+  return DbgNode && getTag() == dwarf::DW_TAG_template_type_parameter;
+}
+
+/// isTemplateValueParameter - Return true if the specified tag is
+/// DW_TAG_template_value_parameter.
+bool DIDescriptor::isTemplateValueParameter() const {
+  return DbgNode && getTag() == dwarf::DW_TAG_template_value_parameter;
 }
 
 /// isCompileUnit - Return true if the specified tag is DW_TAG_compile_unit.
@@ -1560,89 +1572,6 @@ bool DebugInfoFinder::addSubprogram(DISubprogram SP) {
     return false;
 
   SPs.push_back(SP);
-  return true;
-}
-
-/// Find the debug info descriptor corresponding to this global variable.
-static Value *findDbgGlobalDeclare(GlobalVariable *V) {
-  const Module *M = V->getParent();
-  NamedMDNode *NMD = M->getNamedMetadata("llvm.dbg.gv");
-  if (!NMD)
-    return 0;
-
-  for (unsigned i = 0, e = NMD->getNumOperands(); i != e; ++i) {
-    DIDescriptor DIG(cast<MDNode>(NMD->getOperand(i)));
-    if (!DIG.isGlobalVariable())
-      continue;
-    if (DIGlobalVariable(DIG).getGlobal() == V)
-      return DIG;
-  }
-  return 0;
-}
-
-/// Finds the llvm.dbg.declare intrinsic corresponding to this value if any.
-/// It looks through pointer casts too.
-static const DbgDeclareInst *findDbgDeclare(const Value *V) {
-  V = V->stripPointerCasts();
-
-  if (!isa<Instruction>(V) && !isa<Argument>(V))
-    return 0;
-
-  const Function *F = NULL;
-  if (const Instruction *I = dyn_cast<Instruction>(V))
-    F = I->getParent()->getParent();
-  else if (const Argument *A = dyn_cast<Argument>(V))
-    F = A->getParent();
-
-  for (Function::const_iterator FI = F->begin(), FE = F->end(); FI != FE; ++FI)
-    for (BasicBlock::const_iterator BI = (*FI).begin(), BE = (*FI).end();
-         BI != BE; ++BI)
-      if (const DbgDeclareInst *DDI = dyn_cast<DbgDeclareInst>(BI))
-        if (DDI->getAddress() == V)
-          return DDI;
-
-  return 0;
-}
-
-bool llvm::getLocationInfo(const Value *V, std::string &DisplayName,
-                           std::string &Type, unsigned &LineNo,
-                           std::string &File, std::string &Dir) {
-  DICompileUnit Unit;
-  DIType TypeD;
-
-  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(const_cast<Value*>(V))) {
-    Value *DIGV = findDbgGlobalDeclare(GV);
-    if (!DIGV) return false;
-    DIGlobalVariable Var(cast<MDNode>(DIGV));
-
-    StringRef D = Var.getDisplayName();
-    if (!D.empty())
-      DisplayName = D;
-    LineNo = Var.getLineNumber();
-    Unit = Var.getCompileUnit();
-    TypeD = Var.getType();
-  } else {
-    const DbgDeclareInst *DDI = findDbgDeclare(V);
-    if (!DDI) return false;
-    DIVariable Var(cast<MDNode>(DDI->getVariable()));
-
-    StringRef D = Var.getName();
-    if (!D.empty())
-      DisplayName = D;
-    LineNo = Var.getLineNumber();
-    Unit = Var.getCompileUnit();
-    TypeD = Var.getType();
-  }
-
-  StringRef T = TypeD.getName();
-  if (!T.empty())
-    Type = T;
-  StringRef F = Unit.getFilename();
-  if (!F.empty())
-    File = F;
-  StringRef D = Unit.getDirectory();
-  if (!D.empty())
-    Dir = D;
   return true;
 }
 

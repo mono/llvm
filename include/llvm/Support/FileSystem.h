@@ -30,6 +30,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/DataTypes.h"
+#include "llvm/Support/PathV1.h"
 #include "llvm/Support/system_error.h"
 #include <ctime>
 #include <iterator>
@@ -455,11 +456,21 @@ error_code has_magic(const Twine &path, const Twine &magic, bool &result);
 /// @param path Input path.
 /// @param len Number of magic bytes to get.
 /// @param result Set to the first \a len bytes in the file pointed to by
-///               \a path.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
+///               \a path. Or the entire file if file_size(path) < len, in which
+///               case result.size() returns the size of the file.
+/// @results errc::success if result has been successfully set,
+///          errc::value_too_large if len is larger then the file pointed to by
+///          \a path, otherwise a platform specific error_code.
 error_code get_magic(const Twine &path, uint32_t len,
                      SmallVectorImpl<char> &result);
+
+/// @brief Get and identify \a path's type based on its content.
+///
+/// @param path Input path.
+/// @param result Set to the type of file, or LLVMFileType::Unknown_FileType.
+/// @results errc::success if result has been successfully set, otherwise a
+///          platform specific error_code.
+error_code identify_magic(const Twine &path, LLVMFileType &result);
 
 /// @brief Is file bitcode?
 ///
@@ -584,7 +595,7 @@ public:
   void replace_filename(const Twine &filename, file_status st = file_status(),
                               file_status symlink_st = file_status());
 
-  StringRef path() const { return Path; }
+  const std::string &path() const { return Path; }
   error_code status(file_status &result) const;
   error_code symlink_status(file_status &result) const;
 

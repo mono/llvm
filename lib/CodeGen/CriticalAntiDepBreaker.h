@@ -48,7 +48,7 @@ class TargetRegisterInfo;
     /// pointer.
     std::vector<const TargetRegisterClass*> Classes;
 
-    /// RegRegs - Map registers to all their references within a live range.
+    /// RegRefs - Map registers to all their references within a live range.
     std::multimap<unsigned, MachineOperand *> RegRefs;
     typedef std::multimap<unsigned, MachineOperand *>::const_iterator
       RegRefIter;
@@ -92,9 +92,9 @@ class TargetRegisterInfo;
   private:
     void PrescanInstruction(MachineInstr *MI);
     void ScanInstruction(MachineInstr *MI, unsigned Count);
-    bool isNewRegModifiedByRefs(RegRefIter RegRefBegin,
-                                RegRefIter RegRefEnd,
-                                unsigned NewReg);
+    bool isNewRegClobberedByRefs(RegRefIter RegRefBegin,
+                                 RegRefIter RegRefEnd,
+                                 unsigned NewReg);
     unsigned findSuitableFreeRegister(RegRefIter RegRefBegin,
                                       RegRefIter RegRefEnd,
                                       unsigned AntiDepReg,

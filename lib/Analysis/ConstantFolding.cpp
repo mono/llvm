@@ -54,7 +54,7 @@ static Constant *FoldBitCast(Constant *C, const Type *DestTy,
   // vector so the code below can handle it uniformly.
   if (isa<ConstantFP>(C) || isa<ConstantInt>(C)) {
     Constant *Ops = C; // don't take the address of C!
-    return FoldBitCast(ConstantVector::get(&Ops, 1), DestTy, TD);
+    return FoldBitCast(ConstantVector::get(Ops), DestTy, TD);
   }
   
   // If this is a bitcast from constant vector -> vector, fold it.
@@ -167,7 +167,7 @@ static Constant *FoldBitCast(Constant *C, const Type *DestTy,
     }
   }
   
-  return ConstantVector::get(Result.data(), Result.size());
+  return ConstantVector::get(Result);
 }
 
 
@@ -340,6 +340,13 @@ static bool ReadDataFromGlobal(Constant *C, uint64_t ByteOffset,
     return true;
   }
   
+  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(C)) {
+    if (CE->getOpcode() == Instruction::IntToPtr &&
+        CE->getOperand(0)->getType() == TD.getIntPtrType(CE->getContext())) 
+        return ReadDataFromGlobal(CE->getOperand(0), ByteOffset, CurPtr, 
+                                  BytesLeft, TD);
+  }
+
   // Otherwise, unknown initializer type.
   return false;
 }
@@ -467,7 +474,8 @@ Constant *llvm::ConstantFoldLoadFromConstPtr(Constant *C,
   
   // If this load comes from anywhere in a constant global, and if the global
   // is all undef or zero, we know what it loads.
-  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(GetUnderlyingObject(CE))){
+  if (GlobalVariable *GV =
+        dyn_cast<GlobalVariable>(GetUnderlyingObject(CE, TD))) {
     if (GV->isConstant() && GV->hasDefinitiveInitializer()) {
       const Type *ResTy = cast<PointerType>(C->getType())->getElementType();
       if (GV->getInitializer()->isNullValue())
@@ -581,7 +589,7 @@ static Constant *SymbolicallyEvaluateGEP(Constant *const *Ops, unsigned NumOps,
       if (NumOps == 2 &&
           cast<PointerType>(ResultTy)->getElementType()->isIntegerTy(8)) {
         ConstantExpr *CE = dyn_cast<ConstantExpr>(Ops[1]);
-        assert(CE->getType() == IntPtrTy &&
+        assert((CE == 0 || CE->getType() == IntPtrTy) &&
                "CastGEPIndices didn't canonicalize index types!");
         if (CE && CE->getOpcode() == Instruction::Sub &&
             CE->getOperand(0)->isNullValue()) {

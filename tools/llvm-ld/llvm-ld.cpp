@@ -178,7 +178,7 @@ static char ** CopyEnv(char ** const envp) {
 
   // Allocate a new environment list.
   char **newenv = new char* [entries];
-  if ((newenv = new char* [entries]) == NULL)
+  if (newenv == NULL)
     return NULL;
 
   // Make a copy of the list.  Don't forget the NULL that ends the list.
@@ -410,7 +410,7 @@ static int GenerateNative(const std::string &OutputFilename,
 static void EmitShellScript(char **argv, Module *M) {
   if (Verbose)
     errs() << "Emitting Shell Script\n";
-#if defined(_WIN32) || defined(__CYGWIN__)
+#if defined(_WIN32)
   // Windows doesn't support #!/bin/sh style shell scripts in .exe files.  To
   // support windows systems, we copy the llvm-stub.exe executable from the
   // build tree to the destination file.

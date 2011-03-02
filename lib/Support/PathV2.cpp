@@ -20,16 +20,7 @@
 
 namespace {
   using llvm::StringRef;
-
-  bool is_separator(const char value) {
-    switch(value) {
-#ifdef LLVM_ON_WIN32
-    case '\\': // fall through
-#endif
-    case '/': return true;
-    default: return false;
-    }
-  }
+  using llvm::sys::path::is_separator;
 
 #ifdef LLVM_ON_WIN32
   const StringRef separators = "\\/";
@@ -154,7 +145,7 @@ namespace {
 
     return end_pos;
   }
-}
+} // end unnamed namespace
 
 namespace llvm {
 namespace sys  {
@@ -400,6 +391,12 @@ void append(SmallVectorImpl<char> &path, const Twine &a,
   }
 }
 
+void append(SmallVectorImpl<char> &path,
+            const_iterator begin, const_iterator end) {
+  for (; begin != end; ++begin)
+    path::append(path, *begin);
+}
+
 const StringRef parent_path(StringRef path) {
   size_t end_pos = parent_path_end(path);
   if (end_pos == StringRef::npos)
@@ -481,6 +478,16 @@ const StringRef extension(StringRef path) {
       return StringRef();
     else
       return fname.substr(pos);
+}
+
+bool is_separator(char value) {
+  switch(value) {
+#ifdef LLVM_ON_WIN32
+    case '\\': // fall through
+#endif
+    case '/': return true;
+    default: return false;
+  }
 }
 
 bool has_root_name(const Twine &path) {
@@ -686,38 +693,30 @@ void directory_entry::replace_filename(const Twine &filename, file_status st,
 }
 
 error_code has_magic(const Twine &path, const Twine &magic, bool &result) {
-  SmallString<128> PathStorage;
   SmallString<32>  MagicStorage;
-  StringRef Path  = path.toNullTerminatedStringRef(PathStorage);
-  StringRef Magic = magic.toNullTerminatedStringRef(MagicStorage);
+  StringRef Magic = magic.toStringRef(MagicStorage);
+  SmallString<32> Buffer;
 
-  assert(Magic.size() > 0 && "magic must be non-empty!");
-
-  SmallString<32> BufferStorage;
-  BufferStorage.reserve(Magic.size());
-
-  // Open file.
-  std::FILE *file = std::fopen(Path.data(), "rb");
-  if (file == 0)
-    return error_code(errno, posix_category());
-  size_t size = ::fread(BufferStorage.data(), 1, Magic.size(), file);
-  if (size != Magic.size()) {
-    int error = errno;
-    bool eof = std::feof(file) != 0;
-    std::fclose(file);
-    if (eof) {
-      // EOF, return false.
+  if (error_code ec = get_magic(path, Magic.size(), Buffer)) {
+    if (ec == errc::value_too_large) {
+      // Magic.size() > file_size(Path).
       result = false;
       return success;
     }
-    return error_code(error, posix_category());
+    return ec;
   }
-  std::fclose(file);
 
-  if (std::memcmp(BufferStorage.data(), Magic.data(), Magic.size()) != 0)
-    result = false;
-  else
-    result = true;
+  result = Magic == Buffer;
+  return success;
+}
+
+error_code identify_magic(const Twine &path, LLVMFileType &result) {
+  SmallString<32> Magic;
+  error_code ec = get_magic(path, Magic.capacity(), Magic);
+  if (ec && ec != errc::value_too_large)
+    return ec;
+
+  result = IdentifyFileType(Magic.data(), Magic.size());
   return success;
 }
 
@@ -745,7 +744,7 @@ error_code remove_all_r(StringRef path, file_type ft, uint32_t &count) {
 
   return success;
 }
-}
+} // end unnamed namespace
 
 error_code remove_all(const Twine &path, uint32_t &num_removed) {
   SmallString<128> path_storage;

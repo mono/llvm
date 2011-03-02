@@ -39,18 +39,18 @@ static MCStreamer *createMCStreamer(const Target &T, const std::string &TT,
                                     MCContext &Ctx, TargetAsmBackend &TAB,
                                     raw_ostream &OS,
                                     MCCodeEmitter *Emitter,
-                                    bool RelaxAll) {
+                                    bool RelaxAll,
+                                    bool NoExecStack) {
   switch (Triple(TT).getOS()) {
   case Triple::Darwin:
     return createMachOStreamer(Ctx, TAB, OS, Emitter, RelaxAll);
   case Triple::MinGW32:
-  case Triple::MinGW64:
   case Triple::Cygwin:
   case Triple::Win32:
     llvm_unreachable("ARM does not support Windows COFF format");
     return NULL;
   default:
-    return createELFStreamer(Ctx, TAB, OS, Emitter, RelaxAll);
+    return createELFStreamer(Ctx, TAB, OS, Emitter, RelaxAll, NoExecStack);
   }
 }
 

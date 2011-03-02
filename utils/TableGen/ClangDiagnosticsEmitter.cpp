@@ -170,7 +170,13 @@ void ClangDiagsDefsEmitter::run(raw_ostream &OS) {
       OS << ", true";
     else
       OS << ", false";
-    
+
+    // Access control bit
+    if (R.getValueAsBit("AccessControl"))
+      OS << ", true";
+    else
+      OS << ", false";
+
     // Category number.
     OS << ", " << CategoryIDs.getID(getDiagnosticCategory(&R, DGParentMap));
     OS << ")\n";
@@ -181,11 +187,13 @@ void ClangDiagsDefsEmitter::run(raw_ostream &OS) {
 // Warning Group Tables generation
 //===----------------------------------------------------------------------===//
 
+namespace {
 struct GroupInfo {
   std::vector<const Record*> DiagsInGroup;
   std::vector<std::string> SubGroups;
   unsigned IDNo;
 };
+} // end anonymous namespace.
 
 void ClangDiagGroupsEmitter::run(raw_ostream &OS) {
   // Compute a mapping from a DiagGroup to all of its parents.

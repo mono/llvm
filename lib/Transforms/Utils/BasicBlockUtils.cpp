@@ -19,7 +19,7 @@
 #include "llvm/Constant.h"
 #include "llvm/Type.h"
 #include "llvm/Analysis/AliasAnalysis.h"
-#include "llvm/Analysis/DominanceFrontier.h"
+#include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Target/TargetData.h"
@@ -311,9 +311,6 @@ BasicBlock *llvm::SplitBlock(BasicBlock *Old, Instruction *SplitPt, Pass *P) {
         DT->changeImmediateDominator(*I, NewNode);
   }
 
-  if (DominanceFrontier *DF = P->getAnalysisIfAvailable<DominanceFrontier>())
-    DF->splitBlock(Old);
-    
   return New;
 }
 
@@ -325,10 +322,9 @@ BasicBlock *llvm::SplitBlock(BasicBlock *Old, Instruction *SplitPt, Pass *P) {
 /// suffix of 'Suffix'.
 ///
 /// This currently updates the LLVM IR, AliasAnalysis, DominatorTree,
-/// DominanceFrontier, LoopInfo, and LCCSA but no other analyses.
-/// In particular, it does not preserve LoopSimplify (because it's
-/// complicated to handle the case where one of the edges being split
-/// is an exit of a loop with other exits).
+/// LoopInfo, and LCCSA but no other analyses. In particular, it does not
+/// preserve LoopSimplify (because it's complicated to handle the case where one
+/// of the edges being split is an exit of a loop with other exits).
 ///
 BasicBlock *llvm::SplitBlockPredecessors(BasicBlock *BB, 
                                          BasicBlock *const *Preds,
@@ -378,13 +374,10 @@ BasicBlock *llvm::SplitBlockPredecessors(BasicBlock *BB,
     }
   }
 
-  // Update dominator tree and dominator frontier if available.
+  // Update dominator tree if available.
   DominatorTree *DT = P ? P->getAnalysisIfAvailable<DominatorTree>() : 0;
   if (DT)
     DT->splitBlock(NewBB);
-  if (DominanceFrontier *DF =
-        P ? P->getAnalysisIfAvailable<DominanceFrontier>() : 0)
-    DF->splitBlock(NewBB);
 
   // Insert a new PHI node into NewBB for every PHI node in BB and that new PHI
   // node becomes an incoming value for BB's phi node.  However, if the Preds
@@ -516,7 +509,32 @@ void llvm::FindFunctionBackedges(const Function &F,
       // Go up one level.
       InStack.erase(VisitStack.pop_back_val().first);
     }
-  } while (!VisitStack.empty());
-  
-  
+  } while (!VisitStack.empty()); 
+}
+
+/// FoldReturnIntoUncondBranch - This method duplicates the specified return
+/// instruction into a predecessor which ends in an unconditional branch. If
+/// the return instruction returns a value defined by a PHI, propagate the
+/// right value into the return. It returns the new return instruction in the
+/// predecessor.
+ReturnInst *llvm::FoldReturnIntoUncondBranch(ReturnInst *RI, BasicBlock *BB,
+                                             BasicBlock *Pred) {
+  Instruction *UncondBranch = Pred->getTerminator();
+  // Clone the return and add it to the end of the predecessor.
+  Instruction *NewRet = RI->clone();
+  Pred->getInstList().push_back(NewRet);
+      
+  // If the return instruction returns a value, and if the value was a
+  // PHI node in "BB", propagate the right value into the return.
+  for (User::op_iterator i = NewRet->op_begin(), e = NewRet->op_end();
+       i != e; ++i)
+    if (PHINode *PN = dyn_cast<PHINode>(*i))
+      if (PN->getParent() == BB)
+        *i = PN->getIncomingValueForBlock(Pred);
+      
+  // Update any PHI nodes in the returning block to realize that we no
+  // longer branch to them.
+  BB->removePredecessor(Pred);
+  UncondBranch->eraseFromParent();
+  return cast<ReturnInst>(NewRet);
 }

@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This header file pulls in all transformation and analysis passes for tools 
+// This header file pulls in all transformation and analysis passes for tools
 // like opt and bugpoint that need this functionality.
 //
 //===----------------------------------------------------------------------===//
@@ -70,6 +70,7 @@ namespace {
       (void) llvm::createDomViewerPass();
       (void) llvm::createEdgeProfilerPass();
       (void) llvm::createOptimalEdgeProfilerPass();
+      (void) llvm::createPathProfilerPass();
       (void) llvm::createFunctionInliningPass();
       (void) llvm::createAlwaysInlinerPass();
       (void) llvm::createGlobalDCEPass();
@@ -83,7 +84,6 @@ namespace {
       (void) llvm::createLCSSAPass();
       (void) llvm::createLICMPass();
       (void) llvm::createLazyValueInfoPass();
-      (void) llvm::createLiveValuesPass();
       (void) llvm::createLoopDependenceAnalysisPass();
       (void) llvm::createLoopExtractorPass();
       (void) llvm::createLoopSimplifyPass();
@@ -99,7 +99,9 @@ namespace {
       (void) llvm::createNoProfileInfoPass();
       (void) llvm::createProfileEstimatorPass();
       (void) llvm::createProfileVerifierPass();
+      (void) llvm::createPathProfileVerifierPass();
       (void) llvm::createProfileLoaderPass();
+      (void) llvm::createPathProfileLoaderPass();
       (void) llvm::createPromoteMemoryToRegisterPass();
       (void) llvm::createDemoteRegisterToMemoryPass();
       (void) llvm::createPruneEHPass();
@@ -116,7 +118,6 @@ namespace {
       (void) llvm::createSCCPPass();
       (void) llvm::createScalarReplAggregatesPass();
       (void) llvm::createSimplifyLibCallsPass();
-      (void) llvm::createSimplifyHalfPowrLibCallsPass();
       (void) llvm::createSingleLoopExtractorPass();
       (void) llvm::createStripSymbolsPass();
       (void) llvm::createStripNonDebugSymbolsPass();
@@ -135,7 +136,6 @@ namespace {
       (void) llvm::createPostDomTree();
       (void) llvm::createPostDomFrontier();
       (void) llvm::createInstructionNamerPass();
-      (void) llvm::createPartialSpecializationPass();
       (void) llvm::createFunctionAttrsPass();
       (void) llvm::createMergeFunctionsPass();
       (void) llvm::createPrintModulePass(0);
@@ -143,7 +143,6 @@ namespace {
       (void) llvm::createDbgInfoPrinterPass();
       (void) llvm::createModuleDebugInfoPrinterPass();
       (void) llvm::createPartialInliningPass();
-      (void) llvm::createGEPSplitterPass();
       (void) llvm::createLintPass();
       (void) llvm::createSinkingPass();
       (void) llvm::createLowerAtomicPass();

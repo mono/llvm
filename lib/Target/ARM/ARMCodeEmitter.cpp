@@ -187,6 +187,8 @@ namespace {
       const { return 0; }
     unsigned getUnconditionalBranchTargetOpValue(const MachineInstr &MI,
       unsigned Op) const { return 0; }
+    unsigned getARMBranchTargetOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
     unsigned getCCOutOpValue(const MachineInstr &MI, unsigned Op)
       const { return 0; }
     unsigned getSOImmOpValue(const MachineInstr &MI, unsigned Op)
@@ -225,6 +227,8 @@ namespace {
       const { return 0; }
     unsigned getBitfieldInvertedMaskOpValue(const MachineInstr &MI,
                                             unsigned Op) const { return 0; }
+    unsigned getMsbOpValue(const MachineInstr &MI,
+                           unsigned Op) const { return 0; }
     uint32_t getLdStmModeOpValue(const MachineInstr &MI, unsigned OpIdx)
       const {return 0; }
     uint32_t getLdStSORegOpValue(const MachineInstr &MI, unsigned OpIdx)
@@ -306,6 +310,13 @@ namespace {
       const { return 0; }
 
     unsigned getRegisterListOpValue(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
+
+    unsigned getNarrowShiftRight16Imm(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
+    unsigned getNarrowShiftRight32Imm(const MachineInstr &MI, unsigned Op)
+      const { return 0; }
+    unsigned getNarrowShiftRight64Imm(const MachineInstr &MI, unsigned Op)
       const { return 0; }
 
     /// getMovi32Value - Return binary encoding of operand for movw/movt. If the

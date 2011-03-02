@@ -146,6 +146,7 @@ enum {
 
 // Object file classes.
 enum {
+  ELFCLASSNONE = 0,
   ELFCLASS32 = 1, // 32-bit object file
   ELFCLASS64 = 2  // 64-bit object file
 };
@@ -288,6 +289,10 @@ enum {
   R_MICROBLAZE_GOTOFF_32      = 20,
   R_MICROBLAZE_COPY           = 21
 };
+
+
+// ARM Specific e_flags
+enum { EF_ARM_EABIMASK = 0xFF000000U };
 
 // ELF Relocation types for ARM
 // Meets 2.08 ABI Specs.
@@ -500,6 +505,8 @@ enum {
   SHT_ARM_DEBUGOVERLAY    = 0x70000004U,
   SHT_ARM_OVERLAYSECTION  = 0x70000005U,
 
+  SHT_X86_64_UNWIND       = 0x70000001, // Unwind information
+
   SHT_HIPROC        = 0x7fffffff, // Highest processor architecture-specific type.
   SHT_LOUSER        = 0x80000000, // Lowest type reserved for applications.
   SHT_HIUSER        = 0xffffffff  // Highest type reserved for applications.
@@ -507,10 +514,51 @@ enum {
 
 // Section flags.
 enum {
-  SHF_WRITE     = 0x1, // Section data should be writable during execution.
-  SHF_ALLOC     = 0x2, // Section occupies memory during program execution.
-  SHF_EXECINSTR = 0x4, // Section contains executable machine instructions.
-  SHF_MASKPROC  = 0xf0000000 // Bits indicating processor-specific flags.
+  // Section data should be writable during execution.
+  SHF_WRITE = 0x1,
+
+  // Section occupies memory during program execution.
+  SHF_ALLOC = 0x2,
+
+  // Section contains executable machine instructions.
+  SHF_EXECINSTR = 0x4,
+
+  // The data in this section may be merged.
+  SHF_MERGE = 0x10,
+
+  // The data in this section is null-terminated strings.
+  SHF_STRINGS = 0x20,
+
+  // A field in this section holds a section header table index.
+  SHF_INFO_LINK = 0x40U,
+
+  // Adds special ordering requirements for link editors.
+  SHF_LINK_ORDER = 0x80U,
+
+  // This section requires special OS-specific processing to avoid incorrect
+  // behavior.
+  SHF_OS_NONCONFORMING = 0x100U,
+
+  // This section is a member of a section group.
+  SHF_GROUP = 0x200U,
+
+  // This section holds Thread-Local Storage.
+  SHF_TLS = 0x400U,
+
+  // Start of target-specific flags.
+
+  /// XCORE_SHF_CP_SECTION - All sections with the "c" flag are grouped
+  /// together by the linker to form the constant pool and the cp register is
+  /// set to the start of the constant pool by the boot code.
+  XCORE_SHF_CP_SECTION = 0x800U,
+
+  /// XCORE_SHF_DP_SECTION - All sections with the "d" flag are grouped
+  /// together by the linker to form the data section and the dp register is
+  /// set to the start of the section by the boot code.
+  XCORE_SHF_DP_SECTION = 0x1000U,
+
+  // Bits indicating processor-specific flags.
+  SHF_MASKPROC = 0xf0000000
 };
 
 // Section Group Flags

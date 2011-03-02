@@ -85,15 +85,19 @@ TEST(TripleTest, ParsedIDs) {
   EXPECT_EQ(Triple::x86_64, T.getArch());
   EXPECT_EQ(Triple::PC, T.getVendor());
   EXPECT_EQ(Triple::Linux, T.getOS());
-  // When environments are defined, change this test to verify the "gnu"
-  // environment.
-  EXPECT_EQ(Triple::UnknownEnvironment, T.getEnvironment());
+  EXPECT_EQ(Triple::GNU, T.getEnvironment());
 
   T = Triple("powerpc-dunno-notsure");
   EXPECT_EQ(Triple::ppc, T.getArch());
   EXPECT_EQ(Triple::UnknownVendor, T.getVendor());
   EXPECT_EQ(Triple::UnknownOS, T.getOS());
   EXPECT_EQ(Triple::UnknownEnvironment, T.getEnvironment());
+
+  T = Triple("arm-none-none-eabi");
+  EXPECT_EQ(Triple::arm, T.getArch());
+  EXPECT_EQ(Triple::UnknownVendor, T.getVendor());
+  EXPECT_EQ(Triple::UnknownOS, T.getOS());
+  EXPECT_EQ(Triple::EABI, T.getEnvironment());
 
   T = Triple("huh");
   EXPECT_EQ(Triple::UnknownArch, T.getArch());
@@ -110,6 +114,7 @@ static std::string Join(StringRef A, StringRef B, StringRef C, StringRef D) {
 }
 
 TEST(TripleTest, Normalization) {
+
   EXPECT_EQ("", Triple::normalize(""));
   EXPECT_EQ("-", Triple::normalize("-"));
   EXPECT_EQ("--", Triple::normalize("--"));
@@ -144,10 +149,11 @@ TEST(TripleTest, Normalization) {
   EXPECT_EQ("-pc", Triple::normalize("pc"));
   EXPECT_EQ("--linux", Triple::normalize("linux"));
 
+  EXPECT_EQ("x86_64--linux-gnu", Triple::normalize("x86_64-gnu-linux"));
+
   // Check that normalizing a permutated set of valid components returns a
   // triple with the unpermuted components.
   StringRef C[4];
-  C[3] = "environment";
   for (int Arch = 1+Triple::UnknownArch; Arch < Triple::InvalidArch; ++Arch) {
     C[0] = Triple::getArchTypeName(Triple::ArchType(Arch));
     for (int Vendor = 1+Triple::UnknownVendor; Vendor <= Triple::PC;
@@ -156,16 +162,14 @@ TEST(TripleTest, Normalization) {
       for (int OS = 1+Triple::UnknownOS; OS <= Triple::Minix; ++OS) {
         C[2] = Triple::getOSTypeName(Triple::OSType(OS));
 
-        std::string E = Join(C[0], C[1], C[2]);
-        std::string F = Join(C[0], C[1], C[2], C[3]);
-        EXPECT_EQ(E, Triple::normalize(Join(C[0], C[1], C[2])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[0], C[1], C[2], C[3])));
-
         // If a value has multiple interpretations, then the permutation
         // test will inevitably fail.  Currently this is only the case for
         // "psp" which parses as both an architecture and an O/S.
         if (OS == Triple::Psp)
           continue;
+
+        std::string E = Join(C[0], C[1], C[2]);
+        EXPECT_EQ(E, Triple::normalize(Join(C[0], C[1], C[2])));
 
         EXPECT_EQ(E, Triple::normalize(Join(C[0], C[2], C[1])));
         EXPECT_EQ(E, Triple::normalize(Join(C[1], C[2], C[0])));
@@ -173,29 +177,37 @@ TEST(TripleTest, Normalization) {
         EXPECT_EQ(E, Triple::normalize(Join(C[2], C[0], C[1])));
         EXPECT_EQ(E, Triple::normalize(Join(C[2], C[1], C[0])));
 
-        EXPECT_EQ(F, Triple::normalize(Join(C[0], C[1], C[3], C[2])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[0], C[2], C[3], C[1])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[0], C[2], C[1], C[3])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[0], C[3], C[1], C[2])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[0], C[3], C[2], C[1])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[1], C[2], C[3], C[0])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[1], C[2], C[0], C[3])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[1], C[3], C[0], C[2])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[1], C[3], C[2], C[0])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[1], C[0], C[2], C[3])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[1], C[0], C[3], C[2])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[2], C[3], C[0], C[1])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[2], C[3], C[1], C[0])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[2], C[0], C[1], C[3])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[2], C[0], C[3], C[1])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[2], C[1], C[3], C[0])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[2], C[1], C[0], C[3])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[3], C[0], C[1], C[2])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[3], C[0], C[2], C[1])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[3], C[1], C[2], C[0])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[3], C[1], C[0], C[2])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[3], C[2], C[0], C[1])));
-        EXPECT_EQ(F, Triple::normalize(Join(C[3], C[2], C[1], C[0])));
+        for (int Env = 1+Triple::UnknownEnvironment; Env <= Triple::MachO;
+             ++Env) {
+          C[3] = Triple::getEnvironmentTypeName(Triple::EnvironmentType(Env));
+
+          std::string F = Join(C[0], C[1], C[2], C[3]);
+          EXPECT_EQ(F, Triple::normalize(Join(C[0], C[1], C[2], C[3])));
+
+          EXPECT_EQ(F, Triple::normalize(Join(C[0], C[1], C[3], C[2])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[0], C[2], C[3], C[1])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[0], C[2], C[1], C[3])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[0], C[3], C[1], C[2])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[0], C[3], C[2], C[1])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[1], C[2], C[3], C[0])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[1], C[2], C[0], C[3])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[1], C[3], C[0], C[2])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[1], C[3], C[2], C[0])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[1], C[0], C[2], C[3])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[1], C[0], C[3], C[2])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[2], C[3], C[0], C[1])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[2], C[3], C[1], C[0])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[2], C[0], C[1], C[3])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[2], C[0], C[3], C[1])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[2], C[1], C[3], C[0])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[2], C[1], C[0], C[3])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[3], C[0], C[1], C[2])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[3], C[0], C[2], C[1])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[3], C[1], C[2], C[0])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[3], C[1], C[0], C[2])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[3], C[2], C[0], C[1])));
+          EXPECT_EQ(F, Triple::normalize(Join(C[3], C[2], C[1], C[0])));
+        }
       }
     }
   }
@@ -210,6 +222,7 @@ TEST(TripleTest, Normalization) {
   EXPECT_EQ("i486--linux-gnu", Triple::normalize("i486-linux-gnu")); // i486-pc-linux-gnu
   EXPECT_EQ("i386-redhat-linux", Triple::normalize("i386-redhat-linux")); // i386-redhat-linux-gnu
   EXPECT_EQ("i686--linux", Triple::normalize("i686-linux")); // i686-pc-linux-gnu
+  EXPECT_EQ("arm-none--eabi", Triple::normalize("arm-none-eabi")); // arm-none-eabi
 }
 
 TEST(TripleTest, MutateName) {
@@ -251,6 +264,7 @@ TEST(TripleTest, MutateName) {
   EXPECT_EQ(Triple::PC, T.getVendor());
   EXPECT_EQ(Triple::Darwin, T.getOS());
   EXPECT_EQ("i386-pc-darwin", T.getTriple());
+
 }
 
 }

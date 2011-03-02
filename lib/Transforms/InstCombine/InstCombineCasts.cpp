@@ -462,8 +462,8 @@ Instruction *InstCombiner::visitTrunc(TruncInst &CI) {
   
   // Transform trunc(lshr (zext A), Cst) to eliminate one type conversion.
   Value *A = 0; ConstantInt *Cst = 0;
-  if (match(Src, m_LShr(m_ZExt(m_Value(A)), m_ConstantInt(Cst))) &&
-      Src->hasOneUse()) {
+  if (Src->hasOneUse() &&
+      match(Src, m_LShr(m_ZExt(m_Value(A)), m_ConstantInt(Cst)))) {
     // We have three types to worry about here, the type of A, the source of
     // the truncate (MidSize), and the destination of the truncate. We know that
     // ASize < MidSize   and MidSize > ResultSize, but don't know the relation
@@ -481,6 +481,16 @@ Instruction *InstCombiner::visitTrunc(TruncInst &CI) {
     Value *Shift = Builder->CreateLShr(A, Cst->getZExtValue());
     Shift->takeName(Src);
     return CastInst::CreateIntegerCast(Shift, CI.getType(), false);
+  }
+  
+  // Transform "trunc (and X, cst)" -> "and (trunc X), cst" so long as the dest
+  // type isn't non-native.
+  if (Src->hasOneUse() && isa<IntegerType>(Src->getType()) &&
+      ShouldChangeType(Src->getType(), CI.getType()) &&
+      match(Src, m_And(m_Value(A), m_ConstantInt(Cst)))) {
+    Value *NewTrunc = Builder->CreateTrunc(A, CI.getType(), A->getName()+".tr");
+    return BinaryOperator::CreateAnd(NewTrunc,
+                                     ConstantExpr::getTrunc(Cst, CI.getType()));
   }
 
   return 0;
@@ -1027,11 +1037,8 @@ Instruction *InstCombiner::visitSExt(SExtInst &CI) {
       if (Pred == ICmpInst::ICMP_SLT && CmpLHS->getType() == DestTy) {
         const Type *EltTy = VTy->getElementType();
 
-        // splat the shift constant to a cosntant vector
-        Constant *Sh = ConstantInt::get(EltTy, EltTy->getScalarSizeInBits()-1);
-        std::vector<Constant *> Elts(VTy->getNumElements(), Sh);
-        Constant *VSh = ConstantVector::get(Elts);
-
+        // splat the shift constant to a constant vector.
+        Constant *VSh = ConstantInt::get(VTy, EltTy->getScalarSizeInBits()-1);
         Value *In = Builder->CreateAShr(CmpLHS, VSh,CmpLHS->getName()+".lobit");
         return ReplaceInstUsesWith(CI, In);
       }
@@ -1380,8 +1387,7 @@ static Instruction *OptimizeVectorResize(Value *InVal, const VectorType *DestTy,
                        ConstantInt::get(Int32Ty, SrcElts));
   }
   
-  Constant *Mask = ConstantVector::get(ShuffleMask.data(), ShuffleMask.size());
-  return new ShuffleVectorInst(InVal, V2, Mask);
+  return new ShuffleVectorInst(InVal, V2, ConstantVector::get(ShuffleMask));
 }
 
 static bool isMultipleOfTypeSize(unsigned Value, const Type *Ty) {

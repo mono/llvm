@@ -91,6 +91,14 @@ lto_module_t lto_module_create(const char* path)
      return LTOModule::makeLTOModule(path, sLastErrorString);
 }
 
+//
+// loads an object file from disk
+// returns NULL on error (check lto_get_error_message() for details)
+//
+lto_module_t lto_module_create_from_fd(int fd, const char *path, off_t size)
+{
+     return LTOModule::makeLTOModule(fd, path, size, sLastErrorString);
+}
 
 //
 // loads an object file from memory 
@@ -223,7 +231,7 @@ void lto_codegen_set_cpu(lto_code_gen_t cg, const char* cpu)
 //
 void lto_codegen_set_assembler_path(lto_code_gen_t cg, const char* path)
 {
-    cg->setAssemblerPath(path);
+  // In here only for backwards compatibility. We use MC now.
 }
 
 
@@ -233,7 +241,7 @@ void lto_codegen_set_assembler_path(lto_code_gen_t cg, const char* path)
 void lto_codegen_set_assembler_args(lto_code_gen_t cg, const char** args,
                                     int nargs)
 {
-  cg->setAssemblerArgs(args, nargs);
+  // In here only for backwards compatibility. We use MC now.
 }
 
 //

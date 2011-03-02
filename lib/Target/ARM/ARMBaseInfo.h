@@ -97,6 +97,36 @@ inline static const char *ARMCondCodeToString(ARMCC::CondCodes CC) {
   }
 }
 
+namespace ARM_PROC {
+  enum IMod {
+    IE = 2,
+    ID = 3
+  };
+
+  enum IFlags {
+    F = 1,
+    I = 2,
+    A = 4
+  };
+
+  inline static const char *IFlagsToString(unsigned val) {
+    switch (val) {
+    default: llvm_unreachable("Unknown iflags operand");
+    case F: return "f";
+    case I: return "i";
+    case A: return "a";
+    }
+  }
+
+  inline static const char *IModToString(unsigned val) {
+    switch (val) {
+    default: llvm_unreachable("Unknown imod operand");
+    case IE: return "ie";
+    case ID: return "id";
+    }
+  }
+}
+
 namespace ARM_MB {
   // The Memory Barrier Option constants map directly to the 4-bit encoding of
   // the option field for memory barrier operations.
@@ -184,6 +214,29 @@ namespace ARMII {
     /// MO_HI16 - On a symbol operand, this represents a relocation containing
     /// higher 16 bit of the address. Used only via movt instruction.
     MO_HI16,
+
+    /// MO_LO16_NONLAZY - On a symbol operand "FOO", this represents a
+    /// relocation containing lower 16 bit of the non-lazy-ptr indirect symbol,
+    /// i.e. "FOO$non_lazy_ptr".
+    /// Used only via movw instruction.
+    MO_LO16_NONLAZY,
+
+    /// MO_HI16_NONLAZY - On a symbol operand "FOO", this represents a
+    /// relocation containing lower 16 bit of the non-lazy-ptr indirect symbol,
+    /// i.e. "FOO$non_lazy_ptr". Used only via movt instruction.
+    MO_HI16_NONLAZY,
+
+    /// MO_LO16_NONLAZY_PIC - On a symbol operand "FOO", this represents a
+    /// relocation containing lower 16 bit of the PC relative address of the
+    /// non-lazy-ptr indirect symbol, i.e. "FOO$non_lazy_ptr - LABEL".
+    /// Used only via movw instruction.
+    MO_LO16_NONLAZY_PIC,
+
+    /// MO_HI16_NONLAZY_PIC - On a symbol operand "FOO", this represents a
+    /// relocation containing lower 16 bit of the PC relative address of the
+    /// non-lazy-ptr indirect symbol, i.e. "FOO$non_lazy_ptr - LABEL".
+    /// Used only via movt instruction.
+    MO_HI16_NONLAZY_PIC,
 
     /// MO_PLT - On a symbol operand, this represents an ELF PLT reference on a
     /// call operand.

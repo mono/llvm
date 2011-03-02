@@ -352,7 +352,7 @@ INITIALIZE_PASS_END(MemCpyOpt, "memcpyopt", "MemCpy Optimization",
 
 /// tryMergingIntoMemset - When scanning forward over instructions, we look for
 /// some other patterns to fold away.  In particular, this looks for stores to
-/// neighboring locations of memory.  If it sees enough consequtive ones, it
+/// neighboring locations of memory.  If it sees enough consecutive ones, it
 /// attempts to merge them together into a memcpy/memset.
 Instruction *MemCpyOpt::tryMergingIntoMemset(Instruction *StartInst, 
                                              Value *StartPtr, Value *ByteVal) {
@@ -690,8 +690,10 @@ bool MemCpyOpt::processMemCpyMemCpyDependence(MemCpyInst *M, MemCpyInst *MDep,
   
   // Second, the length of the memcpy's must be the same, or the preceeding one
   // must be larger than the following one.
-  ConstantInt *C1 = dyn_cast<ConstantInt>(MDep->getLength());
-  if (!C1) return false;
+  ConstantInt *MDepLen = dyn_cast<ConstantInt>(MDep->getLength());
+  ConstantInt *MLen = dyn_cast<ConstantInt>(M->getLength());
+  if (!MDepLen || !MLen || MDepLen->getZExtValue() < MLen->getZExtValue())
+    return false;
   
   AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
 

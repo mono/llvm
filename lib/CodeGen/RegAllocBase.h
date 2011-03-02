@@ -39,7 +39,6 @@
 
 #include "llvm/ADT/OwningPtr.h"
 #include "LiveIntervalUnion.h"
-#include <queue>
 
 namespace llvm {
 
@@ -58,8 +57,8 @@ class LiveVirtRegQueue;
 /// be extended to add interesting heuristics.
 ///
 /// Register allocators must override the selectOrSplit() method to implement
-/// live range splitting. They may also override getPriority() which otherwise
-/// defaults to the spill weight computed by CalculateSpillWeights.
+/// live range splitting. They must also override enqueue/dequeue to provide an
+/// assignment order.
 class RegAllocBase {
   LiveIntervalUnion::Allocator UnionAllocator;
 protected:
@@ -120,9 +119,11 @@ protected:
   // Get a temporary reference to a Spiller instance.
   virtual Spiller &spiller() = 0;
 
-  // getPriority - Calculate the allocation priority for VirtReg.
-  // Virtual registers with higher priorities are allocated first.
-  virtual float getPriority(LiveInterval *LI) = 0;
+  /// enqueue - Add VirtReg to the priority queue of unassigned registers.
+  virtual void enqueue(LiveInterval *LI) = 0;
+
+  /// dequeue - Return the next unassigned register, or NULL.
+  virtual LiveInterval *dequeue() = 0;
 
   // A RegAlloc pass should override this to provide the allocation heuristics.
   // Each call must guarantee forward progess by returning an available PhysReg
@@ -138,6 +139,15 @@ protected:
   // physical register, including all its register aliases. If an interference
   // exists, return the interfering register, which may be preg or an alias.
   unsigned checkPhysRegInterference(LiveInterval& VirtReg, unsigned PhysReg);
+
+  /// assign - Assign VirtReg to PhysReg.
+  /// This should not be called from selectOrSplit for the current register.
+  void assign(LiveInterval &VirtReg, unsigned PhysReg);
+
+  /// unassign - Undo a previous assignment of VirtReg to PhysReg.
+  /// This can be invoked from selectOrSplit, but be careful to guarantee that
+  /// allocation is making progress.
+  void unassign(LiveInterval &VirtReg, unsigned PhysReg);
 
   // Helper for spilling all live virtual registers currently unified under preg
   // that interfere with the most recently queried lvr.  Return true if spilling
@@ -161,7 +171,7 @@ public:
   static bool VerifyEnabled;
 
 private:
-  void seedLiveVirtRegs(std::priority_queue<std::pair<float, unsigned> >&);
+  void seedLiveRegs();
 
   void spillReg(LiveInterval &VirtReg, unsigned PhysReg,
                 SmallVectorImpl<LiveInterval*> &SplitVRegs);

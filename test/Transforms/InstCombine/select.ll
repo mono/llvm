@@ -689,3 +689,28 @@ define i64 @test50(i32 %a) nounwind {
 ; CHECK-NEXT: %min = select i1 %is_a_nonpositive, i64 %a_ext, i64 2
 ; CHECK-NEXT: ret i64 %min
 }
+
+; PR8994
+
+; This select instruction can't be eliminated because trying to do so would
+; change the number of vector elements. This used to assert.
+define i48 @test51(<3 x i1> %icmp, <3 x i16> %tmp) {
+; CHECK: @test51
+  %select = select <3 x i1> %icmp, <3 x i16> zeroinitializer, <3 x i16> %tmp
+; CHECK: select <3 x i1>
+  %tmp2 = bitcast <3 x i16> %select to i48
+  ret i48 %tmp2
+}
+
+; PR8575
+
+define i32 @test52(i32 %n, i32 %m) nounwind {
+; CHECK: @test52
+  %cmp = icmp sgt i32 %n, %m
+  %. = select i1 %cmp, i32 1, i32 3
+  %add = add nsw i32 %., 3
+  %storemerge = select i1 %cmp, i32 %., i32 %add
+; CHECK: select i1 %cmp, i32 1, i32 6
+  ret i32 %storemerge
+}
+

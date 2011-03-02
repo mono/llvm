@@ -25,7 +25,9 @@ namespace llvm {
 
   /// MCAsmInfo - This class is intended to be used as a base class for asm
   /// properties and features specific to the target.
-  namespace ExceptionHandling { enum ExceptionsType { None, Dwarf, SjLj }; }
+  namespace ExceptionHandling {
+    enum ExceptionsType { None, DwarfTable, DwarfCFI, SjLj };
+  }
 
   class MCAsmInfo {
   protected:
@@ -244,6 +246,11 @@ namespace llvm {
     /// declare a symbol as having hidden visibility.
     MCSymbolAttr HiddenVisibilityAttr;       // Defaults to MCSA_Hidden.
 
+    /// HiddenDeclarationVisibilityAttr - This attribute, if not MCSA_Invalid,
+    /// is used to declare an undefined symbol as having hidden visibility.
+    MCSymbolAttr HiddenDeclarationVisibilityAttr;   // Defaults to MCSA_Hidden.
+
+
     /// ProtectedVisibilityAttr - This attribute, if not MCSA_Invalid, is used
     /// to declare a symbol as having protected visibility.
     MCSymbolAttr ProtectedVisibilityAttr;    // Defaults to MCSA_Protected
@@ -423,6 +430,9 @@ namespace llvm {
     const char *getLinkOnceDirective() const { return LinkOnceDirective; }
 
     MCSymbolAttr getHiddenVisibilityAttr() const { return HiddenVisibilityAttr;}
+    MCSymbolAttr getHiddenDeclarationVisibilityAttr() const {
+      return HiddenDeclarationVisibilityAttr;
+    }
     MCSymbolAttr getProtectedVisibilityAttr() const {
       return ProtectedVisibilityAttr;
     }
@@ -438,6 +448,12 @@ namespace llvm {
     ExceptionHandling::ExceptionsType getExceptionHandlingType() const {
       return ExceptionsType;
     }
+    bool isExceptionHandlingDwarf() const {
+      return
+        (ExceptionsType == ExceptionHandling::DwarfTable ||
+         ExceptionsType == ExceptionHandling::DwarfCFI);
+    }
+
     bool doesDwarfRequireFrameSection() const {
       return DwarfRequiresFrameSection;
     }

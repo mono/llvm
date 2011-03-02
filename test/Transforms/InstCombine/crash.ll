@@ -341,3 +341,32 @@ define double @test16(i32 %a) nounwind {
   %select = select i1 %cmp, double 2.000000e+00, double 3.141592e+00
   ret double %select
 }
+
+
+; PR8983
+%struct.basic_ios = type { i8 }
+
+define %struct.basic_ios *@test17() ssp {
+entry:
+  %add.ptr.i = getelementptr i8* null, i64 undef
+  %0 = bitcast i8* %add.ptr.i to %struct.basic_ios*
+  ret %struct.basic_ios* %0
+}
+
+; PR9013
+define void @test18() nounwind ssp {
+entry:
+  br label %for.cond
+
+for.cond:                                         ; preds = %for.inc, %entry
+  %l_197.0 = phi i32 [ 0, %entry ], [ %sub.i, %for.inc ]
+  br label %for.inc
+
+for.inc:                                          ; preds = %for.cond
+  %conv = and i32 %l_197.0, 255
+  %sub.i = add nsw i32 %conv, -1
+  br label %for.cond
+
+return:                                           ; No predecessors!
+  ret void
+}

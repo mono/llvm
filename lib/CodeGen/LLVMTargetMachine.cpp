@@ -98,12 +98,6 @@ static cl::opt<cl::boolOrDefault>
 EnableFastISelOption("fast-isel", cl::Hidden,
   cl::desc("Enable the \"fast\" instruction selector"));
 
-// Enable or disable an experimental optimization to split GEPs
-// and run a special GVN pass which does not examine loads, in
-// an effort to factor out redundancy implicit in complex GEPs.
-static cl::opt<bool> EnableSplitGEPGVN("split-gep-gvn", cl::Hidden,
-    cl::desc("Split GEPs and run no-load GVN"));
-
 LLVMTargetMachine::LLVMTargetMachine(const Target &T,
                                      const std::string &Triple)
   : TargetMachine(T), TargetTriple(Triple) {
@@ -168,7 +162,8 @@ bool LLVMTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
 
     AsmStreamer.reset(getTarget().createObjectStreamer(TargetTriple, *Context,
                                                        *TAB, Out, MCE,
-                                                       hasMCRelaxAll()));
+                                                       hasMCRelaxAll(),
+                                                       hasMCNoExecStack()));
     AsmStreamer.get()->InitSections();
     break;
   }
@@ -271,12 +266,6 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
   if (!DisableVerify)
     PM.add(createVerifierPass());
 
-  // Optionally, tun split-GEPs and no-load GVN.
-  if (EnableSplitGEPGVN) {
-    PM.add(createGEPSplitterPass());
-    PM.add(createGVNPass(/*NoLoads=*/true));
-  }
-
   // Run loop strength reduction before anything else.
   if (OptLevel != CodeGenOpt::None && !DisableLSR) {
     PM.add(createLoopStrengthReducePass(getTargetLowering()));
@@ -301,7 +290,8 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
     // edge from elsewhere.
     PM.add(createSjLjEHPass(getTargetLowering()));
     // FALLTHROUGH
-  case ExceptionHandling::Dwarf:
+  case ExceptionHandling::DwarfCFI:
+  case ExceptionHandling::DwarfTable:
     PM.add(createDwarfEHPass(this));
     break;
   case ExceptionHandling::None:

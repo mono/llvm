@@ -249,11 +249,7 @@ bool LLParser::ParseModuleAsm() {
   if (ParseToken(lltok::kw_asm, "expected 'module asm'") ||
       ParseStringConstant(AsmStr)) return true;
 
-  const std::string &AsmSoFar = M->getModuleInlineAsm();
-  if (AsmSoFar.empty())
-    M->setModuleInlineAsm(AsmStr);
-  else
-    M->setModuleInlineAsm(AsmSoFar+"\n"+AsmStr);
+  M->appendModuleInlineAsm(AsmStr);
   return false;
 }
 
@@ -715,9 +711,6 @@ bool LLParser::ParseGlobal(const std::string &Name, LocTy NameLoc,
     if (ParseGlobalValue(Ty, Init))
       return true;
   }
-
-  if (!Init && UnnamedAddr)
-    return Error(UnnamedAddrLoc, "only definitions can have unnamed_addr");
 
   if (Ty->isFunctionTy() || Ty->isLabelTy())
     return Error(TyLoc, "invalid type for global variable");
@@ -2082,7 +2075,7 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
                      "vector element #" + Twine(i) +
                     " is not of type '" + Elts[0]->getType()->getDescription());
 
-    ID.ConstantVal = ConstantVector::get(Elts.data(), Elts.size());
+    ID.ConstantVal = ConstantVector::get(Elts);
     ID.Kind = ValID::t_Constant;
     return false;
   }
@@ -2289,7 +2282,10 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
   case lltok::kw_fdiv:
   case lltok::kw_urem:
   case lltok::kw_srem:
-  case lltok::kw_frem: {
+  case lltok::kw_frem:
+  case lltok::kw_shl:
+  case lltok::kw_lshr:
+  case lltok::kw_ashr: {
     bool NUW = false;
     bool NSW = false;
     bool Exact = false;
@@ -2297,9 +2293,8 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
     Constant *Val0, *Val1;
     Lex.Lex();
     LocTy ModifierLoc = Lex.getLoc();
-    if (Opc == Instruction::Add ||
-        Opc == Instruction::Sub ||
-        Opc == Instruction::Mul) {
+    if (Opc == Instruction::Add || Opc == Instruction::Sub ||
+        Opc == Instruction::Mul || Opc == Instruction::Shl) {
       if (EatIfPresent(lltok::kw_nuw))
         NUW = true;
       if (EatIfPresent(lltok::kw_nsw)) {
@@ -2307,7 +2302,8 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
         if (EatIfPresent(lltok::kw_nuw))
           NUW = true;
       }
-    } else if (Opc == Instruction::SDiv) {
+    } else if (Opc == Instruction::SDiv || Opc == Instruction::UDiv ||
+               Opc == Instruction::LShr || Opc == Instruction::AShr) {
       if (EatIfPresent(lltok::kw_exact))
         Exact = true;
     }
@@ -2334,6 +2330,9 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
     case Instruction::SDiv:
     case Instruction::URem:
     case Instruction::SRem:
+    case Instruction::Shl:
+    case Instruction::AShr:
+    case Instruction::LShr:
       if (!Val0->getType()->isIntOrIntVectorTy())
         return Error(ID.Loc, "constexpr requires integer operands");
       break;
@@ -2350,7 +2349,7 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
     unsigned Flags = 0;
     if (NUW)   Flags |= OverflowingBinaryOperator::NoUnsignedWrap;
     if (NSW)   Flags |= OverflowingBinaryOperator::NoSignedWrap;
-    if (Exact) Flags |= SDivOperator::IsExact;
+    if (Exact) Flags |= PossiblyExactOperator::IsExact;
     Constant *C = ConstantExpr::get(Opc, Val0, Val1, Flags);
     ID.ConstantVal = C;
     ID.Kind = ValID::t_Constant;
@@ -2358,9 +2357,6 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
   }
 
   // Logical Operations
-  case lltok::kw_shl:
-  case lltok::kw_lshr:
-  case lltok::kw_ashr:
   case lltok::kw_and:
   case lltok::kw_or:
   case lltok::kw_xor: {
@@ -2673,8 +2669,6 @@ bool LLParser::ParseFunctionHeader(Function *&Fn, bool isDefine) {
   unsigned Linkage;
 
   unsigned Visibility, RetAttrs;
-  bool UnnamedAddr;
-  LocTy UnnamedAddrLoc;
   CallingConv::ID CC;
   PATypeHolder RetType(Type::getVoidTy(Context));
   LocTy RetTypeLoc = Lex.getLoc();
@@ -2682,13 +2676,8 @@ bool LLParser::ParseFunctionHeader(Function *&Fn, bool isDefine) {
       ParseOptionalVisibility(Visibility) ||
       ParseOptionalCallingConv(CC) ||
       ParseOptionalAttrs(RetAttrs, 1) ||
-      ParseOptionalToken(lltok::kw_unnamed_addr, UnnamedAddr,
-                         &UnnamedAddrLoc) ||
       ParseType(RetType, RetTypeLoc, true /*void allowed*/))
     return true;
-
-  if (!isDefine && UnnamedAddr)
-    return Error(UnnamedAddrLoc, "only definitions can have unnamed_addr");
 
   // Verify that the linkage is ok.
   switch ((GlobalValue::LinkageTypes)Linkage) {
@@ -2748,8 +2737,12 @@ bool LLParser::ParseFunctionHeader(Function *&Fn, bool isDefine) {
   std::string Section;
   unsigned Alignment;
   std::string GC;
+  bool UnnamedAddr;
+  LocTy UnnamedAddrLoc;
 
   if (ParseArgumentList(ArgList, isVarArg, false) ||
+      ParseOptionalToken(lltok::kw_unnamed_addr, UnnamedAddr,
+                         &UnnamedAddrLoc) ||
       ParseOptionalAttrs(FuncAttrs, 2) ||
       (EatIfPresent(lltok::kw_section) &&
        ParseStringConstant(Section)) ||
@@ -3008,55 +3001,38 @@ int LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
   // Binary Operators.
   case lltok::kw_add:
   case lltok::kw_sub:
-  case lltok::kw_mul: {
-    bool NUW = false;
-    bool NSW = false;
+  case lltok::kw_mul:
+  case lltok::kw_shl: {
     LocTy ModifierLoc = Lex.getLoc();
-    if (EatIfPresent(lltok::kw_nuw))
-      NUW = true;
-    if (EatIfPresent(lltok::kw_nsw)) {
-      NSW = true;
-      if (EatIfPresent(lltok::kw_nuw))
-        NUW = true;
-    }
-    bool Result = ParseArithmetic(Inst, PFS, KeywordVal, 1);
-    if (!Result) {
-      if (!Inst->getType()->isIntOrIntVectorTy()) {
-        if (NUW)
-          return Error(ModifierLoc, "nuw only applies to integer operations");
-        if (NSW)
-          return Error(ModifierLoc, "nsw only applies to integer operations");
-      }
-      if (NUW)
-        cast<BinaryOperator>(Inst)->setHasNoUnsignedWrap(true);
-      if (NSW)
-        cast<BinaryOperator>(Inst)->setHasNoSignedWrap(true);
-    }
-    return Result;
+    bool NUW = EatIfPresent(lltok::kw_nuw);
+    bool NSW = EatIfPresent(lltok::kw_nsw);
+    if (!NUW) NUW = EatIfPresent(lltok::kw_nuw);
+    
+    if (ParseArithmetic(Inst, PFS, KeywordVal, 1)) return true;
+    
+    if (NUW) cast<BinaryOperator>(Inst)->setHasNoUnsignedWrap(true);
+    if (NSW) cast<BinaryOperator>(Inst)->setHasNoSignedWrap(true);
+    return false;
   }
   case lltok::kw_fadd:
   case lltok::kw_fsub:
   case lltok::kw_fmul:    return ParseArithmetic(Inst, PFS, KeywordVal, 2);
 
-  case lltok::kw_sdiv: {
-    bool Exact = false;
-    if (EatIfPresent(lltok::kw_exact))
-      Exact = true;
-    bool Result = ParseArithmetic(Inst, PFS, KeywordVal, 1);
-    if (!Result)
-      if (Exact)
-        cast<BinaryOperator>(Inst)->setIsExact(true);
-    return Result;
+  case lltok::kw_sdiv:
+  case lltok::kw_udiv:
+  case lltok::kw_lshr:
+  case lltok::kw_ashr: {
+    bool Exact = EatIfPresent(lltok::kw_exact);
+
+    if (ParseArithmetic(Inst, PFS, KeywordVal, 1)) return true;
+    if (Exact) cast<BinaryOperator>(Inst)->setIsExact(true);
+    return false;
   }
 
-  case lltok::kw_udiv:
   case lltok::kw_urem:
   case lltok::kw_srem:   return ParseArithmetic(Inst, PFS, KeywordVal, 1);
   case lltok::kw_fdiv:
   case lltok::kw_frem:   return ParseArithmetic(Inst, PFS, KeywordVal, 2);
-  case lltok::kw_shl:
-  case lltok::kw_lshr:
-  case lltok::kw_ashr:
   case lltok::kw_and:
   case lltok::kw_or:
   case lltok::kw_xor:    return ParseLogical(Inst, PFS, KeywordVal);

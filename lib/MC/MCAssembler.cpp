@@ -172,7 +172,7 @@ MCAssembler::MCAssembler(MCContext &Context_, TargetAsmBackend &Backend_,
                          MCCodeEmitter &Emitter_, MCObjectWriter &Writer_,
                          raw_ostream &OS_)
   : Context(Context_), Backend(Backend_), Emitter(Emitter_), Writer(Writer_),
-    OS(OS_), RelaxAll(false), SubsectionsViaSymbols(false)
+    OS(OS_), RelaxAll(false), NoExecStack(false), SubsectionsViaSymbols(false)
 {
 }
 
@@ -229,8 +229,10 @@ bool MCAssembler::EvaluateFixup(const MCAsmLayout &Layout,
     } else if (!Target.getSymA()) {
       IsResolved = false;
     } else {
-      const MCSymbol &SA = Target.getSymA()->getSymbol();
-      if (SA.AliasedSymbol().isUndefined()) {
+      const MCSymbolRefExpr *A = Target.getSymA();
+      const MCSymbol &SA = A->getSymbol();
+      if (A->getKind() != MCSymbolRefExpr::VK_None ||
+          SA.AliasedSymbol().isUndefined()) {
         IsResolved = false;
       } else {
         const MCSymbolData &DataA = getSymbolData(SA);

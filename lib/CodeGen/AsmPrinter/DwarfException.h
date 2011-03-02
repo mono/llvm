@@ -36,6 +36,7 @@ class AsmPrinter;
 /// DwarfException - Emits Dwarf exception handling directives.
 ///
 class DwarfException {
+protected:
   /// Asm - Target of Dwarf emission.
   AsmPrinter *Asm;
 
@@ -52,81 +53,6 @@ class DwarfException {
     MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
     unsigned Action;
   };
-
-  struct MonoEHFrameInfo {
-    // Mono specific
-    // FIXME: Move into separate structure
-    const MachineFunction *MF;
-    std::vector<CallSiteEntry> CallSites;
-    std::vector<const GlobalVariable *> TypeInfos;
-    std::vector<unsigned> FilterIds;
-    std::vector<LandingPadInfo> PadInfos;
-    int FunctionNumber;
-    int FrameReg;
-    int ThisOffset;
-  };
-
-  struct FunctionEHFrameInfo {
-    MCSymbol *FunctionEHSym;  // L_foo.eh
-    unsigned Number;
-    unsigned PersonalityIndex;
-    bool adjustsStack;
-    bool hasLandingPads;
-    std::vector<MachineMove> Moves;
-    const Function *function;
-
-    MonoEHFrameInfo MonoEH;
-
-    FunctionEHFrameInfo(MCSymbol *EHSym, unsigned Num, unsigned P,
-                        bool hC, bool hL,
-                        const std::vector<MachineMove> &M,
-                        const Function *f):
-      FunctionEHSym(EHSym), Number(Num), PersonalityIndex(P),
-      adjustsStack(hC), hasLandingPads(hL), Moves(M), function (f) { }
-  };
-
-  std::vector<FunctionEHFrameInfo> EHFrames;
-
-  /// UsesLSDA - Indicates whether an FDE that uses the CIE at the given index
-  /// uses an LSDA. If so, then we need to encode that information in the CIE's
-  /// augmentation.
-  DenseMap<unsigned, bool> UsesLSDA;
-
-  /// UsesAugmentation - Indicates whenever the CIE at the given index uses
-  /// augmentation, which means we have to emit the augmentation length in
-  /// the FDE.
-  DenseMap<unsigned, bool> UsesAugmentation;
-
-  /// shouldEmitTable - Per-function flag to indicate if EH tables should
-  /// be emitted.
-  bool shouldEmitTable;
-
-  /// shouldEmitMoves - Per-function flag to indicate if frame moves info
-  /// should be emitted.
-  bool shouldEmitMoves;
-
-  /// shouldEmitTableModule - Per-module flag to indicate if EH tables
-  /// should be emitted.
-  bool shouldEmitTableModule;
-
-  /// shouldEmitFrameModule - Per-module flag to indicate if frame moves
-  /// should be emitted.
-  bool shouldEmitMovesModule;
-
-  /// EmitCIE - Emit a Common Information Entry (CIE). This holds information
-  /// that is shared among many Frame Description Entries.  There is at least
-  /// one CIE in every non-empty .debug_frame section.
-  void EmitCIE(const Function *Personality, unsigned Index);
-
-  /// EmitFDE - Emit the Frame Description Entry (FDE) for the function.
-  void EmitFDE(const FunctionEHFrameInfo &EHFrameInfo);
-
-  // EmitMonoEHFrame - Emit Mono specific exception handling tables
-  void EmitMonoEHFrame(const Function *Personality);
-
-  void PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo);
-
-  void EmitMonoLSDA(const FunctionEHFrameInfo *EHFrameInfo);
 
   /// EmitExceptionTable - Emit landing pads and actions.
   ///
@@ -200,18 +126,137 @@ public:
   // Main entry points.
   //
   DwarfException(AsmPrinter *A);
-  ~DwarfException();
+  virtual ~DwarfException();
 
   /// EndModule - Emit all exception information that should come after the
   /// content.
-  void EndModule();
+  virtual void EndModule();
 
   /// BeginFunction - Gather pre-function exception information.  Assumes being
   /// emitted immediately after the function entry point.
-  void BeginFunction(const MachineFunction *MF);
+  virtual void BeginFunction(const MachineFunction *MF);
 
   /// EndFunction - Gather and emit post-function exception information.
-  void EndFunction();
+  virtual void EndFunction();
+};
+
+class DwarfCFIException : public DwarfException {
+  /// shouldEmitTable - Per-function flag to indicate if EH tables should
+  /// be emitted.
+  bool shouldEmitTable;
+
+  /// shouldEmitMoves - Per-function flag to indicate if frame moves info
+  /// should be emitted.
+  bool shouldEmitMoves;
+
+  /// shouldEmitTableModule - Per-module flag to indicate if EH tables
+  /// should be emitted.
+  bool shouldEmitTableModule;
+public:
+  //===--------------------------------------------------------------------===//
+  // Main entry points.
+  //
+  DwarfCFIException(AsmPrinter *A);
+  virtual ~DwarfCFIException();
+
+  /// EndModule - Emit all exception information that should come after the
+  /// content.
+  virtual void EndModule();
+
+  /// BeginFunction - Gather pre-function exception information.  Assumes being
+  /// emitted immediately after the function entry point.
+  virtual void BeginFunction(const MachineFunction *MF);
+
+  /// EndFunction - Gather and emit post-function exception information.
+  virtual void EndFunction();
+};
+
+class DwarfTableException : public DwarfException {
+  /// shouldEmitTable - Per-function flag to indicate if EH tables should
+  /// be emitted.
+  bool shouldEmitTable;
+
+  /// shouldEmitMoves - Per-function flag to indicate if frame moves info
+  /// should be emitted.
+  bool shouldEmitMoves;
+
+  /// shouldEmitTableModule - Per-module flag to indicate if EH tables
+  /// should be emitted.
+  bool shouldEmitTableModule;
+
+  /// shouldEmitMovesModule - Per-module flag to indicate if frame moves
+  /// should be emitted.
+  bool shouldEmitMovesModule;
+
+  // Mono specific
+  struct MonoEHFrameInfo {
+    const MachineFunction *MF;
+    std::vector<CallSiteEntry> CallSites;
+    std::vector<const GlobalVariable *> TypeInfos;
+    std::vector<unsigned> FilterIds;
+    std::vector<LandingPadInfo> PadInfos;
+    int FunctionNumber;
+    int FrameReg;
+    int ThisOffset;
+  };
+
+  struct FunctionEHFrameInfo {
+    MCSymbol *FunctionEHSym;  // L_foo.eh
+    unsigned Number;
+    unsigned PersonalityIndex;
+    bool adjustsStack;
+    bool hasLandingPads;
+    std::vector<MachineMove> Moves;
+    const Function *function;
+
+    MonoEHFrameInfo MonoEH;
+
+    FunctionEHFrameInfo(MCSymbol *EHSym, unsigned Num, unsigned P,
+                        bool hC, bool hL,
+                        const std::vector<MachineMove> &M,
+                        const Function *f):
+      FunctionEHSym(EHSym), Number(Num), PersonalityIndex(P),
+      adjustsStack(hC), hasLandingPads(hL), Moves(M), function (f) { }
+  };
+
+  std::vector<FunctionEHFrameInfo> EHFrames;
+
+  /// UsesLSDA - Indicates whether an FDE that uses the CIE at the given index
+  /// uses an LSDA. If so, then we need to encode that information in the CIE's
+  /// augmentation.
+  DenseMap<unsigned, bool> UsesLSDA;
+
+  /// EmitCIE - Emit a Common Information Entry (CIE). This holds information
+  /// that is shared among many Frame Description Entries.  There is at least
+  /// one CIE in every non-empty .debug_frame section.
+  void EmitCIE(const Function *Personality, unsigned Index);
+
+  /// EmitFDE - Emit the Frame Description Entry (FDE) for the function.
+  void EmitFDE(const FunctionEHFrameInfo &EHFrameInfo);
+
+  // EmitMonoEHFrame - Emit Mono specific exception handling tables
+  void EmitMonoEHFrame(const Function *Personality);
+
+  void PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo);
+
+  void EmitMonoLSDA(const FunctionEHFrameInfo *EHFrameInfo);
+public:
+  //===--------------------------------------------------------------------===//
+  // Main entry points.
+  //
+  DwarfTableException(AsmPrinter *A);
+  virtual ~DwarfTableException();
+
+  /// EndModule - Emit all exception information that should come after the
+  /// content.
+  virtual void EndModule();
+
+  /// BeginFunction - Gather pre-function exception information.  Assumes being
+  /// emitted immediately after the function entry point.
+  virtual void BeginFunction(const MachineFunction *MF);
+
+  /// EndFunction - Gather and emit post-function exception information.
+  virtual void EndFunction();
 };
 
 } // End of namespace llvm

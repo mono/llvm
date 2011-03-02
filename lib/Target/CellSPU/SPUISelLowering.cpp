@@ -435,7 +435,6 @@ SPUTargetLowering::SPUTargetLowering(SPUTargetMachine &TM)
 
   setOperationAction(ISD::FDIV, MVT::v4f32, Legal);
 
-  setShiftAmountType(MVT::i32);
   setBooleanContents(ZeroOrNegativeOneBooleanContent);
 
   setStackPointerRegisterToSaveRestore(SPU::R1);
@@ -560,7 +559,7 @@ LowerLOAD(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
   assert( LN->getAddressingMode() == ISD::UNINDEXED
           && "we should get only UNINDEXED adresses");
   // clean aligned loads can be selected as-is
-  if (InVT.getSizeInBits() == 128 && alignment == 16)
+  if (InVT.getSizeInBits() == 128 && (alignment%16) == 0)
     return SDValue();
 
   // Get pointerinfos to the memory chunk(s) that contain the data to load
@@ -573,7 +572,7 @@ LowerLOAD(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
   SDValue basePtr = LN->getBasePtr();
   SDValue rotate;
 
-  if (alignment == 16) {
+  if ((alignment%16) == 0) {
     ConstantSDNode *CN;
 
     // Special cases for a known aligned load to simplify the base pointer
@@ -682,10 +681,6 @@ LowerLOAD(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
     // storage position offset from lower 16 byte aligned memory chunk
     SDValue offset = DAG.getNode(ISD::AND, dl, MVT::i32,
                                   basePtr, DAG.getConstant( 0xf, MVT::i32 ) );
-    // 16 - offset
-    SDValue offset_compl = DAG.getNode(ISD::SUB, dl, MVT::i32,
-                                        DAG.getConstant( 16, MVT::i32),
-                                        offset );
     // get a registerfull of ones. (this implementation is a workaround: LLVM
     // cannot handle 128 bit signed int constants)
     SDValue ones = DAG.getConstant(-1, MVT::v4i32 );
@@ -777,7 +772,7 @@ LowerSTORE(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
   assert( SN->getAddressingMode() == ISD::UNINDEXED
           && "we should get only UNINDEXED adresses");
   // clean aligned loads can be selected as-is
-  if (StVT.getSizeInBits() == 128 && alignment == 16)
+  if (StVT.getSizeInBits() == 128 && (alignment%16) == 0)
     return SDValue();
 
   SDValue alignLoadVec;
@@ -785,7 +780,7 @@ LowerSTORE(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
   SDValue the_chain = SN->getChain();
   SDValue insertEltOffs;
 
-  if (alignment == 16) {
+  if ((alignment%16) == 0) {
     ConstantSDNode *CN;
     // Special cases for a known aligned load to simplify the base pointer
     // and insertion byte:
@@ -910,10 +905,6 @@ LowerSTORE(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
     SDValue offset_compl = DAG.getNode(ISD::SUB, dl, MVT::i32,
                                            DAG.getConstant( 16, MVT::i32),
                                            offset);
-    SDValue hi_shift = DAG.getNode(ISD::SUB, dl, MVT::i32,
-                                      DAG.getConstant( VT.getSizeInBits()/8,
-                                                       MVT::i32),
-                                      offset_compl);
     // 16 - sizeof(Value)
     SDValue surplus = DAG.getNode(ISD::SUB, dl, MVT::i32,
                                      DAG.getConstant( 16, MVT::i32),
@@ -2198,7 +2189,7 @@ static SDValue LowerI8Math(SDValue Op, SelectionDAG &DAG, unsigned Opc,
 {
   SDValue N0 = Op.getOperand(0);      // Everything has at least one operand
   DebugLoc dl = Op.getDebugLoc();
-  EVT ShiftVT = TLI.getShiftAmountTy();
+  EVT ShiftVT = TLI.getShiftAmountTy(N0.getValueType());
 
   assert(Op.getValueType() == MVT::i8);
   switch (Opc) {
@@ -2726,6 +2717,12 @@ static SDValue LowerSIGN_EXTEND(SDValue Op, SelectionDAG &DAG)
   // Type to extend from
   SDValue Op0 = Op.getOperand(0);
   MVT Op0VT = Op0.getValueType().getSimpleVT();
+
+  // extend i8 & i16 via i32
+  if (Op0VT == MVT::i8 || Op0VT == MVT::i16) {
+    Op0 = DAG.getNode(ISD::SIGN_EXTEND, dl, MVT::i32, Op0);
+    Op0VT = MVT::i32;
+  }
 
   // The type to extend to needs to be a i128 and
   // the type to extend from needs to be i64 or i32.
@@ -3259,4 +3256,3 @@ SPUTargetLowering::isLegalAddressingMode(const AddrMode &AM,
 
   return false;
 }
-

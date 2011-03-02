@@ -30,6 +30,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/Target/TargetAsmParser.h"
 #include <cctype>
 #include <vector>
@@ -167,11 +168,12 @@ private:
   /// will be either the EndOfStatement or EOF.
   StringRef ParseStringToEndOfStatement();
 
-  bool ParseAssignment(StringRef Name);
+  bool ParseAssignment(StringRef Name, bool allow_redef);
 
   bool ParsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc);
   bool ParseBinOpRHS(unsigned Precedence, const MCExpr *&Res, SMLoc &EndLoc);
   bool ParseParenExpr(const MCExpr *&Res, SMLoc &EndLoc);
+  bool ParseBracketExpr(const MCExpr *&Res, SMLoc &EndLoc);
 
   /// ParseIdentifier - Parse an identifier or string (as a quoted identifier)
   /// and set \arg Res to the identifier contents.
@@ -186,7 +188,7 @@ private:
   bool ParseDirectiveFill(); // ".fill"
   bool ParseDirectiveSpace(); // ".space"
   bool ParseDirectiveZero(); // ".zero"
-  bool ParseDirectiveSet(StringRef IDVal); // ".set" or ".equ"
+  bool ParseDirectiveSet(StringRef IDVal, bool allow_redef); // ".set", ".equ", ".equiv"
   bool ParseDirectiveOrg(); // ".org"
   // ".align{,32}", ".p2align{,w,l}"
   bool ParseDirectiveAlign(bool IsPow2, unsigned ValueSize);
@@ -201,6 +203,8 @@ private:
   bool ParseDirectiveInclude(); // ".include"
 
   bool ParseDirectiveIf(SMLoc DirectiveLoc); // ".if"
+  // ".ifdef" or ".ifndef", depending on expect_defined
+  bool ParseDirectiveIfdef(SMLoc DirectiveLoc, bool expect_defined);
   bool ParseDirectiveElseIf(SMLoc DirectiveLoc); // ".elseif"
   bool ParseDirectiveElse(SMLoc DirectiveLoc); // ".else"
   bool ParseDirectiveEndIf(SMLoc DirectiveLoc); // .endif
@@ -221,7 +225,6 @@ class GenericAsmParser : public MCAsmParserExtension {
     getParser().AddDirectiveHandler(this, Directive,
                                     HandleDirective<GenericAsmParser, Handler>);
   }
-
 public:
   GenericAsmParser() {}
 
@@ -273,6 +276,8 @@ public:
     AddDirectiveHandler<&GenericAsmParser::ParseDirectiveLEB128>(".sleb128");
     AddDirectiveHandler<&GenericAsmParser::ParseDirectiveLEB128>(".uleb128");
   }
+
+  bool ParseRegisterOrRegisterNumber(int64_t &Register, SMLoc DirectiveLoc);
 
   bool ParseDirectiveFile(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveLine(StringRef, SMLoc DirectiveLoc);
@@ -488,6 +493,20 @@ bool AsmParser::ParseParenExpr(const MCExpr *&Res, SMLoc &EndLoc) {
   return false;
 }
 
+/// ParseBracketExpr - Parse a bracket expression and return it.
+/// NOTE: This assumes the leading '[' has already been consumed.
+///
+/// bracketexpr ::= expr]
+///
+bool AsmParser::ParseBracketExpr(const MCExpr *&Res, SMLoc &EndLoc) {
+  if (ParseExpression(Res)) return true;
+  if (Lexer.isNot(AsmToken::RBrac))
+    return TokError("expected ']' in brackets expression");
+  EndLoc = Lexer.getLoc();
+  Lex();
+  return false;
+}
+
 /// ParsePrimaryExpr - Parse a primary expression and return it.
 ///  primaryexpr ::= (parenexpr
 ///  primaryexpr ::= symbol
@@ -523,7 +542,7 @@ bool AsmParser::ParsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
       Variant = MCSymbolRefExpr::getVariantKindForName(Split.second);
       if (Variant == MCSymbolRefExpr::VK_Invalid) {
         Variant = MCSymbolRefExpr::VK_None;
-        TokError("invalid variant '" + Split.second + "'");
+        return TokError("invalid variant '" + Split.second + "'");
       }
     }
 
@@ -563,6 +582,13 @@ bool AsmParser::ParsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
     }
     return false;
   }
+  case AsmToken::Real: {
+    APFloat RealVal(APFloat::IEEEdouble, getTok().getString());
+    uint64_t IntVal = RealVal.bitcastToAPInt().getZExtValue();
+    Res = MCConstantExpr::Create(IntVal, getContext());
+    Lex(); // Eat token.
+    return false;
+  }
   case AsmToken::Dot: {
     // This is a '.' reference, which references the current PC.  Emit a
     // temporary label to the streamer and refer to it.
@@ -573,10 +599,14 @@ bool AsmParser::ParsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
     Lex(); // Eat identifier.
     return false;
   }
-
   case AsmToken::LParen:
     Lex(); // Eat the '('.
     return ParseParenExpr(Res, EndLoc);
+  case AsmToken::LBrac:
+    if (!PlatformParser->HasBracketExpressions())
+      return TokError("brackets expression not supported on this target");
+    Lex(); // Eat the '['.
+    return ParseBracketExpr(Res, EndLoc);
   case AsmToken::Minus:
     Lex(); // Eat the operator.
     if (ParsePrimaryExpr(Res, EndLoc))
@@ -878,6 +908,10 @@ bool AsmParser::ParseStatement() {
   // example.
   if (IDVal == ".if")
     return ParseDirectiveIf(IDLoc);
+  if (IDVal == ".ifdef")
+    return ParseDirectiveIfdef(IDLoc, true);
+  if (IDVal == ".ifndef" || IDVal == ".ifnotdef")
+    return ParseDirectiveIfdef(IDLoc, false);
   if (IDVal == ".elseif")
     return ParseDirectiveElseIf(IDLoc);
   if (IDVal == ".else")
@@ -932,7 +966,7 @@ bool AsmParser::ParseStatement() {
     // identifier '=' ... -> assignment statement
     Lex();
 
-    return ParseAssignment(IDVal);
+    return ParseAssignment(IDVal, true);
 
   default: // Normal instruction or directive.
     break;
@@ -947,7 +981,9 @@ bool AsmParser::ParseStatement() {
   if (IDVal[0] == '.') {
     // Assembler features
     if (IDVal == ".set" || IDVal == ".equ")
-      return ParseDirectiveSet(IDVal);
+      return ParseDirectiveSet(IDVal, true);
+    if (IDVal == ".equiv")
+      return ParseDirectiveSet(IDVal, false);
 
     // Data directives
 
@@ -974,7 +1010,7 @@ bool AsmParser::ParseStatement() {
       return ParseDirectiveValue(8);
     if (IDVal == ".8byte")
       return ParseDirectiveValue(8);
-    if (IDVal == ".single")
+    if (IDVal == ".single" || IDVal == ".float")
       return ParseDirectiveRealValue(APFloat::IEEEsingle);
     if (IDVal == ".double")
       return ParseDirectiveRealValue(APFloat::IEEEdouble);
@@ -1053,6 +1089,9 @@ bool AsmParser::ParseStatement() {
       return ParseDirectiveAbort();
     if (IDVal == ".include")
       return ParseDirectiveInclude();
+
+    if (IDVal == ".code16" || IDVal == ".code32" || IDVal == ".code64")
+      return TokError(Twine(IDVal) + " not supported yet");
 
     // Look up the handler in the handler table.
     std::pair<MCAsmParserExtension*, DirectiveHandler> Handler =
@@ -1254,7 +1293,7 @@ static void MarkUsed(const MCExpr *Value) {
   }
 }
 
-bool AsmParser::ParseAssignment(StringRef Name) {
+bool AsmParser::ParseAssignment(StringRef Name, bool allow_redef) {
   // FIXME: Use better location, we should use proper tokens.
   SMLoc EqualLoc = Lexer.getLoc();
 
@@ -1280,7 +1319,7 @@ bool AsmParser::ParseAssignment(StringRef Name) {
     // FIXME: Diagnose assignment to protected identifier (e.g., register name).
     if (Sym->isUndefined() && !Sym->isUsed() && !Sym->isVariable())
       ; // Allow redefinitions of undefined symbols only used in directives.
-    else if (!Sym->isUndefined() && !Sym->isAbsolute())
+    else if (!Sym->isUndefined() && (!Sym->isAbsolute() || !allow_redef))
       return Error(EqualLoc, "redefinition of '" + Name + "'");
     else if (!Sym->isVariable())
       return Error(EqualLoc, "invalid assignment to '" + Name + "'");
@@ -1341,8 +1380,10 @@ bool AsmParser::ParseIdentifier(StringRef &Res) {
 }
 
 /// ParseDirectiveSet:
+///   ::= .equ identifier ',' expression
+///   ::= .equiv identifier ',' expression
 ///   ::= .set identifier ',' expression
-bool AsmParser::ParseDirectiveSet(StringRef IDVal) {
+bool AsmParser::ParseDirectiveSet(StringRef IDVal, bool allow_redef) {
   StringRef Name;
 
   if (ParseIdentifier(Name))
@@ -1352,7 +1393,7 @@ bool AsmParser::ParseDirectiveSet(StringRef IDVal) {
     return TokError("unexpected token in '" + Twine(IDVal) + "'");
   Lex();
 
-  return ParseAssignment(Name);
+  return ParseAssignment(Name, allow_redef);
 }
 
 bool AsmParser::ParseEscapedString(std::string &Data) {
@@ -1917,6 +1958,31 @@ bool AsmParser::ParseDirectiveIf(SMLoc DirectiveLoc) {
   return false;
 }
 
+bool AsmParser::ParseDirectiveIfdef(SMLoc DirectiveLoc, bool expect_defined) {
+  StringRef Name;
+  TheCondStack.push_back(TheCondState);
+  TheCondState.TheCond = AsmCond::IfCond;
+
+  if (TheCondState.Ignore) {
+    EatToEndOfStatement();
+  } else {
+    if (ParseIdentifier(Name))
+      return TokError("expected identifier after '.ifdef'");
+
+    Lex();
+
+    MCSymbol *Sym = getContext().LookupSymbol(Name);
+
+    if (expect_defined)
+      TheCondState.CondMet = (Sym != NULL && !Sym->isUndefined());
+    else
+      TheCondState.CondMet = (Sym == NULL || Sym->isUndefined());
+    TheCondState.Ignore = !TheCondState.CondMet;
+  }
+
+  return false;
+}
+
 /// ParseDirectiveElseIf
 /// ::= .elseif expression
 bool AsmParser::ParseDirectiveElseIf(SMLoc DirectiveLoc) {
@@ -2175,12 +2241,28 @@ bool GenericAsmParser::ParseDirectiveCFIEndProc(StringRef, SMLoc DirectiveLoc) {
   return getStreamer().EmitCFIEndProc();
 }
 
+/// ParseRegisterOrRegisterNumber - parse register name or number.
+bool GenericAsmParser::ParseRegisterOrRegisterNumber(int64_t &Register,
+                                                     SMLoc DirectiveLoc) {
+  unsigned RegNo;
+
+  if (getLexer().is(AsmToken::Percent)) {
+    if (getParser().getTargetParser().ParseRegister(RegNo, DirectiveLoc,
+      DirectiveLoc))
+      return true;
+    Register = getContext().getTargetAsmInfo().getDwarfRegNum(RegNo, true);
+  } else
+    return getParser().ParseAbsoluteExpression(Register);
+
+  return false;
+}
+
 /// ParseDirectiveCFIDefCfa
 /// ::= .cfi_def_cfa register,  offset
 bool GenericAsmParser::ParseDirectiveCFIDefCfa(StringRef,
                                                SMLoc DirectiveLoc) {
   int64_t Register = 0;
-  if (getParser().ParseAbsoluteExpression(Register))
+  if (ParseRegisterOrRegisterNumber(Register, DirectiveLoc))
     return true;
 
   if (getLexer().isNot(AsmToken::Comma))
@@ -2210,7 +2292,7 @@ bool GenericAsmParser::ParseDirectiveCFIDefCfaOffset(StringRef,
 bool GenericAsmParser::ParseDirectiveCFIDefCfaRegister(StringRef,
                                                        SMLoc DirectiveLoc) {
   int64_t Register = 0;
-  if (getParser().ParseAbsoluteExpression(Register))
+  if (ParseRegisterOrRegisterNumber(Register, DirectiveLoc))
     return true;
 
   return getStreamer().EmitCFIDefCfaRegister(Register);
@@ -2221,7 +2303,8 @@ bool GenericAsmParser::ParseDirectiveCFIDefCfaRegister(StringRef,
 bool GenericAsmParser::ParseDirectiveCFIOffset(StringRef, SMLoc DirectiveLoc) {
   int64_t Register = 0;
   int64_t Offset = 0;
-  if (getParser().ParseAbsoluteExpression(Register))
+
+  if (ParseRegisterOrRegisterNumber(Register, DirectiveLoc))
     return true;
 
   if (getLexer().isNot(AsmToken::Comma))

@@ -49,6 +49,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/Statistic.h"
 #include <algorithm>
 using namespace llvm;
@@ -479,16 +480,7 @@ void SelectionDAGISel::ComputeLiveOutVRegInfo() {
     unsigned NumSignBits = CurDAG->ComputeNumSignBits(Src);
     Mask = APInt::getAllOnesValue(SrcVT.getSizeInBits());
     CurDAG->ComputeMaskedBits(Src, Mask, KnownZero, KnownOne);
-
-    // Only install this information if it tells us something.
-    if (NumSignBits != 1 || KnownZero != 0 || KnownOne != 0) {
-      FuncInfo->LiveOutRegInfo.grow(DestReg);
-      FunctionLoweringInfo::LiveOutInfo &LOI =
-        FuncInfo->LiveOutRegInfo[DestReg];
-      LOI.NumSignBits = NumSignBits;
-      LOI.KnownOne = KnownOne;
-      LOI.KnownZero = KnownZero;
-    }
+    FuncInfo->AddLiveOutRegInfo(DestReg, NumSignBits, KnownZero, KnownOne);
   } while (!Worklist.empty());
 }
 
@@ -771,8 +763,16 @@ bool SelectionDAGISel::TryToFoldFastISelLoad(const LoadInst *LI,
   assert(RI.getOperand().isUse() &&
          "The only use of the vreg must be a use, we haven't emitted the def!");
 
+  MachineInstr *User = &*RI;
+
+  // Set the insertion point properly.  Folding the load can cause generation of
+  // other random instructions (like sign extends) for addressing modes, make
+  // sure they get inserted in a logical place before the new instruction.
+  FuncInfo->InsertPt = User;
+  FuncInfo->MBB = User->getParent();
+
   // Ask the target to try folding the load.
-  return FastIS->TryToFoldLoad(&*RI, RI.getOperandNo(), LI);
+  return FastIS->TryToFoldLoad(User, RI.getOperandNo(), LI);
 }
 
 #ifndef NDEBUG
@@ -824,11 +824,39 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
     FastIS = TLI.createFastISel(*FuncInfo);
 
   // Iterate over all basic blocks in the function.
-  for (Function::const_iterator I = Fn.begin(), E = Fn.end(); I != E; ++I) {
-    const BasicBlock *LLVMBB = &*I;
+  ReversePostOrderTraversal<const Function*> RPOT(&Fn);
+  for (ReversePostOrderTraversal<const Function*>::rpo_iterator
+       I = RPOT.begin(), E = RPOT.end(); I != E; ++I) {
+    const BasicBlock *LLVMBB = *I;
 #ifndef NDEBUG
     CheckLineNumbers(LLVMBB);
 #endif
+
+    if (OptLevel != CodeGenOpt::None) {
+      bool AllPredsVisited = true;
+      for (const_pred_iterator PI = pred_begin(LLVMBB), PE = pred_end(LLVMBB);
+           PI != PE; ++PI) {
+        if (!FuncInfo->VisitedBBs.count(*PI)) {
+          AllPredsVisited = false;
+          break;
+        }
+      }
+
+      if (AllPredsVisited) {
+        for (BasicBlock::const_iterator I = LLVMBB->begin(), E = LLVMBB->end();
+             I != E && isa<PHINode>(I); ++I) {
+          FuncInfo->ComputePHILiveOutRegInfo(cast<PHINode>(I));
+        }
+      } else {
+        for (BasicBlock::const_iterator I = LLVMBB->begin(), E = LLVMBB->end();
+             I != E && isa<PHINode>(I); ++I) {
+          FuncInfo->InvalidatePHILiveOutRegInfo(cast<PHINode>(I));
+        }
+      }
+
+      FuncInfo->VisitedBBs.insert(LLVMBB);
+    }
+
     FuncInfo->MBB = FuncInfo->MBBMap[LLVMBB];
     FuncInfo->InsertPt = FuncInfo->MBB->getFirstNonPHI();
 
@@ -890,11 +918,9 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
           if (Inst != Begin)
             BeforeInst = llvm::prior(llvm::prior(BI));
           if (BeforeInst && isa<LoadInst>(BeforeInst) &&
-              BeforeInst->hasOneUse() && *BeforeInst->use_begin() == Inst) {
-            FastIS->recomputeInsertPt();
-            if (TryToFoldFastISelLoad(cast<LoadInst>(BeforeInst), FastIS))
-              --BI; // If we succeeded, don't re-select the load.
-          }
+              BeforeInst->hasOneUse() && *BeforeInst->use_begin() == Inst &&
+              TryToFoldFastISelLoad(cast<LoadInst>(BeforeInst), FastIS))
+            --BI; // If we succeeded, don't re-select the load.
           continue;
         }
 
@@ -1135,7 +1161,7 @@ SelectionDAGISel::FinishBasicBlock() {
   // additional DAGs necessary.
   for (unsigned i = 0, e = SDB->SwitchCases.size(); i != e; ++i) {
     // Set the current basic block to the mbb we wish to insert the code into
-    MachineBasicBlock *ThisBB = FuncInfo->MBB = SDB->SwitchCases[i].ThisBB;
+    FuncInfo->MBB = SDB->SwitchCases[i].ThisBB;
     FuncInfo->InsertPt = FuncInfo->MBB->end();
 
     // Determine the unique successors.
@@ -1144,13 +1170,15 @@ SelectionDAGISel::FinishBasicBlock() {
     if (SDB->SwitchCases[i].TrueBB != SDB->SwitchCases[i].FalseBB)
       Succs.push_back(SDB->SwitchCases[i].FalseBB);
 
-    // Emit the code. Note that this could result in ThisBB being split, so
-    // we need to check for updates.
+    // Emit the code. Note that this could result in FuncInfo->MBB being split.
     SDB->visitSwitchCase(SDB->SwitchCases[i], FuncInfo->MBB);
     CurDAG->setRoot(SDB->getRoot());
     SDB->clear();
     CodeGenAndEmitDAG();
-    ThisBB = FuncInfo->MBB;
+
+    // Remember the last block, now that any splitting is done, for use in
+    // populating PHI nodes in successors.
+    MachineBasicBlock *ThisBB = FuncInfo->MBB;
 
     // Handle any PHI nodes in successors of this chunk, as if we were coming
     // from the original BB before switch expansion.  Note that PHI nodes can
@@ -2360,6 +2388,18 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       MVT::SimpleValueType VT =
         (MVT::SimpleValueType)MatcherTable[MatcherIndex++];
       unsigned RegNo = MatcherTable[MatcherIndex++];
+      RecordedNodes.push_back(std::pair<SDValue, SDNode*>(
+                              CurDAG->getRegister(RegNo, VT), (SDNode*)0));
+      continue;
+    }
+    case OPC_EmitRegister2: {
+      // For targets w/ more than 256 register names, the register enum
+      // values are stored in two bytes in the matcher table (just like
+      // opcodes).
+      MVT::SimpleValueType VT =
+        (MVT::SimpleValueType)MatcherTable[MatcherIndex++];
+      unsigned RegNo = MatcherTable[MatcherIndex++];
+      RegNo |= MatcherTable[MatcherIndex++] << 8;
       RecordedNodes.push_back(std::pair<SDValue, SDNode*>(
                               CurDAG->getRegister(RegNo, VT), (SDNode*)0));
       continue;

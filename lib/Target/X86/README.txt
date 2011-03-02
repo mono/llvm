@@ -710,23 +710,17 @@ This:
         { return !full_add(a, b).second; }
 
 Should compile to:
+	addl	%esi, %edi
+	setae	%al
+	movzbl	%al, %eax
+	ret
 
-
-        _Z11no_overflowjj:
-                addl    %edi, %esi
-                setae   %al
-                ret
-
-FIXME: That code looks wrong; bool return is normally defined as zext.
-
-on x86-64, not:
-
-__Z11no_overflowjj:
-        addl    %edi, %esi
-        cmpl    %edi, %esi
-        setae   %al
-        movzbl  %al, %eax
-        ret
+on x86-64, instead of the rather stupid-looking:
+	addl	%esi, %edi
+	setb	%al
+	xorb	$1, %al
+	movzbl	%al, %eax
+	ret
 
 
 //===---------------------------------------------------------------------===//
@@ -994,10 +988,10 @@ _foo:
 
 instead of:
 _foo:
-        movl    $255, %eax
-        orl     4(%esp), %eax
-        andl    $65535, %eax
-        ret
+	movl	$65280, %eax
+	andl	4(%esp), %eax
+	orl	$255, %eax
+	ret
 
 //===---------------------------------------------------------------------===//
 
@@ -1884,3 +1878,72 @@ _add32carry:
 	ret
 
 //===---------------------------------------------------------------------===//
+
+The hot loop of 256.bzip2 contains code that looks a bit like this:
+
+int foo(char *P, char *Q, int x, int y) {
+  if (P[0] != Q[0])
+     return P[0] < Q[0];
+  if (P[1] != Q[1])
+     return P[1] < Q[1];
+  if (P[2] != Q[2])
+     return P[2] < Q[2];
+   return P[3] < Q[3];
+}
+
+In the real code, we get a lot more wrong than this.  However, even in this
+code we generate:
+
+_foo:                                   ## @foo
+## BB#0:                                ## %entry
+	movb	(%rsi), %al
+	movb	(%rdi), %cl
+	cmpb	%al, %cl
+	je	LBB0_2
+LBB0_1:                                 ## %if.then
+	cmpb	%al, %cl
+	jmp	LBB0_5
+LBB0_2:                                 ## %if.end
+	movb	1(%rsi), %al
+	movb	1(%rdi), %cl
+	cmpb	%al, %cl
+	jne	LBB0_1
+## BB#3:                                ## %if.end38
+	movb	2(%rsi), %al
+	movb	2(%rdi), %cl
+	cmpb	%al, %cl
+	jne	LBB0_1
+## BB#4:                                ## %if.end60
+	movb	3(%rdi), %al
+	cmpb	3(%rsi), %al
+LBB0_5:                                 ## %if.end60
+	setl	%al
+	movzbl	%al, %eax
+	ret
+
+Note that we generate jumps to LBB0_1 which does a redundant compare.  The
+redundant compare also forces the register values to be live, which prevents
+folding one of the loads into the compare.  In contrast, GCC 4.2 produces:
+
+_foo:
+	movzbl	(%rsi), %eax
+	cmpb	%al, (%rdi)
+	jne	L10
+L12:
+	movzbl	1(%rsi), %eax
+	cmpb	%al, 1(%rdi)
+	jne	L10
+	movzbl	2(%rsi), %eax
+	cmpb	%al, 2(%rdi)
+	jne	L10
+	movzbl	3(%rdi), %eax
+	cmpb	3(%rsi), %al
+L10:
+	setl	%al
+	movzbl	%al, %eax
+	ret
+
+which is "perfect".
+
+//===---------------------------------------------------------------------===//
+

@@ -201,6 +201,10 @@ def CPSR    : ARMReg<0, "cpsr">;
 def FPSCR   : ARMReg<1, "fpscr">;
 def ITSTATE : ARMReg<2, "itstate">;
 
+// Special Registers - only available in privileged mode.
+def FPSID   : ARMReg<0, "fpsid">;
+def FPEXC   : ARMReg<8, "fpexc">;
+
 // Register classes.
 //
 // pc  == Program Counter
@@ -256,7 +260,7 @@ def GPR : RegisterClass<"ARM", [i32], 32, [R0, R1, R2, R3, R4, R5, R6,
 
 // restricted GPR register class. Many Thumb2 instructions allow the full
 // register range for operands, but have undefined behaviours when PC
-// or SP (R13 or R15) are used. The ARM ARM refers to these operands
+// or SP (R13 or R15) are used. The ARM ISA refers to these operands
 // via the BadReg() pseudo-code description.
 def rGPR : RegisterClass<"ARM", [i32], 32, [R0, R1, R2, R3, R4, R5, R6,
                                             R7, R8, R9, R10, R11, R12, LR]> {

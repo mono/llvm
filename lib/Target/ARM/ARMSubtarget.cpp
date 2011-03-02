@@ -25,8 +25,7 @@ ReserveR9("arm-reserve-r9", cl::Hidden,
           cl::desc("Reserve R9, making it unavailable as GPR"));
 
 static cl::opt<bool>
-UseMOVT("arm-use-movt",
-        cl::init(true), cl::Hidden);
+DarwinUseMOVT("arm-darwin-use-movt", cl::init(true), cl::Hidden);
 
 static cl::opt<bool>
 StrictAlign("arm-strict-align", cl::Hidden,
@@ -45,7 +44,7 @@ ARMSubtarget::ARMSubtarget(const std::string &TT, const std::string &FS,
   , NoARM(false)
   , PostRAScheduler(false)
   , IsR9Reserved(ReserveR9)
-  , UseMovt(UseMOVT)
+  , UseMovt(false)
   , HasFP16(false)
   , HasD16(false)
   , HasHardwareDivide(false)
@@ -147,8 +146,12 @@ ARMSubtarget::ARMSubtarget(const std::string &TT, const std::string &FS,
   if (isAAPCS_ABI())
     stackAlignment = 8;
 
-  if (isTargetDarwin())
+  if (!isTargetDarwin())
+    UseMovt = hasV6T2Ops();
+  else {
     IsR9Reserved = ReserveR9 | (ARMArchVersion < V6);
+    UseMovt = DarwinUseMOVT && hasV6T2Ops();
+  }
 
   if (!isThumb() || hasThumb2())
     PostRAScheduler = true;
@@ -168,7 +171,9 @@ ARMSubtarget::GVIsIndirectSymbol(const GlobalValue *GV,
 
   // Materializable GVs (in JIT lazy compilation mode) do not require an extra
   // load from stub.
-  bool isDecl = GV->isDeclaration() && !GV->isMaterializable();
+  bool isDecl = GV->hasAvailableExternallyLinkage();
+  if (GV->isDeclaration() && !GV->isMaterializable())
+    isDecl = true;
 
   if (!isTargetDarwin()) {
     // Extra load is needed for all externally visible.

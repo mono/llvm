@@ -175,7 +175,7 @@ totalExponent(StringRef::iterator p, StringRef::iterator end,
 {
   int unsignedExponent;
   bool negative, overflow;
-  int exponent;
+  int exponent = 0;
 
   assert(p != end && "Exponent has no digits");
 
@@ -3195,6 +3195,12 @@ APFloat::initFromAPInt(const APInt& api, bool isIEEE)
             initFromQuadrupleAPInt(api) : initFromPPCDoubleDoubleAPInt(api));
   else
     llvm_unreachable(0);
+}
+
+APFloat
+APFloat::getAllOnesValue(unsigned BitWidth, bool isIEEE)
+{
+  return APFloat(APInt::getAllOnesValue(BitWidth), isIEEE);
 }
 
 APFloat APFloat::getLargest(const fltSemantics &Sem, bool Negative) {

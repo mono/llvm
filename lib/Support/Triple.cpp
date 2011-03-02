@@ -101,7 +101,6 @@ const char *Triple::getOSTypeName(OSType Kind) {
   case Linux: return "linux";
   case Lv2: return "lv2";
   case MinGW32: return "mingw32";
-  case MinGW64: return "mingw64";
   case NetBSD: return "netbsd";
   case OpenBSD: return "openbsd";
   case Psp: return "psp";
@@ -117,6 +116,10 @@ const char *Triple::getOSTypeName(OSType Kind) {
 const char *Triple::getEnvironmentTypeName(EnvironmentType Kind) {
   switch (Kind) {
   case UnknownEnvironment: return "unknown";
+  case GNU: return "gnu";
+  case GNUEABI: return "gnueabi";
+  case EABI: return "eabi";
+  case MachO: return "macho";
   }
 
   return "<invalid>";
@@ -314,8 +317,6 @@ Triple::OSType Triple::ParseOS(StringRef OSName) {
     return Lv2;
   else if (OSName.startswith("mingw32"))
     return MinGW32;
-  else if (OSName.startswith("mingw64"))
-    return MinGW64;
   else if (OSName.startswith("netbsd"))
     return NetBSD;
   else if (OSName.startswith("openbsd"))
@@ -335,7 +336,16 @@ Triple::OSType Triple::ParseOS(StringRef OSName) {
 }
 
 Triple::EnvironmentType Triple::ParseEnvironment(StringRef EnvironmentName) {
-  return UnknownEnvironment;
+  if (EnvironmentName.startswith("eabi"))
+    return EABI;
+  else if (EnvironmentName.startswith("gnueabi"))
+    return GNUEABI;
+  else if (EnvironmentName.startswith("gnu"))
+    return GNU;
+  else if (EnvironmentName.startswith("macho"))
+    return MachO;
+  else
+    return UnknownEnvironment;
 }
 
 void Triple::Parse() const {
@@ -447,15 +457,16 @@ std::string Triple::normalize(StringRef Str) {
         do {
           // Insert one empty component at Idx.
           StringRef CurrentComponent(""); // The empty component.
-          for (unsigned i = Idx; i < Components.size(); ++i) {
-            // Skip over any fixed components.
-            while (i < array_lengthof(Found) && Found[i]) ++i;
+          for (unsigned i = Idx; i < Components.size();) {
             // Place the component at the new position, getting the component
             // that was at this position - it will be moved right.
             std::swap(CurrentComponent, Components[i]);
             // If it was placed on top of an empty component then we are done.
             if (CurrentComponent.empty())
               break;
+            // Advance to the next component, skipping any fixed components.
+            while (++i < array_lengthof(Found) && Found[i])
+              ;
           }
           // The last component was pushed off the end - append it.
           if (!CurrentComponent.empty())

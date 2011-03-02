@@ -17,7 +17,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Windows.h"
-#include <WinCrypt.h>
+#include <wincrypt.h>
 #include <fcntl.h>
 #include <io.h>
 #include <sys/stat.h>
@@ -310,7 +310,8 @@ error_code rename(const Twine &from, const Twine &to) {
   if (error_code ec = UTF8ToUTF16(f, wide_from)) return ec;
   if (error_code ec = UTF8ToUTF16(t, wide_to)) return ec;
 
-  if (!::MoveFileW(wide_from.begin(), wide_to.begin()))
+  if (!::MoveFileExW(wide_from.begin(), wide_to.begin(),
+                     MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING))
     return windows_error(::GetLastError());
 
   return success;
@@ -524,7 +525,7 @@ error_code unique_file(const Twine &model, int &result_fd,
                               NULL,
                               NULL,
                               PROV_RSA_FULL,
-                              0))
+                              CRYPT_VERIFYCONTEXT))
     return windows_error(::GetLastError());
   ScopedCryptContext CryptoProvider(HCPC);
 
@@ -613,6 +614,48 @@ retry_create_file:
   }
 
   result_fd = fd;
+  return success;
+}
+
+error_code get_magic(const Twine &path, uint32_t len,
+                     SmallVectorImpl<char> &result) {
+  SmallString<128> path_storage;
+  SmallVector<wchar_t, 128> path_utf16;
+  result.set_size(0);
+
+  // Convert path to UTF-16.
+  if (error_code ec = UTF8ToUTF16(path.toStringRef(path_storage),
+                                  path_utf16))
+    return ec;
+
+  // Open file.
+  HANDLE file = ::CreateFileW(c_str(path_utf16),
+                              GENERIC_READ,
+                              FILE_SHARE_READ,
+                              NULL,
+                              OPEN_EXISTING,
+                              FILE_ATTRIBUTE_READONLY,
+                              NULL);
+  if (file == INVALID_HANDLE_VALUE)
+    return windows_error(::GetLastError());
+
+  // Allocate buffer.
+  result.reserve(len);
+
+  // Get magic!
+  DWORD bytes_read = 0;
+  BOOL read_success = ::ReadFile(file, result.data(), len, &bytes_read, NULL);
+  error_code ec = windows_error(::GetLastError());
+  ::CloseHandle(file);
+  if (!read_success || (bytes_read != len)) {
+    // Set result size to the number of bytes read if it's valid.
+    if (bytes_read >= 0 && bytes_read <= len)
+      result.set_size(bytes_read);
+    // ERROR_HANDLE_EOF is mapped to errc::value_too_large.
+    return ec;
+  }
+
+  result.set_size(len);
   return success;
 }
 

@@ -2,29 +2,6 @@ Target Independent Opportunities:
 
 //===---------------------------------------------------------------------===//
 
-Dead argument elimination should be enhanced to handle cases when an argument is
-dead to an externally visible function.  Though the argument can't be removed
-from the externally visible function, the caller doesn't need to pass it in.
-For example in this testcase:
-
-  void foo(int X) __attribute__((noinline));
-  void foo(int X) { sideeffect(); }
-  void bar(int A) { foo(A+1); }
-
-We compile bar to:
-
-define void @bar(i32 %A) nounwind ssp {
-  %0 = add nsw i32 %A, 1                          ; <i32> [#uses=1]
-  tail call void @foo(i32 %0) nounwind noinline ssp
-  ret void
-}
-
-The add is dead, we could pass in 'i32 undef' instead.  This occurs for C++
-templates etc, which usually have linkonce_odr/weak_odr linkage, not internal
-linkage.
-
-//===---------------------------------------------------------------------===//
-
 With the recent changes to make the implicit def/use set explicit in
 machineinstrs, we should change the target descriptions for 'call' instructions
 so that the .td files don't list all the call-clobbered registers as implicit
@@ -277,6 +254,20 @@ unsigned long reverse(unsigned v) {
 
 //===---------------------------------------------------------------------===//
 
+[LOOP DELETION]
+
+We don't delete this output free loop, because trip count analysis doesn't
+realize that it is finite (if it were infinite, it would be undefined).  Not
+having this blocks Loop Idiom from matching strlen and friends.  
+
+void foo(char *C) {
+  int x = 0;
+  while (*C)
+    ++x,++C;
+}
+
+//===---------------------------------------------------------------------===//
+
 [LOOP RECOGNITION]
 
 These idioms should be recognized as popcount (see PR1488):
@@ -308,6 +299,16 @@ unsigned int popcount(unsigned int input) {
   for (unsigned int i =  0; i < 4 * 8; i++)
     count += (input >> i) & i;
   return count;
+}
+
+This should be recognized as CLZ:  rdar://8459039
+
+unsigned clz_a(unsigned a) {
+  int i;
+  for (i=0;i<32;i++)
+    if (a & (1<<(31-i)))
+      return i;
+  return 32;
 }
 
 This sort of thing should be added to the loop idiom pass.
@@ -756,18 +757,6 @@ codegen badness or something else (haven't investigated).
 
 //===---------------------------------------------------------------------===//
 
-We miss some instcombines for stuff like this:
-void bar (void);
-void foo (unsigned int a) {
-  /* This one is equivalent to a >= (3 << 2).  */
-  if ((a >> 2) >= 3)
-    bar ();
-}
-
-A few other related ones are in GCC PR14753.
-
-//===---------------------------------------------------------------------===//
-
 Divisibility by constant can be simplified (according to GCC PR12849) from
 being a mulhi to being a mul lo (cheaper).  Testcase:
 
@@ -908,6 +897,12 @@ rshift_gt (unsigned int a)
  if ((a >> 2) > 5)
    bar ();
 }
+
+void neg_eq_cst(unsigned int a) {
+if (-a == 123)
+bar();
+}
+
 All should simplify to a single comparison.  All of these are
 currently not optimized with "clang -emit-llvm-bc | opt
 -std-compile-opts".
@@ -1285,26 +1280,6 @@ SingleSource/Benchmarks/Misc/dt.c
 
 //===---------------------------------------------------------------------===//
 
-A/B get pinned to the stack because we turn an if/then into a select instead
-of PRE'ing the load/store.  This may be fixable in instcombine:
-http://gcc.gnu.org/bugzilla/show_bug.cgi?id=37892
-
-struct X { int i; };
-int foo (int x) {
-  struct X a;
-  struct X b;
-  struct X *p;
-  a.i = 1;
-  b.i = 2;
-  if (x)
-    p = &a;
-  else
-    p = &b;
-  return p->i;
-}
-
-//===---------------------------------------------------------------------===//
-
 Interesting missed case because of control flow flattening (should be 2 loads):
 http://gcc.gnu.org/bugzilla/show_bug.cgi?id=26629
 With: llvm-gcc t2.c -S -o - -O0 -emit-llvm | llvm-as | 
@@ -1347,6 +1322,21 @@ This should turn into a switch on the character.  See PR3253 for some notes on
 codegen.
 
 456.hmmer apparently uses strcspn and strspn a lot.  471.omnetpp uses strspn.
+
+//===---------------------------------------------------------------------===//
+
+simplifylibcalls should turn these snprintf idioms into memcpy (GCC PR47917)
+
+char buf1[6], buf2[6], buf3[4], buf4[4];
+int i;
+
+int foo (void) {
+  int ret = snprintf (buf1, sizeof buf1, "abcde");
+  ret += snprintf (buf2, sizeof buf2, "abcdef") * 16;
+  ret += snprintf (buf3, sizeof buf3, "%s", i++ < 6 ? "abc" : "def") * 256;
+  ret += snprintf (buf4, sizeof buf4, "%s", i++ > 10 ? "abcde" : "defgh")*4096;
+  return ret;
+}
 
 //===---------------------------------------------------------------------===//
 
@@ -1805,50 +1795,6 @@ case it choses instead to keep the max operation obvious.
 
 //===---------------------------------------------------------------------===//
 
-Take the following testcase on x86-64 (similar testcases exist for all targets
-with addc/adde):
-
-define void @a(i64* nocapture %s, i64* nocapture %t, i64 %a, i64 %b,
-i64 %c) nounwind {
-entry:
- %0 = zext i64 %a to i128                        ; <i128> [#uses=1]
- %1 = zext i64 %b to i128                        ; <i128> [#uses=1]
- %2 = add i128 %1, %0                            ; <i128> [#uses=2]
- %3 = zext i64 %c to i128                        ; <i128> [#uses=1]
- %4 = shl i128 %3, 64                            ; <i128> [#uses=1]
- %5 = add i128 %4, %2                            ; <i128> [#uses=1]
- %6 = lshr i128 %5, 64                           ; <i128> [#uses=1]
- %7 = trunc i128 %6 to i64                       ; <i64> [#uses=1]
- store i64 %7, i64* %s, align 8
- %8 = trunc i128 %2 to i64                       ; <i64> [#uses=1]
- store i64 %8, i64* %t, align 8
- ret void
-}
-
-Generated code:
-       addq    %rcx, %rdx
-       movl    $0, %eax
-       adcq    $0, %rax
-       addq    %r8, %rax
-       movq    %rax, (%rdi)
-       movq    %rdx, (%rsi)
-       ret
-
-Expected code:
-       addq    %rcx, %rdx
-       adcq    $0, %r8
-       movq    %r8, (%rdi)
-       movq    %rdx, (%rsi)
-       ret
-
-The generated SelectionDAG has an ADD of an ADDE, where both operands of the
-ADDE are zero. Replacing one of the operands of the ADDE with the other operand
-of the ADD, and replacing the ADD with the ADDE, should give the desired result.
-
-(That said, we are doing a lot better than gcc on this testcase. :) )
-
-//===---------------------------------------------------------------------===//
-
 Switch lowering generates less than ideal code for the following switch:
 define void @a(i32 %x) nounwind {
 entry:
@@ -1890,43 +1836,6 @@ something like the following, which eliminates a branch:
 	ret
 .LBB0_2:
 	jmp	foo  # TAILCALL
-//===---------------------------------------------------------------------===//
-Given a branch where the two target blocks are identical ("ret i32 %b" in
-both), simplifycfg will simplify them away. But not so for a switch statement:
-
-define i32 @f(i32 %a, i32 %b) nounwind readnone {
-entry:
-        switch i32 %a, label %bb3 [
-                i32 4, label %bb
-                i32 6, label %bb
-        ]
-
-bb:             ; preds = %entry, %entry
-        ret i32 %b
-
-bb3:            ; preds = %entry
-        ret i32 %b
-}
-//===---------------------------------------------------------------------===//
-
-clang -O3 fails to devirtualize this virtual inheritance case: (GCC PR45875)
-Looks related to PR3100
-
-struct c1 {};
-struct c10 : c1{
-  virtual void foo ();
-};
-struct c11 : c10, c1{
-  virtual void f6 ();
-};
-struct c28 : virtual c11{
-  void f6 ();
-};
-void check_c28 () {
-  c28 obj;
-  c11 *ptr = &obj;
-  ptr->f6 ();
-}
 
 //===---------------------------------------------------------------------===//
 
@@ -2155,44 +2064,49 @@ _ZNSt12_Vector_baseIiSaIiEEC2EmRKS0_.exit.i.i:    ; preds = %cond.true.i.i.i.i
   br label %_ZNSt6vectorIiSaIiEEC1EmRKiRKS0_.exit
 
 This is just the handling the construction of the vector. Most surprising here
-is the fact that all three null stores in %entry are dead, but not eliminated.
+is the fact that all three null stores in %entry are dead (because we do no
+cross-block DSE).
+
 Also surprising is that %conv isn't simplified to 0 in %....exit.thread.i.i.
+This is a because the client of LazyValueInfo doesn't simplify all instruction
+operands, just selected ones.
 
 //===---------------------------------------------------------------------===//
 
 clang -O3 -fno-exceptions currently compiles this code:
 
-void f(int N) {
-  std::vector<int> v(N);
-  for (int k = 0; k < N; ++k)
-    v[k] = 0;
-
-  extern void sink(void*); sink(&v);
+void f(char* a, int n) {
+  __builtin_memset(a, 0, n);
+  for (int i = 0; i < n; ++i)
+    a[i] = 0;
 }
 
-into almost the same as the previous note, but replace its final BB with:
+into:
 
-for.body.lr.ph:                                   ; preds = %cond.true.i.i.i.i
-  %mul.i.i.i.i.i = shl i64 %conv, 2
-  %call3.i.i.i.i.i = call noalias i8* @_Znwm(i64 %mul.i.i.i.i.i) nounwind
-  %0 = bitcast i8* %call3.i.i.i.i.i to i32*
-  store i32* %0, i32** %v8.sub, align 8, !tbaa !0
-  %add.ptr.i.i.i = getelementptr inbounds i32* %0, i64 %conv
-  store i32* %add.ptr.i.i.i, i32** %tmp4.i.i.i.i.i, align 8, !tbaa !0
-  call void @llvm.memset.p0i8.i64(i8* %call3.i.i.i.i.i, i8 0, i64 %mul.i.i.i.i.i, i32 4, i1 false)
-  store i32* %add.ptr.i.i.i, i32** %tmp3.i.i.i.i.i, align 8, !tbaa !0
-  %tmp18 = add i32 %N, -1
-  %tmp19 = zext i32 %tmp18 to i64
-  %tmp20 = shl i64 %tmp19, 2
-  %tmp21 = add i64 %tmp20, 4
-  call void @llvm.memset.p0i8.i64(i8* %call3.i.i.i.i.i, i8 0, i64 %tmp21, i32 4, i1 false)
-  br label %for.end
+define void @_Z1fPci(i8* nocapture %a, i32 %n) nounwind {
+entry:
+  %conv = sext i32 %n to i64
+  tail call void @llvm.memset.p0i8.i64(i8* %a, i8 0, i64 %conv, i32 1, i1 false)
+  %cmp8 = icmp sgt i32 %n, 0
+  br i1 %cmp8, label %for.body.lr.ph, label %for.end
 
-First off, why (((zext %N - 1) << 2) + 4) instead of the ((sext %N) << 2) done
-previously? (or better yet, re-use that one?)
+for.body.lr.ph:                                   ; preds = %entry
+  %tmp10 = add i32 %n, -1
+  %tmp11 = zext i32 %tmp10 to i64
+  %tmp12 = add i64 %tmp11, 1
+  call void @llvm.memset.p0i8.i64(i8* %a, i8 0, i64 %tmp12, i32 1, i1 false)
+  ret void
 
-Then, the really painful one is the second memset, of the same memory, to the
-same value.
+for.end:                                          ; preds = %entry
+  ret void
+}
+
+This shouldn't need the ((zext (%n - 1)) + 1) game, and it should ideally fold
+the two memset's together. The issue with %n seems to stem from poor handling
+of the original loop.
+
+To simplify this, we need SCEV to know that "n != 0" because of the dominating
+conditional.  That would turn the second memset into a simple memset of 'n'.
 
 //===---------------------------------------------------------------------===//
 
@@ -2212,6 +2126,12 @@ into poor code for zero-initializing 'v' when N is >0. The problem is that
 S is only 6 bytes, but each element is 8 byte-aligned. We generate a loop and
 4 stores on each iteration. If the struct were 8 bytes, this gets turned into
 a memset.
+
+In order to handle this we have to:
+  A) Teach clang to generate metadata for memsets of structs that have holes in
+     them.
+  B) Teach clang to use such a memset for zero init of this struct (since it has
+     a hole), instead of doing elementwise zeroing.
 
 //===---------------------------------------------------------------------===//
 
@@ -2306,4 +2226,43 @@ llc time when it gets inlined, because we can use smaller transfers.  This also
 avoids partial register stalls in some important cases.
 
 //===---------------------------------------------------------------------===//
+
+We don't fold (icmp (add) (add)) unless the two adds only have a single use.
+There are a lot of cases that we're refusing to fold in (e.g.) 256.bzip2, for
+example:
+
+ %indvar.next90 = add i64 %indvar89, 1     ;; Has 2 uses
+ %tmp96 = add i64 %tmp95, 1                ;; Has 1 use
+ %exitcond97 = icmp eq i64 %indvar.next90, %tmp96
+
+We don't fold this because we don't want to introduce an overlapped live range
+of the ivar.  However if we can make this more aggressive without causing
+performance issues in two ways:
+
+1. If *either* the LHS or RHS has a single use, we can definitely do the
+   transformation.  In the overlapping liverange case we're trading one register
+   use for one fewer operation, which is a reasonable trade.  Before doing this
+   we should verify that the llc output actually shrinks for some benchmarks.
+2. If both ops have multiple uses, we can still fold it if the operations are
+   both sinkable to *after* the icmp (e.g. in a subsequent block) which doesn't
+   increase register pressure.
+
+There are a ton of icmp's we aren't simplifying because of the reg pressure
+concern.  Care is warranted here though because many of these are induction
+variables and other cases that matter a lot to performance, like the above.
+Here's a blob of code that you can drop into the bottom of visitICmp to see some
+missed cases:
+
+  { Value *A, *B, *C, *D;
+    if (match(Op0, m_Add(m_Value(A), m_Value(B))) && 
+        match(Op1, m_Add(m_Value(C), m_Value(D))) &&
+        (A == C || A == D || B == C || B == D)) {
+      errs() << "OP0 = " << *Op0 << "  U=" << Op0->getNumUses() << "\n";
+      errs() << "OP1 = " << *Op1 << "  U=" << Op1->getNumUses() << "\n";
+      errs() << "CMP = " << I << "\n\n";
+    }
+  }
+
+//===---------------------------------------------------------------------===//
+
 

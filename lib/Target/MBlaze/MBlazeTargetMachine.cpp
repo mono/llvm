@@ -33,20 +33,21 @@ static MCStreamer *createMCStreamer(const Target &T, const std::string &TT,
                                     MCContext &Ctx, TargetAsmBackend &TAB,
                                     raw_ostream &_OS,
                                     MCCodeEmitter *_Emitter,
-                                    bool RelaxAll) {
+                                    bool RelaxAll,
+                                    bool NoExecStack) {
   Triple TheTriple(TT);
   switch (TheTriple.getOS()) {
   case Triple::Darwin:
     llvm_unreachable("MBlaze does not support Darwin MACH-O format");
     return NULL;
   case Triple::MinGW32:
-  case Triple::MinGW64:
   case Triple::Cygwin:
   case Triple::Win32:
     llvm_unreachable("MBlaze does not support Windows COFF format");
     return NULL;
   default:
-    return createELFStreamer(Ctx, TAB, _OS, _Emitter, RelaxAll);
+    return createELFStreamer(Ctx, TAB, _OS, _Emitter, RelaxAll,
+                             NoExecStack);
   }
 }
 

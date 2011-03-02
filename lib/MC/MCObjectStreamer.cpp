@@ -101,9 +101,9 @@ void MCObjectStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
 
 void MCObjectStreamer::EmitLabel(MCSymbol *Symbol) {
   assert(!Symbol->isVariable() && "Cannot emit a variable symbol!");
-  assert(CurSection && "Cannot emit before setting section!");
+  assert(getCurrentSection() && "Cannot emit before setting section!");
 
-  Symbol->setSection(*CurSection);
+  Symbol->setSection(*getCurrentSection());
 
   MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
 
@@ -142,14 +142,9 @@ void MCObjectStreamer::EmitWeakReference(MCSymbol *Alias,
   report_fatal_error("This file format doesn't support weak aliases.");
 }
 
-void MCObjectStreamer::SwitchSection(const MCSection *Section) {
+void MCObjectStreamer::ChangeSection(const MCSection *Section) {
   assert(Section && "Cannot switch to a null section!");
 
-  // If already in this section, then this is a noop.
-  if (Section == CurSection) return;
-
-  PrevSection = CurSection;
-  CurSection = Section;
   CurSectionData = &getAssembler().getOrCreateSectionData(*Section);
 }
 
@@ -247,7 +242,23 @@ void MCObjectStreamer::EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
 
 void MCObjectStreamer::EmitValueToOffset(const MCExpr *Offset,
                                         unsigned char Value) {
-  new MCOrgFragment(*Offset, Value, getCurrentSectionData());
+  int64_t Res;
+  if (Offset->EvaluateAsAbsolute(Res, getAssembler())) {
+    new MCOrgFragment(*Offset, Value, getCurrentSectionData());
+    return;
+  }
+
+  MCSymbol *CurrentPos = getContext().CreateTempSymbol();
+  EmitLabel(CurrentPos);
+  MCSymbolRefExpr::VariantKind Variant = MCSymbolRefExpr::VK_None;
+  const MCExpr *Ref =
+    MCSymbolRefExpr::Create(CurrentPos, Variant, getContext());
+  const MCExpr *Delta =
+    MCBinaryExpr::Create(MCBinaryExpr::Sub, Offset, Ref, getContext());
+
+  if (!Delta->EvaluateAsAbsolute(Res, getAssembler()))
+    report_fatal_error("expected assembly-time absolute expression");
+  EmitFill(Res, Value, 0);
 }
 
 void MCObjectStreamer::Finish() {

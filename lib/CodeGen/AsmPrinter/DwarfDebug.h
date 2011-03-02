@@ -52,6 +52,8 @@ class DIType;
 class DINameSpace;
 class DISubrange;
 class DICompositeType;
+class DITemplateTypeParameter;
+class DITemplateValueParameter;
 
 //===----------------------------------------------------------------------===//
 /// SrcLineInfo - This class is used to record source line correspondence.
@@ -71,6 +73,28 @@ public:
   unsigned getSourceID() const { return SourceID; }
   MCSymbol *getLabel() const { return Label; }
 };
+
+/// DotDebugLocEntry - This struct describes location entries emitted in
+/// .debug_loc section.
+typedef struct DotDebugLocEntry {
+  const MCSymbol *Begin;
+  const MCSymbol *End;
+  MachineLocation Loc;
+  bool Merged;
+  DotDebugLocEntry() : Begin(0), End(0), Merged(false) {}
+  DotDebugLocEntry(const MCSymbol *B, const MCSymbol *E, MachineLocation &L) 
+    : Begin(B), End(E), Loc(L), Merged(false) {}
+  /// Empty entries are also used as a trigger to emit temp label. Such
+  /// labels are referenced is used to find debug_loc offset for a given DIE.
+  bool isEmpty() { return Begin == 0 && End == 0; }
+  bool isMerged() { return Merged; }
+  void Merge(DotDebugLocEntry *Next) {
+    if (!(Begin && Loc == Next->Loc && End == Next->Begin))
+      return;
+    Next->Begin = Begin;
+    Merged = true;
+  }
+} DotDebugLocEntry;
 
 class DwarfDebug {
   /// Asm - Target of Dwarf emission.
@@ -115,10 +139,13 @@ class DwarfDebug {
   ///
   UniqueVector<const MCSection*> SectionMap;
 
-  // CurrentFnDbgScope - Top level scope for the current function.
-  //
+  /// CurrentFnDbgScope - Top level scope for the current function.
+  ///
   DbgScope *CurrentFnDbgScope;
   
+  /// CurrentFnArguments - List of Arguments (DbgValues) for current function.
+  SmallVector<DbgVariable *, 8> CurrentFnArguments;
+
   /// DbgScopeMap - Tracks the scopes in the current function.  Owns the
   /// contained DbgScope*s.
   ///
@@ -150,20 +177,6 @@ class DwarfDebug {
   /// DbgVariableToDbgInstMap - Maps DbgVariable to corresponding DBG_VALUE
   /// machine instruction.
   DenseMap<const DbgVariable *, const MachineInstr *> DbgVariableToDbgInstMap;
-
-  /// DotDebugLocEntry - This struct describes location entries emitted in
-  /// .debug_loc section.
-  typedef struct DotDebugLocEntry {
-    const MCSymbol *Begin;
-    const MCSymbol *End;
-    MachineLocation Loc;
-    DotDebugLocEntry() : Begin(0), End(0) {}
-    DotDebugLocEntry(const MCSymbol *B, const MCSymbol *E, 
-                  MachineLocation &L) : Begin(B), End(E), Loc(L) {}
-    /// Empty entries are also used as a trigger to emit temp label. Such
-    /// labels are referenced is used to find debug_loc offset for a given DIE.
-    bool isEmpty() { return Begin == 0 && End == 0; }
-  } DotDebugLocEntry;
 
   /// DotDebugLocEntries - Collection of DotDebugLocEntry.
   SmallVector<DotDebugLocEntry, 4> DotDebugLocEntries;
@@ -341,6 +354,14 @@ private:
   /// getOrCreateTypeDIE - Find existing DIE or create new DIE for the
   /// given DIType.
   DIE *getOrCreateTypeDIE(DIType Ty);
+
+  /// getOrCreateTemplateTypeParameterDIE - Find existing DIE or create new DIE 
+  /// for the given DITemplateTypeParameter.
+  DIE *getOrCreateTemplateTypeParameterDIE(DITemplateTypeParameter TP);
+
+  /// getOrCreateTemplateValueParameterDIE - Find existing DIE or create new DIE 
+  /// for the given DITemplateValueParameter.
+  DIE *getOrCreateTemplateValueParameterDIE(DITemplateValueParameter TVP);
 
   void addPubTypes(DISubprogram SP);
 
@@ -528,6 +549,11 @@ private:
   /// and collect DbgScopes. Return true, if atleast one scope was found.
   bool extractScopeInformation();
   
+  /// addCurrentFnArgument - If Var is an current function argument that add
+  /// it in CurrentFnArguments list.
+  bool addCurrentFnArgument(const MachineFunction *MF,
+                            DbgVariable *Var, DbgScope *Scope);
+
   /// collectVariableInfo - Populate DbgScope entries with variables' info.
   void collectVariableInfo(const MachineFunction *,
                            SmallPtrSet<const MDNode *, 16> &ProcessedVars);

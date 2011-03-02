@@ -33,7 +33,7 @@ namespace llvm {
   namespace InlineConstants {
     // Various magic constants used to adjust heuristics.
     const int InstrCost = 5;
-    const int IndirectCallBonus = 500;
+    const int IndirectCallBonus = -100;
     const int CallPenalty = 25;
     const int LastCallToStaticBonus = -15000;
     const int ColdccPenalty = 2000;
@@ -96,10 +96,9 @@ namespace llvm {
     public:
       unsigned ConstantWeight;
       unsigned AllocaWeight;
-      unsigned ConstantBonus;
 
-      ArgInfo(unsigned CWeight, unsigned AWeight, unsigned CBonus)
-        : ConstantWeight(CWeight), AllocaWeight(AWeight), ConstantBonus(CBonus)
+      ArgInfo(unsigned CWeight, unsigned AWeight)
+        : ConstantWeight(CWeight), AllocaWeight(AWeight)
           {}
     };
 
@@ -111,8 +110,6 @@ namespace llvm {
       /// would reduce the code size.  If so, we add some value to the argument
       /// entry here.
       std::vector<ArgInfo> ArgumentWeights;
-
-
 
       /// analyzeFunction - Add information about the specified function
       /// to the current structure.
@@ -127,6 +124,10 @@ namespace llvm {
     // the ValueMap will update itself when this happens.
     ValueMap<const Function *, FunctionInfo> CachedFunctionInfo;
 
+    int CountBonusForConstant(Value *V, Constant *C = NULL);
+    int ConstantFunctionBonus(CallSite CS, Constant *C);
+    int getInlineSize(CallSite CS, Function *Callee);
+    int getInlineBonuses(CallSite CS, Function *Callee);
   public:
 
     /// getInlineCost - The heuristic used to determine if we should inline the

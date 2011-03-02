@@ -21,7 +21,8 @@ macro(tablegen ofn)
     # The file in LLVM_TARGET_DEFINITIONS may be not in the current
     # directory and local_tds may not contain it, so we must
     # explicitly list it here:
-    DEPENDS tblgen ${local_tds} ${global_tds} ${LLVM_TARGET_DEFINITIONS_ABSOLUTE}
+    DEPENDS ${LLVM_TABLEGEN_EXE} ${local_tds} ${global_tds}
+    ${LLVM_TARGET_DEFINITIONS_ABSOLUTE}
     COMMENT "Building ${ofn}..."
     )
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${ofn}
@@ -34,6 +35,11 @@ macro(tablegen ofn)
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${ofn}.tmp
     COMMENT ""
     )
+
+  # `make clean' must remove all those generated files:
+  set_property(DIRECTORY APPEND
+    PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${ofn}.tmp ${ofn})
+
   set(TABLEGEN_OUTPUT ${TABLEGEN_OUTPUT} ${CMAKE_CURRENT_BINARY_DIR}/${ofn})
   set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/${ofn} 
     PROPERTIES GENERATED 1)

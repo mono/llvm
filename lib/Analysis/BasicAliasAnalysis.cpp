@@ -97,38 +97,53 @@ static bool isEscapeSource(const Value *V) {
   return false;
 }
 
-/// isObjectSmallerThan - Return true if we can prove that the object specified
-/// by V is smaller than Size.
-static bool isObjectSmallerThan(const Value *V, uint64_t Size,
-                                const TargetData &TD) {
+/// getObjectSize - Return the size of the object specified by V, or
+/// UnknownSize if unknown.
+static uint64_t getObjectSize(const Value *V, const TargetData &TD) {
   const Type *AccessTy;
   if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(V)) {
     if (!GV->hasDefinitiveInitializer())
-      return false;
+      return AliasAnalysis::UnknownSize;
     AccessTy = GV->getType()->getElementType();
   } else if (const AllocaInst *AI = dyn_cast<AllocaInst>(V)) {
     if (!AI->isArrayAllocation())
       AccessTy = AI->getType()->getElementType();
     else
-      return false;
+      return AliasAnalysis::UnknownSize;
   } else if (const CallInst* CI = extractMallocCall(V)) {
     if (!isArrayMalloc(V, &TD))
       // The size is the argument to the malloc call.
       if (const ConstantInt* C = dyn_cast<ConstantInt>(CI->getArgOperand(0)))
-        return (C->getZExtValue() < Size);
-    return false;
+        return C->getZExtValue();
+    return AliasAnalysis::UnknownSize;
   } else if (const Argument *A = dyn_cast<Argument>(V)) {
     if (A->hasByValAttr())
       AccessTy = cast<PointerType>(A->getType())->getElementType();
     else
-      return false;
+      return AliasAnalysis::UnknownSize;
   } else {
-    return false;
+    return AliasAnalysis::UnknownSize;
   }
   
   if (AccessTy->isSized())
-    return TD.getTypeAllocSize(AccessTy) < Size;
-  return false;
+    return TD.getTypeAllocSize(AccessTy);
+  return AliasAnalysis::UnknownSize;
+}
+
+/// isObjectSmallerThan - Return true if we can prove that the object specified
+/// by V is smaller than Size.
+static bool isObjectSmallerThan(const Value *V, uint64_t Size,
+                                const TargetData &TD) {
+  uint64_t ObjectSize = getObjectSize(V, TD);
+  return ObjectSize != AliasAnalysis::UnknownSize && ObjectSize < Size;
+}
+
+/// isObjectSize - Return true if we can prove that the object specified
+/// by V has size Size.
+static bool isObjectSize(const Value *V, uint64_t Size,
+                         const TargetData &TD) {
+  uint64_t ObjectSize = getObjectSize(V, TD);
+  return ObjectSize != AliasAnalysis::UnknownSize && ObjectSize == Size;
 }
 
 //===----------------------------------------------------------------------===//
@@ -539,7 +554,7 @@ BasicAliasAnalysis::pointsToConstantMemory(const Location &Loc, bool OrLocal) {
   SmallVector<const Value *, 16> Worklist;
   Worklist.push_back(Loc.Ptr);
   do {
-    const Value *V = GetUnderlyingObject(Worklist.pop_back_val());
+    const Value *V = GetUnderlyingObject(Worklist.pop_back_val(), TD);
     if (!Visited.insert(V)) {
       Visited.clear();
       return AliasAnalysis::pointsToConstantMemory(Loc, OrLocal);
@@ -644,7 +659,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
   assert(notDifferentParent(CS.getInstruction(), Loc.Ptr) &&
          "AliasAnalysis query involving multiple functions!");
 
-  const Value *Object = GetUnderlyingObject(Loc.Ptr);
+  const Value *Object = GetUnderlyingObject(Loc.Ptr, TD);
   
   // If this is a tail call and Loc.Ptr points to a stack location, we know that
   // the tail call cannot access or modify the local stack.
@@ -772,7 +787,7 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
 
 /// aliasGEP - Provide a bunch of ad-hoc rules to disambiguate a GEP instruction
 /// against another pointer.  We know that V1 is a GEP, but we don't know
-/// anything about V2.  UnderlyingV1 is GetUnderlyingObject(GEP1),
+/// anything about V2.  UnderlyingV1 is GetUnderlyingObject(GEP1, TD),
 /// UnderlyingV2 is the same for V2.
 ///
 AliasAnalysis::AliasResult
@@ -1055,8 +1070,8 @@ BasicAliasAnalysis::aliasCheck(const Value *V1, uint64_t V1Size,
     return NoAlias;  // Scalars cannot alias each other
 
   // Figure out what objects these things are pointing to if we can.
-  const Value *O1 = GetUnderlyingObject(V1);
-  const Value *O2 = GetUnderlyingObject(V2);
+  const Value *O1 = GetUnderlyingObject(V1, TD);
+  const Value *O2 = GetUnderlyingObject(V2, TD);
 
   // Null values in the default address space don't point to any object, so they
   // don't alias any other pointer.
@@ -1141,6 +1156,14 @@ BasicAliasAnalysis::aliasCheck(const Value *V1, uint64_t V1Size,
                                      V2, V2Size, V2TBAAInfo);
     if (Result != MayAlias) return Result;
   }
+
+  // If both pointers are pointing into the same object and one of them
+  // accesses is accessing the entire object, then the accesses must
+  // overlap in some way.
+  if (TD && O1 == O2)
+    if ((V1Size != UnknownSize && isObjectSize(O1, V1Size, *TD)) ||
+        (V2Size != UnknownSize && isObjectSize(O2, V2Size, *TD)))
+      return PartialAlias;
 
   return AliasAnalysis::alias(Location(V1, V1Size, V1TBAAInfo),
                               Location(V2, V2Size, V2TBAAInfo));

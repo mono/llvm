@@ -84,6 +84,7 @@ class Xform16Bit { bit canXformTo16Bit = 1; }
 // ARM Instruction flags.  These need to match ARMBaseInstrInfo.h.
 //
 
+// FIXME: Once the JIT is MC-ized, these can go away.
 // Addressing mode.
 class AddrMode<bits<5> val> {
   bits<5> Value = val;
@@ -126,13 +127,14 @@ def IndexModePost : IndexMode<2>;
 def IndexModeUpd  : IndexMode<3>;
 
 // Instruction execution domain.
-class Domain<bits<2> val> {
-  bits<2> Value = val;
+class Domain<bits<3> val> {
+  bits<3> Value = val;
 }
 def GenericDomain : Domain<0>;
 def VFPDomain     : Domain<1>; // Instructions in VFP domain only
 def NeonDomain    : Domain<2>; // Instructions in Neon domain only
 def VFPNeonDomain : Domain<3>; // Instructions in both VFP & Neon domains
+def VFPNeonA8Domain : Domain<5>; // Instructions in VFP & Neon under A8
 
 //===----------------------------------------------------------------------===//
 // ARM special operands.
@@ -146,6 +148,34 @@ def CondCodeOperand : AsmOperandClass {
 def CCOutOperand : AsmOperandClass {
   let Name = "CCOut";
   let SuperClasses = [];
+}
+
+def MemBarrierOptOperand : AsmOperandClass {
+  let Name = "MemBarrierOpt";
+  let SuperClasses = [];
+  let ParserMethod = "tryParseMemBarrierOptOperand";
+}
+
+def ProcIFlagsOperand : AsmOperandClass {
+  let Name = "ProcIFlags";
+  let SuperClasses = [];
+  let ParserMethod = "tryParseProcIFlagsOperand";
+}
+
+def MSRMaskOperand : AsmOperandClass {
+  let Name = "MSRMask";
+  let SuperClasses = [];
+  let ParserMethod = "tryParseMSRMaskOperand";
+}
+
+// ARM imod and iflag operands, used only by the CPS instruction.
+def imod_op : Operand<i32> {
+  let PrintMethod = "printCPSIMod";
+}
+
+def iflags_op : Operand<i32> {
+  let PrintMethod = "printCPSIFlag";
+  let ParserMatchClass = ProcIFlagsOperand;
 }
 
 // ARM Predicate operand. Default to 14 = always (AL). Second part is CC
@@ -182,12 +212,29 @@ def cps_opt : Operand<i32> {
 
 def msr_mask : Operand<i32> {
   let PrintMethod = "printMSRMaskOperand";
+  let ParserMatchClass = MSRMaskOperand;
 }
 
 // A8.6.117, A8.6.118.  Different instructions are generated for #0 and #-0.
 // The neg_zero operand translates -0 to -1, -1 to -2, ..., etc.
 def neg_zero : Operand<i32> {
   let PrintMethod = "printNegZeroOperand";
+}
+
+// Narrow Shift Right Immediate - A narrow shift right immediate is encoded
+// differently from other shift immediates. The imm6 field is encoded like so:
+//
+//   16-bit: imm6<5:3> = '001', 8 - <imm> is encded in imm6<2:0>
+//   32-bit: imm6<5:4> = '01',16 - <imm> is encded in imm6<3:0>
+//   64-bit: imm6<5> = '1', 32 - <imm> is encded in imm6<4:0>
+def nsr16_imm : Operand<i32> {
+  let EncoderMethod = "getNarrowShiftRight16Imm";
+}
+def nsr32_imm : Operand<i32> {
+  let EncoderMethod = "getNarrowShiftRight32Imm";
+}
+def nsr64_imm : Operand<i32> {
+  let EncoderMethod = "getNarrowShiftRight64Imm";
 }
 
 //===----------------------------------------------------------------------===//
@@ -219,7 +266,7 @@ class InstTemplate<AddrMode am, SizeFlagVal sz, IndexMode im,
   let TSFlags{15-10} = Form;
   let TSFlags{16}    = isUnaryDataProc;
   let TSFlags{17}    = canXformTo16Bit;
-  let TSFlags{19-18} = D.Value;
+  let TSFlags{20-18} = D.Value;
 
   let Constraints = cstr;
   let Itinerary = itin;
@@ -800,6 +847,13 @@ class TIx2<bits<5> opcod1, bits<2> opcod2, bit opcod3,
   let Inst{12}    = opcod3;
 }
 
+// Move to/from coprocessor instructions
+class T1Cop<dag oops, dag iops, string asm, list<dag> pattern>
+  : ThumbI<oops, iops, AddrModeNone, Size4Bytes, NoItinerary, asm, "", pattern>,
+    Encoding, Requires<[IsThumb, HasV6]> {
+  let Inst{31-28} = 0b1110;
+}
+
 // BR_JT instructions
 class TJTI<dag oops, dag iops, InstrItinClass itin, string asm,
            list<dag> pattern>
@@ -1046,6 +1100,12 @@ class T2JTI<dag oops, dag iops, InstrItinClass itin,
             string asm, list<dag> pattern>
   : Thumb2XI<oops, iops, AddrModeNone, SizeSpecial, itin, asm, "", pattern>;
 
+// Move to/from coprocessor instructions
+class T2Cop<dag oops, dag iops, string asm, list<dag> pattern>
+  : T2XI<oops, iops, NoItinerary, asm, pattern>, Requires<[IsThumb2, HasV6]> {
+  let Inst{31-28} = 0b1111;
+}
+
 // Two-address instructions
 class T2XIt<dag oops, dag iops, InstrItinClass itin,
             string asm, string cstr, list<dag> pattern>
@@ -1164,7 +1224,7 @@ class ADI5<bits<4> opcod1, bits<2> opcod2, dag oops, dag iops,
   let Inst{11-9}  = 0b101;
   let Inst{8}     = 1;          // Double precision
 
-  // 64-bit loads & stores operate on both NEON and VFP pipelines.
+  // Loads & stores operate on both NEON and VFP pipelines.
   let D = VFPNeonDomain;
 }
 
@@ -1189,6 +1249,9 @@ class ASI5<bits<4> opcod1, bits<2> opcod2, dag oops, dag iops,
   let Inst{21-20} = opcod2;
   let Inst{11-9}  = 0b101;
   let Inst{8}     = 0;          // Single precision
+
+  // Loads & stores operate on both NEON and VFP pipelines.
+  let D = VFPNeonDomain;
 }
 
 // VFP Load / store multiple pseudo instructions.
@@ -1221,9 +1284,6 @@ class AXDI4<dag oops, dag iops, IndexMode im, InstrItinClass itin,
   let Inst{27-25} = 0b110;
   let Inst{11-9}  = 0b101;
   let Inst{8}     = 1;          // Double precision
-
-  // 64-bit loads & stores operate on both NEON and VFP pipelines.
-  let D = VFPNeonDomain;
 }
 
 class AXSI4<dag oops, dag iops, IndexMode im, InstrItinClass itin,

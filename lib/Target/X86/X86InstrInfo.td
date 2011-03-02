@@ -36,7 +36,7 @@ def SDTBinaryArithWithFlags : SDTypeProfile<2, 2,
                                              SDTCisSameAs<0, 3>,
                                              SDTCisInt<0>, SDTCisVT<1, i32>]>;
 
-// SDTBinaryArithWithFlagsInOut - RES1, EFLAGS = op LHS, RHS, EFLAGS 
+// SDTBinaryArithWithFlagsInOut - RES1, EFLAGS = op LHS, RHS, EFLAGS
 def SDTBinaryArithWithFlagsInOut : SDTypeProfile<2, 3,
                                             [SDTCisSameAs<0, 2>,
                                              SDTCisSameAs<0, 3>,
@@ -273,6 +273,10 @@ def i8mem_NOREX : Operand<i64> {
   let ParserMatchClass = X86MemAsmOperand;
 }
 
+// GPRs available for tailcall.
+// It represents GR64_TC or GR64_TCW64.
+def ptr_rc_tailcall : PointerLikeRegClass<2>;
+
 // Special i32mem for addresses of load folding tail calls. These are not
 // allowed to use callee-saved registers since they must be scheduled
 // after callee-saved register are popped.
@@ -287,7 +291,8 @@ def i32mem_TC : Operand<i32> {
 // after callee-saved register are popped.
 def i64mem_TC : Operand<i64> {
   let PrintMethod = "printi64mem";
-  let MIOperandInfo = (ops GR64_TC, i8imm, GR64_TC, i32imm, i8imm);
+  let MIOperandInfo = (ops ptr_rc_tailcall, i8imm,
+                       ptr_rc_tailcall, i32imm, i8imm);
   let ParserMatchClass = X86MemAsmOperand;
 }
 
@@ -1288,6 +1293,12 @@ def : MnemonicAlias<"cdqe", "cltq">;
 // lret maps to lretl, it is not ambiguous with lretq.
 def : MnemonicAlias<"lret", "lretl">;
 
+def : MnemonicAlias<"leavel", "leave">, Requires<[In32BitMode]>;
+def : MnemonicAlias<"leaveq", "leave">, Requires<[In64BitMode]>;
+
+def : MnemonicAlias<"loopz", "loope">;
+def : MnemonicAlias<"loopnz", "loopne">;
+
 def : MnemonicAlias<"pop", "popl">, Requires<[In32BitMode]>;
 def : MnemonicAlias<"pop", "popq">, Requires<[In64BitMode]>;
 def : MnemonicAlias<"popf", "popfl">, Requires<[In32BitMode]>;
@@ -1394,6 +1405,9 @@ defm : IntegerCondCodeMnemonicAlias<"cmov", "q">;
 // aad/aam default to base 10 if no operand is specified.
 def : InstAlias<"aad", (AAD8i8 10)>;
 def : InstAlias<"aam", (AAM8i8 10)>;
+
+// Disambiguate the mem/imm form of bt-without-a-suffix as btl.
+def : InstAlias<"bt $imm, $mem", (BT32mi8 i32mem:$mem, i32i8imm:$imm)>;
 
 // clr aliases.
 def : InstAlias<"clrb $reg", (XOR8rr  GR8 :$reg, GR8 :$reg)>;
@@ -1612,4 +1626,3 @@ def : InstAlias<"xchgb $mem, $val", (XCHG8rm  GR8 :$val, i8mem :$mem)>;
 def : InstAlias<"xchgw $mem, $val", (XCHG16rm GR16:$val, i16mem:$mem)>;
 def : InstAlias<"xchgl $mem, $val", (XCHG32rm GR32:$val, i32mem:$mem)>;
 def : InstAlias<"xchgq $mem, $val", (XCHG64rm GR64:$val, i64mem:$mem)>;
-

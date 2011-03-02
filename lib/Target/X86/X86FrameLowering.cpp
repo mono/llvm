@@ -291,10 +291,7 @@ void X86FrameLowering::emitCalleeSavedFrameMoves(MachineFunction &MF,
   bool HasFP = hasFP(MF);
 
   // Calculate amount of bytes used for return address storing.
-  int stackGrowth =
-    (TM.getFrameLowering()->getStackGrowthDirection() ==
-     TargetFrameLowering::StackGrowsUp ?
-     TD->getPointerSize() : -TD->getPointerSize());
+  int stackGrowth = -TD->getPointerSize();
 
   // FIXME: This is dirty hack. The code itself is pretty mess right now.
   // It should be rewritten from scratch and generalized sometimes.
@@ -321,7 +318,7 @@ void X86FrameLowering::emitCalleeSavedFrameMoves(MachineFunction &MF,
     // move" for this extra "PUSH", the linker will lose track of the fact that
     // the frame pointer should have the value of the first "PUSH" when it's
     // trying to unwind.
-    // 
+    //
     // FIXME: This looks inelegant. It's possibly correct, but it's covering up
     //        another bug. I.e., one where we generate a prolog like this:
     //
@@ -400,11 +397,6 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
     if (HasFP) MinSize += SlotSize;
     StackSize = std::max(MinSize, StackSize > 128 ? StackSize - 128 : 0);
     MFI->setStackSize(StackSize);
-  } else if (IsWin64) {
-    // We need to always allocate 32 bytes as register spill area.
-    // FIXME: We might reuse these 32 bytes for leaf functions.
-    StackSize += 32;
-    MFI->setStackSize(StackSize);
   }
 
   // Insert stack pointer adjustment for later moving of return addr.  Only
@@ -467,7 +459,6 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
         MachineLocation SPSrc(MachineLocation::VirtualFP, 2 * stackGrowth);
         Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
       } else {
-        // FIXME: Verify & implement for FP
         MachineLocation SPDst(StackPtr);
         MachineLocation SPSrc(StackPtr, stackGrowth);
         Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
@@ -560,7 +551,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
   // responsible for adjusting the stack pointer.  Touching the stack at 4K
   // increments is necessary to ensure that the guard pages used by the OS
   // virtual memory manager are allocated in correct sequence.
-  if (NumBytes >= 4096 && (STI.isTargetCygMing() || STI.isTargetWin32())) {
+  if (NumBytes >= 4096 &&
+      (STI.isTargetCygMing() || STI.isTargetWin32()) &&
+      !STI.isTargetEnvMacho()) {
     // Check whether EAX is livein for this function.
     bool isEAXAlive = isEAXLiveIn(MF);
 
@@ -596,9 +589,11 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
                                       StackPtr, false, NumBytes - 4);
       MBB.insert(MBBI, MI);
     }
-  } else if (NumBytes >= 4096 && STI.isTargetWin64()) {
+  } else if (NumBytes >= 4096 &&
+             STI.isTargetWin64() &&
+             !STI.isTargetEnvMacho()) {
     // Sanity check that EAX is not livein for this function.  It should
-    // should not be, so throw an assert.
+    // not be, so throw an assert.
     assert(!isEAXLiveIn(MF) && "EAX is livein in the Win64 case!");
 
     // Handle the 64-bit Windows ABI case where we need to call __chkstk.
@@ -627,7 +622,6 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
                               -StackSize + stackGrowth);
         Moves.push_back(MachineMove(Label, SPDst, SPSrc));
       } else {
-        // FIXME: Verify & implement for FP
         MachineLocation SPDst(StackPtr);
         MachineLocation SPSrc(StackPtr, stackGrowth);
         Moves.push_back(MachineMove(Label, SPDst, SPSrc));
@@ -898,7 +892,6 @@ bool X86FrameLowering::spillCalleeSavedRegisters(MachineBasicBlock &MBB,
 
   MachineFunction &MF = *MBB.getParent();
 
-  bool isWin64 = STI.isTargetWin64();
   unsigned SlotSize = STI.is64Bit() ? 8 : 4;
   unsigned FPReg = TRI->getFrameRegister(MF);
   unsigned CalleeFrameSize = 0;
@@ -906,25 +899,39 @@ bool X86FrameLowering::spillCalleeSavedRegisters(MachineBasicBlock &MBB,
   const TargetInstrInfo &TII = *MF.getTarget().getInstrInfo();
   X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
 
+  // Push GPRs. It increases frame size.
   unsigned Opc = STI.is64Bit() ? X86::PUSH64r : X86::PUSH32r;
   for (unsigned i = CSI.size(); i != 0; --i) {
     unsigned Reg = CSI[i-1].getReg();
+    if (!X86::GR64RegClass.contains(Reg) &&
+        !X86::GR32RegClass.contains(Reg))
+      continue;
     // Add the callee-saved register as live-in. It's killed at the spill.
     MBB.addLiveIn(Reg);
     if (Reg == FPReg)
       // X86RegisterInfo::emitPrologue will handle spilling of frame register.
       continue;
-    if (!X86::VR128RegClass.contains(Reg) && !isWin64) {
-      CalleeFrameSize += SlotSize;
-      BuildMI(MBB, MI, DL, TII.get(Opc)).addReg(Reg, RegState::Kill);
-    } else {
-      const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
-      TII.storeRegToStackSlot(MBB, MI, Reg, true, CSI[i-1].getFrameIdx(),
-                              RC, TRI);
-    }
+    CalleeFrameSize += SlotSize;
+    BuildMI(MBB, MI, DL, TII.get(Opc)).addReg(Reg, RegState::Kill);
   }
 
   X86FI->setCalleeSavedFrameSize(CalleeFrameSize);
+
+  // Make XMM regs spilled. X86 does not have ability of push/pop XMM.
+  // It can be done by spilling XMMs to stack frame.
+  // Note that only Win64 ABI might spill XMMs.
+  for (unsigned i = CSI.size(); i != 0; --i) {
+    unsigned Reg = CSI[i-1].getReg();
+    if (X86::GR64RegClass.contains(Reg) ||
+        X86::GR32RegClass.contains(Reg))
+      continue;
+    // Add the callee-saved register as live-in. It's killed at the spill.
+    MBB.addLiveIn(Reg);
+    const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
+    TII.storeRegToStackSlot(MBB, MI, Reg, true, CSI[i-1].getFrameIdx(),
+                            RC, TRI);
+  }
+
   return true;
 }
 
@@ -939,21 +946,30 @@ bool X86FrameLowering::restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
 
   MachineFunction &MF = *MBB.getParent();
   const TargetInstrInfo &TII = *MF.getTarget().getInstrInfo();
+
+  // Reload XMMs from stack frame.
+  for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+    unsigned Reg = CSI[i].getReg();
+    if (X86::GR64RegClass.contains(Reg) ||
+        X86::GR32RegClass.contains(Reg))
+      continue;
+    const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
+    TII.loadRegFromStackSlot(MBB, MI, Reg, CSI[i].getFrameIdx(),
+                             RC, TRI);
+  }
+
+  // POP GPRs.
   unsigned FPReg = TRI->getFrameRegister(MF);
-  bool isWin64 = STI.isTargetWin64();
   unsigned Opc = STI.is64Bit() ? X86::POP64r : X86::POP32r;
   for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
     unsigned Reg = CSI[i].getReg();
+    if (!X86::GR64RegClass.contains(Reg) &&
+        !X86::GR32RegClass.contains(Reg))
+      continue;
     if (Reg == FPReg)
       // X86RegisterInfo::emitEpilogue will handle restoring of frame register.
       continue;
-    if (!X86::VR128RegClass.contains(Reg) && !isWin64) {
-      BuildMI(MBB, MI, DL, TII.get(Opc), Reg);
-    } else {
-      const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(Reg);
-      TII.loadRegFromStackSlot(MBB, MI, Reg, CSI[i].getFrameIdx(),
-                               RC, TRI);
-    }
+    BuildMI(MBB, MI, DL, TII.get(Opc), Reg);
   }
   return true;
 }

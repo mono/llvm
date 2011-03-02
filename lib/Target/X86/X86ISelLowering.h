@@ -159,16 +159,16 @@ namespace llvm {
 
       /// PSHUFB - Shuffle 16 8-bit values within a vector.
       PSHUFB,
-      
+
       /// PANDN - and with not'd value.
       PANDN,
-      
+
       /// PSIGNB/W/D - Copy integer sign.
-      PSIGNB, PSIGNW, PSIGND, 
-      
+      PSIGNB, PSIGNW, PSIGND,
+
       /// PBLENDVB - Variable blend
       PBLENDVB,
-      
+
       /// FMAX, FMIN - Floating point max and min.
       ///
       FMAX, FMIN,
@@ -212,7 +212,7 @@ namespace llvm {
       // ADD, SUB, SMUL, etc. - Arithmetic operations with FLAGS results.
       ADD, SUB, ADC, SBB, SMUL,
       INC, DEC, OR, XOR, AND,
-      
+
       UMUL, // LOW, HI, FLAGS = umul LHS, RHS
 
       // MUL_IMM - X86 specific multiply by immediate.
@@ -248,6 +248,10 @@ namespace llvm {
       MOVSS,
       UNPCKLPS,
       UNPCKLPD,
+      VUNPCKLPS,
+      VUNPCKLPD,
+      VUNPCKLPSY,
+      VUNPCKLPDY,
       UNPCKHPS,
       UNPCKHPD,
       PUNPCKLBW,
@@ -408,6 +412,16 @@ namespace llvm {
     /// specifies a shuffle of elements that is suitable for input to PALIGNR.
     bool isPALIGNRMask(ShuffleVectorSDNode *N);
 
+    /// isVEXTRACTF128Index - Return true if the specified
+    /// EXTRACT_SUBVECTOR operand specifies a vector extract that is
+    /// suitable for input to VEXTRACTF128.
+    bool isVEXTRACTF128Index(SDNode *N);
+
+    /// isVINSERTF128Index - Return true if the specified
+    /// INSERT_SUBVECTOR operand specifies a subvector insert that is
+    /// suitable for input to VINSERTF128.
+    bool isVINSERTF128Index(SDNode *N);
+
     /// getShuffleSHUFImmediate - Return the appropriate immediate to shuffle
     /// the specified isShuffleMask VECTOR_SHUFFLE mask with PSHUF* and SHUFP*
     /// instructions.
@@ -424,6 +438,16 @@ namespace llvm {
     /// getShufflePALIGNRImmediate - Return the appropriate immediate to shuffle
     /// the specified VECTOR_SHUFFLE mask with the PALIGNR instruction.
     unsigned getShufflePALIGNRImmediate(SDNode *N);
+
+    /// getExtractVEXTRACTF128Immediate - Return the appropriate
+    /// immediate to extract the specified EXTRACT_SUBVECTOR index
+    /// with VEXTRACTF128 instructions.
+    unsigned getExtractVEXTRACTF128Immediate(SDNode *N);
+
+    /// getInsertVINSERTF128Immediate - Return the appropriate
+    /// immediate to insert at the specified INSERT_SUBVECTOR index
+    /// with VINSERTF128 instructions.
+    unsigned getInsertVINSERTF128Immediate(SDNode *N);
 
     /// isZeroNode - Returns true if Elt is a constant zero or a floating point
     /// constant +0.0.
@@ -442,6 +466,8 @@ namespace llvm {
     explicit X86TargetLowering(X86TargetMachine &TM);
 
     virtual unsigned getJumpTableEncoding() const;
+
+    virtual MVT getShiftAmountTy(EVT LHSTy) const { return MVT::i8; }
 
     virtual const MCExpr *
     LowerCustomJumpTableEntry(const MachineJumpTableInfo *MJTI,
@@ -741,6 +767,8 @@ namespace llvm {
     SDValue LowerINSERT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINSERT_VECTOR_ELT_SSE4(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSCALAR_TO_VECTOR(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerEXTRACT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerINSERT_SUBVECTOR(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerBlockAddress(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerGlobalAddress(const GlobalValue *GV, DebugLoc dl,
