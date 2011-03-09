@@ -493,6 +493,7 @@ include "llvm/IntrinsicsARM.td"
 include "llvm/IntrinsicsCellSPU.td"
 include "llvm/IntrinsicsAlpha.td"
 include "llvm/IntrinsicsXCore.td"
+include "llvm/IntrinsicsPTX.td"
 
 include "llvm/IntrinsicsMono.td"
 

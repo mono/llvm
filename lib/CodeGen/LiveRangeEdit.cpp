@@ -13,9 +13,12 @@
 
 #include "LiveRangeEdit.h"
 #include "VirtRegMap.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -75,9 +78,10 @@ bool LiveRangeEdit::allUsesAvailableAt(const MachineInstr *OrigMI,
     if (MO.isDef())
       return false;
     // We cannot depend on virtual registers in uselessRegs_.
-    for (unsigned ui = 0, ue = uselessRegs_.size(); ui != ue; ++ui)
-      if (uselessRegs_[ui]->reg == MO.getReg())
-        return false;
+    if (uselessRegs_)
+      for (unsigned ui = 0, ue = uselessRegs_->size(); ui != ue; ++ui)
+        if ((*uselessRegs_)[ui]->reg == MO.getReg())
+          return false;
 
     LiveInterval &li = lis.getInterval(MO.getReg());
     const VNInfo *OVNI = li.getVNInfoAt(OrigIdx);
@@ -125,5 +129,63 @@ SlotIndex LiveRangeEdit::rematerializeAt(MachineBasicBlock &MBB,
   tii.reMaterialize(MBB, MI, DestReg, 0, RM.OrigMI, tri);
   rematted_.insert(RM.ParentVNI);
   return lis.InsertMachineInstrInMaps(--MI).getDefIndex();
+}
+
+void LiveRangeEdit::eliminateDeadDefs(SmallVectorImpl<MachineInstr*> &Dead,
+                                      LiveIntervals &LIS,
+                                      const TargetInstrInfo &TII) {
+  SetVector<LiveInterval*,
+            SmallVector<LiveInterval*, 8>,
+            SmallPtrSet<LiveInterval*, 8> > ToShrink;
+
+  for (;;) {
+    // Erase all dead defs.
+    while (!Dead.empty()) {
+      MachineInstr *MI = Dead.pop_back_val();
+      assert(MI->allDefsAreDead() && "Def isn't really dead");
+
+      // Never delete inline asm.
+      if (MI->isInlineAsm())
+        continue;
+
+      // Use the same criteria as DeadMachineInstructionElim.
+      bool SawStore = false;
+      if (!MI->isSafeToMove(&TII, 0, SawStore))
+        continue;
+
+      SlotIndex Idx = LIS.getInstructionIndex(MI).getDefIndex();
+      DEBUG(dbgs() << "Deleting dead def " << Idx << '\t' << *MI);
+
+      // Check for live intervals that may shrink
+      for (MachineInstr::mop_iterator MOI = MI->operands_begin(),
+             MOE = MI->operands_end(); MOI != MOE; ++MOI) {
+        if (!MOI->isReg())
+          continue;
+        unsigned Reg = MOI->getReg();
+        if (!TargetRegisterInfo::isVirtualRegister(Reg))
+          continue;
+        LiveInterval &LI = LIS.getInterval(Reg);
+        // Remove defined value.
+        if (MOI->isDef())
+          if (VNInfo *VNI = LI.getVNInfoAt(Idx))
+            LI.removeValNo(VNI);
+        // Shrink read registers.
+        if (MI->readsVirtualRegister(Reg))
+          ToShrink.insert(&LI);
+      }
+
+      if (delegate_)
+        delegate_->LRE_WillEraseInstruction(MI);
+      LIS.RemoveMachineInstrFromMaps(MI);
+      MI->eraseFromParent();
+    }
+
+    if (ToShrink.empty())
+      break;
+
+    // Shrink just one live interval. Then delete new dead defs.
+    LIS.shrinkToUses(ToShrink.back(), &Dead);
+    ToShrink.pop_back();
+  }
 }
 

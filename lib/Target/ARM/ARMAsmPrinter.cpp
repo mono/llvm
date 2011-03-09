@@ -519,7 +519,7 @@ void ARMAsmPrinter::emitAttributes() {
                                ARMBuildAttrs::Allowed);
   }
 
-  if (Subtarget->hasNEON()) {
+  if (Subtarget->hasNEON() && emitFPU) {
     /* NEON is not exactly a VFP architecture, but GAS emit one of
      * neon/vfpv3/vfpv2 for .fpu parameters */
     AttrEmitter->EmitTextAttribute(ARMBuildAttrs::Advanced_SIMD_arch, "neon");
@@ -831,6 +831,136 @@ void ARMAsmPrinter::EmitPatchedInstruction(const MachineInstr *MI,
   TmpInst.setOpcode(Opcode);
   OutStreamer.EmitInstruction(TmpInst);
 }
+
+void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
+  assert(MI->getFlag(MachineInstr::FrameSetup) &&
+      "Only instruction which are involved into frame setup code are allowed");
+
+  const MachineFunction &MF = *MI->getParent()->getParent();
+  const TargetRegisterInfo *RegInfo = MF.getTarget().getRegisterInfo();
+  const ARMFunctionInfo &AFI = *MF.getInfo<ARMFunctionInfo>();
+
+  unsigned FramePtr = RegInfo->getFrameRegister(MF);
+  unsigned Opc = MI->getOpcode();
+  unsigned SrcReg, DstReg;
+
+  if (Opc == ARM::tPUSH || Opc == ARM::tLDRpci) {
+    // Two special cases:
+    // 1) tPUSH does not have src/dst regs.
+    // 2) for Thumb1 code we sometimes materialize the constant via constpool
+    // load. Yes, this is pretty fragile, but for now I don't see better
+    // way... :(
+    SrcReg = DstReg = ARM::SP;
+  } else {
+    SrcReg = MI->getOperand(1).getReg();
+    DstReg = MI->getOperand(0).getReg();
+  }
+
+  // Try to figure out the unwinding opcode out of src / dst regs.
+  if (MI->getDesc().mayStore()) {
+    // Register saves.
+    assert(DstReg == ARM::SP &&
+           "Only stack pointer as a destination reg is supported");
+
+    SmallVector<unsigned, 4> RegList;
+    // Skip src & dst reg, and pred ops.
+    unsigned StartOp = 2 + 2;
+    // Use all the operands.
+    unsigned NumOffset = 0;
+
+    switch (Opc) {
+    default:
+      MI->dump();
+      assert(0 && "Unsupported opcode for unwinding information");
+    case ARM::tPUSH:
+      // Special case here: no src & dst reg, but two extra imp ops.
+      StartOp = 2; NumOffset = 2;
+    case ARM::STMDB_UPD:
+    case ARM::t2STMDB_UPD:
+    case ARM::VSTMDDB_UPD:
+      assert(SrcReg == ARM::SP &&
+             "Only stack pointer as a source reg is supported");
+      for (unsigned i = StartOp, NumOps = MI->getNumOperands() - NumOffset;
+           i != NumOps; ++i)
+        RegList.push_back(MI->getOperand(i).getReg());
+      break;
+    case ARM::STR_PRE:
+      assert(MI->getOperand(2).getReg() == ARM::SP &&
+             "Only stack pointer as a source reg is supported");
+      RegList.push_back(SrcReg);
+      break;
+    }
+    OutStreamer.EmitRegSave(RegList, Opc == ARM::VSTMDDB_UPD);
+  } else {
+    // Changes of stack / frame pointer.
+    if (SrcReg == ARM::SP) {
+      int64_t Offset = 0;
+      switch (Opc) {
+      default:
+        MI->dump();
+        assert(0 && "Unsupported opcode for unwinding information");
+      case ARM::MOVr:
+      case ARM::tMOVgpr2gpr:
+      case ARM::tMOVgpr2tgpr:
+        Offset = 0;
+        break;
+      case ARM::ADDri:
+        Offset = -MI->getOperand(2).getImm();
+        break;
+      case ARM::SUBri:
+      case ARM::t2SUBrSPi:
+        Offset =  MI->getOperand(2).getImm();
+        break;
+      case ARM::tSUBspi:
+        Offset =  MI->getOperand(2).getImm()*4;
+        break;
+      case ARM::tADDspi:
+      case ARM::tADDrSPi:
+        Offset = -MI->getOperand(2).getImm()*4;
+        break;
+      case ARM::tLDRpci: {
+        // Grab the constpool index and check, whether it corresponds to
+        // original or cloned constpool entry.
+        unsigned CPI = MI->getOperand(1).getIndex();
+        const MachineConstantPool *MCP = MF.getConstantPool();
+        if (CPI >= MCP->getConstants().size())
+          CPI = AFI.getOriginalCPIdx(CPI);
+        assert(CPI != -1U && "Invalid constpool index");
+
+        // Derive the actual offset.
+        const MachineConstantPoolEntry &CPE = MCP->getConstants()[CPI];
+        assert(!CPE.isMachineConstantPoolEntry() && "Invalid constpool entry");
+        // FIXME: Check for user, it should be "add" instruction!
+        Offset = -cast<ConstantInt>(CPE.Val.ConstVal)->getSExtValue();
+        break;
+      }
+      }
+
+      if (DstReg == FramePtr && FramePtr != ARM::SP)
+        // Set-up of the frame pointer. Positive values correspond to "add"
+        // instruction.
+        OutStreamer.EmitSetFP(FramePtr, ARM::SP, -Offset);
+      else if (DstReg == ARM::SP) {
+        // Change of SP by an offset. Positive values correspond to "sub"
+        // instruction.
+        OutStreamer.EmitPad(Offset);
+      } else {
+        MI->dump();
+        assert(0 && "Unsupported opcode for unwinding information");
+      }
+    } else if (DstReg == ARM::SP) {
+      // FIXME: .movsp goes here
+      MI->dump();
+      assert(0 && "Unsupported opcode for unwinding information");
+    }
+    else {
+      MI->dump();
+      assert(0 && "Unsupported opcode for unwinding information");
+    }
+  }
+}
+
+extern cl::opt<bool> EnableARMEHABI;
 
 void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   unsigned Opc = MI->getOpcode();
@@ -1585,6 +1715,11 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
 
   MCInst TmpInst;
   LowerARMMachineInstrToMCInst(MI, TmpInst, *this);
+
+  // Emit unwinding stuff for frame-related instructions
+  if (EnableARMEHABI && MI->getFlag(MachineInstr::FrameSetup))
+    EmitUnwindingInstruction(MI);
+
   OutStreamer.EmitInstruction(TmpInst);
 }
 

@@ -33,6 +33,12 @@ using namespace llvm;
 // CompEnd - Compare LiveRange ends.
 namespace {
 struct CompEnd {
+  bool operator()(SlotIndex A, const LiveRange &B) const {
+    return A < B.end;
+  }
+  bool operator()(const LiveRange &A, SlotIndex B) const {
+    return A.end < B;
+  }
   bool operator()(const LiveRange &A, const LiveRange &B) const {
     return A.end < B.end;
   }
@@ -41,8 +47,7 @@ struct CompEnd {
 
 LiveInterval::iterator LiveInterval::find(SlotIndex Pos) {
   assert(Pos.isValid() && "Cannot search for an invalid index");
-  return std::upper_bound(begin(), end(), LiveRange(SlotIndex(), Pos, 0),
-                          CompEnd());
+  return std::upper_bound(begin(), end(), Pos, CompEnd());
 }
 
 /// killedInRange - Return true if the interval has kills in [Start,End).

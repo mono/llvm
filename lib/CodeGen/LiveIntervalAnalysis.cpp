@@ -746,7 +746,8 @@ LiveInterval* LiveIntervals::dupInterval(LiveInterval *li) {
 /// shrinkToUses - After removing some uses of a register, shrink its live
 /// range to just the remaining uses. This method does not compute reaching
 /// defs for new uses, and it doesn't remove dead defs.
-void LiveIntervals::shrinkToUses(LiveInterval *li) {
+void LiveIntervals::shrinkToUses(LiveInterval *li,
+                                 SmallVectorImpl<MachineInstr*> *dead) {
   DEBUG(dbgs() << "Shrink: " << *li << '\n');
   assert(TargetRegisterInfo::isVirtualRegister(li->reg)
          && "Can't only shrink physical registers");
@@ -779,6 +780,13 @@ void LiveIntervals::shrinkToUses(LiveInterval *li) {
     if (VNI->isUnused())
       continue;
     NewLI.addRange(LiveRange(VNI->def, VNI->def.getNextSlot(), VNI));
+
+    // A use tied to an early-clobber def ends at the load slot and isn't caught
+    // above. Catch it here instead. This probably only ever happens for inline
+    // assembly.
+    if (VNI->def.isUse())
+      if (VNInfo *UVNI = li->getVNInfoAt(VNI->def.getLoadIndex()))
+        WorkList.push_back(std::make_pair(VNI->def.getLoadIndex(), UVNI));
   }
 
   // Keep track of the PHIs that are in use.
@@ -797,7 +805,7 @@ void LiveIntervals::shrinkToUses(LiveInterval *li) {
       (void)ExtVNI;
       assert(ExtVNI == VNI && "Unexpected existing value number");
       // Is this a PHIDef we haven't seen before?
-      if (!VNI->isPHIDef() || !UsedPHIs.insert(VNI))
+      if (!VNI->isPHIDef() || VNI->def != BlockStart || !UsedPHIs.insert(VNI))
         continue;
       // The PHI is live, make sure the predecessors are live-out.
       for (MachineBasicBlock::const_pred_iterator PI = MBB->pred_begin(),
@@ -845,6 +853,10 @@ void LiveIntervals::shrinkToUses(LiveInterval *li) {
       MachineInstr *MI = getInstructionFromIndex(VNI->def);
       assert(MI && "No instruction defining live value");
       MI->addRegisterDead(li->reg, tri_);
+      if (dead && MI->allDefsAreDead()) {
+        DEBUG(dbgs() << "All defs dead: " << *MI);
+        dead->push_back(MI);
+      }
     }
   }
 

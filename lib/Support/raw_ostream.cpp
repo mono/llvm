@@ -265,15 +265,23 @@ raw_ostream &raw_ostream::write(const char *Ptr, size_t Size) {
       return write(Ptr, Size);
     }
 
-    // Write out the data in buffer-sized blocks until the remainder
-    // fits within the buffer.
-    do {
-      size_t NumBytes = OutBufEnd - OutBufCur;
-      copy_to_buffer(Ptr, NumBytes);
-      flush_nonempty();
-      Ptr += NumBytes;
-      Size -= NumBytes;
-    } while (OutBufCur+Size > OutBufEnd);
+    size_t NumBytes = OutBufEnd - OutBufCur;
+
+    // If the buffer is empty at this point we have a string that is larger
+    // than the buffer. Directly write the chunk that is a multiple of the
+    // preferred buffer size and put the remainder in the buffer.
+    if (BUILTIN_EXPECT(OutBufCur == OutBufStart, false)) {
+      size_t BytesToWrite = Size - (Size % NumBytes);
+      write_impl(Ptr, BytesToWrite);
+      copy_to_buffer(Ptr + BytesToWrite, Size - BytesToWrite);
+      return *this;
+    }
+
+    // We don't have enough space in the buffer to fit the string in. Insert as
+    // much as possible, flush and start over with the remainder.
+    copy_to_buffer(Ptr, NumBytes);
+    flush_nonempty();
+    return write(Ptr + NumBytes, Size - NumBytes);
   }
 
   copy_to_buffer(Ptr, Size);

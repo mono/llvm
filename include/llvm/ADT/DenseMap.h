@@ -53,13 +53,13 @@ public:
     CopyFrom(other);
   }
 
-  explicit DenseMap(unsigned NumInitBuckets = 64) {
+  explicit DenseMap(unsigned NumInitBuckets = 0) {
     init(NumInitBuckets);
   }
 
   template<typename InputIt>
   DenseMap(const InputIt &I, const InputIt &E) {
-    init(64);
+    init(NextPowerOf2(std::distance(I, E)));
     insert(I, E);
   }
   
@@ -72,7 +72,8 @@ public:
       P->first.~KeyT();
     }
 #ifndef NDEBUG
-    memset(Buckets, 0x5a, sizeof(BucketT)*NumBuckets);
+    if (NumBuckets)
+      memset(Buckets, 0x5a, sizeof(BucketT)*NumBuckets);
 #endif
     operator delete(Buckets);
   }
@@ -98,7 +99,10 @@ public:
   unsigned size() const { return NumEntries; }
 
   /// Grow the densemap so that it has at least Size buckets. Does not shrink
-  void resize(size_t Size) { grow(Size); }
+  void resize(size_t Size) {
+    if (Size > NumBuckets)
+      grow(Size);
+  }
 
   void clear() {
     if (NumEntries == 0 && NumTombstones == 0) return;
@@ -252,19 +256,25 @@ private:
 #endif
       operator delete(Buckets);
     }
-    Buckets = static_cast<BucketT*>(operator new(sizeof(BucketT) *
-                                                 other.NumBuckets));
+
+    NumBuckets = other.NumBuckets;
+
+    if (NumBuckets == 0) {
+      Buckets = 0;
+      return;
+    }
+
+    Buckets = static_cast<BucketT*>(operator new(sizeof(BucketT) * NumBuckets));
 
     if (isPodLike<KeyInfoT>::value && isPodLike<ValueInfoT>::value)
-      memcpy(Buckets, other.Buckets, other.NumBuckets * sizeof(BucketT));
+      memcpy(Buckets, other.Buckets, NumBuckets * sizeof(BucketT));
     else
-      for (size_t i = 0; i < other.NumBuckets; ++i) {
+      for (size_t i = 0; i < NumBuckets; ++i) {
         new (&Buckets[i].first) KeyT(other.Buckets[i].first);
         if (!KeyInfoT::isEqual(Buckets[i].first, getEmptyKey()) &&
             !KeyInfoT::isEqual(Buckets[i].first, getTombstoneKey()))
           new (&Buckets[i].second) ValueT(other.Buckets[i].second);
       }
-    NumBuckets = other.NumBuckets;
   }
 
   BucketT *InsertIntoBucket(const KeyT &Key, const ValueT &Value,
@@ -313,6 +323,11 @@ private:
     unsigned ProbeAmt = 1;
     BucketT *BucketsPtr = Buckets;
 
+    if (NumBuckets == 0) {
+      FoundBucket = 0;
+      return false;
+    }
+
     // FoundTombstone - Keep track of whether we find a tombstone while probing.
     BucketT *FoundTombstone = 0;
     const KeyT EmptyKey = getEmptyKey();
@@ -354,6 +369,12 @@ private:
     NumEntries = 0;
     NumTombstones = 0;
     NumBuckets = InitBuckets;
+
+    if (InitBuckets == 0) {
+      Buckets = 0;
+      return;
+    }
+
     assert(InitBuckets && (InitBuckets & (InitBuckets-1)) == 0 &&
            "# initial buckets must be a power of two!");
     Buckets = static_cast<BucketT*>(operator new(sizeof(BucketT)*InitBuckets));
@@ -366,6 +387,9 @@ private:
   void grow(unsigned AtLeast) {
     unsigned OldNumBuckets = NumBuckets;
     BucketT *OldBuckets = Buckets;
+
+    if (NumBuckets < 64)
+      NumBuckets = 64;
 
     // Double the number of buckets.
     while (NumBuckets < AtLeast)

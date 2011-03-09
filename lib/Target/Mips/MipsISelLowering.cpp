@@ -50,6 +50,8 @@ const char *MipsTargetLowering::getTargetNodeName(unsigned Opcode) const {
     case MipsISD::MAddu      : return "MipsISD::MAddu";
     case MipsISD::MSub       : return "MipsISD::MSub";
     case MipsISD::MSubu      : return "MipsISD::MSubu";
+    case MipsISD::DivRem     : return "MipsISD::DivRem";
+    case MipsISD::DivRemU    : return "MipsISD::DivRemU";
     default                  : return NULL;
   }
 }
@@ -89,6 +91,7 @@ MipsTargetLowering(MipsTargetMachine &TM)
 
   // Mips Custom Operations
   setOperationAction(ISD::GlobalAddress,      MVT::i32,   Custom);
+  setOperationAction(ISD::BlockAddress,       MVT::i32,   Custom);
   setOperationAction(ISD::GlobalTLSAddress,   MVT::i32,   Custom);
   setOperationAction(ISD::JumpTable,          MVT::i32,   Custom);
   setOperationAction(ISD::ConstantPool,       MVT::i32,   Custom);
@@ -108,6 +111,11 @@ MipsTargetLowering(MipsTargetMachine &TM)
   // the result from these setcc are in a flag registers (FCR31).
   setOperationAction(ISD::AND,              MVT::i32,   Custom);
   setOperationAction(ISD::OR,               MVT::i32,   Custom);
+
+  setOperationAction(ISD::SDIV, MVT::i32, Expand);
+  setOperationAction(ISD::SREM, MVT::i32, Expand);
+  setOperationAction(ISD::UDIV, MVT::i32, Expand);
+  setOperationAction(ISD::UREM, MVT::i32, Expand);
 
   // Operations not directly supported by Mips.
   setOperationAction(ISD::BR_JT,             MVT::Other, Expand);
@@ -129,7 +137,9 @@ MipsTargetLowering(MipsTargetMachine &TM)
   setOperationAction(ISD::FCOPYSIGN,         MVT::f32,   Expand);
   setOperationAction(ISD::FCOPYSIGN,         MVT::f64,   Expand);
   setOperationAction(ISD::FSIN,              MVT::f32,   Expand);
+  setOperationAction(ISD::FSIN,              MVT::f64,   Expand);
   setOperationAction(ISD::FCOS,              MVT::f32,   Expand);
+  setOperationAction(ISD::FCOS,              MVT::f64,   Expand);
   setOperationAction(ISD::FPOWI,             MVT::f32,   Expand);
   setOperationAction(ISD::FPOW,              MVT::f32,   Expand);
   setOperationAction(ISD::FLOG,              MVT::f32,   Expand);
@@ -160,6 +170,8 @@ MipsTargetLowering(MipsTargetMachine &TM)
 
   setTargetDAGCombine(ISD::ADDE);
   setTargetDAGCombine(ISD::SUBE);
+  setTargetDAGCombine(ISD::SDIVREM);
+  setTargetDAGCombine(ISD::UDIVREM);
 
   setStackPointerRegisterToSaveRestore(Mips::SP);
   computeRegisterProperties();
@@ -346,6 +358,40 @@ static SDValue PerformSUBECombine(SDNode *N, SelectionDAG& DAG,
   return SDValue();
 }
 
+static SDValue PerformDivRemCombine(SDNode *N, SelectionDAG& DAG,
+                                    TargetLowering::DAGCombinerInfo &DCI,
+                                    const MipsSubtarget* Subtarget) {
+  if (DCI.isBeforeLegalizeOps())
+    return SDValue();
+
+  unsigned opc = N->getOpcode() == ISD::SDIVREM ? MipsISD::DivRem :
+                                                  MipsISD::DivRemU;
+  DebugLoc dl = N->getDebugLoc();
+
+  SDValue DivRem = DAG.getNode(opc, dl, MVT::Glue,
+                               N->getOperand(0), N->getOperand(1));
+  SDValue InChain = DAG.getEntryNode();
+  SDValue InGlue = DivRem;
+
+  // insert MFLO
+  if (N->hasAnyUseOfValue(0)) {
+    SDValue CopyFromLo = DAG.getCopyFromReg(InChain, dl, Mips::LO, MVT::i32,
+                                            InGlue);
+    DAG.ReplaceAllUsesOfValueWith(SDValue(N, 0), CopyFromLo);
+    InChain = CopyFromLo.getValue(1);
+    InGlue = CopyFromLo.getValue(2);
+  }
+
+  // insert MFHI
+  if (N->hasAnyUseOfValue(1)) {
+    SDValue CopyFromHi = DAG.getCopyFromReg(InChain, dl,
+                                               Mips::HI, MVT::i32, InGlue);
+    DAG.ReplaceAllUsesOfValueWith(SDValue(N, 1), CopyFromHi);
+  }
+
+  return SDValue();
+}
+
 SDValue  MipsTargetLowering::PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI)
   const {
   SelectionDAG &DAG = DCI.DAG;
@@ -357,6 +403,9 @@ SDValue  MipsTargetLowering::PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI)
     return PerformADDECombine(N, DAG, DCI, Subtarget);
   case ISD::SUBE:
     return PerformSUBECombine(N, DAG, DCI, Subtarget);
+  case ISD::SDIVREM:
+  case ISD::UDIVREM:
+    return PerformDivRemCombine(N, DAG, DCI, Subtarget);
   }
 
   return SDValue();
@@ -373,6 +422,7 @@ LowerOperation(SDValue Op, SelectionDAG &DAG) const
     case ISD::DYNAMIC_STACKALLOC: return LowerDYNAMIC_STACKALLOC(Op, DAG);
     case ISD::FP_TO_SINT:         return LowerFP_TO_SINT(Op, DAG);
     case ISD::GlobalAddress:      return LowerGlobalAddress(Op, DAG);
+    case ISD::BlockAddress:       return LowerBlockAddress(Op, DAG);
     case ISD::GlobalTLSAddress:   return LowerGlobalTLSAddress(Op, DAG);
     case ISD::JumpTable:          return LowerJumpTable(Op, DAG);
     case ISD::OR:                 return LowerANDOR(Op, DAG);
@@ -717,6 +767,28 @@ SDValue MipsTargetLowering::LowerGlobalAddress(SDValue Op,
   return SDValue(0,0);
 }
 
+SDValue MipsTargetLowering::LowerBlockAddress(SDValue Op,
+                                              SelectionDAG &DAG) const {
+  if (getTargetMachine().getRelocationModel() != Reloc::PIC_) {
+    assert(false && "implement LowerBlockAddress for -static");
+    return SDValue(0, 0);
+  }
+  else {
+    // FIXME there isn't actually debug info here
+    DebugLoc dl = Op.getDebugLoc();
+    const BlockAddress *BA = cast<BlockAddressSDNode>(Op)->getBlockAddress();
+    SDValue BAGOTOffset = DAG.getBlockAddress(BA, MVT::i32, true,
+                                              MipsII::MO_GOT);
+    SDValue BALOOffset = DAG.getBlockAddress(BA, MVT::i32, true,
+                                             MipsII::MO_ABS_HILO);
+    SDValue Load = DAG.getLoad(MVT::i32, dl,
+                               DAG.getEntryNode(), BAGOTOffset,
+                               MachinePointerInfo(), false, false, 0);
+    SDValue Lo = DAG.getNode(MipsISD::Lo, dl, MVT::i32, BALOOffset);
+    return DAG.getNode(ISD::ADD, dl, MVT::i32, Load, Lo);
+  }
+}
+
 SDValue MipsTargetLowering::
 LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const
 {
@@ -937,46 +1009,28 @@ static bool CC_MipsO32_VarArgs(unsigned ValNo, MVT ValVT,
       LocInfo = CCValAssign::AExt;
   }
 
+  unsigned Reg;
+
   if (ValVT == MVT::i32 || ValVT == MVT::f32) {
-    if (unsigned Reg = State.AllocateReg(IntRegs, IntRegsSize)) {
-      State.addLoc(CCValAssign::getReg(ValNo, ValVT, Reg, MVT::i32, LocInfo));
-      return false;
-    }
-    unsigned Off = State.AllocateStack(4, 4);
-    State.addLoc(CCValAssign::getMem(ValNo, ValVT, Off, LocVT, LocInfo));
-    return false;
-  }
+    Reg = State.AllocateReg(IntRegs, IntRegsSize);
+    LocVT = MVT::i32;
+  } else if (ValVT == MVT::f64) {
+    Reg = State.AllocateReg(IntRegs, IntRegsSize);
+    if (Reg == Mips::A1 || Reg == Mips::A3)
+      Reg = State.AllocateReg(IntRegs, IntRegsSize);
+    State.AllocateReg(IntRegs, IntRegsSize);
+    LocVT = MVT::i32;
+  } else
+    llvm_unreachable("Cannot handle this ValVT.");
 
-  unsigned UnallocIntReg = State.getFirstUnallocated(IntRegs, IntRegsSize);
-  if (ValVT == MVT::f64) {
-    if (IntRegs[UnallocIntReg] == (unsigned (Mips::A1))) {
-      // A1 can't be used anymore, because 64 bit arguments
-      // must be aligned when copied back to the caller stack
-      State.AllocateReg(IntRegs, IntRegsSize);
-      UnallocIntReg++;
-    }
+  if (!Reg) {
+    unsigned SizeInBytes = ValVT.getSizeInBits() >> 3;
+    unsigned Offset = State.AllocateStack(SizeInBytes, SizeInBytes);
+    State.addLoc(CCValAssign::getMem(ValNo, ValVT, Offset, LocVT, LocInfo));
+  } else
+    State.addLoc(CCValAssign::getReg(ValNo, ValVT, Reg, LocVT, LocInfo));
 
-    if (IntRegs[UnallocIntReg] == (unsigned (Mips::A0)) ||
-        IntRegs[UnallocIntReg] == (unsigned (Mips::A2))) {
-      unsigned Reg = State.AllocateReg(IntRegs, IntRegsSize);
-      State.addLoc(CCValAssign::getReg(ValNo, ValVT, Reg, MVT::i32, LocInfo));
-      // Shadow the next register so it can be used
-      // later to get the other 32bit part.
-      State.AllocateReg(IntRegs, IntRegsSize);
-      return false;
-    }
-
-    // Register is shadowed to preserve alignment, and the
-    // argument goes to a stack location.
-    if (UnallocIntReg != IntRegsSize)
-      State.AllocateReg(IntRegs, IntRegsSize);
-
-    unsigned Off = State.AllocateStack(8, 8);
-    State.addLoc(CCValAssign::getMem(ValNo, ValVT, Off, LocVT, LocInfo));
-    return false;
-  }
-
-  return true; // CC didn't match
+  return false; // CC must always match
 }
 
 //===----------------------------------------------------------------------===//

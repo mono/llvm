@@ -30,7 +30,13 @@ static void initialize(TargetLibraryInfo &TLI, const Triple &T) {
   // memset_pattern16 is only available on iOS 3.0 and Mac OS/X 10.5 and later.
   if (T.getOS() != Triple::Darwin || T.getDarwinMajorNumber() < 9)
     TLI.setUnavailable(LibFunc::memset_pattern16);
-  
+
+  // iprintf and friends are only available on XCore.
+  if (T.getArch() != Triple::xcore) {
+    TLI.setUnavailable(LibFunc::iprintf);
+    TLI.setUnavailable(LibFunc::siprintf);
+    TLI.setUnavailable(LibFunc::fiprintf);
+  }
 }
 
 

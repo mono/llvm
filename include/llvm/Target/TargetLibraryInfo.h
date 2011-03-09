@@ -26,6 +26,15 @@ namespace llvm {
       /// void memset_pattern16(void *b, const void *pattern16, size_t len);
       memset_pattern16,
       
+      /// int iprintf(const char *format, ...);
+      iprintf,
+      
+      /// int siprintf(char *str, const char *format, ...);
+      siprintf,
+      
+      /// int fiprintf(FILE *stream, const char *format, ...);
+      fiprintf,
+      
       NumLibFuncs
     };
   }

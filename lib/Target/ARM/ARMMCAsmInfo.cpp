@@ -12,7 +12,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "ARMMCAsmInfo.h"
+#include "llvm/Support/CommandLine.h"
+
 using namespace llvm;
+
+cl::opt<bool>
+EnableARMEHABI("arm-enable-ehabi", cl::Hidden,
+  cl::desc("Generate ARM EHABI tables"),
+  cl::init(false));
+
 
 static const char *const arm_asm_table[] = {
   "{r0}", "r0",
@@ -68,4 +76,8 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
   ExceptionsType = ExceptionHandling::DwarfTable;
 
   SupportsDebugInformation = true;
+
+  // Exceptions handling
+  if (EnableARMEHABI)
+    ExceptionsType = ExceptionHandling::ARM;
 }

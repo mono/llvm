@@ -128,6 +128,9 @@ public:
 
   const TargetRegisterClass *getPointerRegClass(unsigned Kind = 0) const;
 
+  unsigned getRegPressureLimit(const TargetRegisterClass *RC,
+                               MachineFunction &MF) const;
+
   std::pair<TargetRegisterClass::iterator,TargetRegisterClass::iterator>
   getAllocationOrder(const TargetRegisterClass *RC,
                      unsigned HintType, unsigned HintReg,
@@ -176,7 +179,8 @@ public:
                                  unsigned DestReg, unsigned SubIdx,
                                  int Val,
                                  ARMCC::CondCodes Pred = ARMCC::AL,
-                                 unsigned PredReg = 0) const;
+                                 unsigned PredReg = 0,
+                                 unsigned MIFlags = MachineInstr::NoFlags)const;
 
   /// Code Generation virtual methods...
   virtual bool isReservedReg(const MachineFunction &MF, unsigned Reg) const;

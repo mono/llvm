@@ -34,77 +34,35 @@ namespace llvm {
   /// SlotIndex & SlotIndexes classes for the public interface to this
   /// information.
   class IndexListEntry {
-    static const unsigned EMPTY_KEY_INDEX = ~0U & ~3U,
-                          TOMBSTONE_KEY_INDEX = ~0U & ~7U;
-
     IndexListEntry *next, *prev;
     MachineInstr *mi;
     unsigned index;
 
-  protected:
-
-    typedef enum { EMPTY_KEY, TOMBSTONE_KEY } ReservedEntryType;
-
-    // This constructor is only to be used by getEmptyKeyEntry
-    // & getTombstoneKeyEntry. It sets index to the given
-    // value and mi to zero.
-    IndexListEntry(ReservedEntryType r) : mi(0) {
-      switch(r) {
-        case EMPTY_KEY: index = EMPTY_KEY_INDEX; break;
-        case TOMBSTONE_KEY: index = TOMBSTONE_KEY_INDEX; break;
-        default: assert(false && "Invalid value for constructor."); 
-      }
-      next = this;
-      prev = this;
-    }
-
   public:
 
-    IndexListEntry(MachineInstr *mi, unsigned index) : mi(mi), index(index) {
-      assert(index != EMPTY_KEY_INDEX && index != TOMBSTONE_KEY_INDEX &&
-             "Attempt to create invalid index. "
-             "Available indexes may have been exhausted?.");
-    }
-
-    bool isValid() const {
-      return (index != EMPTY_KEY_INDEX && index != TOMBSTONE_KEY_INDEX);
-    }
+    IndexListEntry(MachineInstr *mi, unsigned index) : mi(mi), index(index) {}
 
     MachineInstr* getInstr() const { return mi; }
     void setInstr(MachineInstr *mi) {
-      assert(isValid() && "Attempt to modify reserved index.");
       this->mi = mi;
     }
 
     unsigned getIndex() const { return index; }
     void setIndex(unsigned index) {
-      assert(index != EMPTY_KEY_INDEX && index != TOMBSTONE_KEY_INDEX &&
-             "Attempt to set index to invalid value.");
-      assert(isValid() && "Attempt to reset reserved index value.");
       this->index = index;
     }
     
     IndexListEntry* getNext() { return next; }
     const IndexListEntry* getNext() const { return next; }
     void setNext(IndexListEntry *next) {
-      assert(isValid() && "Attempt to modify reserved index.");
       this->next = next;
     }
 
     IndexListEntry* getPrev() { return prev; }
     const IndexListEntry* getPrev() const { return prev; }
     void setPrev(IndexListEntry *prev) {
-      assert(isValid() && "Attempt to modify reserved index.");
       this->prev = prev;
     }
-
-    // This function returns the index list entry that is to be used for empty
-    // SlotIndex keys.
-    static IndexListEntry* getEmptyKeyEntry();
-
-    // This function returns the index list entry that is to be used for
-    // tombstone SlotIndex keys.
-    static IndexListEntry* getTombstoneKeyEntry();
   };
 
   // Specialize PointerLikeTypeTraits for IndexListEntry.
@@ -130,11 +88,10 @@ namespace llvm {
     PointerIntPair<IndexListEntry*, 2, unsigned> lie;
 
     SlotIndex(IndexListEntry *entry, unsigned slot)
-      : lie(entry, slot) {
-      assert(entry != 0 && "Attempt to construct index with 0 pointer.");
-    }
+      : lie(entry, slot) {}
 
     IndexListEntry& entry() const {
+      assert(isValid() && "Attempt to compare reserved index.");
       return *lie.getPointer();
     }
 
@@ -148,22 +105,27 @@ namespace llvm {
     }
 
     static inline unsigned getHashValue(const SlotIndex &v) {
-      IndexListEntry *ptrVal = &v.entry();
-      return (unsigned((intptr_t)ptrVal) >> 4) ^
-             (unsigned((intptr_t)ptrVal) >> 9);
+      void *ptrVal = v.lie.getOpaqueValue();
+      return (unsigned((intptr_t)ptrVal)) ^ (unsigned((intptr_t)ptrVal) >> 9);
     }
 
   public:
+    enum {
+      /// The default distance between instructions as returned by distance().
+      /// This may vary as instructions are inserted and removed.
+      InstrDist = 4*NUM
+    };
+
     static inline SlotIndex getEmptyKey() {
-      return SlotIndex(IndexListEntry::getEmptyKeyEntry(), 0);
+      return SlotIndex(0, 1);
     }
 
     static inline SlotIndex getTombstoneKey() {
-      return SlotIndex(IndexListEntry::getTombstoneKeyEntry(), 0);
+      return SlotIndex(0, 2);
     }
 
     /// Construct an invalid index.
-    SlotIndex() : lie(IndexListEntry::getEmptyKeyEntry(), 0) {}
+    SlotIndex() : lie(0, 0) {}
 
     // Construct a new slot index from the given one, and set the slot.
     SlotIndex(const SlotIndex &li, Slot s)
@@ -175,8 +137,7 @@ namespace llvm {
     /// Returns true if this is a valid index. Invalid indicies do
     /// not point into an index table, and cannot be compared.
     bool isValid() const {
-      IndexListEntry *entry = lie.getPointer();
-      return ((entry!= 0) && (entry->isValid()));
+      return lie.getPointer();
     }
 
     /// Print this index to the given raw_ostream.
@@ -187,11 +148,11 @@ namespace llvm {
 
     /// Compare two SlotIndex objects for equality.
     bool operator==(SlotIndex other) const {
-      return getIndex() == other.getIndex();
+      return lie == other.lie;
     }
     /// Compare two SlotIndex objects for inequality.
     bool operator!=(SlotIndex other) const {
-      return getIndex() != other.getIndex(); 
+      return lie != other.lie;
     }
    
     /// Compare two SlotIndex objects. Return true if the first index
@@ -466,6 +427,9 @@ namespace llvm {
       insert(getTail(), val);
     }
 
+    /// Renumber locally after inserting newEntry.
+    void renumberIndexes(IndexListEntry *newEntry);
+
   public:
     static char ID;
 
@@ -530,7 +494,7 @@ namespace llvm {
     /// Returns the instruction for the given index, or null if the given
     /// index has no instruction associated with it.
     MachineInstr* getInstructionFromIndex(SlotIndex index) const {
-      return index.entry().getInstr();
+      return index.isValid() ? index.entry().getInstr() : 0;
     }
 
     /// Returns the next non-null index.
@@ -622,8 +586,7 @@ namespace llvm {
 
     /// Insert the given machine instruction into the mapping. Returns the
     /// assigned index.
-    SlotIndex insertMachineInstrInMaps(MachineInstr *mi,
-                                        bool *deferredRenumber = 0) {
+    SlotIndex insertMachineInstrInMaps(MachineInstr *mi) {
       assert(mi2iMap.find(mi) == mi2iMap.end() && "Instr already indexed.");
       // Numbering DBG_VALUE instructions could cause code generation to be
       // affected by debug information.
@@ -639,7 +602,6 @@ namespace llvm {
              "Instruction's parent MBB has not been added to SlotIndexes.");
 
       MachineBasicBlock::iterator miItr(mi);
-      bool needRenumber = false;
       IndexListEntry *newEntry;
       // Get previous index, considering that not all instructions are indexed.
       IndexListEntry *prevEntry;
@@ -662,54 +624,21 @@ namespace llvm {
 
       // Get a number for the new instr, or 0 if there's no room currently.
       // In the latter case we'll force a renumber later.
-      unsigned dist = nextEntry->getIndex() - prevEntry->getIndex();
-      unsigned newNumber = dist > SlotIndex::NUM ?
-        prevEntry->getIndex() + ((dist >> 1) & ~3U) : 0;
-
-      if (newNumber == 0) {
-        needRenumber = true;
-      }
+      unsigned dist = ((nextEntry->getIndex() - prevEntry->getIndex())/2) & ~3u;
+      unsigned newNumber = prevEntry->getIndex() + dist;
 
       // Insert a new list entry for mi.
       newEntry = createEntry(mi, newNumber);
       insert(nextEntry, newEntry);
-  
+
+      // Renumber locally if we need to.
+      if (dist == 0)
+        renumberIndexes(newEntry);
+
       SlotIndex newIndex(newEntry, SlotIndex::LOAD);
       mi2iMap.insert(std::make_pair(mi, newIndex));
-
-      if (miItr == mbb->end()) {
-        // If this is the last instr in the MBB then we need to fix up the bb
-        // range:
-        mbbRangeItr->second.second = SlotIndex(newEntry, SlotIndex::STORE);
-      }
-
-      // Renumber if we need to.
-      if (needRenumber) {
-        if (deferredRenumber == 0)
-          renumberIndexes();
-        else
-          *deferredRenumber = true;
-      }
-
       return newIndex;
     }
-
-    /// Add all instructions in the vector to the index list. This method will
-    /// defer renumbering until all instrs have been added, and should be 
-    /// preferred when adding multiple instrs.
-    void insertMachineInstrsInMaps(SmallVectorImpl<MachineInstr*> &mis) {
-      bool renumber = false;
-
-      for (SmallVectorImpl<MachineInstr*>::iterator
-           miItr = mis.begin(), miEnd = mis.end();
-           miItr != miEnd; ++miItr) {
-        insertMachineInstrInMaps(*miItr, &renumber);
-      }
-
-      if (renumber)
-        renumberIndexes();
-    }
-
 
     /// Remove the given machine instruction from the mapping.
     void removeMachineInstrFromMaps(MachineInstr *mi) {

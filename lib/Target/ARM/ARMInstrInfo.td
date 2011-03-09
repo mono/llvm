@@ -93,8 +93,6 @@ def ARMretflag       : SDNode<"ARMISD::RET_FLAG", SDTNone,
 
 def ARMcmov          : SDNode<"ARMISD::CMOV", SDT_ARMCMov,
                               [SDNPInGlue]>;
-def ARMcneg          : SDNode<"ARMISD::CNEG", SDT_ARMCMov,
-                              [SDNPInGlue]>;
 
 def ARMbrcond        : SDNode<"ARMISD::BRCOND", SDT_ARMBrcond,
                               [SDNPHasChain, SDNPInGlue, SDNPOutGlue]>;
@@ -1340,7 +1338,16 @@ let isCall = 1,
             Requires<[IsARM, HasV5T, IsNotDarwin]> {
     bits<4> func;
     let Inst{31-4} = 0b1110000100101111111111110011;
-    let Inst{3-0}   = func;
+    let Inst{3-0}  = func;
+  }
+
+  def BLX_pred : AI<(outs), (ins GPR:$func, variable_ops), BrMiscFrm,
+                    IIC_Br, "blx", "\t$func",
+                    [(ARMcall_pred GPR:$func)]>,
+                 Requires<[IsARM, HasV5T, IsNotDarwin]> {
+    bits<4> func;
+    let Inst{27-4} = 0b000100101111111111110011;
+    let Inst{3-0}  = func;
   }
 
   // ARMv4T
@@ -1386,6 +1393,15 @@ let isCall = 1,
                 [(ARMcall GPR:$func)]>, Requires<[IsARM, HasV5T, IsDarwin]> {
     bits<4> func;
     let Inst{31-4} = 0b1110000100101111111111110011;
+    let Inst{3-0}   = func;
+  }
+
+  def BLXr9_pred : AI<(outs), (ins GPR:$func, variable_ops), BrMiscFrm,
+                      IIC_Br, "blx", "\t$func",
+                      [(ARMcall_pred GPR:$func)]>,
+                   Requires<[IsARM, HasV5T, IsDarwin]> {
+    bits<4> func;
+    let Inst{27-4} = 0b000100101111111111110011;
     let Inst{3-0}   = func;
   }
 
@@ -2202,6 +2218,19 @@ def RSBSri : AI1<0b0011, (outs GPR:$Rd), (ins GPR:$Rn, so_imm:$imm), DPFrm,
   let Inst{15-12} = Rd;
   let Inst{19-16} = Rn;
   let Inst{11-0} = imm;
+}
+def RSBSrr : AI1<0b0011, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm), DPFrm,
+                 IIC_iALUr, "rsbs", "\t$Rd, $Rn, $Rm",
+                 [/* For disassembly only; pattern left blank */]> {
+  bits<4> Rd;
+  bits<4> Rn;
+  bits<4> Rm;
+  let Inst{11-4} = 0b00000000;
+  let Inst{25} = 0;
+  let Inst{20} = 1;
+  let Inst{3-0} = Rm;
+  let Inst{15-12} = Rd;
+  let Inst{19-16} = Rn;
 }
 def RSBSrs : AI1<0b0011, (outs GPR:$Rd), (ins GPR:$Rn, so_reg:$shift),
                  DPSoRegFrm, IIC_iALUsr, "rsbs", "\t$Rd, $Rn, $shift",

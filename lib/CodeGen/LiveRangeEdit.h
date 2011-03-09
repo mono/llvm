@@ -29,9 +29,19 @@ class MachineRegisterInfo;
 class VirtRegMap;
 
 class LiveRangeEdit {
+public:
+  /// Callback methods for LiveRangeEdit owners.
+  struct Delegate {
+    /// Called immediately before erasing a dead machine instruction.
+    virtual void LRE_WillEraseInstruction(MachineInstr *MI) {}
+    virtual ~Delegate() {}
+  };
+
+private:
   LiveInterval &parent_;
   SmallVectorImpl<LiveInterval*> &newRegs_;
-  const SmallVectorImpl<LiveInterval*> &uselessRegs_;
+  Delegate *const delegate_;
+  const SmallVectorImpl<LiveInterval*> *uselessRegs_;
 
   /// firstNew_ - Index of the first register added to newRegs_.
   const unsigned firstNew_;
@@ -41,11 +51,11 @@ class LiveRangeEdit {
 
   /// remattable_ - Values defined by remattable instructions as identified by
   /// tii.isTriviallyReMaterializable().
-  SmallPtrSet<VNInfo*,4> remattable_;
+  SmallPtrSet<const VNInfo*,4> remattable_;
 
   /// rematted_ - Values that were actually rematted, and so need to have their
   /// live range trimmed or entirely removed.
-  SmallPtrSet<VNInfo*,4> rematted_;
+  SmallPtrSet<const VNInfo*,4> rematted_;
 
   /// scanRemattable - Identify the parent_ values that may rematerialize.
   void scanRemattable(LiveIntervals &lis,
@@ -66,9 +76,13 @@ public:
   ///        rematerializing values because they are about to be removed.
   LiveRangeEdit(LiveInterval &parent,
                 SmallVectorImpl<LiveInterval*> &newRegs,
-                const SmallVectorImpl<LiveInterval*> &uselessRegs)
-    : parent_(parent), newRegs_(newRegs), uselessRegs_(uselessRegs),
-      firstNew_(newRegs.size()), scannedRemattable_(false) {}
+                Delegate *delegate,
+                const SmallVectorImpl<LiveInterval*> *uselessRegs = 0)
+    : parent_(parent), newRegs_(newRegs),
+      delegate_(delegate),
+      uselessRegs_(uselessRegs),
+      firstNew_(newRegs.size()),
+      scannedRemattable_(false) {}
 
   LiveInterval &getParent() const { return parent_; }
   unsigned getReg() const { return parent_.reg; }
@@ -87,7 +101,7 @@ public:
 
   /// anyRematerializable - Return true if any parent values may be
   /// rematerializable.
-  /// This function must be called before ny rematerialization is attempted.
+  /// This function must be called before any rematerialization is attempted.
   bool anyRematerializable(LiveIntervals&, const TargetInstrInfo&,
                            AliasAnalysis*);
 
@@ -120,14 +134,22 @@ public:
 
   /// markRematerialized - explicitly mark a value as rematerialized after doing
   /// it manually.
-  void markRematerialized(VNInfo *ParentVNI) {
+  void markRematerialized(const VNInfo *ParentVNI) {
     rematted_.insert(ParentVNI);
   }
 
   /// didRematerialize - Return true if ParentVNI was rematerialized anywhere.
-  bool didRematerialize(VNInfo *ParentVNI) const {
+  bool didRematerialize(const VNInfo *ParentVNI) const {
     return rematted_.count(ParentVNI);
   }
+
+  /// eliminateDeadDefs - Try to delete machine instructions that are now dead
+  /// (allDefsAreDead returns true). This may cause live intervals to be trimmed
+  /// and further dead efs to be eliminated.
+  void eliminateDeadDefs(SmallVectorImpl<MachineInstr*> &Dead,
+                         LiveIntervals&,
+                         const TargetInstrInfo&);
+
 };
 
 }

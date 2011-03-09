@@ -27,11 +27,20 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 STATISTIC(LoadsClustered, "Number of loads clustered together");
+
+// This allows latency based scheduler to notice high latency instructions
+// without a target itinerary. The choise if number here has more to do with
+// balancing scheduler heursitics than with the actual machine latency.
+static cl::opt<int> HighLatencyCycles(
+  "sched-high-latency-cycles", cl::Hidden, cl::init(10),
+  cl::desc("Roughly estimate the number of cycles that 'long latency'"
+           "instructions take for targets with no itinerary"));
 
 ScheduleDAGSDNodes::ScheduleDAGSDNodes(MachineFunction &mf)
   : ScheduleDAG(mf),
@@ -437,6 +446,10 @@ void ScheduleDAGSDNodes::BuildSchedGraph(AliasAnalysis *AA) {
 
 // Initialize NumNodeDefs for the current Node's opcode.
 void ScheduleDAGSDNodes::RegDefIter::InitNodeNumDefs() {
+  // Check for phys reg copy.
+  if (!Node)
+    return;
+
   if (!Node->isMachineOpcode()) {
     if (Node->getOpcode() == ISD::CopyFromReg)
       NodeNumDefs = 1;
@@ -506,7 +519,12 @@ void ScheduleDAGSDNodes::ComputeLatency(SUnit *SU) {
   }
 
   if (!InstrItins || InstrItins->isEmpty()) {
-    SU->Latency = 1;
+    SDNode *N = SU->getNode();
+    if (N && N->isMachineOpcode() &&
+        TII->isHighLatencyDef(N->getMachineOpcode()))
+      SU->Latency = HighLatencyCycles;
+    else
+      SU->Latency = 1;
     return;
   }
 

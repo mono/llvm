@@ -595,6 +595,14 @@ public:
     return NULL;
   }
 
+  /// getRegPressureLimit - Return the register pressure "high water mark" for
+  /// the specific register class. The scheduler is in high register pressure
+  /// mode (for the specific register class) if it goes over the limit.
+  virtual unsigned getRegPressureLimit(const TargetRegisterClass *RC,
+                                       MachineFunction &MF) const {
+    return 0;
+  }
+
   /// getAllocationOrder - Returns the register allocation order for a specified
   /// register class in the form of a pair of TargetRegisterClass iterators.
   virtual std::pair<TargetRegisterClass::iterator,TargetRegisterClass::iterator>
@@ -629,6 +637,13 @@ public:
   /// make use of) the register scavenger.
   virtual bool requiresRegisterScavenging(const MachineFunction &MF) const {
     return false;
+  }
+
+  /// useFPForScavengingIndex - returns true if the target wants to use
+  /// frame pointer based accesses to spill to the scavenger emergency spill
+  /// slot.
+  virtual bool useFPForScavengingIndex(const MachineFunction &MF) const {
+    return true;
   }
 
   /// requiresFrameIndexScavenging - returns true if the target requires post

@@ -50,13 +50,22 @@ public:
   enum CommentFlag {
     ReloadReuse = 0x1
   };
-  
+
+  enum MIFlag {
+    NoFlags    = 0,
+    FrameSetup = 1 << 0                 // Instruction is used as a part of
+                                        // function frame setup code.
+  };
 private:
   const TargetInstrDesc *TID;           // Instruction descriptor.
-  unsigned short NumImplicitOps;        // Number of implicit operands (which
+  uint16_t NumImplicitOps;              // Number of implicit operands (which
                                         // are determined at construction time).
 
-  unsigned short AsmPrinterFlags;       // Various bits of information used by
+  uint8_t Flags;                        // Various bits of additional
+                                        // information about machine
+                                        // instruction.
+
+  uint8_t AsmPrinterFlags;              // Various bits of information used by
                                         // the AsmPrinter to emit helpful
                                         // comments.  This is *not* semantic
                                         // information.  Do not use this for
@@ -125,7 +134,7 @@ public:
 
   /// getAsmPrinterFlags - Return the asm printer flags bitvector.
   ///
-  unsigned short getAsmPrinterFlags() const { return AsmPrinterFlags; }
+  uint8_t getAsmPrinterFlags() const { return AsmPrinterFlags; }
 
   /// clearAsmPrinterFlags - clear the AsmPrinter bitvector
   ///
@@ -140,7 +149,26 @@ public:
   /// setAsmPrinterFlag - Set a flag for the AsmPrinter.
   ///
   void setAsmPrinterFlag(CommentFlag Flag) {
-    AsmPrinterFlags |= (unsigned short)Flag;
+    AsmPrinterFlags |= (uint8_t)Flag;
+  }
+
+  /// getFlags - Return the MI flags bitvector.
+  uint8_t getFlags() const {
+    return Flags;
+  }
+
+  /// getFlag - Return whether an MI flag is set.
+  bool getFlag(MIFlag Flag) const {
+    return Flags & Flag;
+  }
+
+  /// setFlag - Set a MI flag.
+  void setFlag(MIFlag Flag) {
+    Flags |= (uint8_t)Flag;
+  }
+
+  void setFlags(unsigned flags) {
+    Flags = flags;
   }
   
   /// clearAsmPrinterFlag - clear specific AsmPrinter flags
@@ -152,7 +180,7 @@ public:
   /// getDebugLoc - Returns the debug location id of this MachineInstr.
   ///
   DebugLoc getDebugLoc() const { return debugLoc; }
-  
+
   /// getDesc - Returns the target instruction descriptor of this
   /// MachineInstr.
   const TargetInstrDesc &getDesc() const { return *TID; }

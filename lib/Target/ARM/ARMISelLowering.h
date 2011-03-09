@@ -57,7 +57,6 @@ namespace llvm {
       CMPFPw0,      // ARM VFP compare against zero instruction, sets FPSCR.
       FMSTAT,       // ARM fmstat instruction.
       CMOV,         // ARM conditional move instructions.
-      CNEG,         // ARM conditional negate instructions.
 
       BCC_i64,
 
@@ -330,9 +329,6 @@ namespace llvm {
 
     Sched::Preference getSchedulingPreference(SDNode *N) const;
 
-    unsigned getRegPressureLimit(const TargetRegisterClass *RC,
-                                 MachineFunction &MF) const;
-
     bool isShuffleMaskLegal(const SmallVectorImpl<int> &M, EVT VT) const;
     bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const;
 
@@ -463,6 +459,7 @@ namespace llvm {
                       SDValue &ARMcc, SelectionDAG &DAG, DebugLoc dl) const;
     SDValue getVFPCmp(SDValue LHS, SDValue RHS,
                       SelectionDAG &DAG, DebugLoc dl) const;
+    SDValue duplicateCmp(SDValue Cmp, SelectionDAG &DAG) const;
 
     SDValue OptimizeVFPBrcond(SDValue Op, SelectionDAG &DAG) const;
 

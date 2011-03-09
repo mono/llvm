@@ -12,7 +12,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/IndexedMap.h"
 #include "llvm/ADT/IntervalMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/SlotIndexes.h"
@@ -71,6 +73,8 @@ public:
   ///
   struct BlockInfo {
     MachineBasicBlock *MBB;
+    SlotIndex Start;      ///< Beginining of block.
+    SlotIndex Stop;       ///< End of block.
     SlotIndex FirstUse;   ///< First instr using current reg.
     SlotIndex LastUse;    ///< Last instr using current reg.
     SlotIndex Kill;       ///< Interval end point inside block.
@@ -99,7 +103,7 @@ private:
   void analyzeUses();
 
   /// calcLiveBlockInfo - Compute per-block information about CurLI.
-  void calcLiveBlockInfo();
+  bool calcLiveBlockInfo();
 
   /// canAnalyzeBranch - Return true if MBB ends in a branch that can be
   /// analyzed.
@@ -165,7 +169,7 @@ class SplitEditor {
   const TargetRegisterInfo &TRI;
 
   /// Edit - The current parent register and new intervals created.
-  LiveRangeEdit &Edit;
+  LiveRangeEdit *Edit;
 
   /// Index into Edit of the currently open interval.
   /// The index 0 is used for the complement, so the first interval started by
@@ -196,7 +200,7 @@ class SplitEditor {
   ValueMap Values;
 
   typedef std::pair<VNInfo*, MachineDomTreeNode*> LiveOutPair;
-  typedef DenseMap<MachineBasicBlock*,LiveOutPair> LiveOutMap;
+  typedef IndexedMap<LiveOutPair, MBB2NumberFunctor> LiveOutMap;
 
   // LiveOutCache - Map each basic block where a new register is live out to the
   // live-out value and its defining block.
@@ -214,6 +218,10 @@ class SplitEditor {
   // The cache is also used as a visited set by extendRange(). It can be shared
   // by all the new registers because at most one is live out of each block.
   LiveOutMap LiveOutCache;
+
+  // LiveOutSeen - Indexed by MBB->getNumber(), a bit is set for each valid
+  // entry in LiveOutCache.
+  BitVector LiveOutSeen;
 
   /// defValue - define a value in RegIdx from ParentVNI at Idx.
   /// Idx does not have to be ParentVNI->def, but it must be contained within
@@ -246,8 +254,16 @@ class SplitEditor {
                     SlotIndex Idx,
                     const MachineBasicBlock *IdxMBB);
 
+  /// transferSimpleValues - Transfer simply defined values to the new ranges.
+  /// Return true if any complex ranges were skipped.
+  bool transferSimpleValues();
+
+  /// extendPHIKillRanges - Extend the ranges of all values killed by original
+  /// parent PHIDefs.
+  void extendPHIKillRanges();
+
   /// rewriteAssigned - Rewrite all uses of Edit.getReg() to assigned registers.
-  void rewriteAssigned();
+  void rewriteAssigned(bool ExtendRanges);
 
   /// rewriteComponents - Rewrite all uses of Intv[0] according to the eq
   /// classes in ConEQ.
@@ -256,14 +272,17 @@ class SplitEditor {
   void rewriteComponents(const SmallVectorImpl<LiveInterval*> &Intvs,
                          const ConnectedVNInfoEqClasses &ConEq);
 
+  /// deleteRematVictims - Delete defs that are dead after rematerializing.
+  void deleteRematVictims();
+
 public:
   /// Create a new SplitEditor for editing the LiveInterval analyzed by SA.
   /// Newly created intervals will be appended to newIntervals.
   SplitEditor(SplitAnalysis &SA, LiveIntervals&, VirtRegMap&,
-              MachineDominatorTree&, LiveRangeEdit&);
+              MachineDominatorTree&);
 
-  /// getAnalysis - Get the corresponding analysis.
-  SplitAnalysis &getAnalysis() { return SA; }
+  /// reset - Prepare for a new split.
+  void reset(LiveRangeEdit&);
 
   /// Create a new virtual register and live interval.
   void openIntv();

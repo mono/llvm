@@ -655,8 +655,8 @@ ifeq ($(BUILD_COMPONENT), 1)
   Preprocess.CXX= $(BUILD_CXX) $(CPP.Flags) $(CPPFLAGS) $(TargetCommonOpts) \
                   $(CompileCommonOpts) $(CXX.Flags) -E
   Link          = $(BUILD_CXX) $(CPP.Flags) $(CXX.Flags) $(CXXFLAGS) \
-		  $(LDFLAGS) \
-                  $(TargetCommonOpts) $(CompileCommonOpts) $(LD.Flags) $(Strip)
+		  $(LD.Flags) $(LDFLAGS) \
+                  $(TargetCommonOpts) $(CompileCommonOpts) $(Strip)
 else
   Compile.C     = $(CC) $(CPP.Flags) $(C.Flags) $(CFLAGS) $(CPPFLAGS) \
                   $(TargetCommonOpts) $(CompileCommonOpts) -c
@@ -664,8 +664,8 @@ else
                   $(TargetCommonOpts) $(CompileCommonOpts) -c
   Preprocess.CXX= $(CXX) $(CPP.Flags) $(TargetCommonOpts) $(CPPFLAGS) \
                   $(CompileCommonOpts) $(CXX.Flags) -E
-  Link          = $(CXX) $(CPP.Flags) $(CXX.Flags) $(CXXFLAGS) $(LDFLAGS) \
-                  $(TargetCommonOpts)  $(CompileCommonOpts) $(LD.Flags) $(Strip)
+  Link          = $(CXX) $(CPP.Flags) $(CXX.Flags) $(CXXFLAGS) $(LD.Flags) \
+                  $(LDFLAGS) $(TargetCommonOpts)  $(CompileCommonOpts) $(Strip)
 endif
 
 BCCompile.C   = $(LLVMCC) $(CPP.Flags) $(C.Flags) $(CFLAGS) $(CPPFLAGS) \
@@ -718,6 +718,24 @@ BaseNameSources := $(sort $(basename $(Sources)))
 
 ObjectsO  := $(BaseNameSources:%=$(ObjDir)/%.o)
 ObjectsBC := $(BaseNameSources:%=$(ObjDir)/%.bc)
+
+#----------------------------------------------------------
+# For Mingw MSYS bash and Python/w32:
+#
+# $(ECHOPATH) prints DOSish pathstring.
+#   ex) $(ECHOPATH) /include/sys/types.h
+#   --> C:/mingw/include/sys/types.h
+# built-in "echo" does not transform path to DOSish path.
+#
+# FIXME: It would not be needed when MSYS's python
+# were provided.
+#----------------------------------------------------------
+
+ifeq (-mingw32,$(findstring -mingw32,$(BUILD_TRIPLE)))
+  ECHOPATH := $(Verb)python -u -c "import sys;print ' '.join(sys.argv[1:])"
+else
+  ECHOPATH := $(Verb)$(ECHO)
+endif
 
 ###############################################################################
 # DIRECTORIES: Handle recursive descent of directory structure
@@ -2139,8 +2157,13 @@ install-local::
 	$(Verb) $(MKDIR) $(DESTDIR)$(PROJ_includedir)
 	$(Verb) if test -d "$(PROJ_SRC_ROOT)/include" ; then \
 	  cd $(PROJ_SRC_ROOT)/include && \
-	  for  hdr in `find . -type f '!' '(' -name '*~' \
-	      -o -name '.#*' -o -name '*.in' ')' -print | grep -v CVS | \
+	  for hdr in `find . -type f \
+	      '(' -name LICENSE.TXT \
+	       -o -name '*.def' \
+	       -o -name '*.h' \
+	       -o -name '*.inc' \
+	       -o -name '*.td' \
+	      ')' -print | grep -v CVS | \
 	      grep -v .svn` ; do \
 	    instdir=`dirname "$(DESTDIR)$(PROJ_includedir)/$$hdr"` ; \
 	    if test \! -d "$$instdir" ; then \
@@ -2153,7 +2176,19 @@ install-local::
 ifneq ($(PROJ_SRC_ROOT),$(PROJ_OBJ_ROOT))
 	$(Verb) if test -d "$(PROJ_OBJ_ROOT)/include" ; then \
 	  cd $(PROJ_OBJ_ROOT)/include && \
-	  for hdr in `find . -type f -print | grep -v CVS` ; do \
+	  for hdr in `find . -type f \
+	      '(' -name LICENSE.TXT \
+	       -o -name '*.def' \
+	       -o -name '*.h' \
+	       -o -name '*.inc' \
+	       -o -name '*.td' \
+	      ')' -print | grep -v CVS | \
+	      grep -v .svn` ; do \
+	    instdir=`dirname "$(DESTDIR)$(PROJ_includedir)/$$hdr"` ; \
+	    if test \! -d "$$instdir" ; then \
+	      $(EchoCmd) Making install directory $$instdir ; \
+	      $(MKDIR) $$instdir ;\
+	    fi ; \
 	    $(DataInstall) $$hdr $(DESTDIR)$(PROJ_includedir)/$$hdr ; \
 	  done ; \
 	fi

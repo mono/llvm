@@ -778,7 +778,6 @@ const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
   case ARMISD::BCC_i64:       return "ARMISD::BCC_i64";
   case ARMISD::FMSTAT:        return "ARMISD::FMSTAT";
   case ARMISD::CMOV:          return "ARMISD::CMOV";
-  case ARMISD::CNEG:          return "ARMISD::CNEG";
 
   case ARMISD::RBIT:          return "ARMISD::RBIT";
 
@@ -944,27 +943,6 @@ Sched::Preference ARMTargetLowering::getSchedulingPreference(SDNode *N) const {
     return Sched::Latency;
 
   return Sched::RegPressure;
-}
-
-// FIXME: Move to RegInfo
-unsigned
-ARMTargetLowering::getRegPressureLimit(const TargetRegisterClass *RC,
-                                       MachineFunction &MF) const {
-  const TargetFrameLowering *TFI = MF.getTarget().getFrameLowering();
-
-  switch (RC->getID()) {
-  default:
-    return 0;
-  case ARM::tGPRRegClassID:
-    return TFI->hasFP(MF) ? 4 : 5;
-  case ARM::GPRRegClassID: {
-    unsigned FP = TFI->hasFP(MF) ? 1 : 0;
-    return 10 - FP - (Subtarget->isR9Reserved() ? 1 : 0);
-  }
-  case ARM::SPRRegClassID:  // Currently not used as 'rep' register class.
-  case ARM::DPRRegClassID:
-    return 32 - 10;
-  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -2559,6 +2537,27 @@ ARMTargetLowering::getVFPCmp(SDValue LHS, SDValue RHS, SelectionDAG &DAG,
   return DAG.getNode(ARMISD::FMSTAT, dl, MVT::Glue, Cmp);
 }
 
+/// duplicateCmp - Glue values can have only one use, so this function
+/// duplicates a comparison node.
+SDValue
+ARMTargetLowering::duplicateCmp(SDValue Cmp, SelectionDAG &DAG) const {
+  unsigned Opc = Cmp.getOpcode();
+  DebugLoc DL = Cmp.getDebugLoc();
+  if (Opc == ARMISD::CMP || Opc == ARMISD::CMPZ)
+    return DAG.getNode(Opc, DL, MVT::Glue, Cmp.getOperand(0),Cmp.getOperand(1));
+
+  assert(Opc == ARMISD::FMSTAT && "unexpected comparison operation");
+  Cmp = Cmp.getOperand(0);
+  Opc = Cmp.getOpcode();
+  if (Opc == ARMISD::CMPFP)
+    Cmp = DAG.getNode(Opc, DL, MVT::Glue, Cmp.getOperand(0),Cmp.getOperand(1));
+  else {
+    assert(Opc == ARMISD::CMPFPw0 && "unexpected operand of FMSTAT");
+    Cmp = DAG.getNode(Opc, DL, MVT::Glue, Cmp.getOperand(0));
+  }
+  return DAG.getNode(ARMISD::FMSTAT, DL, MVT::Glue, Cmp);
+}
+
 SDValue ARMTargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
   SDValue Cond = Op.getOperand(0);
   SDValue SelectTrue = Op.getOperand(1);
@@ -2594,7 +2593,7 @@ SDValue ARMTargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
         EVT VT = Cond.getValueType();
         SDValue ARMcc = Cond.getOperand(2);
         SDValue CCR = Cond.getOperand(3);
-        SDValue Cmp = Cond.getOperand(4);
+        SDValue Cmp = duplicateCmp(Cond.getOperand(4), DAG);
         return DAG.getNode(ARMISD::CMOV, dl, VT, True, False, ARMcc, CCR, Cmp);
       }
     }
@@ -2723,8 +2722,8 @@ ARMTargetLowering::OptimizeVFPBrcond(SDValue Op, SelectionDAG &DAG) const {
       // If one of the operand is zero, it's safe to ignore the NaN case since
       // we only care about equality comparisons.
       (SeenZero || (DAG.isKnownNeverNaN(LHS) && DAG.isKnownNeverNaN(RHS)))) {
-    // If unsafe fp math optimization is enabled and there are no othter uses of
-    // the CMP operands, and the condition code is EQ oe NE, we can optimize it
+    // If unsafe fp math optimization is enabled and there are no other uses of
+    // the CMP operands, and the condition code is EQ or NE, we can optimize it
     // to an integer comparison.
     if (CC == ISD::SETOEQ)
       CC = ISD::SETEQ;
