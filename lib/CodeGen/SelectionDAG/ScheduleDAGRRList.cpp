@@ -1140,13 +1140,19 @@ SUnit *ScheduleDAGRRList::PickNodeToScheduleBottomUp() {
       TRI->getMinimalPhysRegClass(Reg, VT);
     const TargetRegisterClass *DestRC = TRI->getCrossCopyRegClass(RC);
 
-    // If cross copy register class is null, then it must be possible copy
-    // the value directly. Do not try duplicate the def.
+    // If cross copy register class is the same as RC, then it must be possible
+    // copy the value directly. Do not try duplicate the def.
+    // If cross copy register class is not the same as RC, then it's possible to
+    // copy the value but it require cross register class copies and it is
+    // expensive.
+    // If cross copy register class is null, then it's not possible to copy
+    // the value at all.
     SUnit *NewDef = 0;
-    if (DestRC)
+    if (DestRC != RC) {
       NewDef = CopyAndMoveSuccessors(LRDef);
-    else
-      DestRC = RC;
+      if (!DestRC && !NewDef)
+        report_fatal_error("Can't handle live physical register dependency!");
+    }
     if (!NewDef) {
       // Issue copies, these can be expensive cross register class copies.
       SmallVector<SUnit*, 2> Copies;
@@ -2235,7 +2241,7 @@ bool ilp_ls_rr_sort::isReady(SUnit *SU, unsigned CurCycle) const {
   return true;
 }
 
-bool canEnableCoaelscing(SUnit *SU) {
+static bool canEnableCoalescing(SUnit *SU) {
   unsigned Opc = SU->getNode() ? SU->getNode()->getOpcode() : 0;
   if (Opc == ISD::TokenFactor || Opc == ISD::CopyToReg)
     // CopyToReg should be close to its uses to facilitate coalescing and
@@ -2278,8 +2284,8 @@ bool ilp_ls_rr_sort::operator()(SUnit *left, SUnit *right) const {
   }
 
   if (!DisableSchedRegPressure && (LPDiff > 0 || RPDiff > 0)) {
-    bool LReduce = canEnableCoaelscing(left);
-    bool RReduce = canEnableCoaelscing(right);
+    bool LReduce = canEnableCoalescing(left);
+    bool RReduce = canEnableCoalescing(right);
     DEBUG(if (LReduce != RReduce) ++FactorCount[FactPressureDiff]);
     if (LReduce && !RReduce) return false;
     if (RReduce && !LReduce) return true;

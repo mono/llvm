@@ -22,6 +22,8 @@
 #include "llvm/IntrinsicInst.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/DebugInfo.h"
+#include "llvm/Analysis/DIBuilder.h"
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InstructionSimplify.h"
@@ -755,3 +757,55 @@ unsigned llvm::getOrEnforceKnownAlignment(Value *V, unsigned PrefAlign,
   return Align;
 }
 
+///===---------------------------------------------------------------------===//
+///  Dbg Intrinsic utilities
+///
+
+/// Inserts a llvm.dbg.value instrinsic before the stores to an alloca'd value
+/// that has an associated llvm.dbg.decl intrinsic.
+bool llvm::ConvertDebugDeclareToDebugValue(DbgDeclareInst *DDI,
+                                           StoreInst *SI, DIBuilder &Builder) {
+  DIVariable DIVar(DDI->getVariable());
+  if (!DIVar.Verify())
+    return false;
+
+  Instruction *DbgVal = 
+    Builder.insertDbgValueIntrinsic(SI->getOperand(0), 0,
+                                    DIVar, SI);
+  
+  // Propagate any debug metadata from the store onto the dbg.value.
+  DebugLoc SIDL = SI->getDebugLoc();
+  if (!SIDL.isUnknown())
+    DbgVal->setDebugLoc(SIDL);
+  // Otherwise propagate debug metadata from dbg.declare.
+  else
+    DbgVal->setDebugLoc(DDI->getDebugLoc());
+  return true;
+}
+
+/// LowerDbgDeclare - Lowers llvm.dbg.declare intrinsics into appropriate set
+/// of llvm.dbg.value intrinsics.
+bool llvm::LowerDbgDeclare(Function &F) {
+  DIBuilder DIB(*F.getParent());
+  SmallVector<DbgDeclareInst *, 4> Dbgs;
+  for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ++FI)
+    for (BasicBlock::iterator BI = FI->begin(), BE = FI->end(); BI != BE; ++BI) {
+      if (DbgDeclareInst *DDI = dyn_cast<DbgDeclareInst>(BI))
+        Dbgs.push_back(DDI);
+    }
+  if (Dbgs.empty())
+    return false;
+
+  for (SmallVector<DbgDeclareInst *, 4>::iterator I = Dbgs.begin(),
+         E = Dbgs.end(); I != E; ++I) {
+    DbgDeclareInst *DDI = *I;
+    if (AllocaInst *AI = dyn_cast_or_null<AllocaInst>(DDI->getAddress())) {
+      for (Value::use_iterator UI = AI->use_begin(), E = AI->use_end();
+           UI != E; ++UI)
+        if (StoreInst *SI = dyn_cast<StoreInst>(*UI))
+          ConvertDebugDeclareToDebugValue(DDI, SI, DIB);
+    }
+    DDI->eraseFromParent();
+  }
+  return true;
+}

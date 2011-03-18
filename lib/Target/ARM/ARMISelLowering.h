@@ -153,6 +153,8 @@ namespace llvm {
       VZIP,         // zip (interleave)
       VUZP,         // unzip (deinterleave)
       VTRN,         // transpose
+      VTBL1,        // 1-register shuffle with mask
+      VTBL2,        // 2-register shuffle with mask
 
       // Vector multiply long:
       VMULLs,       // ...signed

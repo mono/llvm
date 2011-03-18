@@ -1309,6 +1309,9 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1, isIndirectBranch = 1 in {
 // before calls from potentially appearing dead.
 let isCall = 1,
   // On non-Darwin platforms R9 is callee-saved.
+  // FIXME:  Do we really need a non-predicated version? If so, it should
+  // at least be a pseudo instruction expanding to the predicated version
+  // at MC lowering time.
   Defs = [R0,  R1,  R2,  R3,  R12, LR,
           D0,  D1,  D2,  D3,  D4,  D5,  D6,  D7,
           D16, D17, D18, D19, D20, D21, D22, D23,
@@ -1371,39 +1374,25 @@ let isCall = 1,
           D16, D17, D18, D19, D20, D21, D22, D23,
           D24, D25, D26, D27, D28, D29, D30, D31, CPSR, FPSCR],
   Uses = [R7, SP] in {
-  def BLr9  : ABXI<0b1011, (outs), (ins bltarget:$func, variable_ops),
-                IIC_Br, "bl\t$func",
-                [(ARMcall tglobaladdr:$func)]>, Requires<[IsARM, IsDarwin]> {
-    let Inst{31-28} = 0b1110;
-    bits<24> func;
-    let Inst{23-0} = func;
-  }
+  def BLr9  : ARMPseudoInst<(outs), (ins bltarget:$func, variable_ops),
+                Size4Bytes, IIC_Br,
+                [(ARMcall tglobaladdr:$func)]>, Requires<[IsARM, IsDarwin]>;
 
-  def BLr9_pred : ABI<0b1011, (outs), (ins bltarget:$func, variable_ops),
-                   IIC_Br, "bl", "\t$func",
+  def BLr9_pred : ARMPseudoInst<(outs),
+                   (ins bltarget:$func, pred:$p, variable_ops),
+                   Size4Bytes, IIC_Br,
                    [(ARMcall_pred tglobaladdr:$func)]>,
-                  Requires<[IsARM, IsDarwin]> {
-    bits<24> func;
-    let Inst{23-0} = func;
-  }
+                  Requires<[IsARM, IsDarwin]>;
 
   // ARMv5T and above
-  def BLXr9 : AXI<(outs), (ins GPR:$func, variable_ops), BrMiscFrm,
-                IIC_Br, "blx\t$func",
-                [(ARMcall GPR:$func)]>, Requires<[IsARM, HasV5T, IsDarwin]> {
-    bits<4> func;
-    let Inst{31-4} = 0b1110000100101111111111110011;
-    let Inst{3-0}   = func;
-  }
+  def BLXr9 : ARMPseudoInst<(outs), (ins GPR:$func, variable_ops),
+                Size4Bytes, IIC_Br,
+                [(ARMcall GPR:$func)]>, Requires<[IsARM, HasV5T, IsDarwin]>;
 
-  def BLXr9_pred : AI<(outs), (ins GPR:$func, variable_ops), BrMiscFrm,
-                      IIC_Br, "blx", "\t$func",
+  def BLXr9_pred: ARMPseudoInst<(outs), (ins GPR:$func, pred:$p,  variable_ops),
+                      Size4Bytes, IIC_Br,
                       [(ARMcall_pred GPR:$func)]>,
-                   Requires<[IsARM, HasV5T, IsDarwin]> {
-    bits<4> func;
-    let Inst{27-4} = 0b000100101111111111110011;
-    let Inst{3-0}   = func;
-  }
+                   Requires<[IsARM, HasV5T, IsDarwin]>;
 
   // ARMv4T
   // Note: Restrict $func to the tGPR regclass to prevent it being in LR.
@@ -1419,11 +1408,7 @@ let isCall = 1,
 
 // Tail calls.
 
-// FIXME: These should probably be xformed into the non-TC versions of the
-// instructions as part of MC lowering.
-// FIXME: These seem to be used for both Thumb and ARM instruction selection.
-// Thumb should have its own version since the instruction is actually
-// different, even though the mnemonic is the same.
+// FIXME: The Thumb versions of these should live in ARMInstrThumb.td
 let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in {
   // Darwin versions.
   let Defs = [R0, R1, R2, R3, R9, R12,
@@ -1437,21 +1422,21 @@ let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in {
     def TCRETURNri : PseudoInst<(outs), (ins tcGPR:$dst, variable_ops),
                        IIC_Br, []>, Requires<[IsDarwin]>;
 
-    def TAILJMPd : ABXI<0b1010, (outs), (ins brtarget:$dst, variable_ops),
-                   IIC_Br, "b\t$dst  @ TAILCALL",
+    def TAILJMPd : ARMPseudoInst<(outs), (ins brtarget:$dst, variable_ops),
+                   Size4Bytes, IIC_Br,
                    []>, Requires<[IsARM, IsDarwin]>;
 
-    def TAILJMPdt: ABXI<0b1010, (outs), (ins brtarget:$dst, variable_ops),
-                   IIC_Br, "b.w\t$dst  @ TAILCALL",
+    def tTAILJMPd: tPseudoInst<(outs), (ins brtarget:$dst, variable_ops),
+                   Size4Bytes, IIC_Br,
                    []>, Requires<[IsThumb, IsDarwin]>;
 
-    def TAILJMPr : AXI<(outs), (ins tcGPR:$dst, variable_ops),
-                     BrMiscFrm, IIC_Br, "bx\t$dst  @ TAILCALL",
-                   []>, Requires<[IsDarwin]> {
-      bits<4> dst;
-      let Inst{31-4} = 0b1110000100101111111111110001;
-      let Inst{3-0}  = dst;
-    }
+    def TAILJMPr : ARMPseudoInst<(outs), (ins tcGPR:$dst, variable_ops),
+                     Size4Bytes, IIC_Br,
+                   []>, Requires<[IsARM, IsDarwin]>;
+
+    def tTAILJMPr : tPseudoInst<(outs), (ins tcGPR:$dst, variable_ops),
+                     Size4Bytes, IIC_Br,
+                   []>, Requires<[IsThumb, IsDarwin]>;
   }
 
   // Non-Darwin versions (the difference is R9).
@@ -1466,34 +1451,31 @@ let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1 in {
     def TCRETURNriND : PseudoInst<(outs), (ins tcGPR:$dst, variable_ops),
                        IIC_Br, []>, Requires<[IsNotDarwin]>;
 
-    def TAILJMPdND : ABXI<0b1010, (outs), (ins brtarget:$dst, variable_ops),
-                   IIC_Br, "b\t$dst  @ TAILCALL",
+    def TAILJMPdND : ARMPseudoInst<(outs), (ins brtarget:$dst, variable_ops),
+                   Size4Bytes, IIC_Br,
                    []>, Requires<[IsARM, IsNotDarwin]>;
 
-    def TAILJMPdNDt : ABXI<0b1010, (outs), (ins brtarget:$dst, variable_ops),
-                   IIC_Br, "b.w\t$dst  @ TAILCALL",
+    def tTAILJMPdND : tPseudoInst<(outs), (ins brtarget:$dst, variable_ops),
+                   Size4Bytes, IIC_Br,
                    []>, Requires<[IsThumb, IsNotDarwin]>;
 
-    def TAILJMPrND : AXI<(outs), (ins tcGPR:$dst, variable_ops),
-                     BrMiscFrm, IIC_Br, "bx\t$dst  @ TAILCALL",
-                   []>, Requires<[IsNotDarwin]> {
-      bits<4> dst;
-      let Inst{31-4} = 0b1110000100101111111111110001;
-      let Inst{3-0}  = dst;
-    }
+    def TAILJMPrND : ARMPseudoInst<(outs), (ins tcGPR:$dst, variable_ops),
+                     Size4Bytes, IIC_Br,
+                   []>, Requires<[IsARM, IsNotDarwin]>;
+    def tTAILJMPrND : tPseudoInst<(outs), (ins tcGPR:$dst, variable_ops),
+                     Size4Bytes, IIC_Br,
+                   []>, Requires<[IsThumb, IsNotDarwin]>;
   }
 }
 
 let isBranch = 1, isTerminator = 1 in {
-  // B is "predicable" since it can be xformed into a Bcc.
+  // B is "predicable" since it's just a Bcc with an 'always' condition.
   let isBarrier = 1 in {
     let isPredicable = 1 in
-    def B : ABXI<0b1010, (outs), (ins brtarget:$target), IIC_Br,
-                "b\t$target", [(br bb:$target)]> {
-      bits<24> target;
-      let Inst{31-28} = 0b1110;
-      let Inst{23-0} = target;
-    }
+    // FIXME: We shouldn't need this pseudo at all. Just using Bcc directly
+    // should be sufficient.
+    def B : ARMPseudoInst<(outs), (ins brtarget:$target), Size4Bytes, IIC_Br,
+                [(br bb:$target)]>;
 
     let isNotDuplicable = 1, isIndirectBranch = 1 in {
     def BR_JTr : ARMPseudoInst<(outs),
@@ -1549,6 +1531,7 @@ def SVC : ABI<0b1111, (outs), (ins i32imm:$svc), IIC_Br, "svc", "\t$svc",
   let Inst{23-0} = svc;
 }
 }
+def : MnemonicAlias<"swi", "svc">;
 
 // Store Return State is a system instruction -- for disassembly only
 let isCodeGenOnly = 1 in {  // FIXME: This should not use submode!
@@ -1908,7 +1891,7 @@ multiclass arm_ldst_mult<string asm, bit L_bit, Format f,
     let Inst{21}    = 1;          // Writeback
     let Inst{20}    = L_bit;
   }
-} 
+}
 
 let neverHasSideEffects = 1 in {
 
@@ -1928,16 +1911,10 @@ def : MnemonicAlias<"stm", "stmia">;
 // FIXME: Should pc be an implicit operand like PICADD, etc?
 let isReturn = 1, isTerminator = 1, isBarrier = 1, mayLoad = 1,
     hasExtraDefRegAllocReq = 1, isCodeGenOnly = 1 in
-// FIXME: Should be a pseudo-instruction.
-def LDMIA_RET : AXI4<(outs GPR:$wb), (ins GPR:$Rn, pred:$p,
-                                      reglist:$regs, variable_ops),
-                     IndexModeUpd, LdStMulFrm, IIC_iLoad_mBr,
-                     "ldmia${p}\t$Rn!, $regs",
-                     "$Rn = $wb", []> {
-  let Inst{24-23} = 0b01;       // Increment After
-  let Inst{21}    = 1;          // Writeback
-  let Inst{20}    = 1;          // Load
-}
+def LDMIA_RET : ARMPseudoInst<(outs GPR:$wb), (ins GPR:$Rn, pred:$p,
+                                               reglist:$regs, variable_ops),
+                     Size4Bytes, IIC_iLoad_mBr, []>,
+      RegConstraint<"$Rn = $wb">;
 
 //===----------------------------------------------------------------------===//
 //  Move Instructions.
@@ -2652,8 +2629,8 @@ def MUL  : AsMul1I32<0b0000000, (outs GPR:$Rd), (ins GPR:$Rn, GPR:$Rm),
 let Constraints = "@earlyclobber $Rd" in
 def MLAv5: ARMPseudoInst<(outs GPR:$Rd),
                          (ins GPR:$Rn, GPR:$Rm, GPR:$Ra, pred:$p, cc_out:$s),
-                         Size4Bytes, IIC_iMAC32, 
-                         [(set GPR:$Rd, (add (mul GPR:$Rn, GPR:$Rm), GPR:$Ra))]>, 
+                         Size4Bytes, IIC_iMAC32,
+                         [(set GPR:$Rd, (add (mul GPR:$Rn, GPR:$Rm), GPR:$Ra))]>,
                         Requires<[IsARM, NoV6]> {
   bits<4> Ra;
   let Inst{15-12} = Ra;
@@ -2686,7 +2663,7 @@ let neverHasSideEffects = 1 in {
 let isCommutable = 1 in {
 let Constraints = "@earlyclobber $RdLo,@earlyclobber $RdHi" in {
 def SMULLv5 : ARMPseudoInst<(outs GPR:$RdLo, GPR:$RdHi),
-                            (ins GPR:$Rn, GPR:$Rm, pred:$p, cc_out:$s), 
+                            (ins GPR:$Rn, GPR:$Rm, pred:$p, cc_out:$s),
                             Size4Bytes, IIC_iMUL64, []>,
                            Requires<[IsARM, NoV6]>;
 
@@ -2710,15 +2687,15 @@ def UMULL : AsMul1I64<0b0000100, (outs GPR:$RdLo, GPR:$RdHi),
 // Multiply + accumulate
 let Constraints = "@earlyclobber $RdLo,@earlyclobber $RdHi" in {
 def SMLALv5 : ARMPseudoInst<(outs GPR:$RdLo, GPR:$RdHi),
-                            (ins GPR:$Rn, GPR:$Rm, pred:$p, cc_out:$s), 
+                            (ins GPR:$Rn, GPR:$Rm, pred:$p, cc_out:$s),
                             Size4Bytes, IIC_iMAC64, []>,
                            Requires<[IsARM, NoV6]>;
 def UMLALv5 : ARMPseudoInst<(outs GPR:$RdLo, GPR:$RdHi),
-                            (ins GPR:$Rn, GPR:$Rm, pred:$p, cc_out:$s), 
+                            (ins GPR:$Rn, GPR:$Rm, pred:$p, cc_out:$s),
                             Size4Bytes, IIC_iMAC64, []>,
                            Requires<[IsARM, NoV6]>;
 def UMAALv5 : ARMPseudoInst<(outs GPR:$RdLo, GPR:$RdHi),
-                            (ins GPR:$Rn, GPR:$Rm, pred:$p, cc_out:$s), 
+                            (ins GPR:$Rn, GPR:$Rm, pred:$p, cc_out:$s),
                             Size4Bytes, IIC_iMAC64, []>,
                            Requires<[IsARM, NoV6]>;
 
@@ -3148,88 +3125,43 @@ def BCCZi64 : PseudoInst<(outs),
 // Conditional moves
 // FIXME: should be able to write a pattern for ARMcmov, but can't use
 // a two-value operand where a dag node expects two operands. :(
-// FIXME: These should all be pseudo-instructions that get expanded to
-//        the normal MOV instructions. That would fix the dependency on
-//        special casing them in tblgen.
 let neverHasSideEffects = 1 in {
-def MOVCCr : AI1<0b1101, (outs GPR:$Rd), (ins GPR:$false, GPR:$Rm), DPFrm,
-                IIC_iCMOVr, "mov", "\t$Rd, $Rm",
-      [/*(set GPR:$Rd, (ARMcmov GPR:$false, GPR:$Rm, imm:$cc, CCR:$ccr))*/]>,
-                RegConstraint<"$false = $Rd">, UnaryDP {
-  bits<4> Rd;
-  bits<4> Rm;
-  let Inst{25} = 0;
-  let Inst{20} = 0;
-  let Inst{15-12} = Rd;
-  let Inst{11-4} = 0b00000000;
-  let Inst{3-0} = Rm;
-}
-
-def MOVCCs : AI1<0b1101, (outs GPR:$Rd),
-                 (ins GPR:$false, so_reg:$shift), DPSoRegFrm, IIC_iCMOVsr,
-                "mov", "\t$Rd, $shift",
-   [/*(set GPR:$Rd, (ARMcmov GPR:$false, so_reg:$shift, imm:$cc, CCR:$ccr))*/]>,
-                RegConstraint<"$false = $Rd">, UnaryDP {
-  bits<4> Rd;
-  bits<12> shift;
-  let Inst{25} = 0;
-  let Inst{20} = 0;
-  let Inst{19-16} = 0;
-  let Inst{15-12} = Rd;
-  let Inst{11-0} = shift;
-}
+def MOVCCr : ARMPseudoInst<(outs GPR:$Rd), (ins GPR:$false, GPR:$Rm, pred:$p),
+                           Size4Bytes, IIC_iCMOVr,
+  [/*(set GPR:$Rd, (ARMcmov GPR:$false, GPR:$Rm, imm:$cc, CCR:$ccr))*/]>,
+      RegConstraint<"$false = $Rd">;
+def MOVCCs : ARMPseudoInst<(outs GPR:$Rd),
+                           (ins GPR:$false, so_reg:$shift, pred:$p),
+                           Size4Bytes, IIC_iCMOVsr,
+  [/*(set GPR:$Rd, (ARMcmov GPR:$false, so_reg:$shift, imm:$cc, CCR:$ccr))*/]>,
+      RegConstraint<"$false = $Rd">;
 
 let isMoveImm = 1 in
-def MOVCCi16 : AI1<0b1000, (outs GPR:$Rd), (ins GPR:$false, i32imm_hilo16:$imm),
-                 DPFrm, IIC_iMOVi,
-                 "movw", "\t$Rd, $imm",
-                 []>,
-                 RegConstraint<"$false = $Rd">, Requires<[IsARM, HasV6T2]>,
-                 UnaryDP {
-  bits<4> Rd;
-  bits<16> imm;
-  let Inst{25} = 1;
-  let Inst{20} = 0;
-  let Inst{19-16} = imm{15-12};
-  let Inst{15-12} = Rd;
-  let Inst{11-0}  = imm{11-0};
-}
+def MOVCCi16 : ARMPseudoInst<(outs GPR:$Rd),
+                             (ins GPR:$false, i32imm_hilo16:$imm, pred:$p),
+                             Size4Bytes, IIC_iMOVi,
+                             []>,
+      RegConstraint<"$false = $Rd">, Requires<[IsARM, HasV6T2]>;
 
 let isMoveImm = 1 in
-def MOVCCi : AI1<0b1101, (outs GPR:$Rd),
-                         (ins GPR:$false, so_imm:$imm), DPFrm, IIC_iCMOVi,
-                "mov", "\t$Rd, $imm",
+def MOVCCi : ARMPseudoInst<(outs GPR:$Rd),
+                           (ins GPR:$false, so_imm:$imm, pred:$p),
+                           Size4Bytes, IIC_iCMOVi,
    [/*(set GPR:$Rd, (ARMcmov GPR:$false, so_imm:$imm, imm:$cc, CCR:$ccr))*/]>,
-                RegConstraint<"$false = $Rd">, UnaryDP {
-  bits<4> Rd;
-  bits<12> imm;
-  let Inst{25} = 1;
-  let Inst{20} = 0;
-  let Inst{19-16} = 0b0000;
-  let Inst{15-12} = Rd;
-  let Inst{11-0} = imm;
-}
+      RegConstraint<"$false = $Rd">;
 
 // Two instruction predicate mov immediate.
 let isMoveImm = 1 in
-def MOVCCi32imm : PseudoInst<(outs GPR:$Rd),
-                             (ins GPR:$false, i32imm:$src, pred:$p),
-                  IIC_iCMOVix2, []>, RegConstraint<"$false = $Rd">;
+def MOVCCi32imm : ARMPseudoInst<(outs GPR:$Rd),
+                                (ins GPR:$false, i32imm:$src, pred:$p),
+                  Size8Bytes, IIC_iCMOVix2, []>, RegConstraint<"$false = $Rd">;
 
 let isMoveImm = 1 in
-def MVNCCi : AI1<0b1111, (outs GPR:$Rd),
-                         (ins GPR:$false, so_imm:$imm), DPFrm, IIC_iCMOVi,
-                "mvn", "\t$Rd, $imm",
+def MVNCCi : ARMPseudoInst<(outs GPR:$Rd),
+                           (ins GPR:$false, so_imm:$imm, pred:$p),
+                           Size4Bytes, IIC_iCMOVi,
  [/*(set GPR:$Rd, (ARMcmov GPR:$false, so_imm_not:$imm, imm:$cc, CCR:$ccr))*/]>,
-                RegConstraint<"$false = $Rd">, UnaryDP {
-  bits<4> Rd;
-  bits<12> imm;
-  let Inst{25} = 1;
-  let Inst{20} = 0;
-  let Inst{19-16} = 0b0000;
-  let Inst{15-12} = Rd;
-  let Inst{11-0} = imm;
-}
+                RegConstraint<"$false = $Rd">;
 } // neverHasSideEffects
 
 //===----------------------------------------------------------------------===//
@@ -3249,13 +3181,6 @@ def DMB : AInoP<(outs), (ins memb_opt:$opt), MiscFrm, NoItinerary,
   bits<4> opt;
   let Inst{31-4} = 0xf57ff05;
   let Inst{3-0} = opt;
-}
-
-def DMB_MCR : AInoP<(outs), (ins GPR:$zero), MiscFrm, NoItinerary,
-                       "mcr", "\tp15, 0, $zero, c7, c10, 5",
-                       [(ARMMemBarrierMCR GPR:$zero)]>,
-                       Requires<[IsARM, HasV6]> {
-  // FIXME: add encoding
 }
 }
 
@@ -3406,238 +3331,7 @@ def SWPB : AIswp<1, (outs GPR:$Rt), (ins GPR:$Rt2, GPR:$Rn), "swpb",
 }
 
 //===----------------------------------------------------------------------===//
-// TLS Instructions
-//
-
-// __aeabi_read_tp preserves the registers r1-r3.
-// This is a pseudo inst so that we can get the encoding right, 
-// complete with fixup for the aeabi_read_tp function.
-let isCall = 1,
-  Defs = [R0, R12, LR, CPSR], Uses = [SP] in {
-  def TPsoft : PseudoInst<(outs), (ins), IIC_Br,
-               [(set R0, ARMthread_pointer)]>;
-}
-
-//===----------------------------------------------------------------------===//
-// SJLJ Exception handling intrinsics
-//   eh_sjlj_setjmp() is an instruction sequence to store the return
-//   address and save #0 in R0 for the non-longjmp case.
-//   Since by its nature we may be coming from some other function to get
-//   here, and we're using the stack frame for the containing function to
-//   save/restore registers, we can't keep anything live in regs across
-//   the eh_sjlj_setjmp(), else it will almost certainly have been tromped upon
-//   when we get here from a longjmp(). We force everthing out of registers
-//   except for our own input by listing the relevant registers in Defs. By
-//   doing so, we also cause the prologue/epilogue code to actively preserve
-//   all of the callee-saved resgisters, which is exactly what we want.
-//   A constant value is passed in $val, and we use the location as a scratch.
-//
-// These are pseudo-instructions and are lowered to individual MC-insts, so
-// no encoding information is necessary.
-let Defs =
-  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7,  R8,  R9,  R10, R11, R12, LR,  D0,
-    D1,  D2,  D3,  D4,  D5,  D6,  D7,  D8,  D9,  D10, D11, D12, D13, D14, D15,
-    D16, D17, D18, D19, D20, D21, D22, D23, D24, D25, D26, D27, D28, D29, D30,
-    D31 ], hasSideEffects = 1, isBarrier = 1 in {
-  def Int_eh_sjlj_setjmp : PseudoInst<(outs), (ins GPR:$src, GPR:$val),
-                               NoItinerary,
-                         [(set R0, (ARMeh_sjlj_setjmp GPR:$src, GPR:$val))]>,
-                           Requires<[IsARM, HasVFP2]>;
-}
-
-let Defs =
-  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7,  R8,  R9,  R10, R11, R12, LR ],
-  hasSideEffects = 1, isBarrier = 1 in {
-  def Int_eh_sjlj_setjmp_nofp : PseudoInst<(outs), (ins GPR:$src, GPR:$val),
-                                   NoItinerary,
-                         [(set R0, (ARMeh_sjlj_setjmp GPR:$src, GPR:$val))]>,
-                                Requires<[IsARM, NoVFP]>;
-}
-
-// FIXME: Non-Darwin version(s)
-let isBarrier = 1, hasSideEffects = 1, isTerminator = 1,
-    Defs = [ R7, LR, SP ] in {
-def Int_eh_sjlj_longjmp : PseudoInst<(outs), (ins GPR:$src, GPR:$scratch),
-                             NoItinerary,
-                         [(ARMeh_sjlj_longjmp GPR:$src, GPR:$scratch)]>,
-                                Requires<[IsARM, IsDarwin]>;
-}
-
-// eh.sjlj.dispatchsetup pseudo-instruction.
-// This pseudo is used for ARM, Thumb1 and Thumb2. Any differences are
-// handled when the pseudo is expanded (which happens before any passes
-// that need the instruction size).
-let isBarrier = 1, hasSideEffects = 1 in
-def Int_eh_sjlj_dispatchsetup :
- PseudoInst<(outs), (ins GPR:$src), NoItinerary,
-            [(ARMeh_sjlj_dispatchsetup GPR:$src)]>,
-              Requires<[IsDarwin]>;
-
-//===----------------------------------------------------------------------===//
-// Non-Instruction Patterns
-//
-
-// Large immediate handling.
-
-// 32-bit immediate using two piece so_imms or movw + movt.
-// This is a single pseudo instruction, the benefit is that it can be remat'd
-// as a single unit instead of having to handle reg inputs.
-// FIXME: Remove this when we can do generalized remat.
-let isReMaterializable = 1, isMoveImm = 1 in
-def MOVi32imm : PseudoInst<(outs GPR:$dst), (ins i32imm:$src), IIC_iMOVix2,
-                           [(set GPR:$dst, (arm_i32imm:$src))]>,
-                           Requires<[IsARM]>;
-
-// Pseudo instruction that combines movw + movt + add pc (if PIC).
-// It also makes it possible to rematerialize the instructions.
-// FIXME: Remove this when we can do generalized remat and when machine licm
-// can properly the instructions.
-let isReMaterializable = 1 in {
-def MOV_ga_pcrel : PseudoInst<(outs GPR:$dst), (ins i32imm:$addr),
-                              IIC_iMOVix2addpc,
-                        [(set GPR:$dst, (ARMWrapperPIC tglobaladdr:$addr))]>,
-                        Requires<[IsARM, UseMovt]>;
-
-def MOV_ga_dyn : PseudoInst<(outs GPR:$dst), (ins i32imm:$addr),
-                             IIC_iMOVix2,
-                        [(set GPR:$dst, (ARMWrapperDYN tglobaladdr:$addr))]>,
-                        Requires<[IsARM, UseMovt]>;
-
-let AddedComplexity = 10 in
-def MOV_ga_pcrel_ldr : PseudoInst<(outs GPR:$dst), (ins i32imm:$addr),
-                                IIC_iMOVix2ld,
-                    [(set GPR:$dst, (load (ARMWrapperPIC tglobaladdr:$addr)))]>,
-                    Requires<[IsARM, UseMovt]>;
-} // isReMaterializable
-
-// ConstantPool, GlobalAddress, and JumpTable
-def : ARMPat<(ARMWrapper  tglobaladdr :$dst), (LEApcrel tglobaladdr :$dst)>,
-            Requires<[IsARM, DontUseMovt]>;
-def : ARMPat<(ARMWrapper  tconstpool  :$dst), (LEApcrel tconstpool  :$dst)>;
-def : ARMPat<(ARMWrapper  tglobaladdr :$dst), (MOVi32imm tglobaladdr :$dst)>,
-            Requires<[IsARM, UseMovt]>;
-def : ARMPat<(ARMWrapperJT tjumptable:$dst, imm:$id),
-             (LEApcrelJT tjumptable:$dst, imm:$id)>;
-
-// TODO: add,sub,and, 3-instr forms?
-
-// Tail calls
-def : ARMPat<(ARMtcret tcGPR:$dst),
-          (TCRETURNri tcGPR:$dst)>, Requires<[IsDarwin]>;
-
-def : ARMPat<(ARMtcret (i32 tglobaladdr:$dst)),
-          (TCRETURNdi texternalsym:$dst)>, Requires<[IsDarwin]>;
-
-def : ARMPat<(ARMtcret (i32 texternalsym:$dst)),
-          (TCRETURNdi texternalsym:$dst)>, Requires<[IsDarwin]>;
-
-def : ARMPat<(ARMtcret tcGPR:$dst),
-          (TCRETURNriND tcGPR:$dst)>, Requires<[IsNotDarwin]>;
-
-def : ARMPat<(ARMtcret (i32 tglobaladdr:$dst)),
-          (TCRETURNdiND texternalsym:$dst)>, Requires<[IsNotDarwin]>;
-
-def : ARMPat<(ARMtcret (i32 texternalsym:$dst)),
-          (TCRETURNdiND texternalsym:$dst)>, Requires<[IsNotDarwin]>;
-
-// Direct calls
-def : ARMPat<(ARMcall texternalsym:$func), (BL texternalsym:$func)>,
-      Requires<[IsARM, IsNotDarwin]>;
-def : ARMPat<(ARMcall texternalsym:$func), (BLr9 texternalsym:$func)>,
-      Requires<[IsARM, IsDarwin]>;
-
-// zextload i1 -> zextload i8
-def : ARMPat<(zextloadi1 addrmode_imm12:$addr), (LDRBi12 addrmode_imm12:$addr)>;
-def : ARMPat<(zextloadi1 ldst_so_reg:$addr),    (LDRBrs ldst_so_reg:$addr)>;
-
-// extload -> zextload
-def : ARMPat<(extloadi1 addrmode_imm12:$addr),  (LDRBi12 addrmode_imm12:$addr)>;
-def : ARMPat<(extloadi1 ldst_so_reg:$addr),     (LDRBrs ldst_so_reg:$addr)>;
-def : ARMPat<(extloadi8 addrmode_imm12:$addr),  (LDRBi12 addrmode_imm12:$addr)>;
-def : ARMPat<(extloadi8 ldst_so_reg:$addr),     (LDRBrs ldst_so_reg:$addr)>;
-
-def : ARMPat<(extloadi16 addrmode3:$addr),  (LDRH addrmode3:$addr)>;
-
-def : ARMPat<(extloadi8  addrmodepc:$addr), (PICLDRB addrmodepc:$addr)>;
-def : ARMPat<(extloadi16 addrmodepc:$addr), (PICLDRH addrmodepc:$addr)>;
-
-// smul* and smla*
-def : ARMV5TEPat<(mul (sra (shl GPR:$a, (i32 16)), (i32 16)),
-                      (sra (shl GPR:$b, (i32 16)), (i32 16))),
-                 (SMULBB GPR:$a, GPR:$b)>;
-def : ARMV5TEPat<(mul sext_16_node:$a, sext_16_node:$b),
-                 (SMULBB GPR:$a, GPR:$b)>;
-def : ARMV5TEPat<(mul (sra (shl GPR:$a, (i32 16)), (i32 16)),
-                      (sra GPR:$b, (i32 16))),
-                 (SMULBT GPR:$a, GPR:$b)>;
-def : ARMV5TEPat<(mul sext_16_node:$a, (sra GPR:$b, (i32 16))),
-                 (SMULBT GPR:$a, GPR:$b)>;
-def : ARMV5TEPat<(mul (sra GPR:$a, (i32 16)),
-                      (sra (shl GPR:$b, (i32 16)), (i32 16))),
-                 (SMULTB GPR:$a, GPR:$b)>;
-def : ARMV5TEPat<(mul (sra GPR:$a, (i32 16)), sext_16_node:$b),
-                (SMULTB GPR:$a, GPR:$b)>;
-def : ARMV5TEPat<(sra (mul GPR:$a, (sra (shl GPR:$b, (i32 16)), (i32 16))),
-                      (i32 16)),
-                 (SMULWB GPR:$a, GPR:$b)>;
-def : ARMV5TEPat<(sra (mul GPR:$a, sext_16_node:$b), (i32 16)),
-                 (SMULWB GPR:$a, GPR:$b)>;
-
-def : ARMV5TEPat<(add GPR:$acc,
-                      (mul (sra (shl GPR:$a, (i32 16)), (i32 16)),
-                           (sra (shl GPR:$b, (i32 16)), (i32 16)))),
-                 (SMLABB GPR:$a, GPR:$b, GPR:$acc)>;
-def : ARMV5TEPat<(add GPR:$acc,
-                      (mul sext_16_node:$a, sext_16_node:$b)),
-                 (SMLABB GPR:$a, GPR:$b, GPR:$acc)>;
-def : ARMV5TEPat<(add GPR:$acc,
-                      (mul (sra (shl GPR:$a, (i32 16)), (i32 16)),
-                           (sra GPR:$b, (i32 16)))),
-                 (SMLABT GPR:$a, GPR:$b, GPR:$acc)>;
-def : ARMV5TEPat<(add GPR:$acc,
-                      (mul sext_16_node:$a, (sra GPR:$b, (i32 16)))),
-                 (SMLABT GPR:$a, GPR:$b, GPR:$acc)>;
-def : ARMV5TEPat<(add GPR:$acc,
-                      (mul (sra GPR:$a, (i32 16)),
-                           (sra (shl GPR:$b, (i32 16)), (i32 16)))),
-                 (SMLATB GPR:$a, GPR:$b, GPR:$acc)>;
-def : ARMV5TEPat<(add GPR:$acc,
-                      (mul (sra GPR:$a, (i32 16)), sext_16_node:$b)),
-                 (SMLATB GPR:$a, GPR:$b, GPR:$acc)>;
-def : ARMV5TEPat<(add GPR:$acc,
-                      (sra (mul GPR:$a, (sra (shl GPR:$b, (i32 16)), (i32 16))),
-                           (i32 16))),
-                 (SMLAWB GPR:$a, GPR:$b, GPR:$acc)>;
-def : ARMV5TEPat<(add GPR:$acc,
-                      (sra (mul GPR:$a, sext_16_node:$b), (i32 16))),
-                 (SMLAWB GPR:$a, GPR:$b, GPR:$acc)>;
-
-//===----------------------------------------------------------------------===//
-// Thumb Support
-//
-
-include "ARMInstrThumb.td"
-
-//===----------------------------------------------------------------------===//
-// Thumb2 Support
-//
-
-include "ARMInstrThumb2.td"
-
-//===----------------------------------------------------------------------===//
-// Floating Point Support
-//
-
-include "ARMInstrVFP.td"
-
-//===----------------------------------------------------------------------===//
-// Advanced SIMD (NEON) Support
-//
-
-include "ARMInstrNEON.td"
-
-//===----------------------------------------------------------------------===//
-// Coprocessor Instructions.  For disassembly only.
+// Coprocessor Instructions.
 //
 
 def CDP : ABI<0b1110, (outs), (ins p_imm:$cop, i32imm:$opc1,
@@ -3938,3 +3632,241 @@ def MSRi : ABI<0b0011, (outs), (ins msr_mask:$mask,  so_imm:$a), NoItinerary,
   let Inst{15-12} = 0b1111;
   let Inst{11-0} = a;
 }
+
+//===----------------------------------------------------------------------===//
+// TLS Instructions
+//
+
+// __aeabi_read_tp preserves the registers r1-r3.
+// This is a pseudo inst so that we can get the encoding right,
+// complete with fixup for the aeabi_read_tp function.
+let isCall = 1,
+  Defs = [R0, R12, LR, CPSR], Uses = [SP] in {
+  def TPsoft : PseudoInst<(outs), (ins), IIC_Br,
+               [(set R0, ARMthread_pointer)]>;
+}
+
+//===----------------------------------------------------------------------===//
+// SJLJ Exception handling intrinsics
+//   eh_sjlj_setjmp() is an instruction sequence to store the return
+//   address and save #0 in R0 for the non-longjmp case.
+//   Since by its nature we may be coming from some other function to get
+//   here, and we're using the stack frame for the containing function to
+//   save/restore registers, we can't keep anything live in regs across
+//   the eh_sjlj_setjmp(), else it will almost certainly have been tromped upon
+//   when we get here from a longjmp(). We force everthing out of registers
+//   except for our own input by listing the relevant registers in Defs. By
+//   doing so, we also cause the prologue/epilogue code to actively preserve
+//   all of the callee-saved resgisters, which is exactly what we want.
+//   A constant value is passed in $val, and we use the location as a scratch.
+//
+// These are pseudo-instructions and are lowered to individual MC-insts, so
+// no encoding information is necessary.
+let Defs =
+  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7,  R8,  R9,  R10, R11, R12, LR,  D0,
+    D1,  D2,  D3,  D4,  D5,  D6,  D7,  D8,  D9,  D10, D11, D12, D13, D14, D15,
+    D16, D17, D18, D19, D20, D21, D22, D23, D24, D25, D26, D27, D28, D29, D30,
+    D31 ], hasSideEffects = 1, isBarrier = 1 in {
+  def Int_eh_sjlj_setjmp : PseudoInst<(outs), (ins GPR:$src, GPR:$val),
+                               NoItinerary,
+                         [(set R0, (ARMeh_sjlj_setjmp GPR:$src, GPR:$val))]>,
+                           Requires<[IsARM, HasVFP2]>;
+}
+
+let Defs =
+  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7,  R8,  R9,  R10, R11, R12, LR ],
+  hasSideEffects = 1, isBarrier = 1 in {
+  def Int_eh_sjlj_setjmp_nofp : PseudoInst<(outs), (ins GPR:$src, GPR:$val),
+                                   NoItinerary,
+                         [(set R0, (ARMeh_sjlj_setjmp GPR:$src, GPR:$val))]>,
+                                Requires<[IsARM, NoVFP]>;
+}
+
+// FIXME: Non-Darwin version(s)
+let isBarrier = 1, hasSideEffects = 1, isTerminator = 1,
+    Defs = [ R7, LR, SP ] in {
+def Int_eh_sjlj_longjmp : PseudoInst<(outs), (ins GPR:$src, GPR:$scratch),
+                             NoItinerary,
+                         [(ARMeh_sjlj_longjmp GPR:$src, GPR:$scratch)]>,
+                                Requires<[IsARM, IsDarwin]>;
+}
+
+// eh.sjlj.dispatchsetup pseudo-instruction.
+// This pseudo is used for ARM, Thumb1 and Thumb2. Any differences are
+// handled when the pseudo is expanded (which happens before any passes
+// that need the instruction size).
+let isBarrier = 1, hasSideEffects = 1 in
+def Int_eh_sjlj_dispatchsetup :
+ PseudoInst<(outs), (ins GPR:$src), NoItinerary,
+            [(ARMeh_sjlj_dispatchsetup GPR:$src)]>,
+              Requires<[IsDarwin]>;
+
+//===----------------------------------------------------------------------===//
+// Non-Instruction Patterns
+//
+
+// Large immediate handling.
+
+// 32-bit immediate using two piece so_imms or movw + movt.
+// This is a single pseudo instruction, the benefit is that it can be remat'd
+// as a single unit instead of having to handle reg inputs.
+// FIXME: Remove this when we can do generalized remat.
+let isReMaterializable = 1, isMoveImm = 1 in
+def MOVi32imm : PseudoInst<(outs GPR:$dst), (ins i32imm:$src), IIC_iMOVix2,
+                           [(set GPR:$dst, (arm_i32imm:$src))]>,
+                           Requires<[IsARM]>;
+
+// Pseudo instruction that combines movw + movt + add pc (if PIC).
+// It also makes it possible to rematerialize the instructions.
+// FIXME: Remove this when we can do generalized remat and when machine licm
+// can properly the instructions.
+let isReMaterializable = 1 in {
+def MOV_ga_pcrel : PseudoInst<(outs GPR:$dst), (ins i32imm:$addr),
+                              IIC_iMOVix2addpc,
+                        [(set GPR:$dst, (ARMWrapperPIC tglobaladdr:$addr))]>,
+                        Requires<[IsARM, UseMovt]>;
+
+def MOV_ga_dyn : PseudoInst<(outs GPR:$dst), (ins i32imm:$addr),
+                             IIC_iMOVix2,
+                        [(set GPR:$dst, (ARMWrapperDYN tglobaladdr:$addr))]>,
+                        Requires<[IsARM, UseMovt]>;
+
+let AddedComplexity = 10 in
+def MOV_ga_pcrel_ldr : PseudoInst<(outs GPR:$dst), (ins i32imm:$addr),
+                                IIC_iMOVix2ld,
+                    [(set GPR:$dst, (load (ARMWrapperPIC tglobaladdr:$addr)))]>,
+                    Requires<[IsARM, UseMovt]>;
+} // isReMaterializable
+
+// ConstantPool, GlobalAddress, and JumpTable
+def : ARMPat<(ARMWrapper  tglobaladdr :$dst), (LEApcrel tglobaladdr :$dst)>,
+            Requires<[IsARM, DontUseMovt]>;
+def : ARMPat<(ARMWrapper  tconstpool  :$dst), (LEApcrel tconstpool  :$dst)>;
+def : ARMPat<(ARMWrapper  tglobaladdr :$dst), (MOVi32imm tglobaladdr :$dst)>,
+            Requires<[IsARM, UseMovt]>;
+def : ARMPat<(ARMWrapperJT tjumptable:$dst, imm:$id),
+             (LEApcrelJT tjumptable:$dst, imm:$id)>;
+
+// TODO: add,sub,and, 3-instr forms?
+
+// Tail calls
+def : ARMPat<(ARMtcret tcGPR:$dst),
+          (TCRETURNri tcGPR:$dst)>, Requires<[IsDarwin]>;
+
+def : ARMPat<(ARMtcret (i32 tglobaladdr:$dst)),
+          (TCRETURNdi texternalsym:$dst)>, Requires<[IsDarwin]>;
+
+def : ARMPat<(ARMtcret (i32 texternalsym:$dst)),
+          (TCRETURNdi texternalsym:$dst)>, Requires<[IsDarwin]>;
+
+def : ARMPat<(ARMtcret tcGPR:$dst),
+          (TCRETURNriND tcGPR:$dst)>, Requires<[IsNotDarwin]>;
+
+def : ARMPat<(ARMtcret (i32 tglobaladdr:$dst)),
+          (TCRETURNdiND texternalsym:$dst)>, Requires<[IsNotDarwin]>;
+
+def : ARMPat<(ARMtcret (i32 texternalsym:$dst)),
+          (TCRETURNdiND texternalsym:$dst)>, Requires<[IsNotDarwin]>;
+
+// Direct calls
+def : ARMPat<(ARMcall texternalsym:$func), (BL texternalsym:$func)>,
+      Requires<[IsARM, IsNotDarwin]>;
+def : ARMPat<(ARMcall texternalsym:$func), (BLr9 texternalsym:$func)>,
+      Requires<[IsARM, IsDarwin]>;
+
+// zextload i1 -> zextload i8
+def : ARMPat<(zextloadi1 addrmode_imm12:$addr), (LDRBi12 addrmode_imm12:$addr)>;
+def : ARMPat<(zextloadi1 ldst_so_reg:$addr),    (LDRBrs ldst_so_reg:$addr)>;
+
+// extload -> zextload
+def : ARMPat<(extloadi1 addrmode_imm12:$addr),  (LDRBi12 addrmode_imm12:$addr)>;
+def : ARMPat<(extloadi1 ldst_so_reg:$addr),     (LDRBrs ldst_so_reg:$addr)>;
+def : ARMPat<(extloadi8 addrmode_imm12:$addr),  (LDRBi12 addrmode_imm12:$addr)>;
+def : ARMPat<(extloadi8 ldst_so_reg:$addr),     (LDRBrs ldst_so_reg:$addr)>;
+
+def : ARMPat<(extloadi16 addrmode3:$addr),  (LDRH addrmode3:$addr)>;
+
+def : ARMPat<(extloadi8  addrmodepc:$addr), (PICLDRB addrmodepc:$addr)>;
+def : ARMPat<(extloadi16 addrmodepc:$addr), (PICLDRH addrmodepc:$addr)>;
+
+// smul* and smla*
+def : ARMV5TEPat<(mul (sra (shl GPR:$a, (i32 16)), (i32 16)),
+                      (sra (shl GPR:$b, (i32 16)), (i32 16))),
+                 (SMULBB GPR:$a, GPR:$b)>;
+def : ARMV5TEPat<(mul sext_16_node:$a, sext_16_node:$b),
+                 (SMULBB GPR:$a, GPR:$b)>;
+def : ARMV5TEPat<(mul (sra (shl GPR:$a, (i32 16)), (i32 16)),
+                      (sra GPR:$b, (i32 16))),
+                 (SMULBT GPR:$a, GPR:$b)>;
+def : ARMV5TEPat<(mul sext_16_node:$a, (sra GPR:$b, (i32 16))),
+                 (SMULBT GPR:$a, GPR:$b)>;
+def : ARMV5TEPat<(mul (sra GPR:$a, (i32 16)),
+                      (sra (shl GPR:$b, (i32 16)), (i32 16))),
+                 (SMULTB GPR:$a, GPR:$b)>;
+def : ARMV5TEPat<(mul (sra GPR:$a, (i32 16)), sext_16_node:$b),
+                (SMULTB GPR:$a, GPR:$b)>;
+def : ARMV5TEPat<(sra (mul GPR:$a, (sra (shl GPR:$b, (i32 16)), (i32 16))),
+                      (i32 16)),
+                 (SMULWB GPR:$a, GPR:$b)>;
+def : ARMV5TEPat<(sra (mul GPR:$a, sext_16_node:$b), (i32 16)),
+                 (SMULWB GPR:$a, GPR:$b)>;
+
+def : ARMV5TEPat<(add GPR:$acc,
+                      (mul (sra (shl GPR:$a, (i32 16)), (i32 16)),
+                           (sra (shl GPR:$b, (i32 16)), (i32 16)))),
+                 (SMLABB GPR:$a, GPR:$b, GPR:$acc)>;
+def : ARMV5TEPat<(add GPR:$acc,
+                      (mul sext_16_node:$a, sext_16_node:$b)),
+                 (SMLABB GPR:$a, GPR:$b, GPR:$acc)>;
+def : ARMV5TEPat<(add GPR:$acc,
+                      (mul (sra (shl GPR:$a, (i32 16)), (i32 16)),
+                           (sra GPR:$b, (i32 16)))),
+                 (SMLABT GPR:$a, GPR:$b, GPR:$acc)>;
+def : ARMV5TEPat<(add GPR:$acc,
+                      (mul sext_16_node:$a, (sra GPR:$b, (i32 16)))),
+                 (SMLABT GPR:$a, GPR:$b, GPR:$acc)>;
+def : ARMV5TEPat<(add GPR:$acc,
+                      (mul (sra GPR:$a, (i32 16)),
+                           (sra (shl GPR:$b, (i32 16)), (i32 16)))),
+                 (SMLATB GPR:$a, GPR:$b, GPR:$acc)>;
+def : ARMV5TEPat<(add GPR:$acc,
+                      (mul (sra GPR:$a, (i32 16)), sext_16_node:$b)),
+                 (SMLATB GPR:$a, GPR:$b, GPR:$acc)>;
+def : ARMV5TEPat<(add GPR:$acc,
+                      (sra (mul GPR:$a, (sra (shl GPR:$b, (i32 16)), (i32 16))),
+                           (i32 16))),
+                 (SMLAWB GPR:$a, GPR:$b, GPR:$acc)>;
+def : ARMV5TEPat<(add GPR:$acc,
+                      (sra (mul GPR:$a, sext_16_node:$b), (i32 16))),
+                 (SMLAWB GPR:$a, GPR:$b, GPR:$acc)>;
+
+
+// Pre-v7 uses MCR for synchronization barriers.
+def : ARMPat<(ARMMemBarrierMCR GPR:$zero), (MCR 15, 0, GPR:$zero, 7, 10, 5)>,
+         Requires<[IsARM, HasV6]>;
+
+
+//===----------------------------------------------------------------------===//
+// Thumb Support
+//
+
+include "ARMInstrThumb.td"
+
+//===----------------------------------------------------------------------===//
+// Thumb2 Support
+//
+
+include "ARMInstrThumb2.td"
+
+//===----------------------------------------------------------------------===//
+// Floating Point Support
+//
+
+include "ARMInstrVFP.td"
+
+//===----------------------------------------------------------------------===//
+// Advanced SIMD (NEON) Support
+//
+
+include "ARMInstrNEON.td"
+

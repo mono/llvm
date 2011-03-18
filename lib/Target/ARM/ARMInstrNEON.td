@@ -4436,14 +4436,8 @@ def  VDUP8q   : VDUPQ<0b11101110, 0b00, "8", v16i8>;
 def  VDUP16q  : VDUPQ<0b11101010, 0b01, "16", v8i16>;
 def  VDUP32q  : VDUPQ<0b11101010, 0b00, "32", v4i32>;
 
-def  VDUPfd   : NVDup<0b11101000, 0b1011, 0b00, (outs DPR:$V), (ins GPR:$R),
-                      IIC_VMOVIS, "vdup", "32", "$V, $R",
-                      [(set DPR:$V, (v2f32 (NEONvdup
-                                              (f32 (bitconvert GPR:$R)))))]>;
-def  VDUPfq   : NVDup<0b11101010, 0b1011, 0b00, (outs QPR:$V), (ins GPR:$R),
-                      IIC_VMOVIS, "vdup", "32", "$V, $R",
-                      [(set QPR:$V, (v4f32 (NEONvdup
-                                              (f32 (bitconvert GPR:$R)))))]>;
+def : Pat<(v2f32 (NEONvdup (f32 (bitconvert GPR:$R)))), (VDUP32d GPR:$R)>;
+def : Pat<(v4f32 (NEONvdup (f32 (bitconvert GPR:$R)))), (VDUP32q GPR:$R)>;
 
 //   VDUP     : Vector Duplicate Lane (from scalar to all elements)
 
@@ -4471,9 +4465,6 @@ def VDUPLN16d : VDUPLND<{?,?,1,0}, "vdup", "16", v4i16> {
 def VDUPLN32d : VDUPLND<{?,1,0,0}, "vdup", "32", v2i32> {
   let Inst{19} = lane{0};
 }
-def VDUPLNfd  : VDUPLND<{?,1,0,0}, "vdup", "32", v2f32> {
-  let Inst{19} = lane{0};
-}
 def VDUPLN8q  : VDUPLNQ<{?,?,?,1}, "vdup", "8", v16i8, v8i8> {
   let Inst{19-17} = lane{2-0};
 }
@@ -4483,9 +4474,12 @@ def VDUPLN16q : VDUPLNQ<{?,?,1,0}, "vdup", "16", v8i16, v4i16> {
 def VDUPLN32q : VDUPLNQ<{?,1,0,0}, "vdup", "32", v4i32, v2i32> {
   let Inst{19} = lane{0};
 }
-def VDUPLNfq  : VDUPLNQ<{?,1,0,0}, "vdup", "32", v4f32, v2f32> {
-  let Inst{19} = lane{0};
-}
+
+def : Pat<(v2f32 (NEONvduplane (v2f32 DPR:$Vm), imm:$lane)),
+          (VDUPLN32d DPR:$Vm, imm:$lane)>;
+
+def : Pat<(v4f32 (NEONvduplane (v2f32 DPR:$Vm), imm:$lane)),
+          (VDUPLN32q DPR:$Vm, imm:$lane)>;
 
 def : Pat<(v16i8 (NEONvduplane (v16i8 QPR:$src), imm:$lane)),
           (v16i8 (VDUPLN8q (v8i8 (EXTRACT_SUBREG QPR:$src,
@@ -4500,7 +4494,7 @@ def : Pat<(v4i32 (NEONvduplane (v4i32 QPR:$src), imm:$lane)),
                                     (DSubReg_i32_reg imm:$lane))),
                             (SubReg_i32_lane imm:$lane)))>;
 def : Pat<(v4f32 (NEONvduplane (v4f32 QPR:$src), imm:$lane)),
-          (v4f32 (VDUPLNfq (v2f32 (EXTRACT_SUBREG QPR:$src,
+          (v4f32 (VDUPLN32q (v2f32 (EXTRACT_SUBREG QPR:$src,
                                    (DSubReg_i32_reg imm:$lane))),
                            (SubReg_i32_lane imm:$lane)))>;
 
@@ -4591,12 +4585,12 @@ class VREV64Q<bits<2> op19_18, string OpcodeStr, string Dt, ValueType Ty>
 def VREV64d8  : VREV64D<0b00, "vrev64", "8", v8i8>;
 def VREV64d16 : VREV64D<0b01, "vrev64", "16", v4i16>;
 def VREV64d32 : VREV64D<0b10, "vrev64", "32", v2i32>;
-def VREV64df  : VREV64D<0b10, "vrev64", "32", v2f32>;
+def : Pat<(v2f32 (NEONvrev64 (v2f32 DPR:$Vm))), (VREV64d32 DPR:$Vm)>;
 
 def VREV64q8  : VREV64Q<0b00, "vrev64", "8", v16i8>;
 def VREV64q16 : VREV64Q<0b01, "vrev64", "16", v8i16>;
 def VREV64q32 : VREV64Q<0b10, "vrev64", "32", v4i32>;
-def VREV64qf  : VREV64Q<0b10, "vrev64", "32", v4f32>;
+def : Pat<(v4f32 (NEONvrev64 (v4f32 QPR:$Vm))), (VREV64q32 QPR:$Vm)>;
 
 //   VREV32   : Vector Reverse elements within 32-bit words
 

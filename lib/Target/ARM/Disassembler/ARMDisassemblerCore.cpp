@@ -679,8 +679,8 @@ static bool DisassembleCoprocessor(MCInst &MI, unsigned Opcode, uint32_t insn,
 }
 
 // Branch Instructions.
-// BLr9: SignExtend(Imm24:'00', 32)
-// Bcc, BLr9_pred: SignExtend(Imm24:'00', 32) Pred0 Pred1
+// BL: SignExtend(Imm24:'00', 32)
+// Bcc, BL_pred: SignExtend(Imm24:'00', 32) Pred0 Pred1
 // SMC: ZeroExtend(imm4, 32)
 // SVC: ZeroExtend(Imm24, 32)
 //
@@ -760,7 +760,7 @@ static bool DisassembleBrFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     return true;
   }
 
-  assert((Opcode == ARM::Bcc || Opcode == ARM::BLr9 || Opcode == ARM::BLr9_pred
+  assert((Opcode == ARM::Bcc || Opcode == ARM::BL || Opcode == ARM::BL_pred
           || Opcode == ARM::SMC || Opcode == ARM::SVC) &&
          "Unexpected Opcode");
 
@@ -778,12 +778,6 @@ static bool DisassembleBrFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned Imm26 = slice(insn, 23, 0) << 2;
     //Imm32 = signextend<signed int, 26>(Imm26);
     Imm32 = SignExtend32<26>(Imm26);
-
-    // When executing an ARM instruction, PC reads as the address of the current
-    // instruction plus 8.  The assembler subtracts 8 from the difference
-    // between the branch instruction and the target address, disassembler has
-    // to add 8 to compensate.
-    Imm32 += 8;
   }
 
   MI.addOperand(MCOperand::CreateImm(Imm32));
@@ -793,7 +787,7 @@ static bool DisassembleBrFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
 }
 
 // Misc. Branch Instructions.
-// BLXr9, BXr9
+// BLX, BX
 // BX, BX_RET
 static bool DisassembleBrMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
@@ -810,8 +804,7 @@ static bool DisassembleBrMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     return true;
 
   // BLX and BX take one GPR reg.
-  if (Opcode == ARM::BLXr9 || Opcode == ARM::BLXr9_pred ||
-      Opcode == ARM::BLX || Opcode == ARM::BLX_pred ||
+  if (Opcode == ARM::BLX || Opcode == ARM::BLX_pred ||
       Opcode == ARM::BX) {
     assert(NumOps >= 1 && OpInfo[OpIdx].RegClass == ARM::GPRRegClassID &&
            "Reg operand expected");
@@ -1079,18 +1072,21 @@ static bool DisassembleLdStFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
   if (OpIdx + 1 >= NumOps)
     return false;
 
-  assert((OpInfo[OpIdx].RegClass == ARM::GPRRegClassID) &&
-         (OpInfo[OpIdx+1].RegClass < 0) &&
-         "Expect 1 reg operand followed by 1 imm operand");
-
   ARM_AM::AddrOpc AddrOpcode = getUBit(insn) ? ARM_AM::add : ARM_AM::sub;
   if (getIBit(insn) == 0) {
-    MI.addOperand(MCOperand::CreateReg(0));
+    // For pre- and post-indexed case, add a reg0 operand (Addressing Mode #2).
+    // Otherwise, skip the reg operand since for addrmode_imm12, Rn has already
+    // been populated.
+    if (isPrePost) {
+      MI.addOperand(MCOperand::CreateReg(0));
+      OpIdx += 1;
+    }
 
     // Disassemble the 12-bit immediate offset.
     unsigned Imm12 = slice(insn, 11, 0);
     unsigned Offset = ARM_AM::getAM2Opc(AddrOpcode, Imm12, ARM_AM::no_shift);
     MI.addOperand(MCOperand::CreateImm(Offset));
+    OpIdx += 1;
   } else {
     // Disassemble the offset reg (Rm), shift type, and immediate shift length.
     MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
@@ -1104,8 +1100,8 @@ static bool DisassembleLdStFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     getImmShiftSE(ShOp, ShImm);
     MI.addOperand(MCOperand::CreateImm(
                     ARM_AM::getAM2Opc(AddrOpcode, ShImm, ShOp)));
+    OpIdx += 2;
   }
-  OpIdx += 2;
 
   return true;
 }

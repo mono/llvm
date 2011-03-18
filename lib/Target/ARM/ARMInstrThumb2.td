@@ -61,40 +61,6 @@ def t2_so_imm_neg : Operand<i32>,
   return ARM_AM::getT2SOImmVal(-((uint32_t)N->getZExtValue())) != -1;
 }], t2_so_imm_neg_XFORM>;
 
-// Break t2_so_imm's up into two pieces.  This handles immediates with up to 16
-// bits set in them.  This uses t2_so_imm2part to match and t2_so_imm2part_[12]
-// to get the first/second pieces.
-def t2_so_imm2part : Operand<i32>,
-                  PatLeaf<(imm), [{
-      return ARM_AM::isT2SOImmTwoPartVal((unsigned)N->getZExtValue());
-    }]> {
-}
-
-def t2_so_imm2part_1 : SDNodeXForm<imm, [{
-  unsigned V = ARM_AM::getT2SOImmTwoPartFirst((unsigned)N->getZExtValue());
-  return CurDAG->getTargetConstant(V, MVT::i32);
-}]>;
-
-def t2_so_imm2part_2 : SDNodeXForm<imm, [{
-  unsigned V = ARM_AM::getT2SOImmTwoPartSecond((unsigned)N->getZExtValue());
-  return CurDAG->getTargetConstant(V, MVT::i32);
-}]>;
-
-def t2_so_neg_imm2part : Operand<i32>, PatLeaf<(imm), [{
-      return ARM_AM::isT2SOImmTwoPartVal(-(int)N->getZExtValue());
-    }]> {
-}
-
-def t2_so_neg_imm2part_1 : SDNodeXForm<imm, [{
-  unsigned V = ARM_AM::getT2SOImmTwoPartFirst(-(int)N->getZExtValue());
-  return CurDAG->getTargetConstant(V, MVT::i32);
-}]>;
-
-def t2_so_neg_imm2part_2 : SDNodeXForm<imm, [{
-  unsigned V = ARM_AM::getT2SOImmTwoPartSecond(-(int)N->getZExtValue());
-  return CurDAG->getTargetConstant(V, MVT::i32);
-}]>;
-
 /// imm1_31 predicate - True if the 32-bit immediate is in the range [1,31].
 def imm1_31 : PatLeaf<(i32 imm), [{
   return (int32_t)N->getZExtValue() >= 1 && (int32_t)N->getZExtValue() < 32;
@@ -128,6 +94,12 @@ def t2addrmode_imm12 : Operand<i32>,
   let MIOperandInfo = (ops GPR:$base, i32imm:$offsimm);
   let ParserMatchClass = MemMode5AsmOperand;
 }
+
+// t2ldrlabel  := imm12
+def t2ldrlabel : Operand<i32> {
+  let EncoderMethod = "getAddrModeImm12OpValue";
+}
+
 
 // ADR instruction labels.
 def t2adrlabel : Operand<i32> {
@@ -911,7 +883,7 @@ multiclass T2I_ld<bit signed, bits<2> opcod, string opc,
   }
 
   // FIXME: Is the pci variant actually needed?
-  def pci : T2Ipc <(outs GPR:$Rt), (ins i32imm:$addr), iii,
+  def pci : T2Ipc <(outs GPR:$Rt), (ins t2ldrlabel:$addr), iii,
                    opc, ".w\t$Rt, $addr",
                    [(set GPR:$Rt, (opnode (ARMWrapper tconstpool:$addr)))]> {
     let isReMaterializable = 1;

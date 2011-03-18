@@ -14,6 +14,7 @@
 
 #define DEBUG_TYPE "regalloc"
 #include "LiveIntervalUnion.h"
+#include "LiveRangeEdit.h"
 #include "RegAllocBase.h"
 #include "RenderMachineFunction.h"
 #include "Spiller.h"
@@ -288,6 +289,16 @@ void RegAllocBase::allocatePhysRegs() {
 
   // Continue assigning vregs one at a time to available physical registers.
   while (LiveInterval *VirtReg = dequeue()) {
+    // Unused registers can appear when the spiller coalesces snippets.
+    if (MRI->reg_nodbg_empty(VirtReg->reg)) {
+      DEBUG(dbgs() << "Dropping unused " << *VirtReg << '\n');
+      LIS->removeInterval(VirtReg->reg);
+      continue;
+    }
+
+    // Invalidate all interference queries, live ranges could have changed.
+    ++UserTag;
+
     // selectOrSplit requests the allocator to return an available physical
     // register if possible and populate a list of new live intervals that
     // result from splitting.
@@ -344,7 +355,8 @@ void RegAllocBase::spillReg(LiveInterval& VirtReg, unsigned PhysReg,
     unassign(SpilledVReg, PhysReg);
 
     // Spill the extracted interval.
-    spiller().spill(&SpilledVReg, SplitVRegs, PendingSpills);
+    LiveRangeEdit LRE(SpilledVReg, SplitVRegs, 0, &PendingSpills);
+    spiller().spill(LRE);
   }
   // After extracting segments, the query's results are invalid. But keep the
   // contents valid until we're done accessing pendingSpills.
@@ -469,9 +481,8 @@ unsigned RABasic::selectOrSplit(LiveInterval &VirtReg,
   }
   // No other spill candidates were found, so spill the current VirtReg.
   DEBUG(dbgs() << "spilling: " << VirtReg << '\n');
-  SmallVector<LiveInterval*, 1> pendingSpills;
-
-  spiller().spill(&VirtReg, SplitVRegs, pendingSpills);
+  LiveRangeEdit LRE(VirtReg, SplitVRegs);
+  spiller().spill(LRE);
 
   // The live virtual register requesting allocation was spilled, so tell
   // the caller not to allocate anything during this round.

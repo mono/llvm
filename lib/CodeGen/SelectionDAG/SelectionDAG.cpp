@@ -2482,6 +2482,9 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL,
            "Vector element count mismatch!");
     if (OpOpcode == ISD::SIGN_EXTEND || OpOpcode == ISD::ZERO_EXTEND)
       return getNode(OpOpcode, DL, VT, Operand.getNode()->getOperand(0));
+    else if (OpOpcode == ISD::UNDEF)
+      // sext(undef) = 0, because the top bits will all be the same.
+      return getConstant(0, VT);
     break;
   case ISD::ZERO_EXTEND:
     assert(VT.isInteger() && Operand.getValueType().isInteger() &&
@@ -2496,6 +2499,9 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL,
     if (OpOpcode == ISD::ZERO_EXTEND)   // (zext (zext x)) -> (zext x)
       return getNode(ISD::ZERO_EXTEND, DL, VT,
                      Operand.getNode()->getOperand(0));
+    else if (OpOpcode == ISD::UNDEF)
+      // zext(undef) = 0, because the top bits will be zero.
+      return getConstant(0, VT);
     break;
   case ISD::ANY_EXTEND:
     assert(VT.isInteger() && Operand.getValueType().isInteger() &&
@@ -2512,6 +2518,8 @@ SDValue SelectionDAG::getNode(unsigned Opcode, DebugLoc DL,
         OpOpcode == ISD::ANY_EXTEND)
       // (ext (zext x)) -> (zext x)  and  (ext (sext x)) -> (sext x)
       return getNode(OpOpcode, DL, VT, Operand.getNode()->getOperand(0));
+    else if (OpOpcode == ISD::UNDEF)
+      return getUNDEF(VT);
 
     // (ext (trunx x)) -> x
     if (OpOpcode == ISD::TRUNCATE) {
@@ -5904,7 +5912,7 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::UINT_TO_FP:  return "uint_to_fp";
   case ISD::FP_TO_SINT:  return "fp_to_sint";
   case ISD::FP_TO_UINT:  return "fp_to_uint";
-  case ISD::BITCAST:     return "bit_convert";
+  case ISD::BITCAST:     return "bitcast";
   case ISD::FP16_TO_FP32: return "fp16_to_fp32";
   case ISD::FP32_TO_FP16: return "fp32_to_fp16";
 

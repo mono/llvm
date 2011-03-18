@@ -91,9 +91,14 @@ public:
   bool isShifterOpProfitable(const SDValue &Shift,
                              ARM_AM::ShiftOpc ShOpcVal, unsigned ShAmt);
   bool SelectShifterOperandReg(SDValue N, SDValue &A,
-                               SDValue &B, SDValue &C);
+                               SDValue &B, SDValue &C,
+                               bool CheckProfitability = true);
   bool SelectShiftShifterOperandReg(SDValue N, SDValue &A,
-                                    SDValue &B, SDValue &C);
+                                    SDValue &B, SDValue &C) {
+    // Don't apply the profitability check
+    return SelectShifterOperandReg(N, A, B, C, false);
+  }
+
   bool SelectAddrModeImm12(SDValue N, SDValue &Base, SDValue &OffImm);
   bool SelectLdStSOReg(SDValue N, SDValue &Base, SDValue &Offset, SDValue &Opc);
 
@@ -373,7 +378,8 @@ bool ARMDAGToDAGISel::isShifterOpProfitable(const SDValue &Shift,
 bool ARMDAGToDAGISel::SelectShifterOperandReg(SDValue N,
                                               SDValue &BaseReg,
                                               SDValue &ShReg,
-                                              SDValue &Opc) {
+                                              SDValue &Opc,
+                                              bool CheckProfitability) {
   if (DisableShifterOp)
     return false;
 
@@ -390,32 +396,8 @@ bool ARMDAGToDAGISel::SelectShifterOperandReg(SDValue N,
     ShImmVal = RHS->getZExtValue() & 31;
   } else {
     ShReg = N.getOperand(1);
-    if (!isShifterOpProfitable(N, ShOpcVal, ShImmVal))
+    if (CheckProfitability && !isShifterOpProfitable(N, ShOpcVal, ShImmVal))
       return false;
-  }
-  Opc = CurDAG->getTargetConstant(ARM_AM::getSORegOpc(ShOpcVal, ShImmVal),
-                                  MVT::i32);
-  return true;
-}
-
-bool ARMDAGToDAGISel::SelectShiftShifterOperandReg(SDValue N,
-                                                   SDValue &BaseReg,
-                                                   SDValue &ShReg,
-                                                   SDValue &Opc) {
-  ARM_AM::ShiftOpc ShOpcVal = ARM_AM::getShiftOpcForNode(N);
-
-  // Don't match base register only case. That is matched to a separate
-  // lower complexity pattern with explicit register operand.
-  if (ShOpcVal == ARM_AM::no_shift) return false;
-
-  BaseReg = N.getOperand(0);
-  unsigned ShImmVal = 0;
-  // Do not check isShifterOpProfitable. This must return true.
-  if (ConstantSDNode *RHS = dyn_cast<ConstantSDNode>(N.getOperand(1))) {
-    ShReg = CurDAG->getRegister(0, MVT::i32);
-    ShImmVal = RHS->getZExtValue() & 31;
-  } else {
-    ShReg = N.getOperand(1);
   }
   Opc = CurDAG->getTargetConstant(ARM_AM::getSORegOpc(ShOpcVal, ShImmVal),
                                   MVT::i32);
@@ -437,7 +419,7 @@ bool ARMDAGToDAGISel::SelectAddrModeImm12(SDValue N,
       OffImm  = CurDAG->getTargetConstant(0, MVT::i32);
       return true;
     }
-    
+
     if (N.getOpcode() == ARMISD::Wrapper &&
         !(Subtarget->useMovt() &&
                      N.getOperand(0).getOpcode() == ISD::TargetGlobalAddress)) {
@@ -1138,7 +1120,7 @@ bool ARMDAGToDAGISel::SelectT2AddrModeImm12(SDValue N,
       OffImm  = CurDAG->getTargetConstant(0, MVT::i32);
       return true;
     }
-    
+
     if (N.getOpcode() == ARMISD::Wrapper &&
                !(Subtarget->useMovt() &&
                  N.getOperand(0).getOpcode() == ISD::TargetGlobalAddress)) {
@@ -1183,7 +1165,7 @@ bool ARMDAGToDAGISel::SelectT2AddrModeImm8(SDValue N,
   if (N.getOpcode() != ISD::ADD && N.getOpcode() != ISD::SUB &&
       !CurDAG->isBaseWithConstantOffset(N))
     return false;
-  
+
   if (ConstantSDNode *RHS = dyn_cast<ConstantSDNode>(N.getOperand(1))) {
     int RHSC = (int)RHS->getSExtValue();
     if (N.getOpcode() == ISD::SUB)
@@ -2168,7 +2150,7 @@ SDNode *ARMDAGToDAGISel::SelectCMOVOp(SDNode *N) {
   // Emits: (tMOVCCr:i32 GPR:i32:$false, GPR:i32:$true, (imm:i32):$cc)
   // Pattern complexity = 6  cost = 11  size = 0
   //
-  // Also FCPYScc and FCPYDcc.
+  // Also VMOVScc and VMOVDcc.
   SDValue Tmp2 = CurDAG->getTargetConstant(CCVal, MVT::i32);
   SDValue Ops[] = { FalseVal, TrueVal, Tmp2, CCR, InFlag };
   unsigned Opc = 0;
@@ -2840,6 +2822,35 @@ SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
       return SelectVTBL(N, true, 4, ARM::VTBX4Pseudo);
     }
     break;
+  }
+
+  case ARMISD::VTBL1: {
+    DebugLoc dl = N->getDebugLoc();
+    EVT VT = N->getValueType(0);
+    SmallVector<SDValue, 6> Ops;
+
+    Ops.push_back(N->getOperand(0));
+    Ops.push_back(N->getOperand(1));
+    Ops.push_back(getAL(CurDAG));                    // Predicate
+    Ops.push_back(CurDAG->getRegister(0, MVT::i32)); // Predicate Register
+    return CurDAG->getMachineNode(ARM::VTBL1, dl, VT, Ops.data(), Ops.size());
+  }
+  case ARMISD::VTBL2: {
+    DebugLoc dl = N->getDebugLoc();
+    EVT VT = N->getValueType(0);
+
+    // Form a REG_SEQUENCE to force register allocation.
+    SDValue V0 = N->getOperand(0);
+    SDValue V1 = N->getOperand(1);
+    SDValue RegSeq = SDValue(PairDRegs(MVT::v16i8, V0, V1), 0);
+
+    SmallVector<SDValue, 6> Ops;
+    Ops.push_back(RegSeq);
+    Ops.push_back(N->getOperand(2));
+    Ops.push_back(getAL(CurDAG));                    // Predicate
+    Ops.push_back(CurDAG->getRegister(0, MVT::i32)); // Predicate Register
+    return CurDAG->getMachineNode(ARM::VTBL2Pseudo, dl, VT,
+                                  Ops.data(), Ops.size());
   }
 
   case ISD::CONCAT_VECTORS:

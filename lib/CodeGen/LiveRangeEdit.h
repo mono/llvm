@@ -34,6 +34,14 @@ public:
   struct Delegate {
     /// Called immediately before erasing a dead machine instruction.
     virtual void LRE_WillEraseInstruction(MachineInstr *MI) {}
+
+    /// Called when a virtual register is no longer used. Return false to defer
+    /// its deletion from LiveIntervals.
+    virtual bool LRE_CanEraseVirtReg(unsigned) { return true; }
+
+    /// Called before shrinking the live range of a virtual register.
+    virtual void LRE_WillShrinkVirtReg(unsigned) {}
+
     virtual ~Delegate() {}
   };
 
@@ -57,6 +65,9 @@ private:
   /// live range trimmed or entirely removed.
   SmallPtrSet<const VNInfo*,4> rematted_;
 
+  /// createFrom - Create a new virtual register based on OldReg.
+  LiveInterval &createFrom(unsigned, LiveIntervals&, VirtRegMap &);
+
   /// scanRemattable - Identify the parent_ values that may rematerialize.
   void scanRemattable(LiveIntervals &lis,
                       const TargetInstrInfo &tii,
@@ -76,7 +87,7 @@ public:
   ///        rematerializing values because they are about to be removed.
   LiveRangeEdit(LiveInterval &parent,
                 SmallVectorImpl<LiveInterval*> &newRegs,
-                Delegate *delegate,
+                Delegate *delegate = 0,
                 const SmallVectorImpl<LiveInterval*> *uselessRegs = 0)
     : parent_(parent), newRegs_(newRegs),
       delegate_(delegate),
@@ -95,9 +106,18 @@ public:
   bool empty() const { return size() == 0; }
   LiveInterval *get(unsigned idx) const { return newRegs_[idx+firstNew_]; }
 
-  /// create - Create a new register with the same class and stack slot as
+  /// FIXME: Temporary accessors until we can get rid of
+  /// LiveIntervals::AddIntervalsForSpills
+  SmallVectorImpl<LiveInterval*> *getNewVRegs() { return &newRegs_; }
+  const SmallVectorImpl<LiveInterval*> *getUselessVRegs() {
+    return uselessRegs_;
+  }
+
+  /// create - Create a new register with the same class and original slot as
   /// parent.
-  LiveInterval &create(MachineRegisterInfo&, LiveIntervals&, VirtRegMap&);
+  LiveInterval &create(LiveIntervals &LIS, VirtRegMap &VRM) {
+    return createFrom(getReg(), LIS, VRM);
+  }
 
   /// anyRematerializable - Return true if any parent values may be
   /// rematerializable.
@@ -143,11 +163,15 @@ public:
     return rematted_.count(ParentVNI);
   }
 
+  /// eraseVirtReg - Notify the delegate that Reg is no longer in use, and try
+  /// to erase it from LIS.
+  void eraseVirtReg(unsigned Reg, LiveIntervals &LIS);
+
   /// eliminateDeadDefs - Try to delete machine instructions that are now dead
   /// (allDefsAreDead returns true). This may cause live intervals to be trimmed
   /// and further dead efs to be eliminated.
   void eliminateDeadDefs(SmallVectorImpl<MachineInstr*> &Dead,
-                         LiveIntervals&,
+                         LiveIntervals&, VirtRegMap&,
                          const TargetInstrInfo&);
 
 };

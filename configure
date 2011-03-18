@@ -5117,6 +5117,9 @@ _ACEOF
     LLVM_NATIVE_TARGET="LLVMInitialize${LLVM_NATIVE_ARCH}Target"
     LLVM_NATIVE_TARGETINFO="LLVMInitialize${LLVM_NATIVE_ARCH}TargetInfo"
     LLVM_NATIVE_ASMPRINTER="LLVMInitialize${LLVM_NATIVE_ARCH}AsmPrinter"
+    if test -f ${srcdir}/lib/Target/${LLVM_NATIVE_ARCH}/AsmParser/Makefile ; then
+      LLVM_NATIVE_ASMPARSER="LLVMInitialize${LLVM_NATIVE_ARCH}AsmParser"
+    fi
 
 cat >>confdefs.h <<_ACEOF
 #define LLVM_NATIVE_TARGET $LLVM_NATIVE_TARGET
@@ -5132,6 +5135,13 @@ cat >>confdefs.h <<_ACEOF
 #define LLVM_NATIVE_ASMPRINTER $LLVM_NATIVE_ASMPRINTER
 _ACEOF
 
+    if test -f ${srcdir}/lib/Target/${LLVM_NATIVE_ARCH}/AsmParser/Makefile ; then
+
+cat >>confdefs.h <<_ACEOF
+#define LLVM_NATIVE_ASMPARSER $LLVM_NATIVE_ASMPARSER
+_ACEOF
+
+    fi
   fi
 done
 
@@ -11561,7 +11571,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<EOF
-#line 11564 "configure"
+#line 11574 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H

@@ -161,6 +161,8 @@ public:
 
 private:
   void LRE_WillEraseInstruction(MachineInstr*);
+  bool LRE_CanEraseVirtReg(unsigned);
+  void LRE_WillShrinkVirtReg(unsigned);
 
   bool checkUncachedInterference(LiveInterval&, unsigned);
   LiveInterval *getSingleInterference(LiveInterval&, unsigned);
@@ -249,6 +251,26 @@ void RAGreedy::LRE_WillEraseInstruction(MachineInstr *MI) {
   VRM->RemoveMachineInstrFromMaps(MI);
 }
 
+bool RAGreedy::LRE_CanEraseVirtReg(unsigned VirtReg) {
+  if (unsigned PhysReg = VRM->getPhys(VirtReg)) {
+    unassign(LIS->getInterval(VirtReg), PhysReg);
+    return true;
+  }
+  // Unassigned virtreg is probably in the priority queue.
+  // RegAllocBase will erase it after dequeueing.
+  return false;
+}
+
+void RAGreedy::LRE_WillShrinkVirtReg(unsigned VirtReg) {
+  unsigned PhysReg = VRM->getPhys(VirtReg);
+  if (!PhysReg)
+    return;
+
+  // Register is assigned, put it back on the queue for reassignment.
+  LiveInterval &LI = LIS->getInterval(VirtReg);
+  unassign(LI, PhysReg);
+  enqueue(&LI);
+}
 
 void RAGreedy::releaseMemory() {
   SpillerInstance.reset(0);
@@ -636,7 +658,9 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
     IndexPair &IP = InterferenceRanges[i];
     DEBUG(dbgs() << "BB#" << BI.MBB->getNumber() << " -> EB#"
                  << Bundles->getBundle(BI.MBB->getNumber(), 1)
-                 << " intf [" << IP.first << ';' << IP.second << ')');
+                 << " [" << BI.Start << ';' << BI.LastSplitPoint << '-'
+                 << BI.Stop << ") intf [" << IP.first << ';' << IP.second
+                 << ')');
 
     // The interference interval should either be invalid or overlap MBB.
     assert((!IP.first.isValid() || IP.first < BI.Stop) && "Bad interference");
@@ -731,7 +755,8 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
     IndexPair &IP = InterferenceRanges[i];
 
     DEBUG(dbgs() << "EB#" << Bundles->getBundle(BI.MBB->getNumber(), 0)
-                 << " -> BB#" << BI.MBB->getNumber());
+                 << " -> BB#" << BI.MBB->getNumber() << " [" << BI.Start << ';'
+                 << BI.LastSplitPoint << '-' << BI.Stop << ')');
 
     // Check interference entering the block.
     if (!IP.first.isValid()) {
@@ -1253,8 +1278,11 @@ unsigned RAGreedy::selectOrSplit(LiveInterval &VirtReg,
 
   // Finally spill VirtReg itself.
   NamedRegionTimer T("Spiller", TimerGroupName, TimePassesIsEnabled);
-  SmallVector<LiveInterval*, 1> pendingSpills;
-  spiller().spill(&VirtReg, NewVRegs, pendingSpills);
+  LiveRangeEdit LRE(VirtReg, NewVRegs, this);
+  spiller().spill(LRE);
+
+  if (VerifyEnabled)
+    MF->verify(this, "After spilling");
 
   // The live virtual register requesting allocation was spilled, so tell
   // the caller not to allocate anything during this round.

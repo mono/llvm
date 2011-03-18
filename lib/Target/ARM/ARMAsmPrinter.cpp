@@ -966,6 +966,27 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   unsigned Opc = MI->getOpcode();
   switch (Opc) {
   default: break;
+  case ARM::B: {
+    // B is just a Bcc with an 'always' predicate.
+    MCInst TmpInst;
+    LowerARMMachineInstrToMCInst(MI, TmpInst, *this);
+    TmpInst.setOpcode(ARM::Bcc);
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  case ARM::LDMIA_RET: {
+    // LDMIA_RET is just a normal LDMIA_UPD instruction that targets PC and as
+    // such has additional code-gen properties and scheduling information.
+    // To emit it, we just construct as normal and set the opcode to LDMIA_UPD.
+    MCInst TmpInst;
+    LowerARMMachineInstrToMCInst(MI, TmpInst, *this);
+    TmpInst.setOpcode(ARM::LDMIA_UPD);
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
   case ARM::t2ADDrSPi:
   case ARM::t2ADDrSPi12:
   case ARM::t2SUBrSPi:
@@ -1032,6 +1053,26 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     TmpInst.addOperand(MCOperand::CreateReg(0));
     // Add 's' bit operand (always reg0 for this)
     TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  // Darwin call instructions are just normal call instructions with different
+  // clobber semantics (they clobber R9).
+  case ARM::BLr9:
+  case ARM::BLr9_pred:
+  case ARM::BLXr9:
+  case ARM::BLXr9_pred: {
+    unsigned newOpc;
+    switch (Opc) {
+    default: assert(0);
+    case ARM::BLr9:       newOpc = ARM::BL; break;
+    case ARM::BLr9_pred:  newOpc = ARM::BL_pred; break;
+    case ARM::BLXr9:      newOpc = ARM::BLX; break;
+    case ARM::BLXr9_pred: newOpc = ARM::BLX_pred; break;
+    }
+    MCInst TmpInst;
+    LowerARMMachineInstrToMCInst(MI, TmpInst, *this);
+    TmpInst.setOpcode(newOpc);
     OutStreamer.EmitInstruction(TmpInst);
     return;
   }
@@ -1687,6 +1728,49 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     }
     return;
   }
+  // Tail jump branches are really just branch instructions with additional
+  // code-gen attributes. Convert them to the cannonical form here.
+  case ARM::TAILJMPd:
+  case ARM::TAILJMPdND: {
+    MCInst TmpInst, TmpInst2;
+    // Lower the instruction as-is to get the operands properly converted.
+    LowerARMMachineInstrToMCInst(MI, TmpInst2, *this);
+    TmpInst.setOpcode(ARM::Bcc);
+    TmpInst.addOperand(TmpInst2.getOperand(0));
+    // Add predicate operands.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.AddComment("TAILCALL");
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  case ARM::tTAILJMPd:
+  case ARM::tTAILJMPdND: {
+    MCInst TmpInst, TmpInst2;
+    LowerARMMachineInstrToMCInst(MI, TmpInst2, *this);
+    TmpInst.setOpcode(ARM::tB);
+    TmpInst.addOperand(TmpInst2.getOperand(0));
+    OutStreamer.AddComment("TAILCALL");
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+  case ARM::TAILJMPrND:
+  case ARM::tTAILJMPrND:
+  case ARM::TAILJMPr:
+  case ARM::tTAILJMPr: {
+    unsigned newOpc = (Opc == ARM::TAILJMPr || Opc == ARM::TAILJMPrND)
+      ? ARM::BX : ARM::tBX;
+    MCInst TmpInst;
+    TmpInst.setOpcode(newOpc);
+    TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
+    // Predicate.
+    TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+    TmpInst.addOperand(MCOperand::CreateReg(0));
+    OutStreamer.AddComment("TAILCALL");
+    OutStreamer.EmitInstruction(TmpInst);
+    return;
+  }
+
   // These are the pseudos created to comply with stricter operand restrictions
   // on ARMv5. Lower them now to "normal" instructions, since all the
   // restrictions are already satisfied.

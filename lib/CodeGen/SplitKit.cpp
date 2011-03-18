@@ -274,10 +274,6 @@ VNInfo *SplitEditor::defValue(unsigned RegIdx,
   // Create a new value.
   VNInfo *VNI = LI->getNextValue(Idx, 0, LIS.getVNInfoAllocator());
 
-  // Preserve the PHIDef bit.
-  if (ParentVNI->isPHIDef() && Idx == ParentVNI->def)
-    VNI->setIsPHIDef(true);
-
   // Use insert for lookup, so we can add missing values with a second lookup.
   std::pair<ValueMap::iterator, bool> InsP =
     Values.insert(std::make_pair(std::make_pair(RegIdx, ParentVNI->id), VNI));
@@ -352,6 +348,7 @@ void SplitEditor::extendRange(unsigned RegIdx, SlotIndex Idx) {
   // Using LiveOutCache as a visited set, perform a BFS for all reaching defs.
   for (unsigned i = 0; i != LiveIn.size(); ++i) {
     MachineBasicBlock *MBB = LiveIn[i]->getBlock();
+    assert(!MBB->pred_empty() && "Value live-in to entry block?");
     for (MachineBasicBlock::pred_iterator PI = MBB->pred_begin(),
            PE = MBB->pred_end(); PI != PE; ++PI) {
        MachineBasicBlock *Pred = *PI;
@@ -542,11 +539,11 @@ void SplitEditor::openIntv() {
 
   // Create the complement as index 0.
   if (Edit->empty())
-    Edit->create(MRI, LIS, VRM);
+    Edit->create(LIS, VRM);
 
   // Create the open interval.
   OpenIdx = Edit->size();
-  Edit->create(MRI, LIS, VRM);
+  Edit->create(LIS, VRM);
 }
 
 SlotIndex SplitEditor::enterIntvBefore(SlotIndex Idx) {
@@ -761,7 +758,8 @@ void SplitEditor::rewriteAssigned(bool ExtendRanges) {
     }
 
     SlotIndex Idx = LIS.getInstructionIndex(MI);
-    Idx = MO.isUse() ? Idx.getUseIndex() : Idx.getDefIndex();
+    if (MO.isDef())
+      Idx = MO.isEarlyClobber() ? Idx.getUseIndex() : Idx.getDefIndex();
 
     // Rewrite to the mapped register at Idx.
     unsigned RegIdx = RegAssign.lookup(Idx);
@@ -769,31 +767,23 @@ void SplitEditor::rewriteAssigned(bool ExtendRanges) {
     DEBUG(dbgs() << "  rewr BB#" << MI->getParent()->getNumber() << '\t'
                  << Idx << ':' << RegIdx << '\t' << *MI);
 
-    // Extend liveness to Idx.
-    if (ExtendRanges)
-      extendRange(RegIdx, Idx);
-  }
-}
-
-/// rewriteSplit - Rewrite uses of Intvs[0] according to the ConEQ mapping.
-void SplitEditor::rewriteComponents(const SmallVectorImpl<LiveInterval*> &Intvs,
-                                    const ConnectedVNInfoEqClasses &ConEq) {
-  for (MachineRegisterInfo::reg_iterator RI = MRI.reg_begin(Intvs[0]->reg),
-       RE = MRI.reg_end(); RI != RE;) {
-    MachineOperand &MO = RI.getOperand();
-    MachineInstr *MI = MO.getParent();
-    ++RI;
-    if (MO.isUse() && MO.isUndef())
+    // Extend liveness to Idx if the instruction reads reg.
+    if (!ExtendRanges)
       continue;
-    // DBG_VALUE instructions should have been eliminated earlier.
-    SlotIndex Idx = LIS.getInstructionIndex(MI);
-    Idx = MO.isUse() ? Idx.getUseIndex() : Idx.getDefIndex();
-    DEBUG(dbgs() << "  rewr BB#" << MI->getParent()->getNumber() << '\t'
-                 << Idx << ':');
-    const VNInfo *VNI = Intvs[0]->getVNInfoAt(Idx);
-    assert(VNI && "Interval not live at use.");
-    MO.setReg(Intvs[ConEq.getEqClass(VNI)]->reg);
-    DEBUG(dbgs() << VNI->id << '\t' << *MI);
+
+    // Skip instructions that don't read Reg.
+    if (MO.isDef()) {
+      if (!MO.getSubReg() && !MO.isEarlyClobber())
+        continue;
+      // We may wan't to extend a live range for a partial redef, or for a use
+      // tied to an early clobber.
+      Idx = Idx.getPrevSlot();
+      if (!Edit->getParent().liveAt(Idx))
+        continue;
+    } else
+      Idx = Idx.getUseIndex();
+
+    extendRange(RegIdx, Idx);
   }
 }
 
@@ -828,7 +818,7 @@ void SplitEditor::deleteRematVictims() {
   if (Dead.empty())
     return;
 
-  Edit->eliminateDeadDefs(Dead, LIS, TII);
+  Edit->eliminateDeadDefs(Dead, LIS, VRM, TII);
 }
 
 void SplitEditor::finish() {
@@ -845,7 +835,10 @@ void SplitEditor::finish() {
     if (ParentVNI->isUnused())
       continue;
     unsigned RegIdx = RegAssign.lookup(ParentVNI->def);
-    defValue(RegIdx, ParentVNI, ParentVNI->def);
+    VNInfo *VNI = defValue(RegIdx, ParentVNI, ParentVNI->def);
+    VNI->setIsPHIDef(ParentVNI->isPHIDef());
+    VNI->setCopy(ParentVNI->getCopy());
+
     // Mark rematted values as complex everywhere to force liveness computation.
     // The new live ranges may be truncated.
     if (Edit->didRematerialize(ParentVNI))
@@ -889,9 +882,8 @@ void SplitEditor::finish() {
     SmallVector<LiveInterval*, 8> dups;
     dups.push_back(li);
     for (unsigned i = 1; i != NumComp; ++i)
-      dups.push_back(&Edit->create(MRI, LIS, VRM));
-    rewriteComponents(dups, ConEQ);
-    ConEQ.Distribute(&dups[0]);
+      dups.push_back(&Edit->create(LIS, VRM));
+    ConEQ.Distribute(&dups[0], MRI);
   }
 
   // Calculate spill weight and allocation hints for new intervals.

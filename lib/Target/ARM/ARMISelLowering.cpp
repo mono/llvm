@@ -852,6 +852,8 @@ const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
   case ARMISD::VZIP:          return "ARMISD::VZIP";
   case ARMISD::VUZP:          return "ARMISD::VUZP";
   case ARMISD::VTRN:          return "ARMISD::VTRN";
+  case ARMISD::VTBL1:         return "ARMISD::VTBL1";
+  case ARMISD::VTBL2:         return "ARMISD::VTBL2";
   case ARMISD::VMULLs:        return "ARMISD::VMULLs";
   case ARMISD::VMULLu:        return "ARMISD::VMULLu";
   case ARMISD::BUILD_VECTOR:  return "ARMISD::BUILD_VECTOR";
@@ -3549,6 +3551,13 @@ static bool isVREVMask(const SmallVectorImpl<int> &M, EVT VT,
   return true;
 }
 
+static bool isVTBLMask(const SmallVectorImpl<int> &M, EVT VT) {
+  // We can handle <8 x i8> vector shuffles. If the index in the mask is out of
+  // range, then 0 is placed into the resulting vector. So pretty much any mask
+  // of 8 elements can work here.
+  return VT == MVT::v8i8 && M.size() == 8;
+}
+
 static bool isVTRNMask(const SmallVectorImpl<int> &M, EVT VT,
                        unsigned &WhichResult) {
   unsigned EltSz = VT.getVectorElementType().getSizeInBits();
@@ -3988,6 +3997,7 @@ ARMTargetLowering::isShuffleMaskLegal(const SmallVectorImpl<int> &M,
           isVREVMask(M, VT, 32) ||
           isVREVMask(M, VT, 16) ||
           isVEXTMask(M, VT, ReverseVEXT, Imm) ||
+          isVTBLMask(M, VT) ||
           isVTRNMask(M, VT, WhichResult) ||
           isVUZPMask(M, VT, WhichResult) ||
           isVZIPMask(M, VT, WhichResult) ||
@@ -4063,6 +4073,29 @@ static SDValue GeneratePerfectShuffle(unsigned PFEntry, SDValue LHS,
     return DAG.getNode(ARMISD::VTRN, dl, DAG.getVTList(VT, VT),
                        OpLHS, OpRHS).getValue(OpNum-OP_VTRNL);
   }
+}
+
+static SDValue LowerVECTOR_SHUFFLEv8i8(SDValue Op,
+                                       SmallVectorImpl<int> &ShuffleMask,
+                                       SelectionDAG &DAG) {
+  // Check to see if we can use the VTBL instruction.
+  SDValue V1 = Op.getOperand(0);
+  SDValue V2 = Op.getOperand(1);
+  DebugLoc DL = Op.getDebugLoc();
+
+  SmallVector<SDValue, 8> VTBLMask;
+  for (SmallVectorImpl<int>::iterator
+         I = ShuffleMask.begin(), E = ShuffleMask.end(); I != E; ++I)
+    VTBLMask.push_back(DAG.getConstant(*I, MVT::i32));
+
+  if (V2.getNode()->getOpcode() == ISD::UNDEF)
+    return DAG.getNode(ARMISD::VTBL1, DL, MVT::v8i8, V1,
+                       DAG.getNode(ISD::BUILD_VECTOR, DL, MVT::v8i8,
+                                   &VTBLMask[0], 8));
+
+  return DAG.getNode(ARMISD::VTBL2, DL, MVT::v8i8, V1, V2, 
+                     DAG.getNode(ISD::BUILD_VECTOR, DL, MVT::v8i8,
+                                 &VTBLMask[0], 8));
 }
 
 static SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) {
@@ -4180,6 +4213,12 @@ static SDValue LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) {
     }
     SDValue Val = DAG.getNode(ARMISD::BUILD_VECTOR, dl, VecVT, &Ops[0],NumElts);
     return DAG.getNode(ISD::BITCAST, dl, VT, Val);
+  }
+
+  if (VT == MVT::v8i8) {
+    SDValue NewOp = LowerVECTOR_SHUFFLEv8i8(Op, ShuffleMask, DAG);
+    if (NewOp.getNode())
+      return NewOp;
   }
 
   return SDValue();
@@ -4544,7 +4583,7 @@ SDValue ARMTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::GlobalAddress:
     return Subtarget->isTargetDarwin() ? LowerGlobalAddressDarwin(Op, DAG) :
       LowerGlobalAddressELF(Op, DAG);
-  case ISD::GlobalTLSAddress:   return LowerGlobalTLSAddress(Op, DAG);
+  case ISD::GlobalTLSAddress: return LowerGlobalTLSAddress(Op, DAG);
   case ISD::SELECT:        return LowerSELECT(Op, DAG);
   case ISD::SELECT_CC:     return LowerSELECT_CC(Op, DAG);
   case ISD::BR_CC:         return LowerBR_CC(Op, DAG);
@@ -4565,7 +4604,7 @@ SDValue ARMTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::EH_SJLJ_DISPATCHSETUP: return LowerEH_SJLJ_DISPATCHSETUP(Op, DAG);
   case ISD::INTRINSIC_WO_CHAIN: return LowerINTRINSIC_WO_CHAIN(Op, DAG,
                                                                Subtarget);
-  case ISD::BITCAST:   return ExpandBITCAST(Op.getNode(), DAG);
+  case ISD::BITCAST:       return ExpandBITCAST(Op.getNode(), DAG);
   case ISD::SHL:
   case ISD::SRL:
   case ISD::SRA:           return LowerShift(Op.getNode(), DAG, Subtarget);

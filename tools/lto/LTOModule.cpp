@@ -91,32 +91,33 @@ LTOModule *LTOModule::makeLTOModule(const char *path,
     errMsg = ec.message();
     return NULL;
   }
-  return makeLTOModule(buffer.get(), errMsg);
+  return makeLTOModule(buffer.take(), errMsg);
 }
 
 LTOModule *LTOModule::makeLTOModule(int fd, const char *path,
-                                    off_t size,
+                                    size_t size,
+                                    std::string &errMsg) {
+  return makeLTOModule(fd, path, size, size, 0, errMsg);
+}
+
+LTOModule *LTOModule::makeLTOModule(int fd, const char *path,
+                                    size_t file_size,
+                                    size_t map_size,
+                                    off_t offset,
                                     std::string &errMsg) {
   OwningPtr<MemoryBuffer> buffer;
-  if (error_code ec = MemoryBuffer::getOpenFile(fd, path, buffer, size)) {
+  if (error_code ec = MemoryBuffer::getOpenFile(fd, path, buffer, file_size,
+                                                map_size, offset, false)) {
     errMsg = ec.message();
     return NULL;
   }
-  return makeLTOModule(buffer.get(), errMsg);
+  return makeLTOModule(buffer.take(), errMsg);
 }
 
-/// makeBuffer - Create a MemoryBuffer from a memory range.  MemoryBuffer
-/// requires the byte past end of the buffer to be a zero.  We might get lucky
-/// and already be that way, otherwise make a copy.  Also if next byte is on a
-/// different page, don't assume it is readable.
+/// makeBuffer - Create a MemoryBuffer from a memory range.
 MemoryBuffer *LTOModule::makeBuffer(const void *mem, size_t length) {
   const char *startPtr = (char*)mem;
-  const char *endPtr = startPtr+length;
-  if (((uintptr_t)endPtr & (sys::Process::GetPageSize()-1)) == 0 ||
-      *endPtr != 0)
-    return MemoryBuffer::getMemBufferCopy(StringRef(startPtr, length));
-
-  return MemoryBuffer::getMemBuffer(StringRef(startPtr, length));
+  return MemoryBuffer::getMemBuffer(StringRef(startPtr, length), "", false);
 }
 
 
@@ -125,7 +126,7 @@ LTOModule *LTOModule::makeLTOModule(const void *mem, size_t length,
   OwningPtr<MemoryBuffer> buffer(makeBuffer(mem, length));
   if (!buffer)
     return NULL;
-  return makeLTOModule(buffer.get(), errMsg);
+  return makeLTOModule(buffer.take(), errMsg);
 }
 
 LTOModule *LTOModule::makeLTOModule(MemoryBuffer *buffer,
@@ -138,9 +139,12 @@ LTOModule *LTOModule::makeLTOModule(MemoryBuffer *buffer,
   }
 
   // parse bitcode buffer
-  OwningPtr<Module> m(ParseBitcodeFile(buffer, getGlobalContext(), &errMsg));
-  if (!m)
+  OwningPtr<Module> m(getLazyBitcodeModule(buffer, getGlobalContext(),
+                                           &errMsg));
+  if (!m) {
+    delete buffer;
     return NULL;
+  }
 
   std::string Triple = m->getTargetTriple();
   if (Triple.empty())
@@ -177,16 +181,6 @@ void LTOModule::setTargetTriple(const char *triple) {
 void LTOModule::addDefinedFunctionSymbol(Function *f, Mangler &mangler) {
   // add to list of defined symbols
   addDefinedSymbol(f, mangler, true);
-
-  // add external symbols referenced by this function.
-  for (Function::iterator b = f->begin(); b != f->end(); ++b) {
-    for (BasicBlock::iterator i = b->begin(); i != b->end(); ++i) {
-      for (unsigned count = 0, total = i->getNumOperands();
-           count != total; ++count) {
-        findExternalRefs(i->getOperand(count), mangler);
-      }
-    }
-  }
 }
 
 // Get string that data pointer points to.
@@ -327,12 +321,6 @@ void LTOModule::addDefinedDataSymbol(GlobalValue *v, Mangler &mangler) {
       }
     }
   }
-
-  // add external symbols referenced by this data.
-  for (unsigned count = 0, total = v->getNumOperands();
-       count != total; ++count) {
-    findExternalRefs(v->getOperand(count), mangler);
-  }
 }
 
 
@@ -340,10 +328,6 @@ void LTOModule::addDefinedSymbol(GlobalValue *def, Mangler &mangler,
                                  bool isFunction) {
   // ignore all llvm.* symbols
   if (def->getName().startswith("llvm."))
-    return;
-
-  // ignore available_externally
-  if (def->hasAvailableExternallyLinkage())
     return;
 
   // string is owned by _defines
@@ -469,28 +453,6 @@ void LTOModule::addPotentialUndefinedSymbol(GlobalValue *decl,
   entry.setValue(info);
 }
 
-
-
-// Find external symbols referenced by VALUE. This is a recursive function.
-void LTOModule::findExternalRefs(Value *value, Mangler &mangler) {
-  if (GlobalValue *gv = dyn_cast<GlobalValue>(value)) {
-    if (!gv->hasExternalLinkage())
-      addPotentialUndefinedSymbol(gv, mangler);
-    // If this is a variable definition, do not recursively process
-    // initializer.  It might contain a reference to this variable
-    // and cause an infinite loop.  The initializer will be
-    // processed in addDefinedDataSymbol().
-    return;
-  }
-
-  // GlobalValue, even with InternalLinkage type, may have operands with
-  // ExternalLinkage type. Do not ignore these operands.
-  if (Constant *c = dyn_cast<Constant>(value)) {
-    // Handle ConstantExpr, ConstantStruct, ConstantArry etc.
-    for (unsigned i = 0, e = c->getNumOperands(); i != e; ++i)
-      findExternalRefs(c->getOperand(i), mangler);
-  }
-}
 
 namespace {
   class RecordStreamer : public MCStreamer {
@@ -679,6 +641,18 @@ bool LTOModule::addAsmGlobalSymbols(MCContext &Context) {
   return false;
 }
 
+static bool isDeclaration(const GlobalValue &V) {
+  if (V.hasAvailableExternallyLinkage())
+    return true;
+  if (V.isMaterializable())
+    return false;
+  return V.isDeclaration();
+}
+
+static bool isAliasToDeclaration(const GlobalAlias &V) {
+  return isDeclaration(*V.getAliasedGlobal());
+}
+
 bool LTOModule::ParseSymbols() {
   // Use mangler to add GlobalPrefix to names to match linker names.
   MCContext Context(*_target->getMCAsmInfo(), NULL);
@@ -686,7 +660,7 @@ bool LTOModule::ParseSymbols() {
 
   // add functions
   for (Module::iterator f = _module->begin(); f != _module->end(); ++f) {
-    if (f->isDeclaration())
+    if (isDeclaration(*f))
       addPotentialUndefinedSymbol(f, mangler);
     else
       addDefinedFunctionSymbol(f, mangler);
@@ -695,7 +669,7 @@ bool LTOModule::ParseSymbols() {
   // add data
   for (Module::global_iterator v = _module->global_begin(),
          e = _module->global_end(); v !=  e; ++v) {
-    if (v->isDeclaration())
+    if (isDeclaration(*v))
       addPotentialUndefinedSymbol(v, mangler);
     else
       addDefinedDataSymbol(v, mangler);
@@ -708,7 +682,7 @@ bool LTOModule::ParseSymbols() {
   // add aliases
   for (Module::alias_iterator i = _module->alias_begin(),
          e = _module->alias_end(); i != e; ++i) {
-    if (i->isDeclaration())
+    if (isAliasToDeclaration(*i))
       addPotentialUndefinedSymbol(i, mangler);
     else
       addDefinedDataSymbol(i, mangler);

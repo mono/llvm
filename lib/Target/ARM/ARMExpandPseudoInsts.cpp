@@ -708,6 +708,78 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
   switch (Opcode) {
     default:
       return false;
+    case ARM::VMOVScc:
+    case ARM::VMOVDcc: {
+      unsigned newOpc = Opcode == ARM::VMOVScc ? ARM::VMOVS : ARM::VMOVD;
+      BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(newOpc),
+              MI.getOperand(1).getReg())
+        .addReg(MI.getOperand(2).getReg(),
+                getKillRegState(MI.getOperand(2).isKill()))
+        .addImm(MI.getOperand(3).getImm()) // 'pred'
+        .addReg(MI.getOperand(4).getReg());
+
+      MI.eraseFromParent();
+      return true;
+    }
+    case ARM::MOVCCr: {
+      BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(ARM::MOVr),
+              MI.getOperand(1).getReg())
+        .addReg(MI.getOperand(2).getReg(),
+                getKillRegState(MI.getOperand(2).isKill()))
+        .addImm(MI.getOperand(3).getImm()) // 'pred'
+        .addReg(MI.getOperand(4).getReg())
+        .addReg(0); // 's' bit
+
+      MI.eraseFromParent();
+      return true;
+    }
+    case ARM::MOVCCs: {
+      BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(ARM::MOVs),
+              (MI.getOperand(1).getReg()))
+        .addReg(MI.getOperand(2).getReg(),
+                getKillRegState(MI.getOperand(2).isKill()))
+        .addReg(MI.getOperand(3).getReg(),
+                getKillRegState(MI.getOperand(3).isKill()))
+        .addImm(MI.getOperand(4).getImm())
+        .addImm(MI.getOperand(5).getImm()) // 'pred'
+        .addReg(MI.getOperand(6).getReg())
+        .addReg(0); // 's' bit
+
+      MI.eraseFromParent();
+      return true;
+    }
+    case ARM::MOVCCi16: {
+      BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(ARM::MOVi16),
+              MI.getOperand(1).getReg())
+        .addImm(MI.getOperand(2).getImm())
+        .addImm(MI.getOperand(3).getImm()) // 'pred'
+        .addReg(MI.getOperand(4).getReg());
+
+      MI.eraseFromParent();
+      return true;
+    }
+    case ARM::MOVCCi: {
+      BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(ARM::MOVi),
+              MI.getOperand(1).getReg())
+        .addImm(MI.getOperand(2).getImm())
+        .addImm(MI.getOperand(3).getImm()) // 'pred'
+        .addReg(MI.getOperand(4).getReg())
+        .addReg(0); // 's' bit
+
+      MI.eraseFromParent();
+      return true;
+    }
+    case ARM::MVNCCi: {
+      BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(ARM::MVNi),
+              MI.getOperand(1).getReg())
+        .addImm(MI.getOperand(2).getImm())
+        .addImm(MI.getOperand(3).getImm()) // 'pred'
+        .addReg(MI.getOperand(4).getReg())
+        .addReg(0); // 's' bit
+
+      MI.eraseFromParent();
+      return true;
+    }
     case ARM::Int_eh_sjlj_dispatchsetup: {
       MachineFunction &MF = *MI.getParent()->getParent();
       const ARMBaseInstrInfo *AII =
@@ -822,7 +894,7 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
       const MachineOperand &MO1 = MI.getOperand(1);
       const GlobalValue *GV = MO1.getGlobal();
       unsigned TF = MO1.getTargetFlags();
-      bool isARM = Opcode != ARM::t2MOV_ga_pcrel;
+      bool isARM = (Opcode != ARM::t2MOV_ga_pcrel && Opcode != ARM::t2MOV_ga_dyn);
       bool isPIC = (Opcode != ARM::MOV_ga_dyn && Opcode != ARM::t2MOV_ga_dyn);
       unsigned LO16Opc = isARM ? ARM::MOVi16_ga_pcrel : ARM::t2MOVi16_ga_pcrel;
       unsigned HI16Opc = isARM ? ARM::MOVTi16_ga_pcrel : ARM::t2MOVTi16_ga_pcrel;
@@ -959,14 +1031,16 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
     }
     case ARM::VDUPfqf:
     case ARM::VDUPfdf:{
-      unsigned NewOpc = Opcode == ARM::VDUPfqf ? ARM::VDUPLNfq : ARM::VDUPLNfd;
+      unsigned NewOpc = Opcode == ARM::VDUPfqf ? ARM::VDUPLN32q :
+        ARM::VDUPLN32d;
       MachineInstrBuilder MIB =
         BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(NewOpc));
       unsigned OpIdx = 0;
       unsigned SrcReg = MI.getOperand(1).getReg();
       unsigned Lane = getARMRegisterNumbering(SrcReg) & 1;
       unsigned DReg = TRI->getMatchingSuperReg(SrcReg,
-                                               Lane & 1 ? ARM::ssub_1 : ARM::ssub_0, &ARM::DPR_VFP2RegClass);
+                            Lane & 1 ? ARM::ssub_1 : ARM::ssub_0,
+                            &ARM::DPR_VFP2RegClass);
       // The lane is [0,1] for the containing DReg superregister.
       // Copy the dst/src register operands.
       MIB.addOperand(MI.getOperand(OpIdx++));

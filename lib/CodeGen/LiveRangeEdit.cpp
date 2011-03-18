@@ -22,16 +22,16 @@
 
 using namespace llvm;
 
-LiveInterval &LiveRangeEdit::create(MachineRegisterInfo &mri,
-                                    LiveIntervals &lis,
-                                    VirtRegMap &vrm) {
-  const TargetRegisterClass *RC = mri.getRegClass(getReg());
-  unsigned VReg = mri.createVirtualRegister(RC);
-  vrm.grow();
-  vrm.setIsSplitFromReg(VReg, vrm.getOriginal(getReg()));
-  LiveInterval &li = lis.getOrCreateInterval(VReg);
-  newRegs_.push_back(&li);
-  return li;
+LiveInterval &LiveRangeEdit::createFrom(unsigned OldReg,
+                                        LiveIntervals &LIS,
+                                        VirtRegMap &VRM) {
+  MachineRegisterInfo &MRI = VRM.getRegInfo();
+  unsigned VReg = MRI.createVirtualRegister(MRI.getRegClass(OldReg));
+  VRM.grow();
+  VRM.setIsSplitFromReg(VReg, VRM.getOriginal(OldReg));
+  LiveInterval &LI = LIS.getOrCreateInterval(VReg);
+  newRegs_.push_back(&LI);
+  return LI;
 }
 
 void LiveRangeEdit::scanRemattable(LiveIntervals &lis,
@@ -131,8 +131,13 @@ SlotIndex LiveRangeEdit::rematerializeAt(MachineBasicBlock &MBB,
   return lis.InsertMachineInstrInMaps(--MI).getDefIndex();
 }
 
+void LiveRangeEdit::eraseVirtReg(unsigned Reg, LiveIntervals &LIS) {
+  if (delegate_ && delegate_->LRE_CanEraseVirtReg(Reg))
+    LIS.removeInterval(Reg);
+}
+
 void LiveRangeEdit::eliminateDeadDefs(SmallVectorImpl<MachineInstr*> &Dead,
-                                      LiveIntervals &LIS,
+                                      LiveIntervals &LIS, VirtRegMap &VRM,
                                       const TargetInstrInfo &TII) {
   SetVector<LiveInterval*,
             SmallVector<LiveInterval*, 8>,
@@ -143,17 +148,21 @@ void LiveRangeEdit::eliminateDeadDefs(SmallVectorImpl<MachineInstr*> &Dead,
     while (!Dead.empty()) {
       MachineInstr *MI = Dead.pop_back_val();
       assert(MI->allDefsAreDead() && "Def isn't really dead");
+      SlotIndex Idx = LIS.getInstructionIndex(MI).getDefIndex();
 
       // Never delete inline asm.
-      if (MI->isInlineAsm())
+      if (MI->isInlineAsm()) {
+        DEBUG(dbgs() << "Won't delete: " << Idx << '\t' << *MI);
         continue;
+      }
 
       // Use the same criteria as DeadMachineInstructionElim.
       bool SawStore = false;
-      if (!MI->isSafeToMove(&TII, 0, SawStore))
+      if (!MI->isSafeToMove(&TII, 0, SawStore)) {
+        DEBUG(dbgs() << "Can't delete: " << Idx << '\t' << *MI);
         continue;
+      }
 
-      SlotIndex Idx = LIS.getInstructionIndex(MI).getDefIndex();
       DEBUG(dbgs() << "Deleting dead def " << Idx << '\t' << *MI);
 
       // Check for live intervals that may shrink
@@ -165,13 +174,21 @@ void LiveRangeEdit::eliminateDeadDefs(SmallVectorImpl<MachineInstr*> &Dead,
         if (!TargetRegisterInfo::isVirtualRegister(Reg))
           continue;
         LiveInterval &LI = LIS.getInterval(Reg);
-        // Remove defined value.
-        if (MOI->isDef())
-          if (VNInfo *VNI = LI.getVNInfoAt(Idx))
-            LI.removeValNo(VNI);
+
         // Shrink read registers.
         if (MI->readsVirtualRegister(Reg))
           ToShrink.insert(&LI);
+
+        // Remove defined value.
+        if (MOI->isDef()) {
+          if (VNInfo *VNI = LI.getVNInfoAt(Idx)) {
+            LI.removeValNo(VNI);
+            if (LI.empty()) {
+              ToShrink.remove(&LI);
+              eraseVirtReg(Reg, LIS);
+            }
+          }
+        }
       }
 
       if (delegate_)
@@ -184,8 +201,24 @@ void LiveRangeEdit::eliminateDeadDefs(SmallVectorImpl<MachineInstr*> &Dead,
       break;
 
     // Shrink just one live interval. Then delete new dead defs.
-    LIS.shrinkToUses(ToShrink.back(), &Dead);
+    LiveInterval *LI = ToShrink.back();
     ToShrink.pop_back();
+    if (delegate_)
+      delegate_->LRE_WillShrinkVirtReg(LI->reg);
+    if (!LIS.shrinkToUses(LI, &Dead))
+      continue;
+
+    // LI may have been separated, create new intervals.
+    LI->RenumberValues(LIS);
+    ConnectedVNInfoEqClasses ConEQ(LIS);
+    unsigned NumComp = ConEQ.Classify(LI);
+    if (NumComp <= 1)
+      continue;
+    DEBUG(dbgs() << NumComp << " components: " << *LI << '\n');
+    SmallVector<LiveInterval*, 8> Dups(1, LI);
+    for (unsigned i = 1; i != NumComp; ++i)
+      Dups.push_back(&createFrom(LI->reg, LIS, VRM));
+    ConEQ.Distribute(&Dups[0], VRM.getRegInfo());
   }
 }
 

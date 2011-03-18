@@ -62,6 +62,7 @@ public:
                        const char *Modifier = 0);
   void printParamOperand(const MachineInstr *MI, int opNum, raw_ostream &OS,
                          const char *Modifier = 0);
+  void printPredicateOperand(const MachineInstr *MI, raw_ostream &O);
 
   // autogen'd.
   void printInstruction(const MachineInstr *MI, raw_ostream &OS);
@@ -87,17 +88,6 @@ static const char *getRegisterTypeName(unsigned RegNo) {
 #undef TEST_REGCLS
 
   llvm_unreachable("Not in any register class!");
-  return NULL;
-}
-
-static const char *getInstructionTypeName(const MachineInstr *MI) {
-  for (int i = 0, e = MI->getNumOperands(); i != e; ++i) {
-    const MachineOperand &MO = MI->getOperand(i);
-    if (MO.getType() == MachineOperand::MO_Register)
-      return getRegisterTypeName(MO.getReg());
-  }
-
-  llvm_unreachable("No reg operand found in instruction!");
   return NULL;
 }
 
@@ -210,16 +200,15 @@ void PTXAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   std::string str;
   str.reserve(64);
 
-  // Write instruction to str
   raw_string_ostream OS(str);
+
+  // Emit predicate
+  printPredicateOperand(MI, OS);
+
+  // Write instruction to str
   printInstruction(MI, OS);
   OS << ';';
   OS.flush();
-
-  // Replace "%type" if found
-  size_t pos;
-  if ((pos = str.find("%type")) != std::string::npos)
-    str.replace(pos, /*strlen("%type")==*/5, getInstructionTypeName(MI));
 
   StringRef strref = StringRef(str);
   OutStreamer.EmitRawText(strref);
@@ -238,6 +227,9 @@ void PTXAsmPrinter::printOperand(const MachineInstr *MI, int opNum,
       break;
     case MachineOperand::MO_Immediate:
       OS << (int) MO.getImm();
+      break;
+    case MachineOperand::MO_MachineBasicBlock:
+      OS << *MO.getMBB()->getSymbol();
       break;
     case MachineOperand::MO_Register:
       OS << getRegisterName(MO.getReg());
@@ -311,13 +303,52 @@ void PTXAsmPrinter::EmitVariableDeclaration(const GlobalVariable *gv) {
     decl += " ";
   }
 
-  decl += getTypeName(gv->getType());
-  decl += " ";
 
-  decl += gvsym->getName();
+  if (PointerType::classof(gv->getType())) {
+    const PointerType* pointerTy = dyn_cast<const PointerType>(gv->getType());
+    const Type* elementTy = pointerTy->getElementType();
 
-  if (ArrayType::classof(gv->getType()) || PointerType::classof(gv->getType()))
-    decl += "[]";
+    assert(elementTy->isArrayTy() && "Only pointers to arrays are supported");
+
+    const ArrayType* arrayTy = dyn_cast<const ArrayType>(elementTy);
+    elementTy = arrayTy->getElementType();
+
+    unsigned numElements = arrayTy->getNumElements();
+
+    while (elementTy->isArrayTy()) {
+
+      arrayTy = dyn_cast<const ArrayType>(elementTy);
+      elementTy = arrayTy->getElementType();
+
+      numElements *= arrayTy->getNumElements();
+    }
+
+    // FIXME: isPrimitiveType() == false for i16?
+    assert(elementTy->isSingleValueType() &&
+           "Non-primitive types are not handled");
+
+    // Compute the size of the array, in bytes.
+    uint64_t arraySize = (elementTy->getPrimitiveSizeInBits() >> 3)
+                       * numElements;
+
+    decl += ".b8 ";
+    decl += gvsym->getName();
+    decl += "[";
+    decl += utostr(arraySize);
+    decl += "]";
+  }
+  else {
+    // Note: this is currently the fall-through case and most likely generates
+    //       incorrect code.
+    decl += getTypeName(gv->getType());
+    decl += " ";
+
+    decl += gvsym->getName();
+
+    if (ArrayType::classof(gv->getType()) ||
+        PointerType::classof(gv->getType()))
+      decl += "[]";
+  }
 
   decl += ";";
 
@@ -360,9 +391,8 @@ void PTXAsmPrinter::EmitFunctionDeclaration() {
     decl += " (";
     if (isKernel) {
       unsigned cnt = 0;
-      //for (int i = 0, e = MFI->getNumArg(); i != e; ++i) {
-      for(PTXMachineFunctionInfo::reg_reverse_iterator
-          i = MFI->argRegReverseBegin(), e = MFI->argRegReverseEnd(), b = i;
+      for(PTXMachineFunctionInfo::reg_iterator
+          i = MFI->argRegBegin(), e = MFI->argRegEnd(), b = i;
           i != e; ++i) {
         reg = *i;
         assert(reg != PTX::NoRegister && "Not a valid register!");
@@ -375,8 +405,8 @@ void PTXAsmPrinter::EmitFunctionDeclaration() {
         decl += utostr(++cnt);
       }
     } else {
-      for (PTXMachineFunctionInfo::reg_reverse_iterator
-           i = MFI->argRegReverseBegin(), e = MFI->argRegReverseEnd(), b = i;
+      for (PTXMachineFunctionInfo::reg_iterator
+           i = MFI->argRegBegin(), e = MFI->argRegEnd(), b = i;
            i != e; ++i) {
         reg = *i;
         assert(reg != PTX::NoRegister && "Not a valid register!");
@@ -392,6 +422,25 @@ void PTXAsmPrinter::EmitFunctionDeclaration() {
   }
 
   OutStreamer.EmitRawText(Twine(decl));
+}
+
+void PTXAsmPrinter::
+printPredicateOperand(const MachineInstr *MI, raw_ostream &O) {
+  int i = MI->findFirstPredOperandIdx();
+  if (i == -1)
+    llvm_unreachable("missing predicate operand");
+
+  unsigned reg = MI->getOperand(i).getReg();
+  int predOp = MI->getOperand(i+1).getImm();
+
+  DEBUG(dbgs() << "predicate: (" << reg << ", " << predOp << ")\n");
+
+  if (reg != PTX::NoRegister) {
+    O << '@';
+    if (predOp == PTX::PRED_NEGATE)
+      O << '!';
+    O << getRegisterName(reg);
+  }
 }
 
 #include "PTXGenAsmWriter.inc"
