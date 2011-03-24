@@ -381,11 +381,17 @@ def rot_imm : Operand<i32>, PatLeaf<(i32 imm), [{
   let EncoderMethod = "getRotImmOpValue";
 }
 
+def ShifterAsmOperand : AsmOperandClass {
+  let Name = "Shifter";
+  let SuperClasses = [];
+}
+
 // shift_imm: An integer that encodes a shift amount and the type of shift
 // (currently either asr or lsl) using the same encoding used for the
 // immediates in so_reg operands.
 def shift_imm : Operand<i32> {
   let PrintMethod = "printShiftImmOperand";
+  let ParserMatchClass = ShifterAsmOperand;
 }
 
 // shifter_operand operands: so_reg and so_imm.
@@ -394,14 +400,14 @@ def so_reg : Operand<i32>,    // reg reg imm
                             [shl,srl,sra,rotr]> {
   let EncoderMethod = "getSORegOpValue";
   let PrintMethod = "printSORegOperand";
-  let MIOperandInfo = (ops GPR, GPR, i32imm);
+  let MIOperandInfo = (ops GPR, GPR, shift_imm);
 }
 def shift_so_reg : Operand<i32>,    // reg reg imm
                    ComplexPattern<i32, 3, "SelectShiftShifterOperandReg",
                                   [shl,srl,sra,rotr]> {
   let EncoderMethod = "getSORegOpValue";
   let PrintMethod = "printSORegOperand";
-  let MIOperandInfo = (ops GPR, GPR, i32imm);
+  let MIOperandInfo = (ops GPR, GPR, shift_imm);
 }
 
 // so_imm - Match a 32-bit shifter_operand immediate operand, which is an
@@ -1694,13 +1700,13 @@ defm LDRD :  AI3_ldridx<0b1101, 0, "ldrd", IIC_iLoad_d_ru>;
 // LDRT, LDRBT, LDRSBT, LDRHT, LDRSHT are for disassembly only.
 let mayLoad = 1, neverHasSideEffects = 1 in {
 def LDRT : AI2ldstidx<1, 0, 0, (outs GPR:$dst, GPR:$base_wb),
-                   (ins GPR:$base, am2offset:$offset), IndexModeNone,
+                   (ins GPR:$base, am2offset:$offset), IndexModePost,
                    LdFrm, IIC_iLoad_ru,
                    "ldrt", "\t$dst, [$base], $offset", "$base = $base_wb", []> {
   let Inst{21} = 1; // overwrite
 }
 def LDRBT : AI2ldstidx<1, 1, 0, (outs GPR:$dst, GPR:$base_wb),
-                  (ins GPR:$base, am2offset:$offset), IndexModeNone,
+                  (ins GPR:$base, am2offset:$offset), IndexModePost,
                   LdFrm, IIC_iLoad_bh_ru,
                   "ldrbt", "\t$dst, [$base], $offset", "$base = $base_wb", []> {
   let Inst{21} = 1; // overwrite
@@ -1799,7 +1805,7 @@ def STRD_POST: AI3stdpo<(outs GPR:$base_wb),
 
 def STRT : AI2stridx<0, 0, (outs GPR:$Rn_wb),
                     (ins GPR:$Rt, GPR:$Rn,am2offset:$offset),
-                    IndexModeNone, StFrm, IIC_iStore_ru,
+                    IndexModePost, StFrm, IIC_iStore_ru,
                     "strt", "\t$Rt, [$Rn], $offset", "$Rn = $Rn_wb",
                     [/* For disassembly only; pattern left blank */]> {
   let Inst{21} = 1; // overwrite
@@ -1807,7 +1813,7 @@ def STRT : AI2stridx<0, 0, (outs GPR:$Rn_wb),
 
 def STRBT : AI2stridx<1, 0, (outs GPR:$Rn_wb),
                      (ins GPR:$Rt, GPR:$Rn, am2offset:$offset),
-                     IndexModeNone, StFrm, IIC_iStore_bh_ru,
+                     IndexModePost, StFrm, IIC_iStore_bh_ru,
                      "strbt", "\t$Rt, [$Rn], $offset", "$Rn = $Rn_wb",
                      [/* For disassembly only; pattern left blank */]> {
   let Inst{21} = 1; // overwrite
@@ -2976,9 +2982,17 @@ def REVSH : AMiscA1I<0b01101111, 0b1011, (outs GPR:$Rd), (ins GPR:$Rm),
                IIC_iUNAr, "revsh", "\t$Rd, $Rm",
                [(set GPR:$Rd,
                   (sext_inreg
-                    (or (srl (and GPR:$Rm, 0xFF00), (i32 8)),
+                    (or (srl GPR:$Rm, (i32 8)),
                         (shl GPR:$Rm, (i32 8))), i16))]>,
                Requires<[IsARM, HasV6]>;
+
+def : ARMV6Pat<(sext_inreg (or (srl (and GPR:$Rm, 0xFF00), (i32 8)),
+                               (shl GPR:$Rm, (i32 8))), i16),
+               (REVSH GPR:$Rm)>;
+
+// Need the AddedComplexity or else MOVs + REV would be chosen.
+let AddedComplexity = 5 in
+def : ARMV6Pat<(sra (bswap GPR:$Rm), (i32 16)), (REVSH GPR:$Rm)>;
 
 def lsl_shift_imm : SDNodeXForm<imm, [{
   unsigned Sh = ARM_AM::getSORegOpc(ARM_AM::lsl, N->getZExtValue());
@@ -3475,10 +3489,9 @@ defm STC2 : LdStCop<0b1111,    0, "stc2">;
 // Move between coprocessor and ARM core register -- for disassembly only
 //
 
-class MovRCopro<string opc, bit direction>
-  : ABI<0b1110, (outs), (ins p_imm:$cop, i32imm:$opc1,
-        GPR:$Rt, c_imm:$CRn, c_imm:$CRm, i32imm:$opc2),
-        NoItinerary, opc, "\t$cop, $opc1, $Rt, $CRn, $CRm, $opc2",
+class MovRCopro<string opc, bit direction, dag oops, dag iops>
+  : ABI<0b1110, oops, iops, NoItinerary, opc,
+        "\t$cop, $opc1, $Rt, $CRn, $CRm, $opc2",
         [/* For disassembly only; pattern left blank */]> {
   let Inst{20} = direction;
   let Inst{4} = 1;
@@ -3498,13 +3511,17 @@ class MovRCopro<string opc, bit direction>
   let Inst{19-16} = CRn;
 }
 
-def MCR : MovRCopro<"mcr", 0 /* from ARM core register to coprocessor */>;
-def MRC : MovRCopro<"mrc", 1 /* from coprocessor to ARM core register */>;
+def MCR : MovRCopro<"mcr", 0 /* from ARM core register to coprocessor */,
+                    (outs), (ins p_imm:$cop, i32imm:$opc1,
+                                 GPR:$Rt, c_imm:$CRn, c_imm:$CRm,
+                                 i32imm:$opc2)>;
+def MRC : MovRCopro<"mrc", 1 /* from coprocessor to ARM core register */,
+                    (outs GPR:$Rt), (ins p_imm:$cop, i32imm:$opc1,
+                                         c_imm:$CRn, c_imm:$CRm, i32imm:$opc2)>;
 
-class MovRCopro2<string opc, bit direction>
-  : ABXI<0b1110, (outs), (ins p_imm:$cop, i32imm:$opc1,
-         GPR:$Rt, c_imm:$CRn, c_imm:$CRm, i32imm:$opc2),
-         NoItinerary, !strconcat(opc, "\t$cop, $opc1, $Rt, $CRn, $CRm, $opc2"),
+class MovRCopro2<string opc, bit direction, dag oops, dag iops>
+  : ABXI<0b1110, oops, iops, NoItinerary,
+         !strconcat(opc, "\t$cop, $opc1, $Rt, $CRn, $CRm, $opc2"),
          [/* For disassembly only; pattern left blank */]> {
   let Inst{31-28} = 0b1111;
   let Inst{20} = direction;
@@ -3525,8 +3542,14 @@ class MovRCopro2<string opc, bit direction>
   let Inst{19-16} = CRn;
 }
 
-def MCR2 : MovRCopro2<"mcr2", 0 /* from ARM core register to coprocessor */>;
-def MRC2 : MovRCopro2<"mrc2", 1 /* from coprocessor to ARM core register */>;
+def MCR2 : MovRCopro2<"mcr2", 0 /* from ARM core register to coprocessor */,
+                      (outs), (ins p_imm:$cop, i32imm:$opc1,
+                                   GPR:$Rt, c_imm:$CRn, c_imm:$CRm,
+                                   i32imm:$opc2)>;
+def MRC2 : MovRCopro2<"mrc2", 1 /* from coprocessor to ARM core register */,
+                      (outs GPR:$Rt), (ins p_imm:$cop, i32imm:$opc1,
+                                           c_imm:$CRn, c_imm:$CRm,
+                                           i32imm:$opc2)>;
 
 class MovRRCopro<string opc, bit direction>
   : ABI<0b1100, (outs), (ins p_imm:$cop, i32imm:$opc1,

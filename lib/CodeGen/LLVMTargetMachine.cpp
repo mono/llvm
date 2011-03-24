@@ -133,7 +133,7 @@ bool LLVMTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
   default: return true;
   case CGFT_AssemblyFile: {
     MCInstPrinter *InstPrinter =
-      getTarget().createMCInstPrinter(MAI.getAssemblerDialect(), MAI);
+      getTarget().createMCInstPrinter(*this, MAI.getAssemblerDialect(), MAI);
 
     // Create a code emitter if asked to show the encoding.
     MCCodeEmitter *MCE = 0;
@@ -224,11 +224,37 @@ bool LLVMTargetMachine::addPassesToEmitMachineCode(PassManagerBase &PM,
 ///
 bool LLVMTargetMachine::addPassesToEmitMC(PassManagerBase &PM,
                                           MCContext *&Ctx,
+                                          raw_ostream &Out,
                                           CodeGenOpt::Level OptLevel,
                                           bool DisableVerify) {
   // Add common CodeGen passes.
   if (addCommonCodeGenPasses(PM, OptLevel, DisableVerify, Ctx))
     return true;
+
+  // Create the code emitter for the target if it exists.  If not, .o file
+  // emission fails.
+  MCCodeEmitter *MCE = getTarget().createCodeEmitter(*this, *Ctx);
+  TargetAsmBackend *TAB = getTarget().createAsmBackend(TargetTriple);
+  if (MCE == 0 || TAB == 0)
+    return true;
+
+  OwningPtr<MCStreamer> AsmStreamer;
+  AsmStreamer.reset(getTarget().createObjectStreamer(TargetTriple, *Ctx,
+                                                     *TAB, Out, MCE,
+                                                     hasMCRelaxAll(),
+                                                     hasMCNoExecStack()));
+  AsmStreamer.get()->InitSections();
+
+  // Create the AsmPrinter, which takes ownership of AsmStreamer if successful.
+  FunctionPass *Printer = getTarget().createAsmPrinter(*this, *AsmStreamer);
+  if (Printer == 0)
+    return true;
+
+  // If successful, createAsmPrinter took ownership of AsmStreamer.
+  AsmStreamer.take();
+
+  PM.add(Printer);
+
   // Make sure the code model is set.
   setCodeModelForJIT();
 

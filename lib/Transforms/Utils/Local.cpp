@@ -211,8 +211,18 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB) {
 bool llvm::isInstructionTriviallyDead(Instruction *I) {
   if (!I->use_empty() || isa<TerminatorInst>(I)) return false;
 
-  // We don't want debug info removed by anything this general.
-  if (isa<DbgInfoIntrinsic>(I)) return false;
+  // We don't want debug info removed by anything this general, unless
+  // debug info is empty.
+  if (DbgDeclareInst *DDI = dyn_cast<DbgDeclareInst>(I)) {
+    if (DDI->getAddress()) 
+      return false;
+    return true;
+  } 
+  if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(I)) {
+    if (DVI->getValue())
+      return false;
+    return true;
+  }
 
   if (!I->mayHaveSideEffects()) return true;
 
@@ -783,6 +793,28 @@ bool llvm::ConvertDebugDeclareToDebugValue(DbgDeclareInst *DDI,
   return true;
 }
 
+/// Inserts a llvm.dbg.value instrinsic before the stores to an alloca'd value
+/// that has an associated llvm.dbg.decl intrinsic.
+bool llvm::ConvertDebugDeclareToDebugValue(DbgDeclareInst *DDI,
+                                           LoadInst *LI, DIBuilder &Builder) {
+  DIVariable DIVar(DDI->getVariable());
+  if (!DIVar.Verify())
+    return false;
+
+  Instruction *DbgVal = 
+    Builder.insertDbgValueIntrinsic(LI->getOperand(0), 0,
+                                    DIVar, LI);
+  
+  // Propagate any debug metadata from the store onto the dbg.value.
+  DebugLoc LIDL = LI->getDebugLoc();
+  if (!LIDL.isUnknown())
+    DbgVal->setDebugLoc(LIDL);
+  // Otherwise propagate debug metadata from dbg.declare.
+  else
+    DbgVal->setDebugLoc(DDI->getDebugLoc());
+  return true;
+}
+
 /// LowerDbgDeclare - Lowers llvm.dbg.declare intrinsics into appropriate set
 /// of llvm.dbg.value intrinsics.
 bool llvm::LowerDbgDeclare(Function &F) {
@@ -804,6 +836,8 @@ bool llvm::LowerDbgDeclare(Function &F) {
            UI != E; ++UI)
         if (StoreInst *SI = dyn_cast<StoreInst>(*UI))
           ConvertDebugDeclareToDebugValue(DDI, SI, DIB);
+        else if (LoadInst *LI = dyn_cast<LoadInst>(*UI))
+          ConvertDebugDeclareToDebugValue(DDI, LI, DIB);
     }
     DDI->eraseFromParent();
   }

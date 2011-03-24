@@ -45,6 +45,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/VectorExtras.h"
+#include "llvm/Support/CallSite.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -446,13 +447,12 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   setOperationAction(ISD::SETCC           , MVT::i8   , Custom);
   setOperationAction(ISD::SETCC           , MVT::i16  , Custom);
   setOperationAction(ISD::SETCC           , MVT::i32  , Custom);
-  setOperationAction(ISD::SETCC           , MVT::i64  , Custom);
   setOperationAction(ISD::SETCC           , MVT::f32  , Custom);
   setOperationAction(ISD::SETCC           , MVT::f64  , Custom);
   setOperationAction(ISD::SETCC           , MVT::f80  , Custom);
   if (Subtarget->is64Bit()) {
     setOperationAction(ISD::SELECT        , MVT::i64  , Custom);
-    setOperationAction(ISD::SETCC         , MVT::i128 , Custom);
+    setOperationAction(ISD::SETCC         , MVT::i64  , Custom);
   }
   setOperationAction(ISD::EH_RETURN       , MVT::Other, Custom);
 
@@ -550,12 +550,11 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
 
   setOperationAction(ISD::STACKSAVE,          MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE,       MVT::Other, Expand);
-  if (Subtarget->is64Bit())
-    setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i64, Expand);
-  if (Subtarget->isTargetCygMing() || Subtarget->isTargetWindows())
-    setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Custom);
-  else
-    setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i32, Expand);
+  setOperationAction(ISD::DYNAMIC_STACKALLOC,
+                     (Subtarget->is64Bit() ? MVT::i64 : MVT::i32),
+                     (Subtarget->isTargetCOFF()
+                      && !Subtarget->isTargetEnvMacho()
+                      ? Custom : Expand));
 
   if (!UseSoftFloat && X86ScalarSSEf64) {
     // f32 and f64 use SSE.
@@ -928,6 +927,7 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     // Can turn SHL into an integer multiply.
     setOperationAction(ISD::SHL,                MVT::v4i32, Custom);
     setOperationAction(ISD::SHL,                MVT::v16i8, Custom);
+    setOperationAction(ISD::SRL,                MVT::v4i32, Legal);
 
     // i8 and i16 vectors are custom , because the source register and source
     // source memory operand types are not the same width.  f32 vectors are
@@ -1593,6 +1593,18 @@ CreateCopyOfByValArgument(SDValue Src, SDValue Dst, SDValue Chain,
 /// supports tail call optimization.
 static bool IsTailCallConvention(CallingConv::ID CC) {
   return (CC == CallingConv::Fast || CC == CallingConv::GHC);
+}
+
+bool X86TargetLowering::mayBeEmittedAsTailCall(CallInst *CI) const {
+  if (!CI->isTailCall())
+    return false;
+
+  CallSite CS(CI);
+  CallingConv::ID CalleeCC = CS.getCallingConv();
+  if (!IsTailCallConvention(CalleeCC) && CalleeCC != CallingConv::C)
+    return false;
+
+  return true;
 }
 
 /// FuncIsMadeTailCallSafe - Return true if the function is being made into
@@ -2851,7 +2863,7 @@ static unsigned TranslateX86CC(ISD::CondCode SetCCOpcode, bool isFP,
       } else if (SetCCOpcode == ISD::SETLT && RHSC->isNullValue()) {
         // X < 0   -> X == 0, jump on sign.
         return X86::COND_S;
-      } else if (SetCCOpcode == ISD::SETLT && RHSC->isOne()) {
+      } else if (SetCCOpcode == ISD::SETLT && RHSC->getZExtValue() == 1) {
         // X < 1   -> X <= 0
         RHS = DAG.getConstant(0, RHS.getValueType());
         return X86::COND_LE;
@@ -7434,8 +7446,7 @@ SDValue X86TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   // Lower (X & (1 << N)) == 0 to BT(X, N).
   // Lower ((X >>u N) & 1) != 0 to BT(X, N).
   // Lower ((X >>s N) & 1) != 0 to BT(X, N).
-  if (isTypeLegal(Op0.getValueType()) &&
-      Op0.getOpcode() == ISD::AND && Op0.hasOneUse() &&
+  if (Op0.getOpcode() == ISD::AND && Op0.hasOneUse() &&
       Op1.getOpcode() == ISD::Constant &&
       cast<ConstantSDNode>(Op1)->isNullValue() &&
       (CC == ISD::SETEQ || CC == ISD::SETNE)) {
@@ -7447,7 +7458,7 @@ SDValue X86TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   // Look for X == 0, X == 1, X != 0, or X != 1.  We can simplify some forms of
   // these.
   if (Op1.getOpcode() == ISD::Constant &&
-      (cast<ConstantSDNode>(Op1)->isOne() ||
+      (cast<ConstantSDNode>(Op1)->getZExtValue() == 1 ||
        cast<ConstantSDNode>(Op1)->isNullValue()) &&
       (CC == ISD::SETEQ || CC == ISD::SETNE)) {
 
@@ -7469,73 +7480,6 @@ SDValue X86TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   unsigned X86CC = TranslateX86CC(CC, isFP, Op0, Op1, DAG);
   if (X86CC == X86::COND_INVALID)
     return SDValue();
-
-  if ((!Subtarget->is64Bit() && Op0.getValueType() == MVT::i64) ||
-      (Subtarget->is64Bit() && Op0.getValueType() == MVT::i128)) {
-    switch (X86CC) {
-    case X86::COND_E:
-    case X86::COND_NE:
-    case X86::COND_S:
-    case X86::COND_NS:
-      // Just use the generic lowering, which works well on x86.
-      return SDValue();
-    case X86::COND_B:
-    case X86::COND_AE:
-    case X86::COND_L:
-    case X86::COND_GE:
-      // Use SBB-based lowering.
-      break;
-    case X86::COND_A:
-      // Use SBB-based lowering; commute so ZF isn't used.
-      X86CC = X86::COND_B;
-      std::swap(Op0, Op1);
-      break;
-    case X86::COND_BE:
-      // Use SBB-based lowering; commute so ZF isn't used.
-      X86CC = X86::COND_AE;
-      std::swap(Op0, Op1);
-      break;
-    case X86::COND_G:
-      // Use SBB-based lowering; commute so ZF isn't used.
-      X86CC = X86::COND_L;
-      std::swap(Op0, Op1);
-      break;
-    case X86::COND_LE:
-      // Use SBB-based lowering; commute so ZF isn't used.
-      X86CC = X86::COND_GE;
-      std::swap(Op0, Op1);
-      break;
-    default:
-      assert(0 && "Unexpected X86CC.");
-      return SDValue();
-    }
-    MVT HalfType = getPointerTy();
-    // FIXME: Refactor this code out to implement ISD::SADDO and friends.
-    SDValue Op0Low = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, HalfType,
-                                 Op0, DAG.getIntPtrConstant(0));
-    SDValue Op1Low = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, HalfType,
-                                 Op1, DAG.getIntPtrConstant(0));
-    SDValue Op0High = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, HalfType,
-                                  Op0, DAG.getIntPtrConstant(1));
-    SDValue Op1High = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, HalfType,
-                                  Op1, DAG.getIntPtrConstant(1));
-    // Redirect some cases which will simplify to the generic expansion;
-    // X86ISD::SUB and X86ISD::SBB are not optimized well at the moment.
-    // FIXME: We really need to add DAGCombines for SUB/SBB/etc.
-    if (Op1Low.getOpcode() == ISD::Constant &&
-        cast<ConstantSDNode>(Op1Low)->isNullValue())
-      return SDValue();
-    if (Op0Low.getOpcode() == ISD::Constant &&
-        cast<ConstantSDNode>(Op0Low)->isAllOnesValue())
-      return SDValue();
-    SDValue res1, res2;
-    SDVTList VTList = DAG.getVTList(HalfType, MVT::i32);
-    res1 = DAG.getNode(X86ISD::SUB, dl, VTList, Op0Low, Op1Low).getValue(1);
-    res2 = DAG.getNode(X86ISD::SBB, dl, VTList, Op0High, Op1High,
-                       res1).getValue(1);
-    return DAG.getNode(X86ISD::SETCC, dl, MVT::i8,
-                       DAG.getConstant(X86CC, MVT::i8), res2);
-  }
 
   SDValue EFLAGS = EmitCmp(Op0, Op1, X86CC, DAG);
   return DAG.getNode(X86ISD::SETCC, dl, MVT::i8,
@@ -7995,6 +7939,7 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
                                            SelectionDAG &DAG) const {
   assert((Subtarget->isTargetCygMing() || Subtarget->isTargetWindows()) &&
          "This should be used only on Windows targets");
+  assert(!Subtarget->isTargetEnvMacho());
   DebugLoc dl = Op.getDebugLoc();
 
   // Get the inputs.
@@ -8005,8 +7950,9 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
   SDValue Flag;
 
   EVT SPTy = Subtarget->is64Bit() ? MVT::i64 : MVT::i32;
+  unsigned Reg = (Subtarget->is64Bit() ? X86::RAX : X86::EAX);
 
-  Chain = DAG.getCopyToReg(Chain, dl, X86::EAX, Size, Flag);
+  Chain = DAG.getCopyToReg(Chain, dl, Reg, Size, Flag);
   Flag = Chain.getValue(1);
 
   SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
@@ -10478,21 +10424,48 @@ X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
   DebugLoc DL = MI->getDebugLoc();
 
+  assert(!Subtarget->isTargetEnvMacho());
+
   // The lowering is pretty easy: we're just emitting the call to _alloca.  The
   // non-trivial part is impdef of ESP.
-  // FIXME: The code should be tweaked as soon as we'll try to do codegen for
-  // mingw-w64.
 
-  const char *StackProbeSymbol =
+  if (Subtarget->isTargetWin64()) {
+    if (Subtarget->isTargetCygMing()) {
+      // ___chkstk(Mingw64):
+      // Clobbers R10, R11, RAX and EFLAGS.
+      // Updates RSP.
+      BuildMI(*BB, MI, DL, TII->get(X86::W64ALLOCA))
+        .addExternalSymbol("___chkstk")
+        .addReg(X86::RAX, RegState::Implicit)
+        .addReg(X86::RSP, RegState::Implicit)
+        .addReg(X86::RAX, RegState::Define | RegState::Implicit)
+        .addReg(X86::RSP, RegState::Define | RegState::Implicit)
+        .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
+    } else {
+      // __chkstk(MSVCRT): does not update stack pointer.
+      // Clobbers R10, R11 and EFLAGS.
+      // FIXME: RAX(allocated size) might be reused and not killed.
+      BuildMI(*BB, MI, DL, TII->get(X86::W64ALLOCA))
+        .addExternalSymbol("__chkstk")
+        .addReg(X86::RAX, RegState::Implicit)
+        .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
+      // RAX has the offset to subtracted from RSP.
+      BuildMI(*BB, MI, DL, TII->get(X86::SUB64rr), X86::RSP)
+        .addReg(X86::RSP)
+        .addReg(X86::RAX);
+    }
+  } else {
+    const char *StackProbeSymbol =
       Subtarget->isTargetWindows() ? "_chkstk" : "_alloca";
 
-  BuildMI(*BB, MI, DL, TII->get(X86::CALLpcrel32))
-    .addExternalSymbol(StackProbeSymbol)
-    .addReg(X86::EAX, RegState::Implicit)
-    .addReg(X86::ESP, RegState::Implicit)
-    .addReg(X86::EAX, RegState::Define | RegState::Implicit)
-    .addReg(X86::ESP, RegState::Define | RegState::Implicit)
-    .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
+    BuildMI(*BB, MI, DL, TII->get(X86::CALLpcrel32))
+      .addExternalSymbol(StackProbeSymbol)
+      .addReg(X86::EAX, RegState::Implicit)
+      .addReg(X86::ESP, RegState::Implicit)
+      .addReg(X86::EAX, RegState::Define | RegState::Implicit)
+      .addReg(X86::ESP, RegState::Define | RegState::Implicit)
+      .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
+  }
 
   MI->eraseFromParent();   // The pseudo instruction is gone now.
   return BB;

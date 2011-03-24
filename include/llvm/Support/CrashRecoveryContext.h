@@ -63,6 +63,10 @@ public:
   /// thread which is in a protected context.
   static CrashRecoveryContext *GetCurrent();
 
+  /// \brief Return true if the current thread is recovering from a
+  /// crash.
+  static bool isRecoveringFromCrash();
+
   /// \brief Execute the provide callback function (with the given arguments) in
   /// a protected context.
   ///
@@ -94,73 +98,96 @@ public:
 };
 
 class CrashRecoveryContextCleanup {
+protected:
+  CrashRecoveryContext *context;
+  CrashRecoveryContextCleanup(CrashRecoveryContext *context)
+    : context(context), cleanupFired(false) {}
 public:
+  bool cleanupFired;
+  
   virtual ~CrashRecoveryContextCleanup();
   virtual void recoverResources() = 0;
-  
-  template <typename T> static CrashRecoveryContextCleanup *create(T *);
-  
+
+  CrashRecoveryContext *getContext() const {
+    return context;
+  }
+
 private:
   friend class CrashRecoveryContext;
   CrashRecoveryContextCleanup *prev, *next;
 };
 
-template <typename T>
-class CrashRecoveryContextDestructorCleanup 
-  : public CrashRecoveryContextCleanup
-{
+template<typename DERIVED, typename T>
+class CrashRecoveryContextCleanupBase : public CrashRecoveryContextCleanup {
+protected:
   T *resource;
+  CrashRecoveryContextCleanupBase(CrashRecoveryContext *context, T* resource)
+    : CrashRecoveryContextCleanup(context), resource(resource) {}
 public:
-  CrashRecoveryContextDestructorCleanup(T *resource) : resource(resource) {}
-  virtual void recoverResources() {
-    resource->~T();
+  static DERIVED *create(T *x) {
+    if (x) {
+      if (CrashRecoveryContext *context = CrashRecoveryContext::GetCurrent())
+        return new DERIVED(context, x);
+    }
+    return 0;
   }
 };
 
 template <typename T>
-class CrashRecoveryContextDeleteCleanup
-  : public CrashRecoveryContextCleanup
+class CrashRecoveryContextDestructorCleanup : public
+  CrashRecoveryContextCleanupBase<CrashRecoveryContextDestructorCleanup<T>, T> {
+public:
+  CrashRecoveryContextDestructorCleanup(CrashRecoveryContext *context,
+                                        T *resource) 
+    : CrashRecoveryContextCleanupBase<
+        CrashRecoveryContextDestructorCleanup<T>, T>(context, resource) {}
+
+  virtual void recoverResources() {
+    this->resource->~T();
+  }
+};
+
+template <typename T>
+class CrashRecoveryContextDeleteCleanup : public
+  CrashRecoveryContextCleanupBase<CrashRecoveryContextDeleteCleanup<T>, T> {
+public:
+  CrashRecoveryContextDeleteCleanup(CrashRecoveryContext *context, T *resource)
+    : CrashRecoveryContextCleanupBase<
+        CrashRecoveryContextDeleteCleanup<T>, T>(context, resource) {}
+
+  virtual void recoverResources() {
+    delete this->resource;
+  }  
+};
+
+template <typename T>
+class CrashRecoveryContextReleaseRefCleanup : public
+  CrashRecoveryContextCleanupBase<CrashRecoveryContextReleaseRefCleanup<T>, T>
 {
-  T *resource;
 public:
-  CrashRecoveryContextDeleteCleanup(T *resource) : resource(resource) {}
+  CrashRecoveryContextReleaseRefCleanup(CrashRecoveryContext *context, 
+                                        T *resource)
+    : CrashRecoveryContextCleanupBase<CrashRecoveryContextReleaseRefCleanup<T>,
+          T>(context, resource) {}
+
   virtual void recoverResources() {
-    delete resource;
+    this->resource->Release();
   }
 };
 
-template <typename T>
-struct CrashRecoveryContextTrait {
-  static inline CrashRecoveryContextCleanup *createCleanup(T *resource) {
-    return new CrashRecoveryContextDeleteCleanup<T>(resource);
-  }
-};
-
-template<typename T>
-inline CrashRecoveryContextCleanup* CrashRecoveryContextCleanup::create(T *x) {
-  return CrashRecoveryContext::GetCurrent() ?
-          CrashRecoveryContextTrait<T>::createCleanup(x) : 
-          0;
-}
-
+template <typename T, typename Cleanup = CrashRecoveryContextDeleteCleanup<T> >
 class CrashRecoveryContextCleanupRegistrar {
-  CrashRecoveryContext *context;
   CrashRecoveryContextCleanup *cleanup;
 public:
-  CrashRecoveryContextCleanupRegistrar(CrashRecoveryContextCleanup *cleanup)
-    : context(CrashRecoveryContext::GetCurrent()),
-      cleanup(cleanup) 
-  {
-    if (context && cleanup)
-      context->registerCleanup(cleanup);
+  CrashRecoveryContextCleanupRegistrar(T *x)
+    : cleanup(Cleanup::create(x)) {
+    if (cleanup)
+      cleanup->getContext()->registerCleanup(cleanup);
   }
+
   ~CrashRecoveryContextCleanupRegistrar() {
-    if (cleanup) {
-      if (context)
-        context->unregisterCleanup(cleanup);
-      else
-        delete cleanup;
-    }
+    if (cleanup && !cleanup->cleanupFired)
+        cleanup->getContext()->unregisterCleanup(cleanup);
   }
 };
 }

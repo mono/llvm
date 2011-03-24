@@ -44,7 +44,7 @@ namespace llvm {
   class RefCountedBase {
     unsigned ref_cnt;
 
-  protected:
+  public:
     RefCountedBase() : ref_cnt(0) {}
 
     void Retain() { ++ref_cnt; }
@@ -52,8 +52,6 @@ namespace llvm {
       assert (ref_cnt > 0 && "Reference count is already zero.");
       if (--ref_cnt == 0) delete static_cast<Derived*>(this);
     }
-
-    friend class IntrusiveRefCntPtr<Derived>;
   };
 
 //===----------------------------------------------------------------------===//
@@ -64,7 +62,6 @@ namespace llvm {
 ///  inherit from RefCountedBaseVPTR can't be allocated on stack -
 ///  attempting to do this will produce a compile error.
 //===----------------------------------------------------------------------===//
-  template <class Derived>
   class RefCountedBaseVPTR {
     unsigned ref_cnt;
 
@@ -78,7 +75,8 @@ namespace llvm {
       if (--ref_cnt == 0) delete this;
     }
 
-    friend class IntrusiveRefCntPtr<Derived>;
+    template <typename T>
+    friend class IntrusiveRefCntPtr;
   };
 
 //===----------------------------------------------------------------------===//
@@ -154,6 +152,10 @@ namespace llvm {
       T* tmp = other.Obj;
       other.Obj = Obj;
       Obj = tmp;
+    }
+    
+    void resetWithoutRelease() {
+      Obj = 0;
     }
 
   private:

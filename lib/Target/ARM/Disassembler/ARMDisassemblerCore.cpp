@@ -1163,8 +1163,9 @@ static bool DisassembleLdStMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
                                                      decodeRd(insn))));
   ++OpIdx;
 
-  // Fill in LDRD and STRD's second operand.
-  if (DualReg) {
+  // Fill in LDRD and STRD's second operand, but only if it's offset mode OR we
+  // have a pre-or-post-indexed store operation.
+  if (DualReg && (!isPrePost || isStore)) {
     MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
                                                        decodeRd(insn) + 1)));
     ++OpIdx;
@@ -1186,7 +1187,7 @@ static bool DisassembleLdStMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
   assert(OpInfo[OpIdx].RegClass == ARM::GPRRegClassID &&
          "Reg operand expected");
   assert((!isPrePost || (TID.getOperandConstraint(OpIdx, TOI::TIED_TO) != -1))
-         && "Index mode or tied_to operand expected");
+         && "Offset mode or tied_to operand expected");
   MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
                                                      decodeRn(insn))));
   ++OpIdx;
@@ -1234,13 +1235,13 @@ static bool DisassembleStMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
 }
 
 // The algorithm for disassembly of LdStMulFrm is different from others because
-// it explicitly populates the two predicate operands after operand 0 (the base)
-// and operand 1 (the AM4 mode imm).  After operand 3, we need to populate the
-// reglist with each affected register encoded as an MCOperand.
+// it explicitly populates the two predicate operands after the base register.
+// After that, we need to populate the reglist with each affected register
+// encoded as an MCOperand.
 static bool DisassembleLdStMulFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  assert(NumOps >= 5 && "LdStMulFrm expects NumOps >= 5");
+  assert(NumOps >= 4 && "LdStMulFrm expects NumOps >= 4");
   NumOpsAdded = 0;
 
   unsigned Base = getRegisterEnum(B, ARM::GPRRegClassID, decodeRn(insn));
@@ -1798,15 +1799,14 @@ static bool DisassembleVFPLdStFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
 }
 
 // VFP Load/Store Multiple Instructions.
-// This is similar to the algorithm for LDM/STM in that operand 0 (the base) and
-// operand 1 (the AM4 mode imm) is followed by two predicate operands.  It is
-// followed by a reglist of either DPR(s) or SPR(s).
+// We have an optional write back reg, the base, and two predicate operands.
+// It is then followed by a reglist of either DPR(s) or SPR(s).
 //
 // VLDMD[_UPD], VLDMS[_UPD], VSTMD[_UPD], VSTMS[_UPD]
 static bool DisassembleVFPLdStMulFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  assert(NumOps >= 5 && "VFPLdStMulFrm expects NumOps >= 5");
+  assert(NumOps >= 4 && "VFPLdStMulFrm expects NumOps >= 4");
 
   unsigned &OpIdx = NumOpsAdded;
 
@@ -1825,21 +1825,12 @@ static bool DisassembleVFPLdStMulFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
 
   MI.addOperand(MCOperand::CreateReg(Base));
 
-  // Next comes the AM4 Opcode.
-  ARM_AM::AMSubMode SubMode = getAMSubModeForBits(getPUBits(insn));
-  // Must be either "ia" or "db" submode.
-  if (SubMode != ARM_AM::ia && SubMode != ARM_AM::db) {
-    DEBUG(errs() << "Illegal addressing mode 4 sub-mode!\n");
-    return false;
-  }
-  MI.addOperand(MCOperand::CreateImm(ARM_AM::getAM4ModeImm(SubMode)));
-
   // Handling the two predicate operands before the reglist.
   int64_t CondVal = insn >> ARMII::CondShift;
   MI.addOperand(MCOperand::CreateImm(CondVal == 0xF ? 0xE : CondVal));
   MI.addOperand(MCOperand::CreateReg(ARM::CPSR));
 
-  OpIdx += 4;
+  OpIdx += 3;
 
   bool isSPVFP = (Opcode == ARM::VLDMSIA     || Opcode == ARM::VLDMSDB     ||
                   Opcode == ARM::VLDMSIA_UPD || Opcode == ARM::VLDMSDB_UPD ||
@@ -1853,6 +1844,11 @@ static bool DisassembleVFPLdStMulFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
   // Fill the variadic part of reglist.
   unsigned char Imm8 = insn & 0xFF;
   unsigned Regs = isSPVFP ? Imm8 : Imm8/2;
+
+  // Apply some sanity checks before proceeding.
+  if (Regs == 0 || (RegD + Regs) > 32 || (!isSPVFP && Regs > 16))
+    return false;
+  
   for (unsigned i = 0; i < Regs; ++i) {
     MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RegClassID,
                                                        RegD + i)));
@@ -2949,6 +2945,11 @@ static bool DisassembleMiscFrm(MCInst &MI, unsigned Opcode, uint32_t insn,
   // no current handling of optional arguments. Fix here when a better handling
   // of optional arguments is implemented.
   if (Opcode == ARM::CPS3p) {
+    // Let's reject impossible imod values by returning false.
+    // AsmPrinter cannot handle imod=0b00, plus (imod=0b00,M=1,iflags!=0) is an
+    // invalid combination, so we just check for imod=0b00 here.
+    if (slice(insn, 19, 18) == 0 || slice(insn, 19, 18) == 1)
+      return false;
     MI.addOperand(MCOperand::CreateImm(slice(insn, 19, 18))); // imod
     MI.addOperand(MCOperand::CreateImm(slice(insn, 8, 6)));   // iflags
     MI.addOperand(MCOperand::CreateImm(slice(insn, 4, 0)));   // mode

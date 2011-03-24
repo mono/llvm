@@ -544,7 +544,7 @@ void ScheduleDAGRRList::ScheduleNodeBottomUp(SUnit *SU) {
 
   // FIXME: Do not modify node height. It may interfere with
   // backtracking. Instead add a "ready cycle" to SUnit. Before scheduling the
-  // node it's ready cycle can aid heuristics, and after scheduling it can
+  // node its ready cycle can aid heuristics, and after scheduling it can
   // indicate the scheduled cycle.
   SU->setHeightToAtLeast(CurCycle);
 
@@ -934,6 +934,15 @@ void ScheduleDAGRRList::InsertCopiesAndMoveSuccs(SUnit *SU, unsigned Reg,
       D.setSUnit(CopyToSU);
       AddPred(SuccSU, D);
       DelDeps.push_back(std::make_pair(SuccSU, *I));
+    }
+    else {
+      // Avoid scheduling the def-side copy before other successors. Otherwise
+      // we could introduce another physreg interference on the copy and
+      // continue inserting copies indefinitely.
+      SDep D(CopyFromSU, SDep::Order, /*Latency=*/0,
+             /*Reg=*/0, /*isNormalMemory=*/false,
+             /*isMustAlias=*/false, /*isArtificial=*/true);
+      AddPred(SuccSU, D);
     }
   }
   for (unsigned i = 0, e = DelDeps.size(); i != e; ++i)
@@ -1812,7 +1821,7 @@ void RegReductionPQBase::ScheduledNode(SUnit *SU) {
 
   if (!SU->getNode())
     return;
-  
+
   for (SUnit::pred_iterator I = SU->Preds.begin(), E = SU->Preds.end();
        I != E; ++I) {
     if (I->isCtrl())
@@ -1880,7 +1889,7 @@ void RegReductionPQBase::UnscheduledNode(SUnit *SU) {
 
   const SDNode *N = SU->getNode();
   if (!N) return;
-  
+
   if (!N->isMachineOpcode()) {
     if (N->getOpcode() != ISD::CopyToReg)
       return;

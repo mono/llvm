@@ -81,6 +81,9 @@ set(LLVM_ALL_TARGETS
   XCore
   )
 
+# List of targets with JIT support:
+set(LLVM_TARGETS_WITH_JIT X86 PowerPC ARM)
+
 if( MSVC )
   set(LLVM_TARGETS_TO_BUILD X86
     CACHE STRING "Semicolon-separated list of targets to build, or \"all\".")
@@ -183,15 +186,6 @@ endif( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
 
 include(AddLLVM)
 include(TableGen)
-
-if( MINGW )
-  get_system_libs(LLVM_SYSTEM_LIBS_LIST)
-  foreach(l ${LLVM_SYSTEM_LIBS_LIST})
-    set(LLVM_SYSTEM_LIBS "${LLVM_SYSTEM_LIBS} -l${l}")
-  endforeach()
-  set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES}${LLVM_SYSTEM_LIBS}")
-  set(CMAKE_C_STANDARD_LIBRARIES "${CMAKE_C_STANDARD_LIBRARIES}${LLVM_SYSTEM_LIBS}")
-endif()
 
 if( MINGW )
   # People report that -O3 is unreliable on MinGW. The traditional
