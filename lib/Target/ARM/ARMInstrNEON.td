@@ -80,6 +80,12 @@ def SDTARMVORRIMM : SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0, 1>,
 def NEONvorrImm   : SDNode<"ARMISD::VORRIMM", SDTARMVORRIMM>;
 def NEONvbicImm   : SDNode<"ARMISD::VBICIMM", SDTARMVORRIMM>;
 
+def NEONvbsl      : SDNode<"ARMISD::VBSL",
+                           SDTypeProfile<1, 3, [SDTCisVec<0>,
+                                                SDTCisSameAs<0, 1>,
+                                                SDTCisSameAs<0, 2>,
+                                                SDTCisSameAs<0, 3>]>>;
+
 def NEONvdup      : SDNode<"ARMISD::VDUP", SDTypeProfile<1, 1, [SDTCisVec<0>]>>;
 
 // VDUPLANE can produce a quad-register result from a double-register source,
@@ -146,18 +152,10 @@ def VLDMQIA
   : PseudoVFPLdStM<(outs QPR:$dst), (ins GPR:$Rn),
                     IIC_fpLoad_m, "",
                    [(set QPR:$dst, (v2f64 (load GPR:$Rn)))]>;
-def VLDMQDB
-  : PseudoVFPLdStM<(outs QPR:$dst), (ins GPR:$Rn),
-                    IIC_fpLoad_m, "",
-                   [(set QPR:$dst, (v2f64 (load GPR:$Rn)))]>;
 
 // Use VSTM to store a Q register as a D register pair.
 // This is a pseudo instruction that is expanded to VSTMD after reg alloc.
 def VSTMQIA
-  : PseudoVFPLdStM<(outs), (ins QPR:$src, GPR:$Rn),
-                    IIC_fpStore_m, "",
-                   [(store (v2f64 QPR:$src), GPR:$Rn)]>;
-def VSTMQDB
   : PseudoVFPLdStM<(outs), (ins QPR:$src, GPR:$Rn),
                     IIC_fpStore_m, "",
                    [(store (v2f64 QPR:$src), GPR:$Rn)]>;
@@ -1801,7 +1799,7 @@ class N3VDX<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 class N3VDSL<bits<2> op21_20, bits<4> op11_8,
              InstrItinClass itin, string OpcodeStr, string Dt,
              ValueType Ty, SDNode ShOp>
-  : N3V<0, 1, op21_20, op11_8, 1, 0,
+  : N3VLane32<0, 1, op21_20, op11_8, 1, 0,
         (outs DPR:$Vd), (ins DPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set (Ty DPR:$Vd),
@@ -1811,7 +1809,7 @@ class N3VDSL<bits<2> op21_20, bits<4> op11_8,
 }
 class N3VDSL16<bits<2> op21_20, bits<4> op11_8,
                string OpcodeStr, string Dt, ValueType Ty, SDNode ShOp>
-  : N3V<0, 1, op21_20, op11_8, 1, 0,
+  : N3VLane16<0, 1, op21_20, op11_8, 1, 0,
         (outs DPR:$Vd), (ins DPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, IIC_VMULi16D, OpcodeStr, Dt,"$Vd, $Vn, $Vm[$lane]","",
         [(set (Ty DPR:$Vd),
@@ -1841,7 +1839,7 @@ class N3VQX<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 class N3VQSL<bits<2> op21_20, bits<4> op11_8,
              InstrItinClass itin, string OpcodeStr, string Dt,
              ValueType ResTy, ValueType OpTy, SDNode ShOp>
-  : N3V<1, 1, op21_20, op11_8, 1, 0,
+  : N3VLane32<1, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd), (ins QPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set (ResTy QPR:$Vd),
@@ -1852,7 +1850,7 @@ class N3VQSL<bits<2> op21_20, bits<4> op11_8,
 }
 class N3VQSL16<bits<2> op21_20, bits<4> op11_8, string OpcodeStr, string Dt,
                ValueType ResTy, ValueType OpTy, SDNode ShOp>
-  : N3V<1, 1, op21_20, op11_8, 1, 0,
+  : N3VLane16<1, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd), (ins QPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, IIC_VMULi16Q, OpcodeStr, Dt,"$Vd, $Vn, $Vm[$lane]","",
         [(set (ResTy QPR:$Vd),
@@ -1874,7 +1872,7 @@ class N3VDInt<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 }
 class N3VDIntSL<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                 string OpcodeStr, string Dt, ValueType Ty, Intrinsic IntOp>
-  : N3V<0, 1, op21_20, op11_8, 1, 0,
+  : N3VLane32<0, 1, op21_20, op11_8, 1, 0,
         (outs DPR:$Vd), (ins DPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set (Ty DPR:$Vd),
@@ -1885,7 +1883,7 @@ class N3VDIntSL<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
 }
 class N3VDIntSL16<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                   string OpcodeStr, string Dt, ValueType Ty, Intrinsic IntOp>
-  : N3V<0, 1, op21_20, op11_8, 1, 0,
+  : N3VLane16<0, 1, op21_20, op11_8, 1, 0,
         (outs DPR:$Vd), (ins DPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set (Ty DPR:$Vd),
@@ -1915,7 +1913,7 @@ class N3VQInt<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 class N3VQIntSL<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                 string OpcodeStr, string Dt,
                 ValueType ResTy, ValueType OpTy, Intrinsic IntOp>
-  : N3V<1, 1, op21_20, op11_8, 1, 0,
+  : N3VLane32<1, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd), (ins QPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set (ResTy QPR:$Vd),
@@ -1927,7 +1925,7 @@ class N3VQIntSL<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
 class N3VQIntSL16<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                   string OpcodeStr, string Dt,
                   ValueType ResTy, ValueType OpTy, Intrinsic IntOp>
-  : N3V<1, 1, op21_20, op11_8, 1, 0,
+  : N3VLane16<1, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd), (ins QPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set (ResTy QPR:$Vd),
@@ -1959,7 +1957,7 @@ class N3VDMulOp<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 class N3VDMulOpSL<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                   string OpcodeStr, string Dt,
                   ValueType Ty, SDPatternOperator MulOp, SDPatternOperator ShOp>
-  : N3V<0, 1, op21_20, op11_8, 1, 0,
+  : N3VLane32<0, 1, op21_20, op11_8, 1, 0,
         (outs DPR:$Vd),
         (ins DPR:$src1, DPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin,
@@ -1972,7 +1970,7 @@ class N3VDMulOpSL<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
 class N3VDMulOpSL16<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                     string OpcodeStr, string Dt,
                     ValueType Ty, SDNode MulOp, SDNode ShOp>
-  : N3V<0, 1, op21_20, op11_8, 1, 0,
+  : N3VLane16<0, 1, op21_20, op11_8, 1, 0,
         (outs DPR:$Vd),
         (ins DPR:$src1, DPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin,
@@ -1994,7 +1992,7 @@ class N3VQMulOp<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 class N3VQMulOpSL<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                   string OpcodeStr, string Dt, ValueType ResTy, ValueType OpTy,
                   SDPatternOperator MulOp, SDPatternOperator ShOp>
-  : N3V<1, 1, op21_20, op11_8, 1, 0,
+  : N3VLane32<1, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd),
         (ins QPR:$src1, QPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin,
@@ -2008,7 +2006,7 @@ class N3VQMulOpSL16<bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                     string OpcodeStr, string Dt,
                     ValueType ResTy, ValueType OpTy,
                     SDNode MulOp, SDNode ShOp>
-  : N3V<1, 1, op21_20, op11_8, 1, 0,
+  : N3VLane16<1, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd),
         (ins QPR:$src1, QPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin,
@@ -2069,7 +2067,7 @@ class N3VLMulOp<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 class N3VLMulOpSL<bit op24, bits<2> op21_20, bits<4> op11_8,
                   InstrItinClass itin, string OpcodeStr, string Dt,
                   ValueType TyQ, ValueType TyD, SDNode MulOp, SDNode OpNode>
-  : N3V<op24, 1, op21_20, op11_8, 1, 0, (outs QPR:$Vd),
+  : N3VLane32<op24, 1, op21_20, op11_8, 1, 0, (outs QPR:$Vd),
         (ins QPR:$src1, DPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin,
         OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "$src1 = $Vd",
@@ -2081,7 +2079,7 @@ class N3VLMulOpSL<bit op24, bits<2> op21_20, bits<4> op11_8,
 class N3VLMulOpSL16<bit op24, bits<2> op21_20, bits<4> op11_8,
                     InstrItinClass itin, string OpcodeStr, string Dt,
                     ValueType TyQ, ValueType TyD, SDNode MulOp, SDNode OpNode>
-  : N3V<op24, 1, op21_20, op11_8, 1, 0, (outs QPR:$Vd),
+  : N3VLane16<op24, 1, op21_20, op11_8, 1, 0, (outs QPR:$Vd),
         (ins QPR:$src1, DPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin,
         OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "$src1 = $Vd",
@@ -2116,7 +2114,7 @@ class N3VLInt3<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 class N3VLInt3SL<bit op24, bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                  string OpcodeStr, string Dt,
                  ValueType ResTy, ValueType OpTy, Intrinsic IntOp>
-  : N3V<op24, 1, op21_20, op11_8, 1, 0,
+  : N3VLane32<op24, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd),
         (ins QPR:$src1, DPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin,
@@ -2129,7 +2127,7 @@ class N3VLInt3SL<bit op24, bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
 class N3VLInt3SL16<bit op24, bits<2> op21_20, bits<4> op11_8,
                    InstrItinClass itin, string OpcodeStr, string Dt,
                    ValueType ResTy, ValueType OpTy, Intrinsic IntOp>
-  : N3V<op24, 1, op21_20, op11_8, 1, 0,
+  : N3VLane16<op24, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd),
         (ins QPR:$src1, DPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin,
@@ -2164,7 +2162,7 @@ class N3VL<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 class N3VLSL<bit op24, bits<2> op21_20, bits<4> op11_8,
              InstrItinClass itin, string OpcodeStr, string Dt,
              ValueType TyQ, ValueType TyD, SDNode OpNode>
-  : N3V<op24, 1, op21_20, op11_8, 1, 0,
+  : N3VLane32<op24, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd), (ins DPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set QPR:$Vd,
@@ -2173,7 +2171,7 @@ class N3VLSL<bit op24, bits<2> op21_20, bits<4> op11_8,
 class N3VLSL16<bit op24, bits<2> op21_20, bits<4> op11_8,
                InstrItinClass itin, string OpcodeStr, string Dt,
                ValueType TyQ, ValueType TyD, SDNode OpNode>
-  : N3V<op24, 1, op21_20, op11_8, 1, 0,
+  : N3VLane16<op24, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd), (ins DPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set QPR:$Vd,
@@ -2219,7 +2217,7 @@ class N3VLInt<bit op24, bit op23, bits<2> op21_20, bits<4> op11_8, bit op4,
 class N3VLIntSL<bit op24, bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
                 string OpcodeStr, string Dt,
                 ValueType ResTy, ValueType OpTy, Intrinsic IntOp>
-  : N3V<op24, 1, op21_20, op11_8, 1, 0,
+  : N3VLane32<op24, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd), (ins DPR:$Vn, DPR_VFP2:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set (ResTy QPR:$Vd),
@@ -2229,7 +2227,7 @@ class N3VLIntSL<bit op24, bits<2> op21_20, bits<4> op11_8, InstrItinClass itin,
 class N3VLIntSL16<bit op24, bits<2> op21_20, bits<4> op11_8,
                   InstrItinClass itin, string OpcodeStr, string Dt,
                   ValueType ResTy, ValueType OpTy, Intrinsic IntOp>
-  : N3V<op24, 1, op21_20, op11_8, 1, 0,
+  : N3VLane16<op24, 1, op21_20, op11_8, 1, 0,
         (outs QPR:$Vd), (ins DPR:$Vn, DPR_8:$Vm, nohash_imm:$lane),
         NVMulSLFrm, itin, OpcodeStr, Dt, "$Vd, $Vn, $Vm[$lane]", "",
         [(set (ResTy QPR:$Vd),
@@ -3775,16 +3773,21 @@ def  VBSLd    : N3VX<1, 0, 0b01, 0b0001, 0, 1, (outs DPR:$Vd),
                      (ins DPR:$src1, DPR:$Vn, DPR:$Vm),
                      N3RegFrm, IIC_VCNTiD,
                      "vbsl", "$Vd, $Vn, $Vm", "$src1 = $Vd",
-                     [(set DPR:$Vd,
-                       (v2i32 (or (and DPR:$Vn, DPR:$src1),
-                                  (and DPR:$Vm, (vnotd DPR:$src1)))))]>;
+                     [(set DPR:$Vd, (v2i32 (NEONvbsl DPR:$src1, DPR:$Vn, DPR:$Vm)))]>;
+
+def : Pat<(v2i32 (or (and DPR:$Vn, DPR:$Vd),
+                     (and DPR:$Vm, (vnotd DPR:$Vd)))),
+          (VBSLd DPR:$Vd, DPR:$Vn, DPR:$Vm)>;
+
 def  VBSLq    : N3VX<1, 0, 0b01, 0b0001, 1, 1, (outs QPR:$Vd),
                      (ins QPR:$src1, QPR:$Vn, QPR:$Vm),
                      N3RegFrm, IIC_VCNTiQ,
                      "vbsl", "$Vd, $Vn, $Vm", "$src1 = $Vd",
-                     [(set QPR:$Vd,
-                       (v4i32 (or (and QPR:$Vn, QPR:$src1),
-                                  (and QPR:$Vm, (vnotq QPR:$src1)))))]>;
+                     [(set QPR:$Vd, (v4i32 (NEONvbsl QPR:$src1, QPR:$Vn, QPR:$Vm)))]>;
+
+def : Pat<(v4i32 (or (and QPR:$Vn, QPR:$Vd),
+                     (and QPR:$Vm, (vnotq QPR:$Vd)))),
+          (VBSLq QPR:$Vd, QPR:$Vn, QPR:$Vm)>;
 
 //   VBIF     : Vector Bitwise Insert if False
 //              like VBSL but with: "vbif $dst, $src3, $src1", "$src2 = $dst",

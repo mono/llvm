@@ -624,7 +624,7 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI) {
     // The PHI node should go at the front of the new basic block to merge all
     // possible incoming values.
     if (!TheCall->use_empty()) {
-      PHI = PHINode::Create(RTy, TheCall->getName(),
+      PHI = PHINode::Create(RTy, Returns.size(), TheCall->getName(),
                             AfterCallBB->begin());
       // Anything that used the result of the function call should now use the
       // PHI node as their operand.

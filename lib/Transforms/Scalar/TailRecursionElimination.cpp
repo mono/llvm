@@ -496,7 +496,7 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
     Instruction *InsertPos = OldEntry->begin();
     for (Function::arg_iterator I = F->arg_begin(), E = F->arg_end();
          I != E; ++I) {
-      PHINode *PN = PHINode::Create(I->getType(),
+      PHINode *PN = PHINode::Create(I->getType(), 2,
                                     I->getName() + ".tr", InsertPos);
       I->replaceAllUsesWith(PN); // Everyone use the PHI node now!
       PN->addIncoming(I, NewEntry);
@@ -527,8 +527,10 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
   if (AccumulatorRecursionEliminationInitVal) {
     Instruction *AccRecInstr = AccumulatorRecursionInstr;
     // Start by inserting a new PHI node for the accumulator.
+    pred_iterator PB = pred_begin(OldEntry), PE = pred_end(OldEntry);
     PHINode *AccPN =
       PHINode::Create(AccumulatorRecursionEliminationInitVal->getType(),
+                      std::distance(PB, PE) + 1,
                       "accumulator.tr", OldEntry->begin());
 
     // Loop over all of the predecessors of the tail recursion block.  For the
@@ -537,8 +539,7 @@ bool TailCallElim::EliminateRecursiveTailCall(CallInst *CI, ReturnInst *Ret,
     // other tail recursions eliminated) the accumulator is not modified.
     // Because we haven't added the branch in the current block to OldEntry yet,
     // it will not show up as a predecessor.
-    for (pred_iterator PI = pred_begin(OldEntry), PE = pred_end(OldEntry);
-         PI != PE; ++PI) {
+    for (pred_iterator PI = PB; PI != PE; ++PI) {
       BasicBlock *P = *PI;
       if (P == &F->getEntryBlock())
         AccPN->addIncoming(AccumulatorRecursionEliminationInitVal, P);

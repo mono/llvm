@@ -1639,8 +1639,9 @@ X86TargetLowering::LowerMemArgument(SDValue Chain,
   // In case of tail call optimization mark all arguments mutable. Since they
   // could be overwritten by lowering of arguments in case of a tail call.
   if (Flags.isByVal()) {
-    int FI = MFI->CreateFixedObject(Flags.getByValSize(),
-                                    VA.getLocMemOffset(), isImmutable);
+    unsigned Bytes = Flags.getByValSize();
+    if (Bytes == 0) Bytes = 1; // Don't create zero-sized stack objects.
+    int FI = MFI->CreateFixedObject(Bytes, VA.getLocMemOffset(), isImmutable);
     return DAG.getFrameIndex(FI, getPointerTy());
   } else {
     int FI = MFI->CreateFixedObject(ValVT.getSizeInBits()/8,
@@ -3902,8 +3903,8 @@ static SDValue getShuffleVectorZeroOrUndef(SDValue V2, unsigned Idx,
 
 /// getShuffleScalarElt - Returns the scalar element that will make up the ith
 /// element of the result of the vector shuffle.
-SDValue getShuffleScalarElt(SDNode *N, int Index, SelectionDAG &DAG,
-                            unsigned Depth) {
+static SDValue getShuffleScalarElt(SDNode *N, int Index, SelectionDAG &DAG,
+                                   unsigned Depth) {
   if (Depth == 6)
     return SDValue();  // Limit search depth.
 

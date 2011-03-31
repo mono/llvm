@@ -25,6 +25,7 @@ namespace llvm {
 
 class AliasAnalysis;
 class LiveIntervals;
+class MachineLoopInfo;
 class MachineRegisterInfo;
 class VirtRegMap;
 
@@ -41,6 +42,10 @@ public:
 
     /// Called before shrinking the live range of a virtual register.
     virtual void LRE_WillShrinkVirtReg(unsigned) {}
+
+    /// Called after cloning a virtual register.
+    /// This is used for new registers representing connected components of Old.
+    virtual void LRE_DidCloneVirtReg(unsigned New, unsigned Old) {}
 
     virtual ~Delegate() {}
   };
@@ -64,9 +69,6 @@ private:
   /// rematted_ - Values that were actually rematted, and so need to have their
   /// live range trimmed or entirely removed.
   SmallPtrSet<const VNInfo*,4> rematted_;
-
-  /// createFrom - Create a new virtual register based on OldReg.
-  LiveInterval &createFrom(unsigned, LiveIntervals&, VirtRegMap &);
 
   /// scanRemattable - Identify the parent_ values that may rematerialize.
   void scanRemattable(LiveIntervals &lis,
@@ -113,6 +115,9 @@ public:
     return uselessRegs_;
   }
 
+  /// createFrom - Create a new virtual register based on OldReg.
+  LiveInterval &createFrom(unsigned OldReg, LiveIntervals&, VirtRegMap&);
+
   /// create - Create a new register with the same class and original slot as
   /// parent.
   LiveInterval &create(LiveIntervals &LIS, VirtRegMap &VRM) {
@@ -124,6 +129,11 @@ public:
   /// This function must be called before any rematerialization is attempted.
   bool anyRematerializable(LiveIntervals&, const TargetInstrInfo&,
                            AliasAnalysis*);
+
+  /// checkRematerializable - Manually add VNI to the list of rematerializable
+  /// values if DefMI may be rematerializable.
+  void checkRematerializable(VNInfo *VNI, const MachineInstr *DefMI,
+                             const TargetInstrInfo&, AliasAnalysis*);
 
   /// Remat - Information needed to rematerialize at a specific location.
   struct Remat {
@@ -174,6 +184,10 @@ public:
                          LiveIntervals&, VirtRegMap&,
                          const TargetInstrInfo&);
 
+  /// calculateRegClassAndHint - Recompute register class and hint for each new
+  /// register.
+  void calculateRegClassAndHint(MachineFunction&, LiveIntervals&,
+                                const MachineLoopInfo&);
 };
 
 }

@@ -880,6 +880,7 @@ bool AsmParser::ParseStatement() {
     EatToEndOfStatement();
     return false;
   }
+
   // Allow an integer followed by a ':' as a directional local label.
   if (Lexer.is(AsmToken::Integer)) {
     LocalLabelVal = getTok().getIntVal();
@@ -896,12 +897,18 @@ bool AsmParser::ParseStatement() {
           return TokError("unexpected token at start of statement");
       }
     }
-  }
-  else if (ParseIdentifier(IDVal)) {
+
+  } else if (Lexer.is(AsmToken::Dot)) {
+    // Treat '.' as a valid identifier in this context.
+    Lex();
+    IDVal = ".";
+
+  } else if (ParseIdentifier(IDVal)) {
     if (!TheCondState.Ignore)
       return TokError("unexpected token at start of statement");
     IDVal = "";
   }
+
 
   // Handle conditional assembly here before checking for skipping.  We
   // have to do this so that .endif isn't skipped in a ".if 0" block for
@@ -934,6 +941,10 @@ bool AsmParser::ParseStatement() {
 
     // identifier ':'   -> Label.
     Lex();
+
+    // Diagnose attempt to use '.' as a label.
+    if (IDVal == ".")
+      return Error(IDLoc, "invalid use of pseudo-symbol '.' as a label");
 
     // Diagnose attempt to use a variable as a label.
     //
@@ -978,7 +989,7 @@ bool AsmParser::ParseStatement() {
       return HandleMacroEntry(IDVal, IDLoc, M);
 
   // Otherwise, we have a normal instruction or directive.
-  if (IDVal[0] == '.') {
+  if (IDVal[0] == '.' && IDVal != ".") {
     // Assembler features
     if (IDVal == ".set" || IDVal == ".equ")
       return ParseDirectiveSet(IDVal, true);
@@ -1306,6 +1317,12 @@ bool AsmParser::ParseAssignment(StringRef Name, bool allow_redef) {
   if (Lexer.isNot(AsmToken::EndOfStatement))
     return TokError("unexpected token in assignment");
 
+  // Error on assignment to '.'.
+  if (Name == ".") {
+    return Error(EqualLoc, ("assignment to pseudo-symbol '.' is unsupported "
+                            "(use '.space' or '.org').)"));
+  }
+
   // Eat the end of statement marker.
   Lex();
 
@@ -1535,13 +1552,21 @@ bool AsmParser::ParseDirectiveRealValue(const fltSemantics &Semantics) {
         Lex();
 
       if (getLexer().isNot(AsmToken::Integer) &&
-          getLexer().isNot(AsmToken::Real))
+          getLexer().isNot(AsmToken::Real) &&
+          getLexer().isNot(AsmToken::Identifier))
         return TokError("unexpected token in directive");
 
       // Convert to an APFloat.
       APFloat Value(Semantics);
-      if (Value.convertFromString(getTok().getString(),
-                                  APFloat::rmNearestTiesToEven) ==
+      StringRef IDVal = getTok().getString();
+      if (getLexer().is(AsmToken::Identifier)) {
+        if (!IDVal.compare_lower("infinity") || !IDVal.compare_lower("inf"))
+          Value = APFloat::getInf(Semantics);
+        else if (!IDVal.compare_lower("nan"))
+          Value = APFloat::getNaN(Semantics, false, ~0);
+        else
+          return TokError("invalid floating point literal");
+      } else if (Value.convertFromString(IDVal, APFloat::rmNearestTiesToEven) ==
           APFloat::opInvalidOp)
         return TokError("invalid floating point literal");
       if (IsNeg)

@@ -1944,11 +1944,11 @@ bool GVN::performPRE(Function &F) {
       addToLeaderTable(ValNo, PREInstr, PREPred);
 
       // Create a PHI to make the value available in this block.
-      PHINode* Phi = PHINode::Create(CurInst->getType(),
+      pred_iterator PB = pred_begin(CurrentBlock), PE = pred_end(CurrentBlock);
+      PHINode* Phi = PHINode::Create(CurInst->getType(), std::distance(PB, PE),
                                      CurInst->getName() + ".pre-phi",
                                      CurrentBlock->begin());
-      for (pred_iterator PI = pred_begin(CurrentBlock),
-           PE = pred_end(CurrentBlock); PI != PE; ++PI) {
+      for (pred_iterator PI = PB; PI != PE; ++PI) {
         BasicBlock *P = *PI;
         Phi->addIncoming(predMap[P], P);
       }

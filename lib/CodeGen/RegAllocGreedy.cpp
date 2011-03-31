@@ -49,7 +49,6 @@ using namespace llvm;
 
 STATISTIC(NumGlobalSplits, "Number of split global live ranges");
 STATISTIC(NumLocalSplits,  "Number of split local live ranges");
-STATISTIC(NumReassigned,   "Number of interferences reassigned");
 STATISTIC(NumEvicted,      "Number of interferences evicted");
 
 static RegisterRegAlloc greedyRegAlloc("greedy", "greedy register allocator",
@@ -91,7 +90,8 @@ class RAGreedy : public MachineFunctionPass,
   // range splitting algorithm terminates, something that is otherwise hard to
   // ensure.
   enum LiveRangeStage {
-    RS_Original, ///< Never seen before, never split.
+    RS_New,      ///< Never seen before.
+    RS_First,    ///< First time in the queue.
     RS_Second,   ///< Second time in the queue.
     RS_Region,   ///< Produced by region splitting.
     RS_Block,    ///< Produced by per-block splitting.
@@ -108,8 +108,11 @@ class RAGreedy : public MachineFunctionPass,
   template<typename Iterator>
   void setStage(Iterator Begin, Iterator End, LiveRangeStage NewStage) {
     LRStage.resize(MRI->getNumVirtRegs());
-    for (;Begin != End; ++Begin)
-      LRStage[(*Begin)->reg] = NewStage;
+    for (;Begin != End; ++Begin) {
+      unsigned Reg = (*Begin)->reg;
+      if (LRStage[Reg] == RS_New)
+        LRStage[Reg] = NewStage;
+    }
   }
 
   // splitting state.
@@ -163,10 +166,7 @@ private:
   void LRE_WillEraseInstruction(MachineInstr*);
   bool LRE_CanEraseVirtReg(unsigned);
   void LRE_WillShrinkVirtReg(unsigned);
-
-  bool checkUncachedInterference(LiveInterval&, unsigned);
-  LiveInterval *getSingleInterference(LiveInterval&, unsigned);
-  bool reassignVReg(LiveInterval &InterferingVReg, unsigned OldPhysReg);
+  void LRE_DidCloneVirtReg(unsigned, unsigned);
 
   void mapGlobalInterference(unsigned, SmallVectorImpl<IndexPair>&);
   float calcSplitConstraints(const SmallVectorImpl<IndexPair>&);
@@ -180,8 +180,6 @@ private:
   unsigned nextSplitPoint(unsigned);
   bool canEvictInterference(LiveInterval&, unsigned, float&);
 
-  unsigned tryReassign(LiveInterval&, AllocationOrder&,
-                              SmallVectorImpl<LiveInterval*>&);
   unsigned tryEvict(LiveInterval&, AllocationOrder&,
                     SmallVectorImpl<LiveInterval*>&);
   unsigned tryRegionSplit(LiveInterval&, AllocationOrder&,
@@ -199,7 +197,7 @@ FunctionPass* llvm::createGreedyRegisterAllocator() {
   return new RAGreedy();
 }
 
-RAGreedy::RAGreedy(): MachineFunctionPass(ID), LRStage(RS_Original) {
+RAGreedy::RAGreedy(): MachineFunctionPass(ID), LRStage(RS_New) {
   initializeSlotIndexesPass(*PassRegistry::getPassRegistry());
   initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
   initializeSlotIndexesPass(*PassRegistry::getPassRegistry());
@@ -272,6 +270,14 @@ void RAGreedy::LRE_WillShrinkVirtReg(unsigned VirtReg) {
   enqueue(&LI);
 }
 
+void RAGreedy::LRE_DidCloneVirtReg(unsigned New, unsigned Old) {
+  // LRE may clone a virtual register because dead code elimination causes it to
+  // be split into connected components. Ensure that the new register gets the
+  // same stage as the parent.
+  LRStage.grow(New);
+  LRStage[New] = LRStage[Old];
+}
+
 void RAGreedy::releaseMemory() {
   SpillerInstance.reset(0);
   LRStage.clear();
@@ -288,17 +294,23 @@ void RAGreedy::enqueue(LiveInterval *LI) {
   unsigned Prio;
 
   LRStage.grow(Reg);
-  if (LRStage[Reg] == RS_Original)
-    // 1st generation ranges are handled first, long -> short.
-    Prio = (1u << 31) + Size;
-  else
-    // Repeat offenders are handled second, short -> long
-    Prio = (1u << 30) - Size;
+  if (LRStage[Reg] == RS_New)
+    LRStage[Reg] = RS_First;
 
-  // Boost ranges that have a physical register hint.
-  const unsigned Hint = VRM->getRegAllocPref(Reg);
-  if (TargetRegisterInfo::isPhysicalRegister(Hint))
-    Prio |= (1u << 30);
+  if (LRStage[Reg] == RS_Second)
+    // Unsplit ranges that couldn't be allocated immediately are deferred until
+    // everything else has been allocated. Long ranges are allocated last so
+    // they are split against realistic interference.
+    Prio = (1u << 31) - Size;
+  else {
+    // Everything else is allocated in long->short order. Long ranges that don't
+    // fit should be spilled ASAP so they don't create interference.
+    Prio = (1u << 31) + Size;
+
+    // Boost ranges that have a physical register hint.
+    if (TargetRegisterInfo::isPhysicalRegister(VRM->getRegAllocPref(Reg)))
+      Prio |= (1u << 30);
+  }
 
   Queue.push(std::make_pair(Prio, Reg));
 }
@@ -310,100 +322,6 @@ LiveInterval *RAGreedy::dequeue() {
   Queue.pop();
   return LI;
 }
-
-//===----------------------------------------------------------------------===//
-//                         Register Reassignment
-//===----------------------------------------------------------------------===//
-
-// Check interference without using the cache.
-bool RAGreedy::checkUncachedInterference(LiveInterval &VirtReg,
-                                         unsigned PhysReg) {
-  for (const unsigned *AliasI = TRI->getOverlaps(PhysReg); *AliasI; ++AliasI) {
-    LiveIntervalUnion::Query subQ(&VirtReg, &PhysReg2LiveUnion[*AliasI]);
-    if (subQ.checkInterference())
-      return true;
-  }
-  return false;
-}
-
-/// getSingleInterference - Return the single interfering virtual register
-/// assigned to PhysReg. Return 0 if more than one virtual register is
-/// interfering.
-LiveInterval *RAGreedy::getSingleInterference(LiveInterval &VirtReg,
-                                              unsigned PhysReg) {
-  // Check physreg and aliases.
-  LiveInterval *Interference = 0;
-  for (const unsigned *AliasI = TRI->getOverlaps(PhysReg); *AliasI; ++AliasI) {
-    LiveIntervalUnion::Query &Q = query(VirtReg, *AliasI);
-    if (Q.checkInterference()) {
-      if (Interference)
-        return 0;
-      if (Q.collectInterferingVRegs(2) > 1)
-        return 0;
-      Interference = Q.interferingVRegs().front();
-    }
-  }
-  return Interference;
-}
-
-// Attempt to reassign this virtual register to a different physical register.
-//
-// FIXME: we are not yet caching these "second-level" interferences discovered
-// in the sub-queries. These interferences can change with each call to
-// selectOrSplit. However, we could implement a "may-interfere" cache that
-// could be conservatively dirtied when we reassign or split.
-//
-// FIXME: This may result in a lot of alias queries. We could summarize alias
-// live intervals in their parent register's live union, but it's messy.
-bool RAGreedy::reassignVReg(LiveInterval &InterferingVReg,
-                            unsigned WantedPhysReg) {
-  assert(TargetRegisterInfo::isVirtualRegister(InterferingVReg.reg) &&
-         "Can only reassign virtual registers");
-  assert(TRI->regsOverlap(WantedPhysReg, VRM->getPhys(InterferingVReg.reg)) &&
-         "inconsistent phys reg assigment");
-
-  AllocationOrder Order(InterferingVReg.reg, *VRM, ReservedRegs);
-  while (unsigned PhysReg = Order.next()) {
-    // Don't reassign to a WantedPhysReg alias.
-    if (TRI->regsOverlap(PhysReg, WantedPhysReg))
-      continue;
-
-    if (checkUncachedInterference(InterferingVReg, PhysReg))
-      continue;
-
-    // Reassign the interfering virtual reg to this physical reg.
-    unsigned OldAssign = VRM->getPhys(InterferingVReg.reg);
-    DEBUG(dbgs() << "reassigning: " << InterferingVReg << " from " <<
-          TRI->getName(OldAssign) << " to " << TRI->getName(PhysReg) << '\n');
-    unassign(InterferingVReg, OldAssign);
-    assign(InterferingVReg, PhysReg);
-    ++NumReassigned;
-    return true;
-  }
-  return false;
-}
-
-/// tryReassign - Try to reassign a single interference to a different physreg.
-/// @param  VirtReg Currently unassigned virtual register.
-/// @param  Order   Physregs to try.
-/// @return         Physreg to assign VirtReg, or 0.
-unsigned RAGreedy::tryReassign(LiveInterval &VirtReg, AllocationOrder &Order,
-                               SmallVectorImpl<LiveInterval*> &NewVRegs){
-  NamedRegionTimer T("Reassign", TimerGroupName, TimePassesIsEnabled);
-
-  Order.rewind();
-  while (unsigned PhysReg = Order.next()) {
-    LiveInterval *InterferingVReg = getSingleInterference(VirtReg, PhysReg);
-    if (!InterferingVReg)
-      continue;
-    if (TargetRegisterInfo::isPhysicalRegister(InterferingVReg->reg))
-      continue;
-    if (reassignVReg(*InterferingVReg, PhysReg))
-      return PhysReg;
-  }
-  return 0;
-}
-
 
 //===----------------------------------------------------------------------===//
 //                         Interference eviction
@@ -851,22 +769,8 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
   SE->finish();
   ++NumGlobalSplits;
 
-  if (VerifyEnabled) {
+  if (VerifyEnabled)
     MF->verify(this, "After splitting live range around region");
-
-#ifndef NDEBUG
-    // Make sure that at least one of the new intervals can allocate to PhysReg.
-    // That was the whole point of splitting the live range.
-    bool found = false;
-    for (LiveRangeEdit::iterator I = LREdit.begin(), E = LREdit.end(); I != E;
-         ++I)
-      if (!checkUncachedInterference(**I, PhysReg)) {
-        found = true;
-        break;
-      }
-    assert(found && "No allocatable intervals after pointless splitting");
-#endif
-  }
 }
 
 unsigned RAGreedy::tryRegionSplit(LiveInterval &VirtReg, AllocationOrder &Order,
@@ -1242,19 +1146,12 @@ unsigned RAGreedy::trySplit(LiveInterval &VirtReg, AllocationOrder &Order,
 
 unsigned RAGreedy::selectOrSplit(LiveInterval &VirtReg,
                                  SmallVectorImpl<LiveInterval*> &NewVRegs) {
-  LiveRangeStage Stage = getStage(VirtReg);
-  if (Stage == RS_Original)
-    LRStage[VirtReg.reg] = RS_Second;
-
   // First try assigning a free register.
   AllocationOrder Order(VirtReg.reg, *VRM, ReservedRegs);
   while (unsigned PhysReg = Order.next()) {
     if (!checkPhysRegInterference(VirtReg, PhysReg))
       return PhysReg;
   }
-
-  if (unsigned PhysReg = tryReassign(VirtReg, Order, NewVRegs))
-    return PhysReg;
 
   if (unsigned PhysReg = tryEvict(VirtReg, Order, NewVRegs))
     return PhysReg;
@@ -1264,7 +1161,9 @@ unsigned RAGreedy::selectOrSplit(LiveInterval &VirtReg,
   // The first time we see a live range, don't try to split or spill.
   // Wait until the second time, when all smaller ranges have been allocated.
   // This gives a better picture of the interference to split around.
-  if (Stage == RS_Original) {
+  LiveRangeStage Stage = getStage(VirtReg);
+  if (Stage == RS_First) {
+    LRStage[VirtReg.reg] = RS_Second;
     DEBUG(dbgs() << "wait for second round\n");
     NewVRegs.push_back(&VirtReg);
     return 0;
@@ -1281,6 +1180,7 @@ unsigned RAGreedy::selectOrSplit(LiveInterval &VirtReg,
   NamedRegionTimer T("Spiller", TimerGroupName, TimePassesIsEnabled);
   LiveRangeEdit LRE(VirtReg, NewVRegs, this);
   spiller().spill(LRE);
+  setStage(NewVRegs.begin(), NewVRegs.end(), RS_Spill);
 
   if (VerifyEnabled)
     MF->verify(this, "After spilling");

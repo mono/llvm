@@ -129,8 +129,12 @@ let Properties = [IntrNoMem, Commutative] in {
   def int_arm_neon_vmulp : Neon_2Arg_Intrinsic;
   def int_arm_neon_vqdmulh : Neon_2Arg_Intrinsic;
   def int_arm_neon_vqrdmulh : Neon_2Arg_Intrinsic;
+  def int_arm_neon_vmulls : Neon_2Arg_Long_Intrinsic;
+  def int_arm_neon_vmullu : Neon_2Arg_Long_Intrinsic;
   def int_arm_neon_vmullp : Neon_2Arg_Long_Intrinsic;
   def int_arm_neon_vqdmull : Neon_2Arg_Long_Intrinsic;
+
+  // Vector Multiply and Accumulate/Subtract.
   def int_arm_neon_vqdmlal : Neon_3Arg_Long_Intrinsic;
   def int_arm_neon_vqdmlsl : Neon_3Arg_Long_Intrinsic;
 

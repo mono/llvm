@@ -461,6 +461,10 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
     setOperationAction(ISD::UDIV, MVT::v8i8, Custom);
     setOperationAction(ISD::VSETCC, MVT::v1i64, Expand);
     setOperationAction(ISD::VSETCC, MVT::v2i64, Expand);
+    // Neon does not have single instruction SINT_TO_FP and UINT_TO_FP with
+    // a destination type that is wider than the source.
+    setOperationAction(ISD::SINT_TO_FP, MVT::v4i16, Custom);
+    setOperationAction(ISD::UINT_TO_FP, MVT::v4i16, Custom);
 
     setTargetDAGCombine(ISD::INTRINSIC_VOID);
     setTargetDAGCombine(ISD::INTRINSIC_W_CHAIN);
@@ -862,6 +866,7 @@ const char *ARMTargetLowering::getTargetNodeName(unsigned Opcode) const {
   case ARMISD::BFI:           return "ARMISD::BFI";
   case ARMISD::VORRIMM:       return "ARMISD::VORRIMM";
   case ARMISD::VBICIMM:       return "ARMISD::VBICIMM";
+  case ARMISD::VBSL:          return "ARMISD::VBSL";
   case ARMISD::VLD2DUP:       return "ARMISD::VLD2DUP";
   case ARMISD::VLD3DUP:       return "ARMISD::VLD3DUP";
   case ARMISD::VLD4DUP:       return "ARMISD::VLD4DUP";
@@ -2163,6 +2168,13 @@ ARMTargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG,
     }
     return Result;
   }
+  case Intrinsic::arm_neon_vmulls:
+  case Intrinsic::arm_neon_vmullu: {
+    unsigned NewOpc = (IntNo == Intrinsic::arm_neon_vmulls)
+      ? ARMISD::VMULLs : ARMISD::VMULLu;
+    return DAG.getNode(NewOpc, Op.getDebugLoc(), Op.getValueType(),
+                       Op.getOperand(1), Op.getOperand(2));
+  }
   }
 }
 
@@ -2389,8 +2401,9 @@ ARMTargetLowering::LowerFormalArguments(SDValue Chain,
           // In case of tail call optimization mark all arguments mutable. Since they
           // could be overwritten by lowering of arguments in case of a tail call.
           if (Flags.isByVal()) {
-            int FI = MFI->CreateFixedObject(Flags.getByValSize(),
-                                            VA.getLocMemOffset(), false);
+            unsigned Bytes = Flags.getByValSize();
+            if (Bytes == 0) Bytes = 1; // Don't create zero-sized stack objects.
+            int FI = MFI->CreateFixedObject(Bytes, VA.getLocMemOffset(), false);
             InVals.push_back(DAG.getFrameIndex(FI, getPointerTy()));
           } else {
             int FI = MFI->CreateFixedObject(VA.getLocVT().getSizeInBits()/8,
@@ -2864,8 +2877,39 @@ static SDValue LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG) {
   return DAG.getNode(ISD::BITCAST, dl, MVT::i32, Op);
 }
 
+static SDValue LowerVectorINT_TO_FP(SDValue Op, SelectionDAG &DAG) {
+  EVT VT = Op.getValueType();
+  DebugLoc dl = Op.getDebugLoc();
+
+  EVT OperandVT = Op.getOperand(0).getValueType();
+  assert(OperandVT == MVT::v4i16 && "Invalid type for custom lowering!");
+  if (VT != MVT::v4f32)
+    return DAG.UnrollVectorOp(Op.getNode());
+
+  unsigned CastOpc;
+  unsigned Opc;
+  switch (Op.getOpcode()) {
+  default:
+    assert(0 && "Invalid opcode!");
+  case ISD::SINT_TO_FP:
+    CastOpc = ISD::SIGN_EXTEND;
+    Opc = ISD::SINT_TO_FP;
+    break;
+  case ISD::UINT_TO_FP:
+    CastOpc = ISD::ZERO_EXTEND;
+    Opc = ISD::UINT_TO_FP;
+    break;
+  }
+
+  Op = DAG.getNode(CastOpc, dl, MVT::v4i32, Op.getOperand(0));
+  return DAG.getNode(Opc, dl, VT, Op);
+}
+
 static SDValue LowerINT_TO_FP(SDValue Op, SelectionDAG &DAG) {
   EVT VT = Op.getValueType();
+  if (VT.isVector())
+    return LowerVectorINT_TO_FP(Op, DAG);
+
   DebugLoc dl = Op.getDebugLoc();
   unsigned Opc;
 
@@ -4380,6 +4424,28 @@ static SDValue SkipExtension(SDNode *N, SelectionDAG &DAG) {
                      MVT::getVectorVT(TruncVT, NumElts), Ops.data(), NumElts);
 }
 
+static bool isAddSubSExt(SDNode *N, SelectionDAG &DAG) {
+  unsigned Opcode = N->getOpcode();
+  if (Opcode == ISD::ADD || Opcode == ISD::SUB) {
+    SDNode *N0 = N->getOperand(0).getNode();
+    SDNode *N1 = N->getOperand(1).getNode();
+    return N0->hasOneUse() && N1->hasOneUse() &&
+      isSignExtended(N0, DAG) && isSignExtended(N1, DAG);
+  }
+  return false;
+}
+
+static bool isAddSubZExt(SDNode *N, SelectionDAG &DAG) {
+  unsigned Opcode = N->getOpcode();
+  if (Opcode == ISD::ADD || Opcode == ISD::SUB) {
+    SDNode *N0 = N->getOperand(0).getNode();
+    SDNode *N1 = N->getOperand(1).getNode();
+    return N0->hasOneUse() && N1->hasOneUse() &&
+      isZeroExtended(N0, DAG) && isZeroExtended(N1, DAG);
+  }
+  return false;
+}
+
 static SDValue LowerMUL(SDValue Op, SelectionDAG &DAG) {
   // Multiplications are only custom-lowered for 128-bit vectors so that
   // VMULL can be detected.  Otherwise v2i64 multiplications are not legal.
@@ -4388,26 +4454,70 @@ static SDValue LowerMUL(SDValue Op, SelectionDAG &DAG) {
   SDNode *N0 = Op.getOperand(0).getNode();
   SDNode *N1 = Op.getOperand(1).getNode();
   unsigned NewOpc = 0;
-  if (isSignExtended(N0, DAG) && isSignExtended(N1, DAG))
+  bool isMLA = false;
+  bool isN0SExt = isSignExtended(N0, DAG);
+  bool isN1SExt = isSignExtended(N1, DAG);
+  if (isN0SExt && isN1SExt)
     NewOpc = ARMISD::VMULLs;
-  else if (isZeroExtended(N0, DAG) && isZeroExtended(N1, DAG))
-    NewOpc = ARMISD::VMULLu;
-  else if (VT == MVT::v2i64)
-    // Fall through to expand this.  It is not legal.
-    return SDValue();
-  else
-    // Other vector multiplications are legal.
-    return Op;
+  else {
+    bool isN0ZExt = isZeroExtended(N0, DAG);
+    bool isN1ZExt = isZeroExtended(N1, DAG);
+    if (isN0ZExt && isN1ZExt)
+      NewOpc = ARMISD::VMULLu;
+    else if (isN1SExt || isN1ZExt) {
+      // Look for (s/zext A + s/zext B) * (s/zext C). We want to turn these
+      // into (s/zext A * s/zext C) + (s/zext B * s/zext C)
+      if (isN1SExt && isAddSubSExt(N0, DAG)) {
+        NewOpc = ARMISD::VMULLs;
+        isMLA = true;
+      } else if (isN1ZExt && isAddSubZExt(N0, DAG)) {
+        NewOpc = ARMISD::VMULLu;
+        isMLA = true;
+      } else if (isN0ZExt && isAddSubZExt(N1, DAG)) {
+        std::swap(N0, N1);
+        NewOpc = ARMISD::VMULLu;
+        isMLA = true;
+      }
+    }
+
+    if (!NewOpc) {
+      if (VT == MVT::v2i64)
+        // Fall through to expand this.  It is not legal.
+        return SDValue();
+      else
+        // Other vector multiplications are legal.
+        return Op;
+    }
+  }
 
   // Legalize to a VMULL instruction.
   DebugLoc DL = Op.getDebugLoc();
-  SDValue Op0 = SkipExtension(N0, DAG);
+  SDValue Op0;
   SDValue Op1 = SkipExtension(N1, DAG);
+  if (!isMLA) {
+    Op0 = SkipExtension(N0, DAG);
+    assert(Op0.getValueType().is64BitVector() &&
+           Op1.getValueType().is64BitVector() &&
+           "unexpected types for extended operands to VMULL");
+    return DAG.getNode(NewOpc, DL, VT, Op0, Op1);
+  }
 
-  assert(Op0.getValueType().is64BitVector() &&
-         Op1.getValueType().is64BitVector() &&
-         "unexpected types for extended operands to VMULL");
-  return DAG.getNode(NewOpc, DL, VT, Op0, Op1);
+  // Optimizing (zext A + zext B) * C, to (VMULL A, C) + (VMULL B, C) during
+  // isel lowering to take advantage of no-stall back to back vmul + vmla.
+  //   vmull q0, d4, d6
+  //   vmlal q0, d5, d6
+  // is faster than
+  //   vaddl q0, d4, d5
+  //   vmovl q1, d6
+  //   vmul  q0, q0, q1
+  SDValue N00 = SkipExtension(N0->getOperand(0).getNode(), DAG);
+  SDValue N01 = SkipExtension(N0->getOperand(1).getNode(), DAG);
+  EVT Op1VT = Op1.getValueType();
+  return DAG.getNode(N0->getOpcode(), DL, VT,
+                     DAG.getNode(NewOpc, DL, VT,
+                               DAG.getNode(ISD::BITCAST, DL, Op1VT, N00), Op1),
+                     DAG.getNode(NewOpc, DL, VT,
+                               DAG.getNode(ISD::BITCAST, DL, Op1VT, N01), Op1));
 }
 
 static SDValue 
@@ -5178,6 +5288,7 @@ static SDValue PerformMULCombine(SDNode *N,
 
 static SDValue PerformANDCombine(SDNode *N,
                                 TargetLowering::DAGCombinerInfo &DCI) {
+  
   // Attempt to use immediate-form VBIC
   BuildVectorSDNode *BVN = dyn_cast<BuildVectorSDNode>(N->getOperand(1));
   DebugLoc dl = N->getDebugLoc();
@@ -5237,6 +5348,37 @@ static SDValue PerformORCombine(SDNode *N,
     }
   }
 
+  SDValue N0 = N->getOperand(0);
+  if (N0.getOpcode() != ISD::AND)
+    return SDValue();
+  SDValue N1 = N->getOperand(1);
+
+  // (or (and B, A), (and C, ~A)) => (VBSL A, B, C) when A is a constant.
+  if (Subtarget->hasNEON() && N1.getOpcode() == ISD::AND && VT.isVector() &&
+      DAG.getTargetLoweringInfo().isTypeLegal(VT)) {
+    APInt SplatUndef;
+    unsigned SplatBitSize;
+    bool HasAnyUndefs;
+
+    BuildVectorSDNode *BVN0 = dyn_cast<BuildVectorSDNode>(N0->getOperand(1));
+    APInt SplatBits0;
+    if (BVN0 && BVN0->isConstantSplat(SplatBits0, SplatUndef, SplatBitSize,
+                                  HasAnyUndefs) && !HasAnyUndefs) {
+      BuildVectorSDNode *BVN1 = dyn_cast<BuildVectorSDNode>(N1->getOperand(1));
+      APInt SplatBits1;
+      if (BVN1 && BVN1->isConstantSplat(SplatBits1, SplatUndef, SplatBitSize,
+                                    HasAnyUndefs) && !HasAnyUndefs &&
+          SplatBits0 == ~SplatBits1) {
+        // Canonicalize the vector type to make instruction selection simpler.
+        EVT CanonicalVT = VT.is128BitVector() ? MVT::v4i32 : MVT::v2i32;
+        SDValue Result = DAG.getNode(ARMISD::VBSL, dl, CanonicalVT,
+                                     N0->getOperand(1), N0->getOperand(0),
+                                     N1->getOperand(1));
+        return DAG.getNode(ISD::BITCAST, dl, VT, Result);
+      }
+    }
+  }
+
   // Try to use the ARM/Thumb2 BFI (bitfield insert) instruction when
   // reasonable.
 
@@ -5244,19 +5386,16 @@ static SDValue PerformORCombine(SDNode *N,
   if (Subtarget->isThumb1Only() || !Subtarget->hasV6T2Ops())
     return SDValue();
 
-  SDValue N0 = N->getOperand(0), N1 = N->getOperand(1);
   DebugLoc DL = N->getDebugLoc();
   // 1) or (and A, mask), val => ARMbfi A, val, mask
   //      iff (val & mask) == val
   //
   // 2) or (and A, mask), (and B, mask2) => ARMbfi A, (lsr B, amt), mask
   //  2a) iff isBitFieldInvertedMask(mask) && isBitFieldInvertedMask(~mask2)
-  //          && CountPopulation_32(mask) == CountPopulation_32(~mask2)
+  //          && mask == ~mask2
   //  2b) iff isBitFieldInvertedMask(~mask) && isBitFieldInvertedMask(mask2)
-  //          && CountPopulation_32(mask) == CountPopulation_32(~mask2)
+  //          && ~mask == mask2
   //  (i.e., copy a bitfield value into another bitfield of the same width)
-  if (N0.getOpcode() != ISD::AND)
-    return SDValue();
 
   if (VT != MVT::i32)
     return SDValue();
@@ -5299,26 +5438,26 @@ static SDValue PerformORCombine(SDNode *N,
       return SDValue();
     unsigned Mask2 = N11C->getZExtValue();
 
+    // Mask and ~Mask2 (or reverse) must be equivalent for the BFI pattern
+    // as is to match.
     if (ARM::isBitFieldInvertedMask(Mask) &&
-        ARM::isBitFieldInvertedMask(~Mask2) &&
-        (CountPopulation_32(Mask) == CountPopulation_32(~Mask2))) {
+        (Mask == ~Mask2)) {
       // The pack halfword instruction works better for masks that fit it,
       // so use that when it's available.
       if (Subtarget->hasT2ExtractPack() &&
           (Mask == 0xffff || Mask == 0xffff0000))
         return SDValue();
       // 2a
-      unsigned lsb = CountTrailingZeros_32(Mask2);
+      unsigned amt = CountTrailingZeros_32(Mask2);
       Res = DAG.getNode(ISD::SRL, DL, VT, N1.getOperand(0),
-                        DAG.getConstant(lsb, MVT::i32));
+                        DAG.getConstant(amt, MVT::i32));
       Res = DAG.getNode(ARMISD::BFI, DL, VT, N00, Res,
                         DAG.getConstant(Mask, MVT::i32));
       // Do not add new nodes to DAG combiner worklist.
       DCI.CombineTo(N, Res, false);
       return SDValue();
     } else if (ARM::isBitFieldInvertedMask(~Mask) &&
-               ARM::isBitFieldInvertedMask(Mask2) &&
-               (CountPopulation_32(~Mask) == CountPopulation_32(Mask2))) {
+               (~Mask == Mask2)) {
       // The pack halfword instruction works better for masks that fit it,
       // so use that when it's available.
       if (Subtarget->hasT2ExtractPack() &&
@@ -5329,7 +5468,7 @@ static SDValue PerformORCombine(SDNode *N,
       Res = DAG.getNode(ISD::SRL, DL, VT, N00,
                         DAG.getConstant(lsb, MVT::i32));
       Res = DAG.getNode(ARMISD::BFI, DL, VT, N1.getOperand(0), Res,
-                                DAG.getConstant(Mask2, MVT::i32));
+                        DAG.getConstant(Mask2, MVT::i32));
       // Do not add new nodes to DAG combiner worklist.
       DCI.CombineTo(N, Res, false);
       return SDValue();

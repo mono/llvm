@@ -11,9 +11,11 @@
 // is spilled or split.
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "regalloc"
 #include "LiveRangeEdit.h"
 #include "VirtRegMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/CodeGen/CalcSpillWeights.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Target/TargetInstrInfo.h"
@@ -34,6 +36,16 @@ LiveInterval &LiveRangeEdit::createFrom(unsigned OldReg,
   return LI;
 }
 
+void LiveRangeEdit::checkRematerializable(VNInfo *VNI,
+                                          const MachineInstr *DefMI,
+                                          const TargetInstrInfo &tii,
+                                          AliasAnalysis *aa) {
+  assert(DefMI && "Missing instruction");
+  if (tii.isTriviallyReMaterializable(DefMI, aa))
+    remattable_.insert(VNI);
+  scannedRemattable_ = true;
+}
+
 void LiveRangeEdit::scanRemattable(LiveIntervals &lis,
                                    const TargetInstrInfo &tii,
                                    AliasAnalysis *aa) {
@@ -45,10 +57,8 @@ void LiveRangeEdit::scanRemattable(LiveIntervals &lis,
     MachineInstr *DefMI = lis.getInstructionFromIndex(VNI->def);
     if (!DefMI)
       continue;
-    if (tii.isTriviallyReMaterializable(DefMI, aa))
-      remattable_.insert(VNI);
+    checkRematerializable(VNI, DefMI, tii, aa);
   }
-  scannedRemattable_ = true;
 }
 
 bool LiveRangeEdit::anyRematerializable(LiveIntervals &lis,
@@ -69,14 +79,11 @@ bool LiveRangeEdit::allUsesAvailableAt(const MachineInstr *OrigMI,
   UseIdx = UseIdx.getUseIndex();
   for (unsigned i = 0, e = OrigMI->getNumOperands(); i != e; ++i) {
     const MachineOperand &MO = OrigMI->getOperand(i);
-    if (!MO.isReg() || !MO.getReg() || MO.getReg() == getReg())
+    if (!MO.isReg() || !MO.getReg() || MO.isDef())
       continue;
     // Reserved registers are OK.
     if (MO.isUndef() || !lis.hasInterval(MO.getReg()))
       continue;
-    // We don't want to move any defs.
-    if (MO.isDef())
-      return false;
     // We cannot depend on virtual registers in uselessRegs_.
     if (uselessRegs_)
       for (unsigned ui = 0, ue = uselessRegs_->size(); ui != ue; ++ui)
@@ -103,16 +110,22 @@ bool LiveRangeEdit::canRematerializeAt(Remat &RM,
   if (!remattable_.count(RM.ParentVNI))
     return false;
 
-  // No defining instruction.
-  RM.OrigMI = lis.getInstructionFromIndex(RM.ParentVNI->def);
-  assert(RM.OrigMI && "Defining instruction for remattable value disappeared");
+  // No defining instruction provided.
+  SlotIndex DefIdx;
+  if (RM.OrigMI)
+    DefIdx = lis.getInstructionIndex(RM.OrigMI);
+  else {
+    DefIdx = RM.ParentVNI->def;
+    RM.OrigMI = lis.getInstructionFromIndex(DefIdx);
+    assert(RM.OrigMI && "No defining instruction for remattable value");
+  }
 
   // If only cheap remats were requested, bail out early.
   if (cheapAsAMove && !RM.OrigMI->getDesc().isAsCheapAsAMove())
     return false;
 
   // Verify that all used registers are available with the same values.
-  if (!allUsesAvailableAt(RM.OrigMI, RM.ParentVNI->def, UseIdx, lis))
+  if (!allUsesAvailableAt(RM.OrigMI, DefIdx, UseIdx, lis))
     return false;
 
   return true;
@@ -218,9 +231,22 @@ void LiveRangeEdit::eliminateDeadDefs(SmallVectorImpl<MachineInstr*> &Dead,
       continue;
     DEBUG(dbgs() << NumComp << " components: " << *LI << '\n');
     SmallVector<LiveInterval*, 8> Dups(1, LI);
-    for (unsigned i = 1; i != NumComp; ++i)
+    for (unsigned i = 1; i != NumComp; ++i) {
       Dups.push_back(&createFrom(LI->reg, LIS, VRM));
+      if (delegate_)
+        delegate_->LRE_DidCloneVirtReg(Dups.back()->reg, LI->reg);
+    }
     ConEQ.Distribute(&Dups[0], VRM.getRegInfo());
   }
 }
 
+void LiveRangeEdit::calculateRegClassAndHint(MachineFunction &MF,
+                                             LiveIntervals &LIS,
+                                             const MachineLoopInfo &Loops) {
+  VirtRegAuxInfo VRAI(MF, LIS, Loops);
+  for (iterator I = begin(), E = end(); I != E; ++I) {
+    LiveInterval &LI = **I;
+    VRAI.CalculateRegClass(LI.reg);
+    VRAI.CalculateWeightAndHint(LI);
+  }
+}

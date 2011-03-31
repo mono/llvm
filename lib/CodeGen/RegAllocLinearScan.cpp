@@ -375,7 +375,7 @@ namespace {
             dbgs() << str << " intervals:\n";
 
           for (; i != e; ++i) {
-            dbgs() << "\t" << *i->first << " -> ";
+            dbgs() << '\t' << *i->first << " -> ";
 
             unsigned reg = i->first->reg;
             if (TargetRegisterInfo::isVirtualRegister(reg))
@@ -390,7 +390,7 @@ namespace {
 }
 
 INITIALIZE_PASS_BEGIN(RALinScan, "linearscan-regalloc",
-                "Linear Scan Register Allocator", false, false)
+                      "Linear Scan Register Allocator", false, false)
 INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
 INITIALIZE_PASS_DEPENDENCY(StrongPHIElimination)
 INITIALIZE_PASS_DEPENDENCY(CalculateSpillWeights)
@@ -401,7 +401,7 @@ INITIALIZE_PASS_DEPENDENCY(VirtRegMap)
 INITIALIZE_AG_DEPENDENCY(RegisterCoalescer)
 INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_END(RALinScan, "linearscan-regalloc",
-                "Linear Scan Register Allocator", false, false)
+                    "Linear Scan Register Allocator", false, false)
 
 void RALinScan::ComputeRelatedRegClasses() {
   // First pass, add all reg classes to the union, and determine at least one
@@ -1110,6 +1110,7 @@ void RALinScan::assignRegOrStackSlotAtInterval(LiveInterval* cur) {
   // list.
   if (physReg) {
     DEBUG(dbgs() <<  tri_->getName(physReg) << '\n');
+    assert(RC->contains(physReg) && "Invalid candidate");
     vrm_->assignVirt2Phys(cur->reg, physReg);
     addRegUse(physReg);
     active_.push_back(std::make_pair(cur, cur->begin()));

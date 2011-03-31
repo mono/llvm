@@ -1140,7 +1140,7 @@ static bool DisassembleThumb2LdStMul(MCInst &MI, unsigned Opcode, uint32_t insn,
           Opcode == ARM::t2STMIA || Opcode == ARM::t2STMIA_UPD ||
           Opcode == ARM::t2STMDB || Opcode == ARM::t2STMDB_UPD)
          && "Unexpected opcode");
-  assert(NumOps >= 5 && "Thumb2 LdStMul expects NumOps >= 5");
+  assert(NumOps >= 4 && "Thumb2 LdStMul expects NumOps >= 4");
 
   NumOpsAdded = 0;
 
@@ -1194,8 +1194,8 @@ static bool DisassembleThumb2LdStEx(MCInst &MI, unsigned Opcode, uint32_t insn,
   OpIdx = 0;
 
   assert(NumOps >= 2
-         && OpInfo[0].RegClass == ARM::GPRRegClassID
-         && OpInfo[1].RegClass == ARM::GPRRegClassID
+         && OpInfo[0].RegClass > 0
+         && OpInfo[1].RegClass > 0
          && "Expect >=2 operands and first two as reg operands");
 
   bool isStore = (ARM::t2STREX <= Opcode && Opcode <= ARM::t2STREXH);
@@ -1205,34 +1205,31 @@ static bool DisassembleThumb2LdStEx(MCInst &MI, unsigned Opcode, uint32_t insn,
   // Add the destination operand for store.
   if (isStore) {
     MI.addOperand(MCOperand::CreateReg(
-                    getRegisterEnum(B, ARM::GPRRegClassID,
+                    getRegisterEnum(B, OpInfo[OpIdx].RegClass,
                                     isSW ? decodeRs(insn) : decodeRm(insn))));
     ++OpIdx;
   }
 
   // Source operand for store and destination operand for load.
-  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, OpInfo[OpIdx].RegClass,
                                                      decodeRd(insn))));
   ++OpIdx;
 
   // Thumb2 doubleword complication: with an extra source/destination operand.
   if (isDW) {
-    MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+    MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B,OpInfo[OpIdx].RegClass,
                                                        decodeRs(insn))));
     ++OpIdx;
   }
 
   // Finally add the pointer operand.
-  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, OpInfo[OpIdx].RegClass,
                                                      decodeRn(insn))));
   ++OpIdx;
 
   return true;
 }
 
-// LLVM, as of Jan-05-2010, does not output <Rt2>, i.e., Rs, in the asm.
-// Whereas the ARM Arch. Manual does not require that t2 = t+1 like in ARM ISA.
-//
 // t2LDRDi8: Rd Rs Rn imm8s4 (offset mode)
 // t2LDRDpci: Rd Rs imm8s4 (Not decoded, prefer the generic t2LDRDi8 version)
 // t2STRDi8: Rd Rs Rn imm8s4 (offset mode)
@@ -1246,18 +1243,21 @@ static bool DisassembleThumb2LdStDual(MCInst &MI, unsigned Opcode,
   if (!OpInfo) return false;
 
   assert(NumOps >= 4
-         && OpInfo[0].RegClass == ARM::GPRRegClassID
-         && OpInfo[1].RegClass == ARM::GPRRegClassID
-         && OpInfo[2].RegClass == ARM::GPRRegClassID
+         && OpInfo[0].RegClass > 0
+         && OpInfo[0].RegClass == OpInfo[1].RegClass
+         && OpInfo[2].RegClass > 0
          && OpInfo[3].RegClass < 0
          && "Expect >= 4 operands and first 3 as reg operands");
 
   // Add the <Rt> <Rt2> operands.
-  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+  unsigned RegClassPair = OpInfo[0].RegClass;
+  unsigned RegClassBase = OpInfo[2].RegClass;
+  
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RegClassPair,
                                                      decodeRd(insn))));
-  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RegClassPair,
                                                      decodeRs(insn))));
-  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, RegClassBase,
                                                      decodeRn(insn))));
 
   // Finally add (+/-)imm8*4, depending on the U bit.
@@ -1786,7 +1786,7 @@ static bool DisassembleThumb2PreLoad(MCInst &MI, unsigned Opcode, uint32_t insn,
                                                      decodeRn(insn))));
   ++OpIdx;
 
-  if (OpInfo[OpIdx].RegClass == ARM::GPRRegClassID) {
+  if (OpInfo[OpIdx].RegClass == ARM::rGPRRegClassID) {
     MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
                                                        decodeRm(insn))));
   } else {
@@ -1794,17 +1794,17 @@ static bool DisassembleThumb2PreLoad(MCInst &MI, unsigned Opcode, uint32_t insn,
            && !OpInfo[OpIdx].isOptionalDef()
            && "Pure imm operand expected");
     int Offset = 0;
-    if (slice(insn, 19, 16) == 0xFF) {
-      bool Negative = slice(insn, 23, 23) == 0;
-      unsigned Imm12 = getImm12(insn);
-      Offset = Negative ? -1 - Imm12 : 1 * Imm12;
-    } else if (Opcode == ARM::t2PLDi8 || Opcode == ARM::t2PLDWi8 ||
-               Opcode == ARM::t2PLIi8) {
+    if (Opcode == ARM::t2PLDi8 || Opcode == ARM::t2PLDWi8 ||
+        Opcode == ARM::t2PLIi8) {
       // A8.6.117 Encoding T2: add = FALSE
       unsigned Imm8 = getImm8(insn);
-      Offset = -1 - Imm8;
-    } else // The i12 forms.  See, for example, A8.6.117 Encoding T1.
+      Offset = -1 * Imm8;
+    } else {
+      // The i12 forms.  See, for example, A8.6.117 Encoding T1.
+      // Note that currently t2PLDi12 also handles the previously named t2PLDpci
+      // opcode, that's why we use decodeImm12(insn) which returns +/- imm12.
       Offset = decodeImm12(insn);
+    }
     MI.addOperand(MCOperand::CreateImm(Offset));
   }
   ++OpIdx;
@@ -1868,7 +1868,7 @@ static bool DisassembleThumb2LdSt(bool Load, MCInst &MI, unsigned Opcode,
          OpInfo[1].RegClass == ARM::GPRRegClassID &&
          "Expect >= 3 operands and first two as reg operands");
 
-  bool ThreeReg = (OpInfo[2].RegClass == ARM::GPRRegClassID);
+  bool ThreeReg = (OpInfo[2].RegClass > 0);
   bool TIED_TO = ThreeReg && TID.getOperandConstraint(2, TOI::TIED_TO) != -1;
   bool Imm12 = !ThreeReg && slice(insn, 23, 23) == 1; // ARMInstrThumb2.td
 
@@ -1912,7 +1912,8 @@ static bool DisassembleThumb2LdSt(bool Load, MCInst &MI, unsigned Opcode,
   ++OpIdx;
 
   if (ThreeReg) {
-    MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::GPRRegClassID,
+    // This could be an offset register or a TIED_TO register.
+    MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B,OpInfo[OpIdx].RegClass,
                                                        R2)));
     ++OpIdx;
   }
@@ -1946,25 +1947,25 @@ static bool DisassembleThumb2DPReg(MCInst &MI, unsigned Opcode, uint32_t insn,
   OpIdx = 0;
 
   assert(NumOps >= 2 &&
-         OpInfo[0].RegClass == ARM::rGPRRegClassID &&
-         OpInfo[1].RegClass == ARM::rGPRRegClassID &&
+         OpInfo[0].RegClass > 0 &&
+         OpInfo[1].RegClass > 0 &&
          "Expect >= 2 operands and first two as reg operands");
 
   // Build the register operands, followed by the optional rotation amount.
 
-  bool ThreeReg = NumOps > 2 && OpInfo[2].RegClass == ARM::rGPRRegClassID;
+  bool ThreeReg = NumOps > 2 && OpInfo[2].RegClass > 0;
 
-  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::rGPRRegClassID,
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, OpInfo[OpIdx].RegClass,
                                                      decodeRs(insn))));
   ++OpIdx;
 
   if (ThreeReg) {
-    MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::rGPRRegClassID,
+    MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B,OpInfo[OpIdx].RegClass,
                                                        decodeRn(insn))));
     ++OpIdx;
   }
 
-  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::rGPRRegClassID,
+  MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, OpInfo[OpIdx].RegClass,
                                                      decodeRm(insn))));
   ++OpIdx;
 
