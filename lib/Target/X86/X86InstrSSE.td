@@ -3195,7 +3195,7 @@ def : Pat<(X86MFence), (MFENCE)>;
 
 // Pause. This "instruction" is encoded as "rep; nop", so even though it
 // was introduced with SSE2, it's backward compatible.
-def PAUSE : I<0x90, RawFrm, (outs), (ins), "pause", []>, REP;
+def PAUSE : I<0x90, RawFrm, (outs), (ins), "pause", [(int_x86_sse2_pause)]>, REP;
 
 // Alias instructions that map zero vector to pxor / xorp* for sse.
 // We set canFoldAsLoad because this can be converted to a constant-pool
