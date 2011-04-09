@@ -37,7 +37,7 @@ namespace Mips {
     // To be used with float branch True
     FCOND_F,
     FCOND_UN,
-    FCOND_EQ,
+    FCOND_OEQ,
     FCOND_UEQ,
     FCOND_OLT,
     FCOND_ULT,
@@ -57,8 +57,8 @@ namespace Mips {
     // above ones, but are used with a branch False;
     FCOND_T,
     FCOND_OR,
-    FCOND_NEQ,
-    FCOND_OGL,
+    FCOND_UNE,
+    FCOND_ONE,
     FCOND_UGE,
     FCOND_OGE,
     FCOND_UGT,
@@ -70,24 +70,12 @@ namespace Mips {
     FCOND_NLT,
     FCOND_GE,
     FCOND_NLE,
-    FCOND_GT,
-
-    // Only integer conditions
-    COND_E,
-    COND_GZ,
-    COND_GEZ,
-    COND_LZ,
-    COND_LEZ,
-    COND_NE,
-    COND_INVALID
+    FCOND_GT
   };
 
-  // Turn condition code into conditional branch opcode.
-  unsigned GetCondBranchFromCond(CondCode CC);
-
-  /// GetOppositeBranchCondition - Return the inverse of the specified cond,
-  /// e.g. turning COND_E to COND_NE.
-  CondCode GetOppositeBranchCondition(Mips::CondCode CC);
+  /// GetOppositeBranchOpc - Return the inverse of the specified
+  /// opcode, e.g. turning BEQ to BNE.
+  unsigned GetOppositeBranchOpc(unsigned Opc);
 
   /// MipsCCToString - Map each FP condition code to its string
   inline static const char *MipsFCCToString(Mips::CondCode CC)
@@ -98,10 +86,10 @@ namespace Mips {
       case FCOND_T:   return "f";
       case FCOND_UN:
       case FCOND_OR:  return "un";
-      case FCOND_EQ:
-      case FCOND_NEQ: return "eq";
+      case FCOND_OEQ:
+      case FCOND_UNE: return "eq";
       case FCOND_UEQ:
-      case FCOND_OGL: return "ueq";
+      case FCOND_ONE: return "ueq";
       case FCOND_OLT:
       case FCOND_UGE: return "olt";
       case FCOND_ULT:
@@ -121,11 +109,11 @@ namespace Mips {
       case FCOND_LT:
       case FCOND_NLT: return "lt";
       case FCOND_NGE:
-      case FCOND_GE:  return "ge";
+      case FCOND_GE:  return "nge";
       case FCOND_LE:
-      case FCOND_NLE: return "nle";
+      case FCOND_NLE: return "le";
       case FCOND_NGT:
-      case FCOND_GT:  return "gt";
+      case FCOND_GT:  return "ngt";
     }
   }
 }
@@ -155,10 +143,10 @@ namespace MipsII {
     /// for the relocatable object file being produced.
     MO_GPREL,
 
-    /// MO_ABS_HILO - Represents the hi or low part of an absolute symbol
+    /// MO_ABS_HI/LO - Represents the hi or low part of an absolute symbol
     /// address.
-    MO_ABS_HILO
-
+    MO_ABS_HI,
+    MO_ABS_LO
   };
 }
 
@@ -196,6 +184,12 @@ public:
                              SmallVectorImpl<MachineOperand> &Cond,
                              bool AllowModify) const;
   virtual unsigned RemoveBranch(MachineBasicBlock &MBB) const;
+
+private:
+  void BuildCondBr(MachineBasicBlock &MBB, MachineBasicBlock *TBB, DebugLoc DL,
+                   const SmallVectorImpl<MachineOperand>& Cond) const;
+
+public:
   virtual unsigned InsertBranch(MachineBasicBlock &MBB, MachineBasicBlock *TBB,
                                 MachineBasicBlock *FBB,
                                 const SmallVectorImpl<MachineOperand> &Cond,

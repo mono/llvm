@@ -14,13 +14,15 @@
 
 #define DEBUG_TYPE "regalloc"
 #include "AllocationOrder.h"
-#include "LiveIntervalUnion.h"
+#include "InterferenceCache.h"
+#include "LiveDebugVariables.h"
 #include "LiveRangeEdit.h"
 #include "RegAllocBase.h"
 #include "Spiller.h"
 #include "SpillPlacement.h"
 #include "SplitKit.h"
 #include "VirtRegMap.h"
+#include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Function.h"
@@ -119,15 +121,18 @@ class RAGreedy : public MachineFunctionPass,
   std::auto_ptr<SplitAnalysis> SA;
   std::auto_ptr<SplitEditor> SE;
 
-  /// All basic blocks where the current register is live.
+  /// Cached per-block interference maps
+  InterferenceCache IntfCache;
+
+  /// All basic blocks where the current register has uses.
   SmallVector<SpillPlacement::BlockConstraint, 8> SplitConstraints;
 
-  typedef std::pair<SlotIndex, SlotIndex> IndexPair;
+  /// Live-through blocks that have already been added to SpillPlacer.
+  SparseBitVector<> ActiveThroughBlocks;
 
   /// Global live range splitting candidate info.
   struct GlobalSplitCandidate {
     unsigned PhysReg;
-    SmallVector<IndexPair, 8> Interference;
     BitVector LiveBundles;
   };
 
@@ -168,10 +173,10 @@ private:
   void LRE_WillShrinkVirtReg(unsigned);
   void LRE_DidCloneVirtReg(unsigned, unsigned);
 
-  void mapGlobalInterference(unsigned, SmallVectorImpl<IndexPair>&);
-  float calcSplitConstraints(const SmallVectorImpl<IndexPair>&);
-
-  float calcGlobalSplitCost(const BitVector&);
+  bool addSplitConstraints(InterferenceCache::Cursor, float&);
+  void addThroughConstraints(InterferenceCache::Cursor, ArrayRef<unsigned>);
+  void growRegion(InterferenceCache::Cursor);
+  float calcGlobalSplitCost(unsigned, const BitVector&);
   void splitAroundRegion(LiveInterval&, unsigned, const BitVector&,
                          SmallVectorImpl<LiveInterval*>&);
   void calcGapWeights(unsigned, SmallVectorImpl<float>&);
@@ -198,6 +203,7 @@ FunctionPass* llvm::createGreedyRegisterAllocator() {
 }
 
 RAGreedy::RAGreedy(): MachineFunctionPass(ID), LRStage(RS_New) {
+  initializeLiveDebugVariablesPass(*PassRegistry::getPassRegistry());
   initializeSlotIndexesPass(*PassRegistry::getPassRegistry());
   initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
   initializeSlotIndexesPass(*PassRegistry::getPassRegistry());
@@ -220,6 +226,8 @@ void RAGreedy::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<LiveIntervals>();
   AU.addRequired<SlotIndexes>();
   AU.addPreserved<SlotIndexes>();
+  AU.addRequired<LiveDebugVariables>();
+  AU.addPreserved<LiveDebugVariables>();
   if (StrongPHIElim)
     AU.addRequiredID(StrongPHIEliminationID);
   AU.addRequiredTransitive<RegisterCoalescer>();
@@ -407,96 +415,50 @@ unsigned RAGreedy::tryEvict(LiveInterval &VirtReg,
 //                              Region Splitting
 //===----------------------------------------------------------------------===//
 
-/// mapGlobalInterference - Compute a map of the interference from PhysReg and
-/// its aliases in each block in SA->LiveBlocks.
-/// If LiveBlocks[i] is live-in, Ranges[i].first is the first interference.
-/// If LiveBlocks[i] is live-out, Ranges[i].second is the last interference.
-void RAGreedy::mapGlobalInterference(unsigned PhysReg,
-                                     SmallVectorImpl<IndexPair> &Ranges) {
-  Ranges.assign(SA->LiveBlocks.size(), IndexPair());
-  LiveInterval &VirtReg = const_cast<LiveInterval&>(SA->getParent());
-  for (const unsigned *AI = TRI->getOverlaps(PhysReg); *AI; ++AI) {
-    if (!query(VirtReg, *AI).checkInterference())
-      continue;
-    LiveIntervalUnion::SegmentIter IntI =
-      PhysReg2LiveUnion[*AI].find(VirtReg.beginIndex());
-    if (!IntI.valid())
-      continue;
-    for (unsigned i = 0, e = SA->LiveBlocks.size(); i != e; ++i) {
-      const SplitAnalysis::BlockInfo &BI = SA->LiveBlocks[i];
-      IndexPair &IP = Ranges[i];
+/// addSplitConstraints - Fill out the SplitConstraints vector based on the
+/// interference pattern in Physreg and its aliases. Add the constraints to
+/// SpillPlacement and return the static cost of this split in Cost, assuming
+/// that all preferences in SplitConstraints are met.
+/// Return false if there are no bundles with positive bias.
+bool RAGreedy::addSplitConstraints(InterferenceCache::Cursor Intf,
+                                   float &Cost) {
+  ArrayRef<SplitAnalysis::BlockInfo> UseBlocks = SA->getUseBlocks();
 
-      // Skip interference-free blocks.
-      if (IntI.start() >= BI.Stop)
-        continue;
-
-      // First interference in block.
-      if (BI.LiveIn) {
-        IntI.advanceTo(BI.Start);
-        if (!IntI.valid())
-          break;
-        if (IntI.start() >= BI.Stop)
-          continue;
-        if (!IP.first.isValid() || IntI.start() < IP.first)
-          IP.first = IntI.start();
-      }
-
-      // Last interference in block.
-      if (BI.LiveOut) {
-        IntI.advanceTo(BI.Stop);
-        if (!IntI.valid() || IntI.start() >= BI.Stop)
-          --IntI;
-        if (IntI.stop() <= BI.Start)
-          continue;
-        if (!IP.second.isValid() || IntI.stop() > IP.second)
-          IP.second = IntI.stop();
-      }
-    }
-  }
-}
-
-/// calcSplitConstraints - Fill out the SplitConstraints vector based on the
-/// interference pattern in Intf. Return the static cost of this split,
-/// assuming that all preferences in SplitConstraints are met.
-float RAGreedy::calcSplitConstraints(const SmallVectorImpl<IndexPair> &Intf) {
   // Reset interference dependent info.
-  SplitConstraints.resize(SA->LiveBlocks.size());
+  SplitConstraints.resize(UseBlocks.size());
   float StaticCost = 0;
-  for (unsigned i = 0, e = SA->LiveBlocks.size(); i != e; ++i) {
-    SplitAnalysis::BlockInfo &BI = SA->LiveBlocks[i];
+  for (unsigned i = 0; i != UseBlocks.size(); ++i) {
+    const SplitAnalysis::BlockInfo &BI = UseBlocks[i];
     SpillPlacement::BlockConstraint &BC = SplitConstraints[i];
-    IndexPair IP = Intf[i];
 
     BC.Number = BI.MBB->getNumber();
-    BC.Entry = (BI.Uses && BI.LiveIn) ?
-      SpillPlacement::PrefReg : SpillPlacement::DontCare;
-    BC.Exit = (BI.Uses && BI.LiveOut) ?
-      SpillPlacement::PrefReg : SpillPlacement::DontCare;
+    Intf.moveToBlock(BC.Number);
+    BC.Entry = BI.LiveIn ? SpillPlacement::PrefReg : SpillPlacement::DontCare;
+    BC.Exit = BI.LiveOut ? SpillPlacement::PrefReg : SpillPlacement::DontCare;
+
+    if (!Intf.hasInterference())
+      continue;
 
     // Number of spill code instructions to insert.
     unsigned Ins = 0;
 
     // Interference for the live-in value.
-    if (IP.first.isValid()) {
-      if (IP.first <= BI.Start)
-        BC.Entry = SpillPlacement::MustSpill, Ins += BI.Uses;
-      else if (!BI.Uses)
-        BC.Entry = SpillPlacement::PrefSpill;
-      else if (IP.first < BI.FirstUse)
+    if (BI.LiveIn) {
+      if (Intf.first() <= Indexes->getMBBStartIdx(BC.Number))
+        BC.Entry = SpillPlacement::MustSpill, ++Ins;
+      else if (Intf.first() < BI.FirstUse)
         BC.Entry = SpillPlacement::PrefSpill, ++Ins;
-      else if (IP.first < (BI.LiveThrough ? BI.LastUse : BI.Kill))
+      else if (Intf.first() < (BI.LiveThrough ? BI.LastUse : BI.Kill))
         ++Ins;
     }
 
     // Interference for the live-out value.
-    if (IP.second.isValid()) {
-      if (IP.second >= BI.LastSplitPoint)
-        BC.Exit = SpillPlacement::MustSpill, Ins += BI.Uses;
-      else if (!BI.Uses)
-        BC.Exit = SpillPlacement::PrefSpill;
-      else if (IP.second > BI.LastUse)
+    if (BI.LiveOut) {
+      if (Intf.last() >= SA->getLastSplitPoint(BC.Number))
+        BC.Exit = SpillPlacement::MustSpill, ++Ins;
+      else if (Intf.last() > BI.LastUse)
         BC.Exit = SpillPlacement::PrefSpill, ++Ins;
-      else if (IP.second > (BI.LiveThrough ? BI.FirstUse : BI.Def))
+      else if (Intf.last() > (BI.LiveThrough ? BI.FirstUse : BI.Def))
         ++Ins;
     }
 
@@ -504,33 +466,147 @@ float RAGreedy::calcSplitConstraints(const SmallVectorImpl<IndexPair> &Intf) {
     if (Ins)
       StaticCost += Ins * SpillPlacer->getBlockFrequency(BC.Number);
   }
-  return StaticCost;
+  Cost = StaticCost;
+
+  // Add constraints for use-blocks. Note that these are the only constraints
+  // that may add a positive bias, it is downhill from here.
+  SpillPlacer->addConstraints(SplitConstraints);
+  return SpillPlacer->scanActiveBundles();
 }
 
+
+/// addThroughConstraints - Add constraints and links to SpillPlacer from the
+/// live-through blocks in Blocks.
+void RAGreedy::addThroughConstraints(InterferenceCache::Cursor Intf,
+                                     ArrayRef<unsigned> Blocks) {
+  const unsigned GroupSize = 8;
+  SpillPlacement::BlockConstraint BCS[GroupSize];
+  unsigned TBS[GroupSize];
+  unsigned B = 0, T = 0;
+
+  for (unsigned i = 0; i != Blocks.size(); ++i) {
+    unsigned Number = Blocks[i];
+    Intf.moveToBlock(Number);
+
+    if (!Intf.hasInterference()) {
+      assert(T < GroupSize && "Array overflow");
+      TBS[T] = Number;
+      if (++T == GroupSize) {
+        SpillPlacer->addLinks(ArrayRef<unsigned>(TBS, T));
+        T = 0;
+      }
+      continue;
+    }
+
+    assert(B < GroupSize && "Array overflow");
+    BCS[B].Number = Number;
+
+    // Interference for the live-in value.
+    if (Intf.first() <= Indexes->getMBBStartIdx(Number))
+      BCS[B].Entry = SpillPlacement::MustSpill;
+    else
+      BCS[B].Entry = SpillPlacement::PrefSpill;
+
+    // Interference for the live-out value.
+    if (Intf.last() >= SA->getLastSplitPoint(Number))
+      BCS[B].Exit = SpillPlacement::MustSpill;
+    else
+      BCS[B].Exit = SpillPlacement::PrefSpill;
+
+    if (++B == GroupSize) {
+      ArrayRef<SpillPlacement::BlockConstraint> Array(BCS, B);
+      SpillPlacer->addConstraints(Array);
+      B = 0;
+    }
+  }
+
+  ArrayRef<SpillPlacement::BlockConstraint> Array(BCS, B);
+  SpillPlacer->addConstraints(Array);
+  SpillPlacer->addLinks(ArrayRef<unsigned>(TBS, T));
+}
+
+void RAGreedy::growRegion(InterferenceCache::Cursor Intf) {
+  // Keep track of through blocks that have already been added to SpillPlacer.
+  SparseBitVector<> Added;
+  SmallVector<unsigned, 16> ThroughBlocks;
+#ifndef NDEBUG
+  unsigned Visited = 0;
+#endif
+  for (;;) {
+    ArrayRef<unsigned> NewBundles = SpillPlacer->getRecentPositive();
+    if (NewBundles.empty())
+      break;
+    // Find new through blocks in the periphery of PrefRegBundles.
+    for (int i = 0, e = NewBundles.size(); i != e; ++i) {
+      unsigned Bundle = NewBundles[i];
+      // Look at all blocks connected to Bundle in the full graph.
+      ArrayRef<unsigned> Blocks = Bundles->getBlocks(Bundle);
+      for (ArrayRef<unsigned>::iterator I = Blocks.begin(), E = Blocks.end();
+           I != E; ++I) {
+        unsigned Block = *I;
+        if (!SA->isThroughBlock(Block) || !Added.test_and_set(Block))
+          continue;
+        // This is a new through block. Add it to SpillPlacer later.
+        ThroughBlocks.push_back(Block);
+#ifndef NDEBUG
+        ++Visited;
+#endif
+      }
+    }
+    // Any new blocks to add?
+    if (!ThroughBlocks.empty()) {
+      addThroughConstraints(Intf, ThroughBlocks);
+      ThroughBlocks.clear();
+    }
+    // Perhaps iterating can enable more bundles?
+    SpillPlacer->iterate();
+  }
+
+  // Rememeber the relevant set of through blocks for splitAroundRegion().
+  ActiveThroughBlocks |= Added;
+  DEBUG(dbgs() << ", v=" << Visited);
+}
 
 /// calcGlobalSplitCost - Return the global split cost of following the split
 /// pattern in LiveBundles. This cost should be added to the local cost of the
 /// interference pattern in SplitConstraints.
 ///
-float RAGreedy::calcGlobalSplitCost(const BitVector &LiveBundles) {
+float RAGreedy::calcGlobalSplitCost(unsigned PhysReg,
+                                    const BitVector &LiveBundles) {
   float GlobalCost = 0;
-  for (unsigned i = 0, e = SA->LiveBlocks.size(); i != e; ++i) {
-    SplitAnalysis::BlockInfo &BI = SA->LiveBlocks[i];
+  ArrayRef<SplitAnalysis::BlockInfo> UseBlocks = SA->getUseBlocks();
+  for (unsigned i = 0; i != UseBlocks.size(); ++i) {
+    const SplitAnalysis::BlockInfo &BI = UseBlocks[i];
     SpillPlacement::BlockConstraint &BC = SplitConstraints[i];
     bool RegIn  = LiveBundles[Bundles->getBundle(BC.Number, 0)];
     bool RegOut = LiveBundles[Bundles->getBundle(BC.Number, 1)];
     unsigned Ins = 0;
 
-    if (!BI.Uses)
-      Ins += RegIn != RegOut;
-    else {
-      if (BI.LiveIn)
-        Ins += RegIn != (BC.Entry == SpillPlacement::PrefReg);
-      if (BI.LiveOut)
-        Ins += RegOut != (BC.Exit == SpillPlacement::PrefReg);
-    }
+    if (BI.LiveIn)
+      Ins += RegIn != (BC.Entry == SpillPlacement::PrefReg);
+    if (BI.LiveOut)
+      Ins += RegOut != (BC.Exit == SpillPlacement::PrefReg);
     if (Ins)
       GlobalCost += Ins * SpillPlacer->getBlockFrequency(BC.Number);
+  }
+
+  InterferenceCache::Cursor Intf(IntfCache, PhysReg);
+  for (SparseBitVector<>::iterator I = ActiveThroughBlocks.begin(),
+       E = ActiveThroughBlocks.end(); I != E; ++I) {
+    unsigned Number = *I;
+    bool RegIn  = LiveBundles[Bundles->getBundle(Number, 0)];
+    bool RegOut = LiveBundles[Bundles->getBundle(Number, 1)];
+    if (!RegIn && !RegOut)
+      continue;
+    if (RegIn && RegOut) {
+      // We need double spill code if this block has interference.
+      Intf.moveToBlock(Number);
+      if (Intf.hasInterference())
+        GlobalCost += 2*SpillPlacer->getBlockFrequency(Number);
+      continue;
+    }
+    // live-in / stack-out or stack-in live-out.
+    GlobalCost += SpillPlacer->getBlockFrequency(Number);
   }
   return GlobalCost;
 }
@@ -553,10 +629,7 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
     dbgs() << ".\n";
   });
 
-  // First compute interference ranges in the live blocks.
-  SmallVector<IndexPair, 8> InterferenceRanges;
-  mapGlobalInterference(PhysReg, InterferenceRanges);
-
+  InterferenceCache::Cursor Intf(IntfCache, PhysReg);
   LiveRangeEdit LREdit(VirtReg, NewVRegs, this);
   SE->reset(LREdit);
 
@@ -564,8 +637,9 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
   SE->openIntv();
 
   // First add all defs that are live out of a block.
-  for (unsigned i = 0, e = SA->LiveBlocks.size(); i != e; ++i) {
-    SplitAnalysis::BlockInfo &BI = SA->LiveBlocks[i];
+  ArrayRef<SplitAnalysis::BlockInfo> UseBlocks = SA->getUseBlocks();
+  for (unsigned i = 0; i != UseBlocks.size(); ++i) {
+    const SplitAnalysis::BlockInfo &BI = UseBlocks[i];
     bool RegIn  = LiveBundles[Bundles->getBundle(BI.MBB->getNumber(), 0)];
     bool RegOut = LiveBundles[Bundles->getBundle(BI.MBB->getNumber(), 1)];
 
@@ -573,41 +647,35 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
     if (!BI.LiveOut || !RegOut)
       continue;
 
-    IndexPair &IP = InterferenceRanges[i];
+    SlotIndex Start, Stop;
+    tie(Start, Stop) = Indexes->getMBBRange(BI.MBB);
+    Intf.moveToBlock(BI.MBB->getNumber());
     DEBUG(dbgs() << "BB#" << BI.MBB->getNumber() << " -> EB#"
                  << Bundles->getBundle(BI.MBB->getNumber(), 1)
-                 << " [" << BI.Start << ';' << BI.LastSplitPoint << '-'
-                 << BI.Stop << ") intf [" << IP.first << ';' << IP.second
-                 << ')');
+                 << " [" << Start << ';'
+                 << SA->getLastSplitPoint(BI.MBB->getNumber()) << '-' << Stop
+                 << ") intf [" << Intf.first() << ';' << Intf.last() << ')');
 
     // The interference interval should either be invalid or overlap MBB.
-    assert((!IP.first.isValid() || IP.first < BI.Stop) && "Bad interference");
-    assert((!IP.second.isValid() || IP.second > BI.Start)
+    assert((!Intf.hasInterference() || Intf.first() < Stop)
+           && "Bad interference");
+    assert((!Intf.hasInterference() || Intf.last() > Start)
            && "Bad interference");
 
     // Check interference leaving the block.
-    if (!IP.second.isValid()) {
+    if (!Intf.hasInterference()) {
       // Block is interference-free.
       DEBUG(dbgs() << ", no interference");
-      if (!BI.Uses) {
-        assert(BI.LiveThrough && "No uses, but not live through block?");
-        // Block is live-through without interference.
-        DEBUG(dbgs() << ", no uses"
-                     << (RegIn ? ", live-through.\n" : ", stack in.\n"));
-        if (!RegIn)
-          SE->enterIntvAtEnd(*BI.MBB);
-        continue;
-      }
       if (!BI.LiveThrough) {
         DEBUG(dbgs() << ", not live-through.\n");
-        SE->useIntv(SE->enterIntvBefore(BI.Def), BI.Stop);
+        SE->useIntv(SE->enterIntvBefore(BI.Def), Stop);
         continue;
       }
       if (!RegIn) {
         // Block is live-through, but entry bundle is on the stack.
         // Reload just before the first use.
         DEBUG(dbgs() << ", not live-in, enter before first use.\n");
-        SE->useIntv(SE->enterIntvBefore(BI.FirstUse), BI.Stop);
+        SE->useIntv(SE->enterIntvBefore(BI.FirstUse), Stop);
         continue;
       }
       DEBUG(dbgs() << ", live-through.\n");
@@ -615,40 +683,32 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
     }
 
     // Block has interference.
-    DEBUG(dbgs() << ", interference to " << IP.second);
+    DEBUG(dbgs() << ", interference to " << Intf.last());
 
-    if (!BI.LiveThrough && IP.second <= BI.Def) {
+    if (!BI.LiveThrough && Intf.last() <= BI.Def) {
       // The interference doesn't reach the outgoing segment.
       DEBUG(dbgs() << " doesn't affect def from " << BI.Def << '\n');
-      SE->useIntv(BI.Def, BI.Stop);
+      SE->useIntv(BI.Def, Stop);
       continue;
     }
 
-
-    if (!BI.Uses) {
-      // No uses in block, avoid interference by reloading as late as possible.
-      DEBUG(dbgs() << ", no uses.\n");
-      SlotIndex SegStart = SE->enterIntvAtEnd(*BI.MBB);
-      assert(SegStart >= IP.second && "Couldn't avoid interference");
-      continue;
-    }
-
-    if (IP.second.getBoundaryIndex() < BI.LastUse) {
+    SlotIndex LastSplitPoint = SA->getLastSplitPoint(BI.MBB->getNumber());
+    if (Intf.last().getBoundaryIndex() < BI.LastUse) {
       // There are interference-free uses at the end of the block.
       // Find the first use that can get the live-out register.
       SmallVectorImpl<SlotIndex>::const_iterator UI =
         std::lower_bound(SA->UseSlots.begin(), SA->UseSlots.end(),
-                         IP.second.getBoundaryIndex());
+                         Intf.last().getBoundaryIndex());
       assert(UI != SA->UseSlots.end() && "Couldn't find last use");
       SlotIndex Use = *UI;
       assert(Use <= BI.LastUse && "Couldn't find last use");
       // Only attempt a split befroe the last split point.
-      if (Use.getBaseIndex() <= BI.LastSplitPoint) {
+      if (Use.getBaseIndex() <= LastSplitPoint) {
         DEBUG(dbgs() << ", free use at " << Use << ".\n");
         SlotIndex SegStart = SE->enterIntvBefore(Use);
-        assert(SegStart >= IP.second && "Couldn't avoid interference");
-        assert(SegStart < BI.LastSplitPoint && "Impossible split point");
-        SE->useIntv(SegStart, BI.Stop);
+        assert(SegStart >= Intf.last() && "Couldn't avoid interference");
+        assert(SegStart < LastSplitPoint && "Impossible split point");
+        SE->useIntv(SegStart, Stop);
         continue;
       }
     }
@@ -656,12 +716,12 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
     // Interference is after the last use.
     DEBUG(dbgs() << " after last use.\n");
     SlotIndex SegStart = SE->enterIntvAtEnd(*BI.MBB);
-    assert(SegStart >= IP.second && "Couldn't avoid interference");
+    assert(SegStart >= Intf.last() && "Couldn't avoid interference");
   }
 
   // Now all defs leading to live bundles are handled, do everything else.
-  for (unsigned i = 0, e = SA->LiveBlocks.size(); i != e; ++i) {
-    SplitAnalysis::BlockInfo &BI = SA->LiveBlocks[i];
+  for (unsigned i = 0; i != UseBlocks.size(); ++i) {
+    const SplitAnalysis::BlockInfo &BI = UseBlocks[i];
     bool RegIn  = LiveBundles[Bundles->getBundle(BI.MBB->getNumber(), 0)];
     bool RegOut = LiveBundles[Bundles->getBundle(BI.MBB->getNumber(), 1)];
 
@@ -670,47 +730,38 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
       continue;
 
     // We have an incoming register. Check for interference.
-    IndexPair &IP = InterferenceRanges[i];
-
+    SlotIndex Start, Stop;
+    tie(Start, Stop) = Indexes->getMBBRange(BI.MBB);
+    Intf.moveToBlock(BI.MBB->getNumber());
     DEBUG(dbgs() << "EB#" << Bundles->getBundle(BI.MBB->getNumber(), 0)
-                 << " -> BB#" << BI.MBB->getNumber() << " [" << BI.Start << ';'
-                 << BI.LastSplitPoint << '-' << BI.Stop << ')');
+                 << " -> BB#" << BI.MBB->getNumber() << " [" << Start << ';'
+                 << SA->getLastSplitPoint(BI.MBB->getNumber()) << '-' << Stop
+                 << ')');
 
     // Check interference entering the block.
-    if (!IP.first.isValid()) {
+    if (!Intf.hasInterference()) {
       // Block is interference-free.
       DEBUG(dbgs() << ", no interference");
-      if (!BI.Uses) {
-        assert(BI.LiveThrough && "No uses, but not live through block?");
-        // Block is live-through without interference.
-        if (RegOut) {
-          DEBUG(dbgs() << ", no uses, live-through.\n");
-          SE->useIntv(BI.Start, BI.Stop);
-        } else {
-          DEBUG(dbgs() << ", no uses, stack-out.\n");
-          SE->leaveIntvAtTop(*BI.MBB);
-        }
-        continue;
-      }
       if (!BI.LiveThrough) {
         DEBUG(dbgs() << ", killed in block.\n");
-        SE->useIntv(BI.Start, SE->leaveIntvAfter(BI.Kill));
+        SE->useIntv(Start, SE->leaveIntvAfter(BI.Kill));
         continue;
       }
       if (!RegOut) {
+        SlotIndex LastSplitPoint = SA->getLastSplitPoint(BI.MBB->getNumber());
         // Block is live-through, but exit bundle is on the stack.
         // Spill immediately after the last use.
-        if (BI.LastUse < BI.LastSplitPoint) {
+        if (BI.LastUse < LastSplitPoint) {
           DEBUG(dbgs() << ", uses, stack-out.\n");
-          SE->useIntv(BI.Start, SE->leaveIntvAfter(BI.LastUse));
+          SE->useIntv(Start, SE->leaveIntvAfter(BI.LastUse));
           continue;
         }
         // The last use is after the last split point, it is probably an
         // indirect jump.
         DEBUG(dbgs() << ", uses at " << BI.LastUse << " after split point "
-                     << BI.LastSplitPoint << ", stack-out.\n");
-        SlotIndex SegEnd = SE->leaveIntvBefore(BI.LastSplitPoint);
-        SE->useIntv(BI.Start, SegEnd);
+                     << LastSplitPoint << ", stack-out.\n");
+        SlotIndex SegEnd = SE->leaveIntvBefore(LastSplitPoint);
+        SE->useIntv(Start, SegEnd);
         // Run a double interval from the split to the last use.
         // This makes it possible to spill the complement without affecting the
         // indirect branch.
@@ -719,46 +770,61 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg, unsigned PhysReg,
       }
       // Register is live-through.
       DEBUG(dbgs() << ", uses, live-through.\n");
-      SE->useIntv(BI.Start, BI.Stop);
+      SE->useIntv(Start, Stop);
       continue;
     }
 
     // Block has interference.
-    DEBUG(dbgs() << ", interference from " << IP.first);
+    DEBUG(dbgs() << ", interference from " << Intf.first());
 
-    if (!BI.LiveThrough && IP.first >= BI.Kill) {
+    if (!BI.LiveThrough && Intf.first() >= BI.Kill) {
       // The interference doesn't reach the outgoing segment.
       DEBUG(dbgs() << " doesn't affect kill at " << BI.Kill << '\n');
-      SE->useIntv(BI.Start, BI.Kill);
+      SE->useIntv(Start, BI.Kill);
       continue;
     }
 
-    if (!BI.Uses) {
-      // No uses in block, avoid interference by spilling as soon as possible.
-      DEBUG(dbgs() << ", no uses.\n");
-      SlotIndex SegEnd = SE->leaveIntvAtTop(*BI.MBB);
-      assert(SegEnd <= IP.first && "Couldn't avoid interference");
-      continue;
-    }
-    if (IP.first.getBaseIndex() > BI.FirstUse) {
+    if (Intf.first().getBaseIndex() > BI.FirstUse) {
       // There are interference-free uses at the beginning of the block.
       // Find the last use that can get the register.
       SmallVectorImpl<SlotIndex>::const_iterator UI =
         std::lower_bound(SA->UseSlots.begin(), SA->UseSlots.end(),
-                         IP.first.getBaseIndex());
+                         Intf.first().getBaseIndex());
       assert(UI != SA->UseSlots.begin() && "Couldn't find first use");
       SlotIndex Use = (--UI)->getBoundaryIndex();
       DEBUG(dbgs() << ", free use at " << *UI << ".\n");
       SlotIndex SegEnd = SE->leaveIntvAfter(Use);
-      assert(SegEnd <= IP.first && "Couldn't avoid interference");
-      SE->useIntv(BI.Start, SegEnd);
+      assert(SegEnd <= Intf.first() && "Couldn't avoid interference");
+      SE->useIntv(Start, SegEnd);
       continue;
     }
 
     // Interference is before the first use.
     DEBUG(dbgs() << " before first use.\n");
     SlotIndex SegEnd = SE->leaveIntvAtTop(*BI.MBB);
-    assert(SegEnd <= IP.first && "Couldn't avoid interference");
+    assert(SegEnd <= Intf.first() && "Couldn't avoid interference");
+  }
+
+  // Handle live-through blocks.
+  for (SparseBitVector<>::iterator I = ActiveThroughBlocks.begin(),
+       E = ActiveThroughBlocks.end(); I != E; ++I) {
+    unsigned Number = *I;
+    bool RegIn  = LiveBundles[Bundles->getBundle(Number, 0)];
+    bool RegOut = LiveBundles[Bundles->getBundle(Number, 1)];
+    DEBUG(dbgs() << "Live through BB#" << Number << '\n');
+    if (RegIn && RegOut) {
+      Intf.moveToBlock(Number);
+      if (!Intf.hasInterference()) {
+        SE->useIntv(Indexes->getMBBStartIdx(Number),
+                    Indexes->getMBBEndIdx(Number));
+        continue;
+      }
+    }
+    MachineBasicBlock *MBB = MF->getBlockNumbered(Number);
+    if (RegIn)
+      SE->leaveIntvAtTop(*MBB);
+    if (RegOut)
+      SE->enterIntvAtEnd(*MBB);
   }
 
   SE->closeIntv();
@@ -778,6 +844,7 @@ unsigned RAGreedy::tryRegionSplit(LiveInterval &VirtReg, AllocationOrder &Order,
   BitVector LiveBundles, BestBundles;
   float BestCost = 0;
   unsigned BestReg = 0;
+  ActiveThroughBlocks.clear();
 
   Order.rewind();
   for (unsigned Cand = 0; unsigned PhysReg = Order.next(); ++Cand) {
@@ -785,22 +852,29 @@ unsigned RAGreedy::tryRegionSplit(LiveInterval &VirtReg, AllocationOrder &Order,
       GlobalCand.resize(Cand+1);
     GlobalCand[Cand].PhysReg = PhysReg;
 
-    mapGlobalInterference(PhysReg, GlobalCand[Cand].Interference);
-    float Cost = calcSplitConstraints(GlobalCand[Cand].Interference);
-    DEBUG(dbgs() << PrintReg(PhysReg, TRI) << "\tstatic = " << Cost);
-    if (BestReg && Cost >= BestCost) {
-      DEBUG(dbgs() << " higher.\n");
+    SpillPlacer->prepare(LiveBundles);
+    float Cost;
+    InterferenceCache::Cursor Intf(IntfCache, PhysReg);
+    if (!addSplitConstraints(Intf, Cost)) {
+      DEBUG(dbgs() << PrintReg(PhysReg, TRI) << "\tno positive bundles\n");
       continue;
     }
+    DEBUG(dbgs() << PrintReg(PhysReg, TRI) << "\tstatic = " << Cost);
+    if (BestReg && Cost >= BestCost) {
+      DEBUG(dbgs() << " worse than " << PrintReg(BestReg, TRI) << '\n');
+      continue;
+    }
+    growRegion(Intf);
 
-    SpillPlacer->placeSpills(SplitConstraints, LiveBundles);
+    SpillPlacer->finish();
+
     // No live bundles, defer to splitSingleBlocks().
     if (!LiveBundles.any()) {
       DEBUG(dbgs() << " no bundles.\n");
       continue;
     }
 
-    Cost += calcGlobalSplitCost(LiveBundles);
+    Cost += calcGlobalSplitCost(PhysReg, LiveBundles);
     DEBUG({
       dbgs() << ", total = " << Cost << " with bundles";
       for (int i = LiveBundles.find_first(); i>=0; i = LiveBundles.find_next(i))
@@ -835,8 +909,8 @@ unsigned RAGreedy::tryRegionSplit(LiveInterval &VirtReg, AllocationOrder &Order,
 ///
 void RAGreedy::calcGapWeights(unsigned PhysReg,
                               SmallVectorImpl<float> &GapWeight) {
-  assert(SA->LiveBlocks.size() == 1 && "Not a local interval");
-  const SplitAnalysis::BlockInfo &BI = SA->LiveBlocks.front();
+  assert(SA->getUseBlocks().size() == 1 && "Not a local interval");
+  const SplitAnalysis::BlockInfo &BI = SA->getUseBlocks().front();
   const SmallVectorImpl<SlotIndex> &Uses = SA->UseSlots;
   const unsigned NumGaps = Uses.size()-1;
 
@@ -927,8 +1001,8 @@ unsigned RAGreedy::nextSplitPoint(unsigned i) {
 ///
 unsigned RAGreedy::tryLocalSplit(LiveInterval &VirtReg, AllocationOrder &Order,
                                  SmallVectorImpl<LiveInterval*> &NewVRegs) {
-  assert(SA->LiveBlocks.size() == 1 && "Not a local interval");
-  const SplitAnalysis::BlockInfo &BI = SA->LiveBlocks.front();
+  assert(SA->getUseBlocks().size() == 1 && "Not a local interval");
+  const SplitAnalysis::BlockInfo &BI = SA->getUseBlocks().front();
 
   // Note that it is possible to have an interval that is live-in or live-out
   // while only covering a single block - A phi-def can use undef values from
@@ -1213,6 +1287,7 @@ bool RAGreedy::runOnMachineFunction(MachineFunction &mf) {
   SE.reset(new SplitEditor(*SA, *LIS, *VRM, *DomTree));
   LRStage.clear();
   LRStage.resize(MRI->getNumVirtRegs());
+  IntfCache.init(MF, &PhysReg2LiveUnion[0], Indexes, TRI);
 
   allocatePhysRegs();
   addMBBLiveIns(MF);
@@ -1223,6 +1298,9 @@ bool RAGreedy::runOnMachineFunction(MachineFunction &mf) {
     NamedRegionTimer T("Rewriter", TimerGroupName, TimePassesIsEnabled);
     VRM->rewrite(Indexes);
   }
+
+  // Write out new DBG_VALUE instructions.
+  getAnalysis<LiveDebugVariables>().emitDebugValues(VRM);
 
   // The pass output is in VirtRegMap. Release all the transient data.
   releaseMemory();

@@ -930,6 +930,20 @@ bool DwarfDebug::addConstantValue(DIE *Die, ConstantInt *CI,
   return true;
 }
 
+/// addTemplateParams - Add template parameters in buffer.
+void DwarfDebug::addTemplateParams(DIE &Buffer, DIArray TParams) {
+  // Add template parameters.
+  for (unsigned i = 0, e = TParams.getNumElements(); i != e; ++i) {
+    DIDescriptor Element = TParams.getElement(i);
+    if (Element.isTemplateTypeParameter())
+      Buffer.addChild(getOrCreateTemplateTypeParameterDIE(
+                        DITemplateTypeParameter(Element)));
+    else if (Element.isTemplateValueParameter())
+      Buffer.addChild(getOrCreateTemplateValueParameterDIE(
+                        DITemplateValueParameter(Element)));
+  }
+
+}
 /// addToContextOwner - Add Die into the list of its context owner's children.
 void DwarfDebug::addToContextOwner(DIE *Die, DIDescriptor Context) {
   if (Context.isType()) {
@@ -1155,20 +1169,9 @@ void DwarfDebug::constructTypeDIE(DIE &Buffer, DICompositeType CTy) {
       addToContextOwner(&Buffer, Context);
     }
 
-    if (Tag == dwarf::DW_TAG_class_type) {
-      DIArray TParams = CTy.getTemplateParams();
-      unsigned N = TParams.getNumElements();
-      // Add template parameters.
-      for (unsigned i = 0; i < N; ++i) {
-        DIDescriptor Element = TParams.getElement(i);
-        if (Element.isTemplateTypeParameter())
-          Buffer.addChild(getOrCreateTemplateTypeParameterDIE(
-                            DITemplateTypeParameter(Element)));
-        else if (Element.isTemplateValueParameter())
-          Buffer.addChild(getOrCreateTemplateValueParameterDIE(
-                            DITemplateValueParameter(Element)));
-      }
-    }
+    if (Tag == dwarf::DW_TAG_class_type) 
+      addTemplateParams(Buffer, CTy.getTemplateParams());
+
     break;
   }
   default:
@@ -1225,7 +1228,8 @@ DwarfDebug::getOrCreateTemplateValueParameterDIE(DITemplateValueParameter TPV) {
 
   ParamDIE = new DIE(dwarf::DW_TAG_template_value_parameter);
   addType(ParamDIE, TPV.getType());
-  addString(ParamDIE, dwarf::DW_AT_name, dwarf::DW_FORM_string, TPV.getName());
+  if (!TPV.getName().empty())
+    addString(ParamDIE, dwarf::DW_AT_name, dwarf::DW_FORM_string, TPV.getName());
   addUInt(ParamDIE, dwarf::DW_AT_const_value, dwarf::DW_FORM_udata, 
           TPV.getValue());
   return ParamDIE;
@@ -1233,15 +1237,24 @@ DwarfDebug::getOrCreateTemplateValueParameterDIE(DITemplateValueParameter TPV) {
 
 /// constructSubrangeDIE - Construct subrange DIE from DISubrange.
 void DwarfDebug::constructSubrangeDIE(DIE &Buffer, DISubrange SR, DIE *IndexTy){
+  DIE *DW_Subrange = new DIE(dwarf::DW_TAG_subrange_type);
+  addDIEEntry(DW_Subrange, dwarf::DW_AT_type, dwarf::DW_FORM_ref4, IndexTy);
   int64_t L = SR.getLo();
   int64_t H = SR.getHi();
-  DIE *DW_Subrange = new DIE(dwarf::DW_TAG_subrange_type);
 
-  addDIEEntry(DW_Subrange, dwarf::DW_AT_type, dwarf::DW_FORM_ref4, IndexTy);
+  // The L value defines the lower bounds which is typically zero for C/C++. The
+  // H value is the upper bounds.  Values are 64 bit.  H - L + 1 is the size
+  // of the array. If L > H then do not emit DW_AT_lower_bound and 
+  // DW_AT_upper_bound attributes. If L is zero and H is also zero then the
+  // array has one element and in such case do not emit lower bound.
+
+  if (L > H) {
+    Buffer.addChild(DW_Subrange);
+    return;
+  }
   if (L)
     addSInt(DW_Subrange, dwarf::DW_AT_lower_bound, 0, L);
   addSInt(DW_Subrange, dwarf::DW_AT_upper_bound, 0, H);
-
   Buffer.addChild(DW_Subrange);
 }
 
@@ -1450,6 +1463,9 @@ DIE *DwarfDebug::createSubprogramDIE(DISubprogram SP) {
   if (unsigned isa = Asm->getISAEncoding()) {
     addUInt(SPDie, dwarf::DW_AT_APPLE_isa, dwarf::DW_FORM_flag, isa);
   }
+
+  // Add function template parameters.
+  addTemplateParams(*SPDie, SP.getTemplateParams());
 
   // DW_TAG_inlined_subroutine may refer to this DIE.
   SPCU->insertDIE(SP, SPDie);

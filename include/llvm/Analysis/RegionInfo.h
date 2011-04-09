@@ -28,9 +28,10 @@
 #define LLVM_ANALYSIS_REGION_INFO_H
 
 #include "llvm/ADT/PointerIntPair.h"
-#include "llvm/Analysis/Dominators.h"
+#include "llvm/Analysis/DominanceFrontier.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Support/Allocator.h"
+#include <map>
 
 namespace llvm {
 
@@ -335,12 +336,16 @@ public:
     return RI;
   }
 
+  /// PrintStyle - Print region in difference ways.
+  enum PrintStyle { PrintNone, PrintBB, PrintRN  };
+
   /// @brief Print the region.
   ///
   /// @param OS The output stream the Region is printed to.
   /// @param printTree Print also the tree of subregions.
   /// @param level The indentation level used for printing.
-  void print(raw_ostream& OS, bool printTree = true, unsigned level = 0) const;
+  void print(raw_ostream& OS, bool printTree = true, unsigned level = 0,
+             enum PrintStyle Style = PrintNone) const;
 
   /// @brief Print the region to stderr.
   void dump() const;

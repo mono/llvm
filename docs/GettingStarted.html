@@ -62,7 +62,7 @@
   <p>Written by: 
     <a href="mailto:criswell@uiuc.edu">John Criswell</a>, 
     <a href="mailto:sabre@nondot.org">Chris Lattner</a>,
-    <a href="http://misha.brukman.net">Misha Brukman</a>, 
+    <a href="http://misha.brukman.net/">Misha Brukman</a>, 
     <a href="http://www.cs.uiuc.edu/~vadve">Vikram Adve</a>, and
     <a href="mailto:gshi1@uiuc.edu">Guochun Shi</a>.
   </p>
@@ -116,13 +116,13 @@ and performance.
   <li>Read the documentation.</li>
   <li>Remember that you were warned twice about reading the documentation.</li>
   <li>Install the llvm-gcc-4.2 front end if you intend to compile C or C++
-      (see <a href="#installcf">Install the GCC Front End</a> for details):</li>
+      (see <a href="#installcf">Install the GCC Front End</a> for details):
     <ol>
       <li><tt>cd <i>where-you-want-the-C-front-end-to-live</i></tt></li>
       <li><tt>gunzip --stdout llvm-gcc-4.2-<i>version</i>-<i>platform</i>.tar.gz | tar -xvf -</tt></li>
 	  <li><tt><i>install-binutils-binary-from-MinGW</i></tt> (Windows only)</li>
 	  <li>Note: If the binary extension is "<tt>.bz</tt>" use <tt>bunzip2</tt> instead of <tt>gunzip</tt>.</li>
-	  <li>Note: On Windows, use <a href="http://www.7-zip.org">7-Zip</a> or a similar archiving tool.</li>
+	  <li>Note: On Windows, use <a href="http://www.7-zip.org/">7-Zip</a> or a similar archiving tool.</li>
 	  <li>Add <tt>llvm-gcc</tt>'s "<tt>bin</tt>" directory to your <tt>PATH</tt> environment variable.</li>
     </ol></li>
 
@@ -344,9 +344,9 @@ up</a></li>
     ActivePerl, as these have Windows-specifics that will cause the
     build to fail.</a></li>
 <li><a name="pf_11">To use LLVM modules on Win32-based system,
-    you may configure LLVM with <i>&quot;--enable-shared&quot;</i>.</li>
+    you may configure LLVM with <i>&quot;--enable-shared&quot;</i>.</a></li>
 <li><a name="pf_12">To compile SPU backend, you need to add
-    <tt>&quot;LDFLAGS=-Wl,--stack,16777216&quot;</tt> to configure.</li>
+    <tt>&quot;LDFLAGS=-Wl,--stack,16777216&quot;</tt> to configure.</a></li>
 </ol>
 </div>
 
@@ -387,13 +387,13 @@ href="GCCFEBuildInstrs.html">try to compile it</a> on your platform.</p>
     </tr>
 
     <tr>
-      <td><a href="http://gcc.gnu.org">GCC</a></td>
+      <td><a href="http://gcc.gnu.org/">GCC</a></td>
       <td>3.4.2</td>
       <td>C/C++ compiler<sup><a href="#sf1">1</a></sup></td>
     </tr>
 
     <tr>
-      <td><a href="http://www.gnu.org/software/texinfo">TeXinfo</a></td>
+      <td><a href="http://www.gnu.org/software/texinfo/">TeXinfo</a></td>
       <td>4.5</td>
       <td>For building the CFE</td>
     </tr>
@@ -403,6 +403,11 @@ href="GCCFEBuildInstrs.html">try to compile it</a> on your platform.</p>
       <td>&ge;1.3</td>
       <td>Subversion access to LLVM<sup><a href="#sf2">2</a></sup></td>
     </tr>
+
+    <!-- FIXME:
+    Do we support dg?
+    Are DejaGnu and expect obsolete?
+    Shall we mention Python? -->
 
     <tr>
       <td><a href="http://savannah.gnu.org/projects/dejagnu">DejaGnu</a></td>
@@ -435,13 +440,13 @@ href="GCCFEBuildInstrs.html">try to compile it</a> on your platform.</p>
     </tr>
 
     <tr>
-      <td><a href="http://www.gnu.org/software/autoconf">GNU Autoconf</a></td>
+      <td><a href="http://www.gnu.org/software/autoconf/">GNU Autoconf</a></td>
       <td>2.60</td>
       <td>Configuration script builder<sup><a href="#sf4">4</a></sup></td>
     </tr>
 
     <tr>
-      <td><a href="http://www.gnu.org/software/automake">GNU Automake</a></td>
+      <td><a href="http://www.gnu.org/software/automake/">GNU Automake</a></td>
       <td>1.9.6</td>
       <td>aclocal macro generator<sup><a href="#sf4">4</a></sup></td>
     </tr>
@@ -743,6 +748,7 @@ revision), you can checkout it from the '<tt>tags</tt>' directory (instead of
 subdirectories of the '<tt>tags</tt>' directory:</p>
 
 <ul>
+<li>Release 2.9: <b>RELEASE_29/final</b></li>
 <li>Release 2.8: <b>RELEASE_28</b></li>
 <li>Release 2.7: <b>RELEASE_27</b></li>
 <li>Release 2.6: <b>RELEASE_26</b></li>
@@ -795,11 +801,11 @@ instructions</a> to successfully get and build the LLVM GCC front-end.</p>
   sync automatically with each Subversion commit and contain all necessary
   git-svn marks (so, you can recreate git-svn metadata locally). Note that right
   now mirrors reflect only <tt>trunk</tt> for each project. You can do the
-  read-only GIT clone of LLVM via: 
+  read-only GIT clone of LLVM via:</p>
+
 <pre>
 % git clone http://llvm.org/git/llvm.git
 </pre>
-</p>
 
 </div>
 
@@ -817,7 +823,7 @@ you can optionally <a href="GCCFEBuildInstrs.html">build llvm-gcc yourself</a> a
 main LLVM repository.</p>
 
 <p>To install the GCC front end, do the following (on Windows, use an archival tool
-like <a href="http://www.7-zip.org">7-zip</a> that understands gzipped tars):</p>
+like <a href="http://www.7-zip.org/">7-zip</a> that understands gzipped tars):</p>
 
 <ol>
   <li><tt>cd <i>where-you-want-the-front-end-to-live</i></tt></li>
@@ -1232,7 +1238,7 @@ $ ./hello.bc
 
 <p>
 This allows you to execute LLVM bitcode files directly.  On Debian, you 
-can also use this command instead of the 'echo' command above:</p>
+can also use this command instead of the 'echo' command above:
 </p>
 
 <div class="doc_code">
@@ -1252,7 +1258,7 @@ $ sudo update-binfmts --install llvm /path/to/lli --magic 'BC'
 <div class="doc_text">
 
 <p>One useful source of information about the LLVM source base is the LLVM <a
-href="http://www.doxygen.org">doxygen</a> documentation available at <tt><a
+href="http://www.doxygen.org/">doxygen</a> documentation available at <tt><a
 href="http://llvm.org/doxygen/">http://llvm.org/doxygen/</a></tt>.
 The following is a brief introduction to code layout:</p>
 
@@ -1334,6 +1340,10 @@ different <a href="#tools">tools</a>.</p>
   <dd> This directory contains the major parts of the code generator: Instruction 
   Selector, Instruction Scheduling, and Register Allocation.</dd>
 
+  <dt><tt><b>llvm/lib/MC/</b></tt></dt>
+  <dd>(FIXME: T.B.D.)</dd>
+
+  <!--FIXME: obsoleted -->
   <dt><tt><b>llvm/lib/Debugger/</b></tt></dt>
   <dd> This directory contains the source level debugger library that makes 
   it possible to instrument LLVM programs so that a debugger could identify 
@@ -1347,6 +1357,7 @@ different <a href="#tools">tools</a>.</p>
   <dd> This directory contains the source code that corresponds to the header 
   files located in <tt>llvm/include/Support/</tt>.</dd>
 
+  <!--FIXME: obsoleted -->
   <dt><tt><b>llvm/lib/System/</b></tt></dt>
   <dd>This directory contains the operating system abstraction layer that
   shields LLVM from platform-specific coding.</dd>
@@ -1701,7 +1712,7 @@ out:</p>
 
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
   <a href="http://llvm.x10sys.com/rspencer/">Reid Spencer</a><br>
-  <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
+  <a href="http://llvm.org/">The LLVM Compiler Infrastructure</a><br>
   Last modified: $Date$
 </address>
 </body>

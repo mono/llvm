@@ -185,7 +185,7 @@ source tree in the <tt>lib/Transforms/Hello</tt> directory.</p>
   <tt>lib/Transforms/Hello</tt>.  Finally, you must set up a build script 
   (Makefile) that will compile the source code for the new pass.  To do this, 
   copy the following into <tt>Makefile</tt>:</p>
-  <hr/>
+  <hr>
 
 <div class="doc_code"><pre>
 # Makefile for hello pass
@@ -301,7 +301,7 @@ function.</p>
 initialization value is not important.</p>
 
 <div class="doc_code"><pre>
-  static RegisterPass<Hello> X("<i>hello</i>", "<i>Hello World Pass</i>",
+  static RegisterPass&lt;Hello&gt; X("<i>hello</i>", "<i>Hello World Pass</i>",
                         false /* Only looks at CFG */,
                         false /* Analysis Pass */);
 }  <i>// end of anonymous namespace</i>
@@ -337,7 +337,7 @@ is supplied as fourth argument. </p>
   };
   
   char Hello::ID = 0;
-  static RegisterPass<Hello> X("hello", "Hello World Pass", false, false);
+  static RegisterPass&lt;Hello&gt; X("hello", "Hello World Pass", false, false);
 }
 
 </pre></div>
@@ -751,7 +751,7 @@ loop nest order such that outer most loop is processed last. </p>
 
 <p> <tt>LoopPass</tt> subclasses are allowed to update loop nest using
 <tt>LPPassManager</tt> interface. Implementing a loop pass is usually
-straightforward. <tt>Looppass</tt>'s may overload three virtual methods to
+straightforward. <tt>LoopPass</tt>'s may overload three virtual methods to
 do their work. All these methods should return true if they modified the 
 program, or false if they didn't. </p>
 </div>
@@ -829,7 +829,7 @@ region is processed last.  </p>
 
 <p> <tt>RegionPass</tt> subclasses are allowed to update the region tree by using
 the <tt>RGPassManager</tt> interface. You may overload three virtual methods of
-<tt>RegionPass</tt> to implementing your own region pass is usually. All these
+<tt>RegionPass</tt> to implement your own region pass. All these
 methods should return true if they modified the program, or false if they didn not.
 </p>
 </div>
@@ -1205,17 +1205,6 @@ the fact that it hacks on the CFG.
 </div>
 
 <div class="doc_text">
-
-<div class="doc_code"><pre>
-  <i>// This is an example implementation from an analysis, which does not modify
-  // the program at all, yet has a prerequisite.</i>
-  <b>void</b> <a href="http://llvm.org/doxygen/classllvm_1_1PostDominanceFrontier.html">PostDominanceFrontier</a>::getAnalysisUsage(AnalysisUsage &amp;AU) <b>const</b> {
-    AU.setPreservesAll();
-    AU.addRequired&lt;<a href="http://llvm.org/doxygen/classllvm_1_1PostDominatorTree.html">PostDominatorTree</a>&gt;();
-  }
-</pre></div>
-
-<p>and:</p>
 
 <div class="doc_code"><pre>
   <i>// This example modifies the program, but does not modify the CFG</i>
@@ -1920,7 +1909,7 @@ Despite that, we have kept the LLVM passes SMP ready, and you should too.</p>
   src="http://www.w3.org/Icons/valid-html401-blue" alt="Valid HTML 4.01"></a>
 
   <a href="mailto:sabre@nondot.org">Chris Lattner</a><br>
-  <a href="http://llvm.org">The LLVM Compiler Infrastructure</a><br>
+  <a href="http://llvm.org/">The LLVM Compiler Infrastructure</a><br>
   Last modified: $Date$
 </address>
 

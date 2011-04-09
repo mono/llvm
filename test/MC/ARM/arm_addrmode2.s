@@ -13,8 +13,6 @@
 @ CHECK: strbt  r1, [r0], r2 @ encoding: [0x02,0x10,0xe0,0xe6]
 @ CHECK: strbt  r1, [r0], r2, lsr #3 @ encoding: [0xa2,0x11,0xe0,0xe6]
 @ CHECK: strbt  r1, [r0], #4 @ encoding: [0x04,0x10,0xe0,0xe4]
-@ CHECK: ldr  r1, [r0], r2, lsr #3 @ encoding: [0xa2,0x11,0x90,0xe6]
-@ CHECK: ldrb  r1, [r0], r2, lsr #3 @ encoding: [0xa2,0x11,0xd0,0xe6]
         ldrt  r1, [r0], r2
         ldrt  r1, [r0], r2, lsr #3
         ldrt  r1, [r0], #4
@@ -27,8 +25,6 @@
         strbt  r1, [r0], r2
         strbt  r1, [r0], r2, lsr #3
         strbt  r1, [r0], #4
-        ldr  r1, [r0], r2, lsr #3
-        ldrb  r1, [r0], r2, lsr #3
 
 @ Pre-indexed
 @ CHECK: ldr  r1, [r0, r2, lsr #3]! @ encoding: [0xa2,0x11,0xb0,0xe7]

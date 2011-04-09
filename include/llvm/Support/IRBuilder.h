@@ -17,6 +17,7 @@
 
 #include "llvm/Instructions.h"
 #include "llvm/BasicBlock.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ConstantFolder.h"
 
@@ -301,7 +302,7 @@ public:
     : IRBuilderBase(C), Inserter(I), Folder(F) {
   }
 
-  explicit IRBuilder(LLVMContext &C) : IRBuilderBase(C), Folder(C) {
+  explicit IRBuilder(LLVMContext &C) : IRBuilderBase(C), Folder() {
   }
 
   explicit IRBuilder(BasicBlock *TheBB, const T &F)
@@ -310,12 +311,12 @@ public:
   }
 
   explicit IRBuilder(BasicBlock *TheBB)
-    : IRBuilderBase(TheBB->getContext()), Folder(Context) {
+    : IRBuilderBase(TheBB->getContext()), Folder() {
     SetInsertPoint(TheBB);
   }
 
   explicit IRBuilder(Instruction *IP)
-    : IRBuilderBase(IP->getContext()), Folder(Context) {
+    : IRBuilderBase(IP->getContext()), Folder() {
     SetInsertPoint(IP);
   }
   
@@ -325,7 +326,7 @@ public:
   }
 
   IRBuilder(BasicBlock *TheBB, BasicBlock::iterator IP)
-    : IRBuilderBase(TheBB->getContext()), Folder(Context) {
+    : IRBuilderBase(TheBB->getContext()), Folder() {
     SetInsertPoint(TheBB, IP);
   }
 
@@ -1100,6 +1101,11 @@ public:
                         Value *Arg4, Value *Arg5, const Twine &Name = "") {
     Value *Args[] = { Arg1, Arg2, Arg3, Arg4, Arg5 };
     return Insert(CallInst::Create(Callee, Args, Args+5), Name);
+  }
+
+  CallInst *CreateCall(Value *Callee, ArrayRef<Value *> Arg,
+                       const Twine &Name = "") {
+    return Insert(CallInst::Create(Callee, Arg.begin(), Arg.end(), Name));
   }
 
   template<typename RandomAccessIterator>

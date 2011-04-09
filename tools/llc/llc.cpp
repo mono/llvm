@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
   InitializeAllAsmParsers();
 
   cl::ParseCommandLineOptions(argc, argv, "llvm system compiler\n");
-  
+
   // Load the module to be compiled...
   SMDiagnostic Err;
   std::auto_ptr<Module> M;
@@ -271,7 +271,7 @@ int main(int argc, char **argv) {
     FeaturesStr = Features.getString();
   }
 
-  std::auto_ptr<TargetMachine> 
+  std::auto_ptr<TargetMachine>
     target(TheTarget->createTargetMachine(TheTriple.getTriple(), FeaturesStr));
   assert(target.get() && "Could not allocate target machine!");
   TargetMachine &Target = *target.get();
@@ -337,6 +337,9 @@ int main(int argc, char **argv) {
              << " file type!\n";
       return 1;
     }
+
+    // Before executing passes, print the final values of the LLVM options.
+    cl::PrintOptionValues();
 
     PM.run(mod);
   }

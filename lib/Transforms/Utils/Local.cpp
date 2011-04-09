@@ -332,8 +332,14 @@ bool llvm::SimplifyInstructionsInBlock(BasicBlock *BB, const TargetData *TD) {
         BI = BB->begin();
       continue;
     }
-    
+
+    if (Inst->isTerminator())
+      break;
+
+    WeakVH BIHandle(BI);
     MadeChange |= RecursivelyDeleteTriviallyDeadInstructions(Inst);
+    if (BIHandle != BI)
+      BI = BB->begin();
   }
   return MadeChange;
 }
