@@ -363,7 +363,7 @@ void ValueEnumerator::EnumerateValue(const Value *V) {
       // Initializers for globals are handled explicitly elsewhere.
     } else if (isa<ConstantArray>(C) && cast<ConstantArray>(C)->isString()) {
       // Do not enumerate the initializers for an array of simple characters.
-      // The initializers just polute the value table, and we emit the strings
+      // The initializers just pollute the value table, and we emit the strings
       // specially.
     } else if (C->getNumOperands()) {
       // If a constant has operands, enumerate them.  This makes sure that if a
@@ -423,7 +423,7 @@ void ValueEnumerator::EnumerateOperandType(const Value *V) {
     // This constant may have operands, make sure to enumerate the types in
     // them.
     for (unsigned i = 0, e = C->getNumOperands(); i != e; ++i) {
-      const User *Op = C->getOperand(i);
+      const Value *Op = C->getOperand(i);
       
       // Don't enumerate basic blocks here, this happens as operands to
       // blockaddress.

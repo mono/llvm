@@ -14,6 +14,7 @@
 
 #include "DifferenceEngine.h"
 
+#include "llvm/Constants.h"
 #include "llvm/Function.h"
 #include "llvm/Instructions.h"
 #include "llvm/Module.h"
@@ -266,7 +267,7 @@ class FunctionDifferenceEngine {
     } else if (isa<PHINode>(L)) {
       // FIXME: implement.
 
-      // This is really wierd;  type uniquing is broken?
+      // This is really weird;  type uniquing is broken?
       if (L->getType() != R->getType()) {
         if (!L->getType()->isPointerTy() || !R->getType()->isPointerTy()) {
           if (Complain) Engine.log("different phi types");

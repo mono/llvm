@@ -369,6 +369,15 @@ let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
     let Inst{2-0} = 0b000;
   }
 
+  def tBX_Rm : TI<(outs), (ins pred:$p, GPR:$Rm), IIC_Br, "bx${p}\t$Rm",
+                  [/* for disassembly only */]>,
+               T1Special<{1,1,0,?}> {
+    // A6.2.3 & A8.6.25
+    bits<4> Rm;
+    let Inst{6-3} = Rm;
+    let Inst{2-0} = 0b000;
+  }
+
   // Alternative return instruction used by vararg functions.
   def tBX_RET_vararg : TI<(outs), (ins tGPR:$Rm),
                           IIC_Br, "bx\t$Rm",
@@ -1175,9 +1184,17 @@ def tREVSH :                    // A8.6.136
                  "revsh", "\t$Rd, $Rm",
                  [(set tGPR:$Rd,
                        (sext_inreg
-                         (or (srl (and tGPR:$Rm, 0xFF00), (i32 8)),
+                         (or (srl tGPR:$Rm, (i32 8)),
                              (shl tGPR:$Rm, (i32 8))), i16))]>,
                  Requires<[IsThumb, IsThumb1Only, HasV6]>;
+
+def : T1Pat<(sext_inreg (or (srl (and tGPR:$Rm, 0xFF00), (i32 8)),
+                            (shl tGPR:$Rm, (i32 8))), i16),
+            (tREVSH tGPR:$Rm)>,
+      Requires<[IsThumb, IsThumb1Only, HasV6]>;
+
+def : T1Pat<(sra (bswap tGPR:$Rm), (i32 16)), (tREVSH tGPR:$Rm)>,
+      Requires<[IsThumb, IsThumb1Only, HasV6]>;
 
 // Rotate right register
 def tROR :                      // A8.6.139
@@ -1422,7 +1439,7 @@ def tTPsoft : TIx2<0b11110, 0b11, 1, (outs), (ins), IIC_Br,
 // from some other function to get here, and we're using the stack frame for the
 // containing function to save/restore registers, we can't keep anything live in
 // regs across the eh_sjlj_setjmp(), else it will almost certainly have been
-// tromped upon when we get here from a longjmp(). We force everthing out of
+// tromped upon when we get here from a longjmp(). We force everything out of
 // registers except for our own input by listing the relevant registers in
 // Defs. By doing so, we also cause the prologue/epilogue code to actively
 // preserve all of the callee-saved resgisters, which is exactly what we want.

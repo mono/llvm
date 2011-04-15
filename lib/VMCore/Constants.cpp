@@ -771,7 +771,7 @@ bool ConstantExpr::hasIndices() const {
          getOpcode() == Instruction::InsertValue;
 }
 
-const SmallVector<unsigned, 4> &ConstantExpr::getIndices() const {
+ArrayRef<unsigned> ConstantExpr::getIndices() const {
   if (const ExtractValueConstantExpr *EVCE =
         dyn_cast<ExtractValueConstantExpr>(this))
     return EVCE->Indices;
@@ -855,10 +855,10 @@ ConstantExpr::getWithOperandReplaced(unsigned OpNo, Constant *Op) const {
 /// operands replaced with the specified values.  The specified operands must
 /// match count and type with the existing ones.
 Constant *ConstantExpr::
-getWithOperands(Constant *const *Ops, unsigned NumOps) const {
-  assert(NumOps == getNumOperands() && "Operand count mismatch!");
+getWithOperands(ArrayRef<Constant*> Ops) const {
+  assert(Ops.size() == getNumOperands() && "Operand count mismatch!");
   bool AnyChange = false;
-  for (unsigned i = 0; i != NumOps; ++i) {
+  for (unsigned i = 0; i != Ops.size(); ++i) {
     assert(Ops[i]->getType() == getOperand(i)->getType() &&
            "Operand type mismatch!");
     AnyChange |= Ops[i] != getOperand(i);
@@ -890,8 +890,8 @@ getWithOperands(Constant *const *Ops, unsigned NumOps) const {
     return ConstantExpr::getShuffleVector(Ops[0], Ops[1], Ops[2]);
   case Instruction::GetElementPtr:
     return cast<GEPOperator>(this)->isInBounds() ?
-      ConstantExpr::getInBoundsGetElementPtr(Ops[0], &Ops[1], NumOps-1) :
-      ConstantExpr::getGetElementPtr(Ops[0], &Ops[1], NumOps-1);
+      ConstantExpr::getInBoundsGetElementPtr(Ops[0], &Ops[1], Ops.size()-1) :
+      ConstantExpr::getGetElementPtr(Ops[0], &Ops[1], Ops.size()-1);
   case Instruction::ICmp:
   case Instruction::FCmp:
     return ConstantExpr::getCompare(getPredicate(), Ops[0], Ops[1]);
@@ -2151,7 +2151,7 @@ void ConstantExpr::replaceUsesOfWithOnConstant(Value *From, Value *ToV,
     Constant *Agg = getOperand(0);
     if (Agg == From) Agg = To;
     
-    const SmallVector<unsigned, 4> &Indices = getIndices();
+    ArrayRef<unsigned> Indices = getIndices();
     Replacement = ConstantExpr::getExtractValue(Agg,
                                                 &Indices[0], Indices.size());
   } else if (getOpcode() == Instruction::InsertValue) {
@@ -2160,7 +2160,7 @@ void ConstantExpr::replaceUsesOfWithOnConstant(Value *From, Value *ToV,
     if (Agg == From) Agg = To;
     if (Val == From) Val = To;
     
-    const SmallVector<unsigned, 4> &Indices = getIndices();
+    ArrayRef<unsigned> Indices = getIndices();
     Replacement = ConstantExpr::getInsertValue(Agg, Val,
                                                &Indices[0], Indices.size());
   } else if (isCast()) {

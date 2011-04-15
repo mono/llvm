@@ -1678,6 +1678,13 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
         ConstantSDNode *ShAmt = dyn_cast<ConstantSDNode>(In.getOperand(1));
         if (!ShAmt)
           break;
+        SDValue Shift = In.getOperand(1);
+        if (TLO.LegalTypes()) {
+          uint64_t ShVal = ShAmt->getZExtValue();
+          Shift =
+            TLO.DAG.getConstant(ShVal, getShiftAmountTy(Op.getValueType()));
+        }
+
         APInt HighBits = APInt::getHighBitsSet(OperandBitWidth,
                                                OperandBitWidth - BitWidth);
         HighBits = HighBits.lshr(ShAmt->getZExtValue()).trunc(BitWidth);
@@ -1691,7 +1698,7 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
           return TLO.CombineTo(Op, TLO.DAG.getNode(ISD::SRL, dl,
                                                    Op.getValueType(),
                                                    NewTrunc,
-                                                   In.getOperand(1)));
+                                                   Shift));
         }
         break;
       }
@@ -1842,7 +1849,6 @@ TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
                               ISD::CondCode Cond, bool foldBooleans,
                               DAGCombinerInfo &DCI, DebugLoc dl) const {
   SelectionDAG &DAG = DCI.DAG;
-  LLVMContext &Context = *DAG.getContext();
 
   // These setcc operations always fold.
   switch (Cond) {
@@ -1853,12 +1859,11 @@ TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
   case ISD::SETTRUE2:  return DAG.getConstant(1, VT);
   }
 
-  if (isa<ConstantSDNode>(N0.getNode())) {
-    // Ensure that the constant occurs on the RHS, and fold constant
-    // comparisons.
+  // Ensure that the constant occurs on the RHS, and fold constant
+  // comparisons.
+  if (isa<ConstantSDNode>(N0.getNode()))
     return DAG.getSetCC(dl, VT, N1, N0, ISD::getSetCCSwappedOperands(Cond));
-  }
-
+  
   if (ConstantSDNode *N1C = dyn_cast<ConstantSDNode>(N1.getNode())) {
     const APInt &C1 = N1C->getAPIntValue();
 
@@ -1949,7 +1954,7 @@ TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
         }
       }
       if (bestWidth) {
-        EVT newVT = EVT::getIntegerVT(Context, bestWidth);
+        EVT newVT = EVT::getIntegerVT(*DAG.getContext(), bestWidth);
         if (newVT.isRound()) {
           EVT PtrType = Lod->getOperand(1).getValueType();
           SDValue Ptr = Lod->getBasePtr();

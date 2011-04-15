@@ -841,7 +841,7 @@ public:
   static Constant *getICmp(unsigned short pred, Constant *LHS, Constant *RHS);
   static Constant *getFCmp(unsigned short pred, Constant *LHS, Constant *RHS);
 
-  /// Getelementptr form.  std::vector<Value*> is only accepted for convenience:
+  /// Getelementptr form.  Value* is only accepted for convenience;
   /// all elements must be Constant's.
   ///
   static Constant *getGetElementPtr(Constant *C,
@@ -885,7 +885,7 @@ public:
 
   /// getIndices - Assert that this is an insertvalue or exactvalue
   /// expression and return the list of indices.
-  const SmallVector<unsigned, 4> &getIndices() const;
+  ArrayRef<unsigned> getIndices() const;
 
   /// getOpcodeName - Return a string representation for an opcode.
   const char *getOpcodeName() const;
@@ -897,10 +897,7 @@ public:
   /// getWithOperands - This returns the current constant expression with the
   /// operands replaced with the specified values.  The specified operands must
   /// match count and type with the existing ones.
-  Constant *getWithOperands(const std::vector<Constant*> &Ops) const {
-    return getWithOperands(&Ops[0], (unsigned)Ops.size());
-  }
-  Constant *getWithOperands(Constant *const *Ops, unsigned NumOps) const;
+  Constant *getWithOperands(ArrayRef<Constant*> Ops) const;
   
   virtual void destroyConstant();
   virtual void replaceUsesOfWithOnConstant(Value *From, Value *To, Use *U);

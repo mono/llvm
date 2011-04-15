@@ -331,7 +331,7 @@ Instruction *InstCombiner::OptAndOp(Instruction *Op,
 
 
 /// InsertRangeTest - Emit a computation of: (V >= Lo && V < Hi) if Inside is
-/// true, otherwise (V < Lo || V >= Hi).  In pratice, we emit the more efficient
+/// true, otherwise (V < Lo || V >= Hi).  In practice, we emit the more efficient
 /// (V-Lo) <u Hi-Lo.  This method expects that Lo <= Hi. isSigned indicates
 /// whether to treat the V, Lo and HI as signed or not. IB is the location to
 /// insert new instructions.
@@ -2003,7 +2003,14 @@ Instruction *InstCombiner::visitOr(BinaryOperator &I) {
       }
     }
   }
-  
+
+  // or(sext(A), B) -> A ? -1 : B where A is an i1
+  // or(A, sext(B)) -> B ? -1 : A where B is an i1
+  if (match(Op0, m_SExt(m_Value(A))) && A->getType()->isIntegerTy(1))
+    return SelectInst::Create(A, ConstantInt::getSigned(I.getType(), -1), Op1);
+  if (match(Op1, m_SExt(m_Value(A))) && A->getType()->isIntegerTy(1))
+    return SelectInst::Create(A, ConstantInt::getSigned(I.getType(), -1), Op0);
+
   // Note: If we've gotten to the point of visiting the outer OR, then the
   // inner one couldn't be simplified.  If it was a constant, then it won't
   // be simplified by a later pass either, so we try swapping the inner/outer

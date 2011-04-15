@@ -112,12 +112,12 @@
 // rdar://8470918
 smovb // CHECK: movsb
 smovw // CHECK: movsw
-smovl // CHECK: movsl
+smovl // CHECK: movsd
 smovq // CHECK: movsq
 
 // rdar://8456361
 // CHECK: rep
-// CHECK: movsl
+// CHECK: movsd
         rep movsd
 
 // CHECK: rep
@@ -190,6 +190,10 @@ fadd %st(7)
 // CHECK: int3
 INT3
 
+// rdar://8735979 - int $3 -> int3
+// CHECK: int3
+int	$3
+
 
 // Allow scale factor without index register.
 // CHECK: movaps	%xmm3, (%esi)
@@ -228,10 +232,10 @@ cmovnzq %rbx, %rax
 
 // rdar://8407928
 // CHECK: inb	$127, %al
-// CHECK: inw	%dx, %ax
+// CHECK: inw	%dx
 // CHECK: outb	%al, $127
-// CHECK: outw	%ax, %dx
-// CHECK: inl	%dx, %eax
+// CHECK: outw	%dx
+// CHECK: inl	%dx
 inb	$0x7f
 inw	%dx
 outb	$0x7f
@@ -240,12 +244,12 @@ inl	%dx
 
 
 // PR8114
-// CHECK: outb	%al, %dx
-// CHECK: outb	%al, %dx
-// CHECK: outw	%ax, %dx
-// CHECK: outw	%ax, %dx
-// CHECK: outl	%eax, %dx
-// CHECK: outl	%eax, %dx
+// CHECK: outb	%dx
+// CHECK: outb	%dx
+// CHECK: outw	%dx
+// CHECK: outw	%dx
+// CHECK: outl	%dx
+// CHECK: outl	%dx
 
 out	%al, (%dx)
 outb	%al, (%dx)
@@ -254,12 +258,12 @@ outw	%ax, (%dx)
 out	%eax, (%dx)
 outl	%eax, (%dx)
 
-// CHECK: inb	%dx, %al
-// CHECK: inb	%dx, %al
-// CHECK: inw	%dx, %ax
-// CHECK: inw	%dx, %ax
-// CHECK: inl	%dx, %eax
-// CHECK: inl	%dx, %eax
+// CHECK: inb	%dx
+// CHECK: inb	%dx
+// CHECK: inw	%dx
+// CHECK: inw	%dx
+// CHECK: inl	%dx
+// CHECK: inl	%dx
 
 in	(%dx), %al
 inb	(%dx), %al
@@ -270,16 +274,16 @@ inl	(%dx), %eax
 
 // rdar://8431422
 
-// CHECK: fxch	%st(1)
-// CHECK: fucom	%st(1)
-// CHECK: fucomp	%st(1)
-// CHECK: faddp	%st(1)
+// CHECK: fxch
+// CHECK: fucom
+// CHECK: fucomp
+// CHECK: faddp
 // CHECK: faddp	%st(0)
-// CHECK: fsubp	%st(1)
-// CHECK: fsubrp	%st(1)
-// CHECK: fmulp	%st(1)
-// CHECK: fdivp	%st(1)
-// CHECK: fdivrp	%st(1)
+// CHECK: fsubp
+// CHECK: fsubrp
+// CHECK: fmulp
+// CHECK: fdivp
+// CHECK: fdivrp
 
 fxch
 fucom
@@ -292,11 +296,11 @@ fmulp
 fdivp
 fdivrp
 
-// CHECK: fcomi	%st(1)
+// CHECK: fcomi
 // CHECK: fcomi	%st(2)
-// CHECK: fucomi	%st(1)
-// CHECK: fucomi	%st(2)
-// CHECK: fucomi	%st(2)
+// CHECK: fucomi
+// CHECK: fucomi %st(2)
+// CHECK: fucomi %st(2)
 
 fcomi
 fcomi	%st(2)
@@ -600,7 +604,7 @@ movsq
 // CHECK:   encoding: [0x48,0xa5]
 
 movsl
-// CHECK: movsl
+// CHECK: movsd
 // CHECK:   encoding: [0xa5]
 
 stosq
@@ -786,7 +790,7 @@ lock/incl 1(%rsp)
 rep movsl
 // CHECK: rep
 // CHECK: encoding: [0xf3]
-// CHECK: movsl
+// CHECK: movsd
 // CHECK: encoding: [0xa5]
 
 
@@ -1023,9 +1027,9 @@ xsetbv // CHECK: xsetbv # encoding: [0x0f,0x01,0xd1]
 	movsw	%ds:(%rsi), %es:(%rdi)
 	movsw	(%rsi), %es:(%rdi)
 
-// CHECK: movsl # encoding: [0xa5]
-// CHECK: movsl
-// CHECK: movsl
+// CHECK: movsd # encoding: [0xa5]
+// CHECK: movsd
+// CHECK: movsd
 	movsl
 	movsl	%ds:(%rsi), %es:(%rdi)
 	movsl	(%rsi), %es:(%rdi)

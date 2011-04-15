@@ -95,6 +95,9 @@ public:
   // Remove a live virtual register's segments from this union.
   void extract(LiveInterval &VirtReg);
 
+  // Remove all inserted virtual registers.
+  void clear() { Segments.clear(); ++Tag; }
+
   // Print union, using TRI to translate register names
   void print(raw_ostream &OS, const TargetRegisterInfo *TRI) const;
 
@@ -226,7 +229,8 @@ public:
 
     // Count the virtual registers in this union that interfere with this
     // query's live virtual register, up to maxInterferingRegs.
-    unsigned collectInterferingVRegs(unsigned MaxInterferingRegs = UINT_MAX);
+    unsigned collectInterferingVRegs(unsigned MaxInterferingRegs = UINT_MAX,
+                                     float MaxWeight = HUGE_VALF);
 
     // Was this virtual register visited during collectInterferingVRegs?
     bool isSeenInterference(LiveInterval *VReg) const;

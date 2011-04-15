@@ -845,6 +845,7 @@ multiclass T2I_ld<bit signed, bits<2> opcod, string opc,
     let Inst{15-12} = Rt;
 
     bits<17> addr;
+    let addr{12}    = 1;           // add = TRUE
     let Inst{19-16} = addr{16-13}; // Rn
     let Inst{23}    = addr{12};    // U
     let Inst{11-0}  = addr{11-0};  // imm
@@ -925,6 +926,7 @@ multiclass T2I_st<bits<2> opcod, string opc,
     let Inst{15-12} = Rt;
 
     bits<17> addr;
+    let addr{12}    = 1;           // add = TRUE
     let Inst{19-16} = addr{16-13}; // Rn
     let Inst{23}    = addr{12};    // U
     let Inst{11-0}  = addr{11-0};  // imm
@@ -1379,7 +1381,7 @@ def t2LDRSH_POST : T2Iidxldst<1, 0b01, 1, 0, (outs GPR:$dst, GPR:$Rn),
 // for disassembly only.
 // Ref: A8.6.57 LDR (immediate, Thumb) Encoding T4
 class T2IldT<bit signed, bits<2> type, string opc, InstrItinClass ii>
-  : T2Ii8<(outs GPR:$Rt), (ins t2addrmode_imm8:$addr), ii, opc,
+  : T2Ii8<(outs rGPR:$Rt), (ins t2addrmode_imm8:$addr), ii, opc,
           "\t$Rt, $addr", []> {
   let Inst{31-27} = 0b11111;
   let Inst{26-25} = 0b00;
@@ -1421,42 +1423,48 @@ def t2STRDi8 : T2Ii8s4<1, 0, 0, (outs),
 def t2STR_PRE  : T2Iidxldst<0, 0b10, 0, 1, (outs GPR:$base_wb),
                             (ins GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr),
                             AddrModeT2_i8, IndexModePre, IIC_iStore_iu,
-                         "str", "\t$Rt, [$Rn, $addr]!", "$Rn = $base_wb",
+                         "str", "\t$Rt, [$Rn, $addr]!",
+                         "$Rn = $base_wb,@earlyclobber $base_wb",
              [(set GPR:$base_wb,
                    (pre_store GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr))]>;
 
 def t2STR_POST : T2Iidxldst<0, 0b10, 0, 0, (outs GPR:$base_wb),
                             (ins GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr),
                             AddrModeT2_i8, IndexModePost, IIC_iStore_iu,
-                          "str", "\t$Rt, [$Rn], $addr", "$Rn = $base_wb",
+                          "str", "\t$Rt, [$Rn], $addr",
+                          "$Rn = $base_wb,@earlyclobber $base_wb",
              [(set GPR:$base_wb,
                   (post_store GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr))]>;
 
 def t2STRH_PRE  : T2Iidxldst<0, 0b01, 0, 1, (outs GPR:$base_wb),
                             (ins GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr),
                             AddrModeT2_i8, IndexModePre, IIC_iStore_iu,
-                        "strh", "\t$Rt, [$Rn, $addr]!", "$Rn = $base_wb",
+                        "strh", "\t$Rt, [$Rn, $addr]!",
+                        "$Rn = $base_wb,@earlyclobber $base_wb",
         [(set GPR:$base_wb,
               (pre_truncsti16 GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr))]>;
 
 def t2STRH_POST : T2Iidxldst<0, 0b01, 0, 0, (outs GPR:$base_wb),
                             (ins GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr),
                             AddrModeT2_i8, IndexModePost, IIC_iStore_bh_iu,
-                         "strh", "\t$Rt, [$Rn], $addr", "$Rn = $base_wb",
+                         "strh", "\t$Rt, [$Rn], $addr",
+                         "$Rn = $base_wb,@earlyclobber $base_wb",
        [(set GPR:$base_wb,
              (post_truncsti16 GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr))]>;
 
 def t2STRB_PRE  : T2Iidxldst<0, 0b00, 0, 1, (outs GPR:$base_wb),
                             (ins GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr),
                             AddrModeT2_i8, IndexModePre, IIC_iStore_bh_iu,
-                        "strb", "\t$Rt, [$Rn, $addr]!", "$Rn = $base_wb",
+                        "strb", "\t$Rt, [$Rn, $addr]!",
+                        "$Rn = $base_wb,@earlyclobber $base_wb",
          [(set GPR:$base_wb,
                (pre_truncsti8 GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr))]>;
 
 def t2STRB_POST : T2Iidxldst<0, 0b00, 0, 0, (outs GPR:$base_wb),
                             (ins GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr),
                             AddrModeT2_i8, IndexModePost, IIC_iStore_bh_iu,
-                         "strb", "\t$Rt, [$Rn], $addr", "$Rn = $base_wb",
+                         "strb", "\t$Rt, [$Rn], $addr",
+                         "$Rn = $base_wb,@earlyclobber $base_wb",
         [(set GPR:$base_wb,
               (post_truncsti8 GPR:$Rt, GPR:$Rn, t2am_imm8_offset:$addr))]>;
 
@@ -1464,7 +1472,7 @@ def t2STRB_POST : T2Iidxldst<0, 0b00, 0, 0, (outs GPR:$base_wb),
 // only.
 // Ref: A8.6.193 STR (immediate, Thumb) Encoding T4
 class T2IstT<bits<2> type, string opc, InstrItinClass ii>
-  : T2Ii8<(outs GPR:$Rt), (ins t2addrmode_imm8:$addr), ii, opc,
+  : T2Ii8<(outs rGPR:$Rt), (ins t2addrmode_imm8:$addr), ii, opc,
           "\t$Rt, $addr", []> {
   let Inst{31-27} = 0b11111;
   let Inst{26-25} = 0b00;
@@ -1489,20 +1497,20 @@ def t2STRHT  : T2IstT<0b01, "strht", IIC_iStore_bh_i>;
 // ldrd / strd pre / post variants
 // For disassembly only.
 
-def t2LDRD_PRE  : T2Ii8s4<1, 1, 1, (outs GPR:$Rt, GPR:$Rt2),
+def t2LDRD_PRE  : T2Ii8s4<1, 1, 1, (outs rGPR:$Rt, rGPR:$Rt2),
                  (ins GPR:$base, t2am_imm8s4_offset:$imm), IIC_iLoad_d_ru,
                  "ldrd", "\t$Rt, $Rt2, [$base, $imm]!", []>;
 
-def t2LDRD_POST : T2Ii8s4<0, 1, 1, (outs GPR:$Rt, GPR:$Rt2),
+def t2LDRD_POST : T2Ii8s4<0, 1, 1, (outs rGPR:$Rt, rGPR:$Rt2),
                  (ins GPR:$base, t2am_imm8s4_offset:$imm), IIC_iLoad_d_ru,
                  "ldrd", "\t$Rt, $Rt2, [$base], $imm", []>;
 
 def t2STRD_PRE  : T2Ii8s4<1, 1, 0, (outs),
-                 (ins GPR:$Rt, GPR:$Rt2, GPR:$base, t2am_imm8s4_offset:$imm),
+                 (ins rGPR:$Rt, rGPR:$Rt2, GPR:$base, t2am_imm8s4_offset:$imm),
                  IIC_iStore_d_ru, "strd", "\t$Rt, $Rt2, [$base, $imm]!", []>;
 
 def t2STRD_POST : T2Ii8s4<0, 1, 0, (outs),
-                 (ins GPR:$Rt, GPR:$Rt2, GPR:$base, t2am_imm8s4_offset:$imm),
+                 (ins rGPR:$Rt, rGPR:$Rt2, GPR:$base, t2am_imm8s4_offset:$imm),
                  IIC_iStore_d_ru, "strd", "\t$Rt, $Rt2, [$base], $imm", []>;
 
 // T2Ipl (Preload Data/Instruction) signals the memory system of possible future
@@ -1522,6 +1530,7 @@ multiclass T2Ipl<bits<1> write, bits<1> instr, string opc> {
     let Inst{15-12} = 0b1111;
 
     bits<17> addr;
+    let addr{12}    = 1;           // add = TRUE
     let Inst{19-16} = addr{16-13}; // Rn
     let Inst{23}    = addr{12};    // U
     let Inst{11-0}  = addr{11-0};  // imm12
@@ -2157,9 +2166,11 @@ let Constraints = "$src = $Rd" in {
                   [(set rGPR:$Rd, (ARMbfi rGPR:$src, rGPR:$Rn,
                                    bf_inv_mask_imm:$imm))]> {
     let Inst{31-27} = 0b11110;
+    let Inst{26} = 0; // should be 0.
     let Inst{25} = 1;
     let Inst{24-20} = 0b10110;
     let Inst{15} = 0;
+    let Inst{5} = 0; // should be 0.
 
     bits<10> imm;
     let msb{4-0} = imm{9-5};
@@ -2174,9 +2185,11 @@ let Constraints = "$src = $Rd" in {
                   IIC_iBITi, "bfi", "\t$Rd, $Rn, $lsbit, $width",
                   []> {
     let Inst{31-27} = 0b11110;
+    let Inst{26} = 0; // should be 0.
     let Inst{25} = 1;
     let Inst{24-20} = 0b10110;
     let Inst{15} = 0;
+    let Inst{5} = 0; // should be 0.
 
     bits<5> lsbit;
     bits<5> width;
@@ -2952,7 +2965,7 @@ let isCall = 1,
 //   here, and we're using the stack frame for the containing function to
 //   save/restore registers, we can't keep anything live in regs across
 //   the eh_sjlj_setjmp(), else it will almost certainly have been tromped upon
-//   when we get here from a longjmp(). We force everthing out of registers
+//   when we get here from a longjmp(). We force everything out of registers
 //   except for our own input by listing the relevant registers in Defs. By
 //   doing so, we also cause the prologue/epilogue code to actively preserve
 //   all of the callee-saved resgisters, which is exactly what we want.
@@ -3225,19 +3238,20 @@ class T2RFE<bits<12> op31_20, dag oops, dag iops, InstrItinClass itin,
 
   bits<4> Rn;
   let Inst{19-16} = Rn;
+  let Inst{15-0} = 0xc000;
 }
 
 def t2RFEDBW : T2RFE<0b111010000011,
-                   (outs), (ins rGPR:$Rn), NoItinerary, "rfedb", "\t$Rn!",
+                   (outs), (ins GPR:$Rn), NoItinerary, "rfedb", "\t$Rn!",
                    [/* For disassembly only; pattern left blank */]>;
 def t2RFEDB  : T2RFE<0b111010000001,
-                   (outs), (ins rGPR:$Rn), NoItinerary, "rfeab", "\t$Rn",
+                   (outs), (ins GPR:$Rn), NoItinerary, "rfedb", "\t$Rn",
                    [/* For disassembly only; pattern left blank */]>;
 def t2RFEIAW : T2RFE<0b111010011011,
-                   (outs), (ins rGPR:$Rn), NoItinerary, "rfeia", "\t$Rn!",
+                   (outs), (ins GPR:$Rn), NoItinerary, "rfeia", "\t$Rn!",
                    [/* For disassembly only; pattern left blank */]>;
 def t2RFEIA  : T2RFE<0b111010011001,
-                   (outs), (ins rGPR:$Rn), NoItinerary, "rfeia", "\t$Rn",
+                   (outs), (ins GPR:$Rn), NoItinerary, "rfeia", "\t$Rn",
                    [/* For disassembly only; pattern left blank */]>;
 
 //===----------------------------------------------------------------------===//

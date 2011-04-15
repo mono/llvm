@@ -725,7 +725,7 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
 // pressure of the register class's representative and all of it's super
 // classes' representatives transitively. We have not implemented this because
 // of the difficulty prior to coalescing of modeling operand register classes
-// due to the common occurence of cross class copies and subregister insertions
+// due to the common occurrence of cross class copies and subregister insertions
 // and extractions.
 std::pair<const TargetRegisterClass*, uint8_t>
 ARMTargetLowering::findRepresentativeClass(EVT VT) const{
@@ -1333,7 +1333,7 @@ ARMTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     // than necessary, because it means that each store effectively depends
     // on every argument instead of just those arguments it would clobber.
 
-    // Do not flag preceeding copytoreg stuff together with the following stuff.
+    // Do not flag preceding copytoreg stuff together with the following stuff.
     InFlag = SDValue();
     for (unsigned i = 0, e = RegsToPass.size(); i != e; ++i) {
       Chain = DAG.getCopyToReg(Chain, dl, RegsToPass[i].first,
@@ -2962,7 +2962,10 @@ SDValue ARMTargetLowering::LowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG) const {
         Tmp1 = DAG.getNode(ARMISD::VSHL, dl, OpVT,
                            DAG.getNode(ISD::BITCAST, dl, OpVT, Tmp1),
                            DAG.getConstant(32, MVT::i32));
-    }
+    } else if (VT == MVT::f32)
+      Tmp1 = DAG.getNode(ARMISD::VSHRu, dl, MVT::v1i64,
+                         DAG.getNode(ISD::BITCAST, dl, MVT::v1i64, Tmp1),
+                         DAG.getConstant(32, MVT::i32));
     Tmp0 = DAG.getNode(ISD::BITCAST, dl, OpVT, Tmp0);
     Tmp1 = DAG.getNode(ISD::BITCAST, dl, OpVT, Tmp1);
 
@@ -5484,7 +5487,7 @@ static SDValue PerformORCombine(SDNode *N,
         EVT CanonicalVT = VT.is128BitVector() ? MVT::v4i32 : MVT::v2i32;
         SDValue Result = DAG.getNode(ARMISD::VBSL, dl, CanonicalVT,
                                      N0->getOperand(1), N0->getOperand(0),
-                                     N1->getOperand(1));
+                                     N1->getOperand(0));
         return DAG.getNode(ISD::BITCAST, dl, VT, Result);
       }
     }
@@ -5694,8 +5697,28 @@ static SDValue PerformSTORECombine(SDNode *N,
   // Otherwise, the i64 value will be legalized to a pair of i32 values.
   StoreSDNode *St = cast<StoreSDNode>(N);
   SDValue StVal = St->getValue();
-  if (!ISD::isNormalStore(St) || St->isVolatile() ||
-      StVal.getValueType() != MVT::i64 ||
+  if (!ISD::isNormalStore(St) || St->isVolatile())
+    return SDValue();
+
+  if (StVal.getNode()->getOpcode() == ARMISD::VMOVDRR &&
+      StVal.getNode()->hasOneUse() && !St->isVolatile()) {
+    SelectionDAG  &DAG = DCI.DAG;
+    DebugLoc DL = St->getDebugLoc();
+    SDValue BasePtr = St->getBasePtr();
+    SDValue NewST1 = DAG.getStore(St->getChain(), DL,
+                                  StVal.getNode()->getOperand(0), BasePtr,
+                                  St->getPointerInfo(), St->isVolatile(),
+                                  St->isNonTemporal(), St->getAlignment());
+
+    SDValue OffsetPtr = DAG.getNode(ISD::ADD, DL, MVT::i32, BasePtr,
+                                    DAG.getConstant(4, MVT::i32));
+    return DAG.getStore(NewST1.getValue(0), DL, StVal.getNode()->getOperand(1),
+                        OffsetPtr, St->getPointerInfo(), St->isVolatile(),
+                        St->isNonTemporal(),
+                        std::min(4U, St->getAlignment() / 2));
+  }
+
+  if (StVal.getValueType() != MVT::i64 ||
       StVal.getNode()->getOpcode() != ISD::EXTRACT_VECTOR_ELT)
     return SDValue();
 

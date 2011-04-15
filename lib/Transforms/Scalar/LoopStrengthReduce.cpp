@@ -572,9 +572,6 @@ static bool isAddressUse(Instruction *Inst, Value *OperandVal) {
     switch (II->getIntrinsicID()) {
       default: break;
       case Intrinsic::prefetch:
-      case Intrinsic::x86_sse2_loadu_dq:
-      case Intrinsic::x86_sse2_loadu_pd:
-      case Intrinsic::x86_sse_loadu_ps:
       case Intrinsic::x86_sse_storeu_ps:
       case Intrinsic::x86_sse2_storeu_pd:
       case Intrinsic::x86_sse2_storeu_dq:
@@ -789,7 +786,7 @@ void Cost::RateFormula(const Formula &F,
   }
 }
 
-/// Loose - Set this cost to a loosing value.
+/// Loose - Set this cost to a losing value.
 void Cost::Loose() {
   NumRegs = ~0u;
   AddRecCost = ~0u;
@@ -1827,7 +1824,7 @@ LSRInstance::OptimizeLoopTermCond() {
   }
 }
 
-/// reconcileNewOffset - Determine if the given use can accomodate a fixup
+/// reconcileNewOffset - Determine if the given use can accommodate a fixup
 /// at the given offset and other details. If so, update the use and
 /// return true.
 bool

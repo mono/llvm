@@ -578,13 +578,6 @@ void LiveIntervals::handleRegisterDef(MachineBasicBlock *MBB,
       CopyMI = MI;
     handlePhysicalRegisterDef(MBB, MI, MIIdx, MO,
                               getOrCreateInterval(MO.getReg()), CopyMI);
-    // Def of a register also defines its sub-registers.
-    for (const unsigned* AS = tri_->getSubRegisters(MO.getReg()); *AS; ++AS)
-      // If MI also modifies the sub-register explicitly, avoid processing it
-      // more than once. Do not pass in TRI here so it checks for exact match.
-      if (!MI->definesRegister(*AS))
-        handlePhysicalRegisterDef(MBB, MI, MIIdx, MO,
-                                  getOrCreateInterval(*AS), 0);
   }
 }
 
@@ -1514,7 +1507,7 @@ rewriteInstructionsForSpills(const LiveInterval &li, bool TrySplit,
         // ...
         // def = ...
         //     = use
-        // It's better to start a new interval to avoid artifically
+        // It's better to start a new interval to avoid artificially
         // extend the new interval.
         if (MI->readsWritesVirtualRegister(li.reg) ==
             std::make_pair(false,true)) {

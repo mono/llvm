@@ -235,9 +235,12 @@ void RegAllocBase::init(VirtRegMap &vrm, LiveIntervals &lis) {
   MRI = &vrm.getRegInfo();
   VRM = &vrm;
   LIS = &lis;
-  PhysReg2LiveUnion.init(UnionAllocator, TRI->getNumRegs());
-  // Cache an interferece query for each physical reg
-  Queries.reset(new LiveIntervalUnion::Query[PhysReg2LiveUnion.numRegs()]);
+  const unsigned NumRegs = TRI->getNumRegs();
+  if (NumRegs != PhysReg2LiveUnion.numRegs()) {
+    PhysReg2LiveUnion.init(UnionAllocator, NumRegs);
+    // Cache an interferece query for each physical reg
+    Queries.reset(new LiveIntervalUnion::Query[PhysReg2LiveUnion.numRegs()]);
+  }
 }
 
 void RegAllocBase::LiveUnionArray::clear() {
@@ -251,13 +254,15 @@ void RegAllocBase::LiveUnionArray::clear() {
 }
 
 void RegAllocBase::releaseMemory() {
-  PhysReg2LiveUnion.clear();
+  for (unsigned r = 0, e = PhysReg2LiveUnion.numRegs(); r != e; ++r)
+    PhysReg2LiveUnion[r].clear();
 }
 
 // Visit all the live registers. If they are already assigned to a physical
 // register, unify them with the corresponding LiveIntervalUnion, otherwise push
 // them on the priority queue for later assignment.
 void RegAllocBase::seedLiveRegs() {
+  NamedRegionTimer T("Seed Live Regs", TimerGroupName, TimePassesIsEnabled);
   for (LiveIntervals::iterator I = LIS->begin(), E = LIS->end(); I != E; ++I) {
     unsigned RegNum = I->first;
     LiveInterval &VirtReg = *I->second;
@@ -404,29 +409,31 @@ RegAllocBase::spillInterferences(LiveInterval &VirtReg, unsigned PhysReg,
 // Add newly allocated physical registers to the MBB live in sets.
 void RegAllocBase::addMBBLiveIns(MachineFunction *MF) {
   NamedRegionTimer T("MBB Live Ins", TimerGroupName, TimePassesIsEnabled);
-  typedef SmallVector<MachineBasicBlock*, 8> MBBVec;
-  MBBVec liveInMBBs;
-  MachineBasicBlock &entryMBB = *MF->begin();
+  SlotIndexes *Indexes = LIS->getSlotIndexes();
+  if (MF->size() <= 1)
+    return;
 
+  LiveIntervalUnion::SegmentIter SI;
   for (unsigned PhysReg = 0; PhysReg < PhysReg2LiveUnion.numRegs(); ++PhysReg) {
     LiveIntervalUnion &LiveUnion = PhysReg2LiveUnion[PhysReg];
     if (LiveUnion.empty())
       continue;
-    for (LiveIntervalUnion::SegmentIter SI = LiveUnion.begin(); SI.valid();
-         ++SI) {
-
-      // Find the set of basic blocks which this range is live into...
-      liveInMBBs.clear();
-      if (!LIS->findLiveInMBBs(SI.start(), SI.stop(), liveInMBBs)) continue;
-
-      // And add the physreg for this interval to their live-in sets.
-      for (MBBVec::iterator I = liveInMBBs.begin(), E = liveInMBBs.end();
-           I != E; ++I) {
-        MachineBasicBlock *MBB = *I;
-        if (MBB == &entryMBB) continue;
-        if (MBB->isLiveIn(PhysReg)) continue;
-        MBB->addLiveIn(PhysReg);
-      }
+    MachineFunction::iterator MBB = llvm::next(MF->begin());
+    MachineFunction::iterator MFE = MF->end();
+    SlotIndex Start, Stop;
+    tie(Start, Stop) = Indexes->getMBBRange(MBB);
+    SI.setMap(LiveUnion.getMap());
+    SI.find(Start);
+    while (SI.valid()) {
+      if (SI.start() <= Start) {
+        if (!MBB->isLiveIn(PhysReg))
+          MBB->addLiveIn(PhysReg);
+      } else if (SI.start() > Stop)
+        MBB = Indexes->getMBBFromIndex(SI.start().getPrevIndex());
+      if (++MBB == MFE)
+        break;
+      tie(Start, Stop) = Indexes->getMBBRange(MBB);
+      SI.advanceTo(Start);
     }
   }
 }

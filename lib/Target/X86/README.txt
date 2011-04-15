@@ -1572,7 +1572,7 @@ Implement processor-specific optimizations for parity with GCC on these
 processors.  GCC does two optimizations:
 
 1. ix86_pad_returns inserts a noop before ret instructions if immediately
-   preceeded by a conditional branch or is the target of a jump.
+   preceded by a conditional branch or is the target of a jump.
 2. ix86_avoid_jump_misspredicts inserts noops in cases where a 16-byte block of
    code contains more than 3 branches.
    
@@ -2014,5 +2014,29 @@ We currently generate:
 	ret
 
 We could save an instruction here by commuting the addss.
+
+//===---------------------------------------------------------------------===//
+
+This (from PR9661):
+
+float clamp_float(float a) {
+        if (a > 1.0f)
+                return 1.0f;
+        else if (a < 0.0f)
+                return 0.0f;
+        else
+                return a;
+}
+
+Could compile to:
+
+clamp_float:                            # @clamp_float
+        movss   .LCPI0_0(%rip), %xmm1
+        minss   %xmm1, %xmm0
+        pxor    %xmm1, %xmm1
+        maxss   %xmm1, %xmm0
+        ret
+
+with -ffast-math.
 
 //===---------------------------------------------------------------------===//
