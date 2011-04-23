@@ -196,12 +196,14 @@ eliminateFrameIndex(MachineBasicBlock::iterator II, int SPAdj,
     const TargetInstrInfo *TII = MF.getTarget().getInstrInfo();
     DebugLoc DL = II->getDebugLoc();
     int ImmLo = OrigImm & 0xffff;
-    int ImmHi = (((unsigned)OrigImm & 0xffff0000) >> 16) + ((OrigImm & 0x8000) != 0);
+    int ImmHi = (((unsigned)OrigImm & 0xffff0000) >> 16) +
+                ((OrigImm & 0x8000) != 0);
 
     // FIXME: change this when mips goes MC".
     BuildMI(MBB, II, DL, TII->get(Mips::NOAT));
     BuildMI(MBB, II, DL, TII->get(Mips::LUi), Mips::AT).addImm(ImmHi);
-    BuildMI(MBB, II, DL, TII->get(Mips::ADDu), Mips::AT).addReg(OrigReg).addReg(Mips::AT);
+    BuildMI(MBB, II, DL, TII->get(Mips::ADDu), Mips::AT).addReg(OrigReg)
+                                                        .addReg(Mips::AT);
     NewReg = Mips::AT;
     NewImm = ImmLo;
     

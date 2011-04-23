@@ -170,8 +170,7 @@ void CodeGenTarget::ReadRegisters() const {
 }
 
 CodeGenRegister::CodeGenRegister(Record *R) : TheDef(R) {
-  DeclaredSpillSize = R->getValueAsInt("SpillSize");
-  DeclaredSpillAlignment = R->getValueAsInt("SpillAlignment");
+  CostPerUse = R->getValueAsInt("CostPerUse");
 }
 
 const std::string &CodeGenRegister::getName() const {

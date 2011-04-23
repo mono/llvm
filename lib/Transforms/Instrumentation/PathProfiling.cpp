@@ -63,7 +63,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Instrumentation.h"
-#include <map>
 #include <vector>
 
 #define HASH_THRESHHOLD 100000
@@ -388,6 +387,9 @@ namespace llvm {
   ftEntryTypeBuilder;
 
   // BallLarusEdge << operator overloading
+  raw_ostream& operator<<(raw_ostream& os,
+                          const BLInstrumentationEdge& edge)
+      LLVM_ATTRIBUTE_USED;
   raw_ostream& operator<<(raw_ostream& os,
                           const BLInstrumentationEdge& edge) {
     os << "[" << edge.getSource()->getName() << " -> "

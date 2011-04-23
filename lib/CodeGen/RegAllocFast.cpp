@@ -97,7 +97,7 @@ namespace {
       // immediately without checking aliases.
       regFree,
 
-      // A reserved register has been assigned expolicitly (e.g., setting up a
+      // A reserved register has been assigned explicitly (e.g., setting up a
       // call parameter), and it remains reserved until it is used.
       regReserved
 
@@ -396,7 +396,6 @@ void RAFast::definePhysReg(MachineInstr *MI, unsigned PhysReg,
   PhysRegState[PhysReg] = NewState;
   for (const unsigned *AS = TRI->getAliasSet(PhysReg);
        unsigned Alias = *AS; ++AS) {
-    UsedInInstr.set(Alias);
     switch (unsigned VirtReg = PhysRegState[Alias]) {
     case regDisabled:
       break;
@@ -734,10 +733,6 @@ void RAFast::handleThroughOperands(MachineInstr *MI,
     if (!Reg || !TargetRegisterInfo::isPhysicalRegister(Reg)) continue;
     DEBUG(dbgs() << "\tSetting reg " << Reg << " as used in instr\n");
     UsedInInstr.set(Reg);
-    for (const unsigned *AS = TRI->getAliasSet(Reg); *AS; ++AS) {
-      DEBUG(dbgs() << "\tSetting alias reg " << *AS << " as used in instr\n");
-      UsedInInstr.set(*AS);
-    }
   }
 
   // Also mark PartialDefs as used to avoid reallocation.

@@ -1618,17 +1618,39 @@ OptimizeCompareInstr(MachineInstr *CmpInstr, unsigned SrcReg, int CmpMask,
   // Set the "zero" bit in CPSR.
   switch (MI->getOpcode()) {
   default: break;
+  case ARM::RSBrr:
   case ARM::RSBri:
+  case ARM::RSCrr:
   case ARM::RSCri:
+  case ARM::ADDrr:
   case ARM::ADDri:
+  case ARM::ADCrr:
   case ARM::ADCri:
+  case ARM::SUBrr:
   case ARM::SUBri:
+  case ARM::SBCrr:
   case ARM::SBCri:
   case ARM::t2RSBri:
+  case ARM::t2ADDrr:
   case ARM::t2ADDri:
+  case ARM::t2ADCrr:
   case ARM::t2ADCri:
+  case ARM::t2SUBrr:
   case ARM::t2SUBri:
-  case ARM::t2SBCri: {
+  case ARM::t2SBCrr:
+  case ARM::t2SBCri:
+  case ARM::ANDrr:
+  case ARM::ANDri:
+  case ARM::t2ANDrr:
+  case ARM::t2ANDri:
+  case ARM::ORRrr:
+  case ARM::ORRri:
+  case ARM::t2ORRrr:
+  case ARM::t2ORRri:
+  case ARM::EORrr:
+  case ARM::EORri:
+  case ARM::t2EORrr:
+  case ARM::t2EORri: {
     // Scan forward for the use of CPSR, if it's a conditional code requires
     // checking of V bit, then this is not safe to do. If we can't find the
     // CPSR use (i.e. used in another block), then it's not safe to perform
@@ -1667,15 +1689,12 @@ OptimizeCompareInstr(MachineInstr *CmpInstr, unsigned SrcReg, int CmpMask,
     if (!isSafe)
       return false;
 
-    // fallthrough
-  }
-  case ARM::ANDri:
-  case ARM::t2ANDri:
     // Toggle the optional operand to CPSR.
     MI->getOperand(5).setReg(ARM::CPSR);
     MI->getOperand(5).setIsDef(true);
     CmpInstr->eraseFromParent();
     return true;
+  }
   }
 
   return false;
@@ -2203,6 +2222,101 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     }
   }
 
+  if (DefAlign < 8 && Subtarget.isCortexA9())
+    switch (DefTID.getOpcode()) {
+    default: break;
+    case ARM::VLD1q8:
+    case ARM::VLD1q16:
+    case ARM::VLD1q32:
+    case ARM::VLD1q64:
+    case ARM::VLD1q8_UPD:
+    case ARM::VLD1q16_UPD:
+    case ARM::VLD1q32_UPD:
+    case ARM::VLD1q64_UPD:
+    case ARM::VLD2d8:
+    case ARM::VLD2d16:
+    case ARM::VLD2d32:
+    case ARM::VLD2q8:
+    case ARM::VLD2q16:
+    case ARM::VLD2q32:
+    case ARM::VLD2d8_UPD:
+    case ARM::VLD2d16_UPD:
+    case ARM::VLD2d32_UPD:
+    case ARM::VLD2q8_UPD:
+    case ARM::VLD2q16_UPD:
+    case ARM::VLD2q32_UPD:
+    case ARM::VLD3d8:
+    case ARM::VLD3d16:
+    case ARM::VLD3d32:
+    case ARM::VLD1d64T:
+    case ARM::VLD3d8_UPD:
+    case ARM::VLD3d16_UPD:
+    case ARM::VLD3d32_UPD:
+    case ARM::VLD1d64T_UPD:
+    case ARM::VLD3q8_UPD:
+    case ARM::VLD3q16_UPD:
+    case ARM::VLD3q32_UPD:
+    case ARM::VLD4d8:
+    case ARM::VLD4d16:
+    case ARM::VLD4d32:
+    case ARM::VLD1d64Q:
+    case ARM::VLD4d8_UPD:
+    case ARM::VLD4d16_UPD:
+    case ARM::VLD4d32_UPD:
+    case ARM::VLD1d64Q_UPD:
+    case ARM::VLD4q8_UPD:
+    case ARM::VLD4q16_UPD:
+    case ARM::VLD4q32_UPD:
+    case ARM::VLD1DUPq8:
+    case ARM::VLD1DUPq16:
+    case ARM::VLD1DUPq32:
+    case ARM::VLD1DUPq8_UPD:
+    case ARM::VLD1DUPq16_UPD:
+    case ARM::VLD1DUPq32_UPD:
+    case ARM::VLD2DUPd8:
+    case ARM::VLD2DUPd16:
+    case ARM::VLD2DUPd32:
+    case ARM::VLD2DUPd8_UPD:
+    case ARM::VLD2DUPd16_UPD:
+    case ARM::VLD2DUPd32_UPD:
+    case ARM::VLD4DUPd8:
+    case ARM::VLD4DUPd16:
+    case ARM::VLD4DUPd32:
+    case ARM::VLD4DUPd8_UPD:
+    case ARM::VLD4DUPd16_UPD:
+    case ARM::VLD4DUPd32_UPD:
+    case ARM::VLD1LNd8:
+    case ARM::VLD1LNd16:
+    case ARM::VLD1LNd32:
+    case ARM::VLD1LNd8_UPD:
+    case ARM::VLD1LNd16_UPD:
+    case ARM::VLD1LNd32_UPD:
+    case ARM::VLD2LNd8:
+    case ARM::VLD2LNd16:
+    case ARM::VLD2LNd32:
+    case ARM::VLD2LNq16:
+    case ARM::VLD2LNq32:
+    case ARM::VLD2LNd8_UPD:
+    case ARM::VLD2LNd16_UPD:
+    case ARM::VLD2LNd32_UPD:
+    case ARM::VLD2LNq16_UPD:
+    case ARM::VLD2LNq32_UPD:
+    case ARM::VLD4LNd8:
+    case ARM::VLD4LNd16:
+    case ARM::VLD4LNd32:
+    case ARM::VLD4LNq16:
+    case ARM::VLD4LNq32:
+    case ARM::VLD4LNd8_UPD:
+    case ARM::VLD4LNd16_UPD:
+    case ARM::VLD4LNd32_UPD:
+    case ARM::VLD4LNq16_UPD:
+    case ARM::VLD4LNq32_UPD:
+      // If the address is not 64-bit aligned, the latencies of these
+      // instructions increases by one.
+      ++Latency;
+      break;
+    }
+
   return Latency;
 }
 
@@ -2268,6 +2382,113 @@ ARMBaseInstrInfo::getOperandLatency(const InstrItineraryData *ItinData,
     }
     }
   }
+
+  if (DefAlign < 8 && Subtarget.isCortexA9())
+    switch (DefTID.getOpcode()) {
+    default: break;
+    case ARM::VLD1q8Pseudo:
+    case ARM::VLD1q16Pseudo:
+    case ARM::VLD1q32Pseudo:
+    case ARM::VLD1q64Pseudo:
+    case ARM::VLD1q8Pseudo_UPD:
+    case ARM::VLD1q16Pseudo_UPD:
+    case ARM::VLD1q32Pseudo_UPD:
+    case ARM::VLD1q64Pseudo_UPD:
+    case ARM::VLD2d8Pseudo:
+    case ARM::VLD2d16Pseudo:
+    case ARM::VLD2d32Pseudo:
+    case ARM::VLD2q8Pseudo:
+    case ARM::VLD2q16Pseudo:
+    case ARM::VLD2q32Pseudo:
+    case ARM::VLD2d8Pseudo_UPD:
+    case ARM::VLD2d16Pseudo_UPD:
+    case ARM::VLD2d32Pseudo_UPD:
+    case ARM::VLD2q8Pseudo_UPD:
+    case ARM::VLD2q16Pseudo_UPD:
+    case ARM::VLD2q32Pseudo_UPD:
+    case ARM::VLD3d8Pseudo:
+    case ARM::VLD3d16Pseudo:
+    case ARM::VLD3d32Pseudo:
+    case ARM::VLD1d64TPseudo:
+    case ARM::VLD3d8Pseudo_UPD:
+    case ARM::VLD3d16Pseudo_UPD:
+    case ARM::VLD3d32Pseudo_UPD:
+    case ARM::VLD1d64TPseudo_UPD:
+    case ARM::VLD3q8Pseudo_UPD:
+    case ARM::VLD3q16Pseudo_UPD:
+    case ARM::VLD3q32Pseudo_UPD:
+    case ARM::VLD3q8oddPseudo:
+    case ARM::VLD3q16oddPseudo:
+    case ARM::VLD3q32oddPseudo:
+    case ARM::VLD3q8oddPseudo_UPD:
+    case ARM::VLD3q16oddPseudo_UPD:
+    case ARM::VLD3q32oddPseudo_UPD:
+    case ARM::VLD4d8Pseudo:
+    case ARM::VLD4d16Pseudo:
+    case ARM::VLD4d32Pseudo:
+    case ARM::VLD1d64QPseudo:
+    case ARM::VLD4d8Pseudo_UPD:
+    case ARM::VLD4d16Pseudo_UPD:
+    case ARM::VLD4d32Pseudo_UPD:
+    case ARM::VLD1d64QPseudo_UPD:
+    case ARM::VLD4q8Pseudo_UPD:
+    case ARM::VLD4q16Pseudo_UPD:
+    case ARM::VLD4q32Pseudo_UPD:
+    case ARM::VLD4q8oddPseudo:
+    case ARM::VLD4q16oddPseudo:
+    case ARM::VLD4q32oddPseudo:
+    case ARM::VLD4q8oddPseudo_UPD:
+    case ARM::VLD4q16oddPseudo_UPD:
+    case ARM::VLD4q32oddPseudo_UPD:
+    case ARM::VLD1DUPq8Pseudo:
+    case ARM::VLD1DUPq16Pseudo:
+    case ARM::VLD1DUPq32Pseudo:
+    case ARM::VLD1DUPq8Pseudo_UPD:
+    case ARM::VLD1DUPq16Pseudo_UPD:
+    case ARM::VLD1DUPq32Pseudo_UPD:
+    case ARM::VLD2DUPd8Pseudo:
+    case ARM::VLD2DUPd16Pseudo:
+    case ARM::VLD2DUPd32Pseudo:
+    case ARM::VLD2DUPd8Pseudo_UPD:
+    case ARM::VLD2DUPd16Pseudo_UPD:
+    case ARM::VLD2DUPd32Pseudo_UPD:
+    case ARM::VLD4DUPd8Pseudo:
+    case ARM::VLD4DUPd16Pseudo:
+    case ARM::VLD4DUPd32Pseudo:
+    case ARM::VLD4DUPd8Pseudo_UPD:
+    case ARM::VLD4DUPd16Pseudo_UPD:
+    case ARM::VLD4DUPd32Pseudo_UPD:
+    case ARM::VLD1LNq8Pseudo:
+    case ARM::VLD1LNq16Pseudo:
+    case ARM::VLD1LNq32Pseudo:
+    case ARM::VLD1LNq8Pseudo_UPD:
+    case ARM::VLD1LNq16Pseudo_UPD:
+    case ARM::VLD1LNq32Pseudo_UPD:
+    case ARM::VLD2LNd8Pseudo:
+    case ARM::VLD2LNd16Pseudo:
+    case ARM::VLD2LNd32Pseudo:
+    case ARM::VLD2LNq16Pseudo:
+    case ARM::VLD2LNq32Pseudo:
+    case ARM::VLD2LNd8Pseudo_UPD:
+    case ARM::VLD2LNd16Pseudo_UPD:
+    case ARM::VLD2LNd32Pseudo_UPD:
+    case ARM::VLD2LNq16Pseudo_UPD:
+    case ARM::VLD2LNq32Pseudo_UPD:
+    case ARM::VLD4LNd8Pseudo:
+    case ARM::VLD4LNd16Pseudo:
+    case ARM::VLD4LNd32Pseudo:
+    case ARM::VLD4LNq16Pseudo:
+    case ARM::VLD4LNq32Pseudo:
+    case ARM::VLD4LNd8Pseudo_UPD:
+    case ARM::VLD4LNd16Pseudo_UPD:
+    case ARM::VLD4LNd32Pseudo_UPD:
+    case ARM::VLD4LNq16Pseudo_UPD:
+    case ARM::VLD4LNq32Pseudo_UPD:
+      // If the address is not 64-bit aligned, the latencies of these
+      // instructions increases by one.
+      ++Latency;
+      break;
+    }
 
   return Latency;
 }

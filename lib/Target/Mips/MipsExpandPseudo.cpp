@@ -1,4 +1,4 @@
-//===--  MipsExpandPseudo.cpp - Expand pseudo instructions ---------------------===//
+//===--  MipsExpandPseudo.cpp - Expand pseudo instructions ----------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -42,7 +42,8 @@ namespace {
 
   private:
     void ExpandBuildPairF64(MachineBasicBlock&, MachineBasicBlock::iterator);
-    void ExpandExtractElementF64(MachineBasicBlock&, MachineBasicBlock::iterator);
+    void ExpandExtractElementF64(MachineBasicBlock&,
+                                 MachineBasicBlock::iterator);
   };
   char MipsExpandPseudo::ID = 0;
 } // end of anonymous namespace
@@ -98,7 +99,7 @@ void MipsExpandPseudo::ExpandBuildPairF64(MachineBasicBlock& MBB,
 }
 
 void MipsExpandPseudo::ExpandExtractElementF64(MachineBasicBlock& MBB,
-                                                 MachineBasicBlock::iterator I) {
+                                               MachineBasicBlock::iterator I) {
   unsigned DstReg = I->getOperand(0).getReg();
   unsigned SrcReg = I->getOperand(1).getReg();
   unsigned N = I->getOperand(2).getImm();

@@ -175,6 +175,7 @@ private:
   void LRE_WillShrinkVirtReg(unsigned);
   void LRE_DidCloneVirtReg(unsigned, unsigned);
 
+  float calcSpillCost();
   bool addSplitConstraints(InterferenceCache::Cursor, float&);
   void addThroughConstraints(InterferenceCache::Cursor, ArrayRef<unsigned>);
   void growRegion(GlobalSplitCandidate &Cand, InterferenceCache::Cursor);
@@ -187,8 +188,10 @@ private:
   unsigned nextSplitPoint(unsigned);
   bool canEvictInterference(LiveInterval&, unsigned, float&);
 
+  unsigned tryAssign(LiveInterval&, AllocationOrder&,
+                     SmallVectorImpl<LiveInterval*>&);
   unsigned tryEvict(LiveInterval&, AllocationOrder&,
-                    SmallVectorImpl<LiveInterval*>&);
+                    SmallVectorImpl<LiveInterval*>&, unsigned = ~0u);
   unsigned tryRegionSplit(LiveInterval&, AllocationOrder&,
                           SmallVectorImpl<LiveInterval*>&);
   unsigned tryLocalSplit(LiveInterval&, AllocationOrder&,
@@ -199,6 +202,11 @@ private:
 } // end anonymous namespace
 
 char RAGreedy::ID = 0;
+
+// Hysteresis to use when comparing floats.
+// This helps stabilize decisions based on float comparisons.
+const float Hysteresis = 0.98f;
+
 
 FunctionPass* llvm::createGreedyRegisterAllocator() {
   return new RAGreedy();
@@ -334,6 +342,37 @@ LiveInterval *RAGreedy::dequeue() {
   return LI;
 }
 
+
+//===----------------------------------------------------------------------===//
+//                            Direct Assignment
+//===----------------------------------------------------------------------===//
+
+/// tryAssign - Try to assign VirtReg to an available register.
+unsigned RAGreedy::tryAssign(LiveInterval &VirtReg,
+                             AllocationOrder &Order,
+                             SmallVectorImpl<LiveInterval*> &NewVRegs) {
+  Order.rewind();
+  unsigned PhysReg;
+  while ((PhysReg = Order.next()))
+    if (!checkPhysRegInterference(VirtReg, PhysReg))
+      break;
+  if (!PhysReg || Order.isHint(PhysReg))
+    return PhysReg;
+
+  // PhysReg is available. Try to evict interference from a cheaper alternative.
+  unsigned Cost = TRI->getCostPerUse(PhysReg);
+
+  // Most registers have 0 additional cost.
+  if (!Cost)
+    return PhysReg;
+
+  DEBUG(dbgs() << PrintReg(PhysReg, TRI) << " is available at cost " << Cost
+               << '\n');
+  unsigned CheapReg = tryEvict(VirtReg, Order, NewVRegs, Cost);
+  return CheapReg ? CheapReg : PhysReg;
+}
+
+
 //===----------------------------------------------------------------------===//
 //                         Interference eviction
 //===----------------------------------------------------------------------===//
@@ -371,7 +410,8 @@ bool RAGreedy::canEvictInterference(LiveInterval &VirtReg, unsigned PhysReg,
 /// @return         Physreg to assign VirtReg, or 0.
 unsigned RAGreedy::tryEvict(LiveInterval &VirtReg,
                             AllocationOrder &Order,
-                            SmallVectorImpl<LiveInterval*> &NewVRegs){
+                            SmallVectorImpl<LiveInterval*> &NewVRegs,
+                            unsigned CostPerUseLimit) {
   NamedRegionTimer T("Evict", TimerGroupName, TimePassesIsEnabled);
 
   // Keep track of the lightest single interference seen so far.
@@ -380,6 +420,12 @@ unsigned RAGreedy::tryEvict(LiveInterval &VirtReg,
 
   Order.rewind();
   while (unsigned PhysReg = Order.next()) {
+    if (TRI->getCostPerUse(PhysReg) >= CostPerUseLimit)
+      continue;
+    // The first use of a register in a function has cost 1.
+    if (CostPerUseLimit == 1 && !MRI->isPhysRegUsed(PhysReg))
+      continue;
+
     float Weight = BestWeight;
     if (!canEvictInterference(VirtReg, PhysReg, Weight))
       continue;
@@ -573,6 +619,33 @@ void RAGreedy::growRegion(GlobalSplitCandidate &Cand,
     SpillPlacer->iterate();
   }
   DEBUG(dbgs() << ", v=" << Visited);
+}
+
+/// calcSpillCost - Compute how expensive it would be to split the live range in
+/// SA around all use blocks instead of forming bundle regions.
+float RAGreedy::calcSpillCost() {
+  float Cost = 0;
+  const LiveInterval &LI = SA->getParent();
+  ArrayRef<SplitAnalysis::BlockInfo> UseBlocks = SA->getUseBlocks();
+  for (unsigned i = 0; i != UseBlocks.size(); ++i) {
+    const SplitAnalysis::BlockInfo &BI = UseBlocks[i];
+    unsigned Number = BI.MBB->getNumber();
+    // We normally only need one spill instruction - a load or a store.
+    Cost += SpillPlacer->getBlockFrequency(Number);
+
+    // Unless the value is redefined in the block.
+    if (BI.LiveIn && BI.LiveOut) {
+      SlotIndex Start, Stop;
+      tie(Start, Stop) = Indexes->getMBBRange(Number);
+      LiveInterval::const_iterator I = LI.find(Start);
+      assert(I != LI.end() && "Expected live-in value");
+      // Is there a different live-out value? If so, we need an extra spill
+      // instruction.
+      if (I->end < Stop)
+        Cost += SpillPlacer->getBlockFrequency(Number);
+    }
+  }
+  return Cost;
 }
 
 /// calcGlobalSplitCost - Return the global split cost of following the split
@@ -843,11 +916,35 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg,
       SE->enterIntvAtEnd(*MBB);
   }
 
-  // FIXME: Should we be more aggressive about splitting the stack region into
-  // per-block segments? The current approach allows the stack region to
-  // separate into connected components. Some components may be allocatable.
-  SE->finish();
   ++NumGlobalSplits;
+
+  SmallVector<unsigned, 8> IntvMap;
+  SE->finish(&IntvMap);
+  LRStage.resize(MRI->getNumVirtRegs());
+
+  // Sort out the new intervals created by splitting. We get four kinds:
+  // - Remainder intervals should not be split again.
+  // - Candidate intervals can be assigned to Cand.PhysReg.
+  // - Block-local splits are candidates for local splitting.
+  // - DCE leftovers should go back on the queue.
+  for (unsigned i = 0, e = LREdit.size(); i != e; ++i) {
+    unsigned Reg = LREdit.get(i)->reg;
+
+    // Ignore old intervals from DCE.
+    if (LRStage[Reg] != RS_New)
+      continue;
+
+    // Remainder interval. Don't try splitting again, spill if it doesn't
+    // allocate.
+    if (IntvMap[i] == 0) {
+      LRStage[Reg] = RS_Global;
+      continue;
+    }
+
+    // Other intervals are treated as new. This includes the main interval,
+    // local intervals created for blocks with multiple uses, and anything
+    // created by DCE.
+  }
 
   if (VerifyEnabled)
     MF->verify(this, "After splitting live range around region");
@@ -855,7 +952,8 @@ void RAGreedy::splitAroundRegion(LiveInterval &VirtReg,
 
 unsigned RAGreedy::tryRegionSplit(LiveInterval &VirtReg, AllocationOrder &Order,
                                   SmallVectorImpl<LiveInterval*> &NewVRegs) {
-  float BestCost = 0;
+  float BestCost = Hysteresis * calcSpillCost();
+  DEBUG(dbgs() << "Cost of isolating all blocks = " << BestCost << '\n');
   const unsigned NoCand = ~0u;
   unsigned BestCand = NoCand;
 
@@ -873,9 +971,14 @@ unsigned RAGreedy::tryRegionSplit(LiveInterval &VirtReg, AllocationOrder &Order,
       continue;
     }
     DEBUG(dbgs() << PrintReg(PhysReg, TRI) << "\tstatic = " << Cost);
-    if (BestCand != NoCand && Cost >= BestCost) {
-      DEBUG(dbgs() << " worse than "
-                   << PrintReg(GlobalCand[BestCand].PhysReg, TRI) << '\n');
+    if (Cost >= BestCost) {
+      DEBUG({
+        if (BestCand == NoCand)
+          dbgs() << " worse than no bundles\n";
+        else
+          dbgs() << " worse than "
+                 << PrintReg(GlobalCand[BestCand].PhysReg, TRI) << '\n';
+      });
       continue;
     }
     growRegion(GlobalCand[Cand], Intf);
@@ -896,9 +999,9 @@ unsigned RAGreedy::tryRegionSplit(LiveInterval &VirtReg, AllocationOrder &Order,
         dbgs() << " EB#" << i;
       dbgs() << ".\n";
     });
-    if (BestCand == NoCand || Cost < BestCost) {
+    if (Cost < BestCost) {
       BestCand = Cand;
-      BestCost = 0.98f * Cost; // Prevent rounding effects.
+      BestCost = Hysteresis * Cost; // Prevent rounding effects.
     }
   }
 
@@ -906,7 +1009,6 @@ unsigned RAGreedy::tryRegionSplit(LiveInterval &VirtReg, AllocationOrder &Order,
     return 0;
 
   splitAroundRegion(VirtReg, GlobalCand[BestCand], NewVRegs);
-  setStage(NewVRegs.begin(), NewVRegs.end(), RS_Global);
   return 0;
 }
 
@@ -1230,10 +1332,8 @@ unsigned RAGreedy::selectOrSplit(LiveInterval &VirtReg,
                                  SmallVectorImpl<LiveInterval*> &NewVRegs) {
   // First try assigning a free register.
   AllocationOrder Order(VirtReg.reg, *VRM, ReservedRegs);
-  while (unsigned PhysReg = Order.next()) {
-    if (!checkPhysRegInterference(VirtReg, PhysReg))
-      return PhysReg;
-  }
+  if (unsigned PhysReg = tryAssign(VirtReg, Order, NewVRegs))
+    return PhysReg;
 
   if (unsigned PhysReg = tryEvict(VirtReg, Order, NewVRegs))
     return PhysReg;

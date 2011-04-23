@@ -486,38 +486,10 @@ void AsmPrinter::EmitFunctionEntryLabel() {
 }
 
 
-static void EmitDebugLoc(DebugLoc DL, const MachineFunction *MF,
-                         raw_ostream &CommentOS) {
-  const LLVMContext &Ctx = MF->getFunction()->getContext();
-  if (!DL.isUnknown()) {          // Print source line info.
-    DIScope Scope(DL.getScope(Ctx));
-    // Omit the directory, because it's likely to be long and uninteresting.
-    if (Scope.Verify())
-      CommentOS << Scope.getFilename();
-    else
-      CommentOS << "<unknown>";
-    CommentOS << ':' << DL.getLine();
-    if (DL.getCol() != 0)
-      CommentOS << ':' << DL.getCol();
-    DebugLoc InlinedAtDL = DebugLoc::getFromDILocation(DL.getInlinedAt(Ctx));
-    if (!InlinedAtDL.isUnknown()) {
-      CommentOS << "[ ";
-      EmitDebugLoc(InlinedAtDL, MF, CommentOS);
-      CommentOS << " ]";
-    }
-  }
-}
-
 /// EmitComments - Pretty-print comments for instructions.
 static void EmitComments(const MachineInstr &MI, raw_ostream &CommentOS) {
   const MachineFunction *MF = MI.getParent()->getParent();
   const TargetMachine &TM = MF->getTarget();
-
-  DebugLoc DL = MI.getDebugLoc();
-  if (!DL.isUnknown()) {          // Print source line info.
-    EmitDebugLoc(DL, MF, CommentOS);
-    CommentOS << '\n';
-  }
 
   // Check for spills and reloads
   int FI;
@@ -644,24 +616,7 @@ void AsmPrinter::emitPrologLabel(const MachineInstr &MI) {
     }
   }
   assert(Move);
-
-  const MachineLocation &Dst = Move->getDestination();
-  const MachineLocation &Src = Move->getSource();
-  const TargetAsmInfo &AsmInfo = OutContext.getTargetAsmInfo();
-  if (Dst.isReg() && Dst.getReg() == MachineLocation::VirtualFP) {
-    if (Src.getReg() == MachineLocation::VirtualFP)
-      OutStreamer.EmitCFIDefCfaOffset(-Src.getOffset());
-    else {
-      unsigned Reg = AsmInfo.getDwarfRegNum(Src.getReg(), true);
-      OutStreamer.EmitCFIDefCfa(Reg, -Src.getOffset());
-    }
-  } else if (Src.isReg() && Src.getReg() == MachineLocation::VirtualFP) {
-    unsigned Reg = AsmInfo.getDwarfRegNum(Dst.getReg(), true);
-    OutStreamer.EmitCFIDefCfaRegister(Reg);
-  } else {
-    unsigned Reg = AsmInfo.getDwarfRegNum(Src.getReg(), true);
-    OutStreamer.EmitCFIOffset(Reg, -Dst.getOffset());
-  }
+  EmitCFIFrameMove(*Move);
 }
 
 /// EmitFunctionBody - This method emits the body and trailer for a
@@ -795,6 +750,40 @@ MachineLocation AsmPrinter::
 getDebugValueLocation(const MachineInstr *MI) const {
   // Target specific DBG_VALUE instructions are handled by each target.
   return MachineLocation();
+}
+
+/// EmitDwarfRegOp - Emit dwarf register operation.
+void AsmPrinter::EmitDwarfRegOp(const MachineLocation &MLoc) const {
+  const TargetRegisterInfo *RI = TM.getRegisterInfo();
+  unsigned Reg = RI->getDwarfRegNum(MLoc.getReg(), false);
+  if (int Offset =  MLoc.getOffset()) {
+    // If the value is at a certain offset from frame register then
+    // use DW_OP_fbreg.
+    unsigned OffsetSize = Offset ? MCAsmInfo::getSLEB128Size(Offset) : 1;
+    OutStreamer.AddComment("Loc expr size");
+    EmitInt16(1 + OffsetSize);
+    OutStreamer.AddComment(
+      dwarf::OperationEncodingString(dwarf::DW_OP_fbreg));
+    EmitInt8(dwarf::DW_OP_fbreg);
+    OutStreamer.AddComment("Offset");
+    EmitSLEB128(Offset);
+  } else {
+    if (Reg < 32) {
+      OutStreamer.AddComment("Loc expr size");
+      EmitInt16(1);
+      OutStreamer.AddComment(
+        dwarf::OperationEncodingString(dwarf::DW_OP_reg0 + Reg));
+      EmitInt8(dwarf::DW_OP_reg0 + Reg);
+    } else {
+      OutStreamer.AddComment("Loc expr size");
+      EmitInt16(1 + MCAsmInfo::getULEB128Size(Reg));
+      OutStreamer.AddComment(
+        dwarf::OperationEncodingString(dwarf::DW_OP_regx));
+      EmitInt8(dwarf::DW_OP_regx);
+      OutStreamer.AddComment(Twine(Reg));
+      EmitULEB128(Reg);
+    }
+  }
 }
 
 bool AsmPrinter::doFinalization(Module &M) {

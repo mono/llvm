@@ -444,8 +444,8 @@ static SDValue CreateFPCmp(SelectionDAG& DAG, const SDValue& Op) {
   SDValue RHS = Op.getOperand(1);
   DebugLoc dl = Op.getDebugLoc();
 
-  // Assume the 3rd operand is a CondCodeSDNode. Add code to check the type of node
-  // if necessary.
+  // Assume the 3rd operand is a CondCodeSDNode. Add code to check the type of
+  // node if necessary.
   ISD::CondCode CC = cast<CondCodeSDNode>(Op.getOperand(2))->get();
 
   return DAG.getNode(MipsISD::FPCmp, dl, MVT::Glue, LHS, RHS,
@@ -851,7 +851,8 @@ LowerJumpTable(SDValue Op, SelectionDAG &DAG) const
                          MachinePointerInfo(),
                          false, false, 0);
 
-  SDValue JTILo = DAG.getTargetJumpTable(JT->getIndex(), PtrVT, MipsII::MO_ABS_LO);
+  SDValue JTILo = DAG.getTargetJumpTable(JT->getIndex(), PtrVT,
+                                         MipsII::MO_ABS_LO);
   SDValue Lo = DAG.getNode(MipsISD::Lo, dl, MVT::i32, JTILo);
   ResNode = DAG.getNode(ISD::ADD, dl, MVT::i32, HiPart, Lo);
 
@@ -1134,10 +1135,10 @@ MipsTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
         if (VA.getValVT() == MVT::f32 && VA.getLocVT() == MVT::i32)
           Arg = DAG.getNode(ISD::BITCAST, dl, MVT::i32, Arg);
         if (VA.getValVT() == MVT::f64 && VA.getLocVT() == MVT::i32) {
-          SDValue Lo = DAG.getNode(MipsISD::ExtractElementF64, dl, MVT::i32, Arg,
-                                   DAG.getConstant(0, MVT::i32));
-          SDValue Hi = DAG.getNode(MipsISD::ExtractElementF64, dl, MVT::i32, Arg,
-                                   DAG.getConstant(1, MVT::i32));
+          SDValue Lo = DAG.getNode(MipsISD::ExtractElementF64, dl, MVT::i32,
+                                   Arg, DAG.getConstant(0, MVT::i32));
+          SDValue Hi = DAG.getNode(MipsISD::ExtractElementF64, dl, MVT::i32,
+                                   Arg, DAG.getConstant(1, MVT::i32));
           if (!Subtarget->isLittle())
             std::swap(Lo, Hi);
           RegsToPass.push_back(std::make_pair(VA.getLocReg(), Lo));
@@ -1350,11 +1351,12 @@ MipsTargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
 /// and generate load operations for arguments places on the stack.
 SDValue
 MipsTargetLowering::LowerFormalArguments(SDValue Chain,
-                                        CallingConv::ID CallConv, bool isVarArg,
-                                        const SmallVectorImpl<ISD::InputArg>
-                                        &Ins,
-                                        DebugLoc dl, SelectionDAG &DAG,
-                                        SmallVectorImpl<SDValue> &InVals)
+                                         CallingConv::ID CallConv,
+                                         bool isVarArg,
+                                         const SmallVectorImpl<ISD::InputArg>
+                                         &Ins,
+                                         DebugLoc dl, SelectionDAG &DAG,
+                                         SmallVectorImpl<SDValue> &InVals)
                                           const {
 
   MachineFunction &MF = DAG.getMachineFunction();

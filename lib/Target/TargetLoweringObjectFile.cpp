@@ -120,6 +120,19 @@ static bool IsNullTerminatedString(const Constant *C) {
   return false;
 }
 
+MCSymbol *
+TargetLoweringObjectFile::getPersonalityPICSymbol(StringRef Name) const {
+  assert(0 && "Not Available in this format.");
+  return 0;
+}
+
+void TargetLoweringObjectFile::emitPersonalityValue(MCStreamer &Streamer,
+                                                    const TargetMachine &TM,
+                                                    const MCSymbol *Sym) const {
+  assert(0 && "Not Available in this format.");
+}
+
+
 /// getKindForGlobal - This is a top-level target-independent classifier for
 /// a global variable.  Given an global variable and information from TM, it
 /// classifies the global in a variety of ways that make various target
@@ -305,12 +318,11 @@ getExprForDwarfGlobalReference(const GlobalValue *GV, Mangler *Mang,
                                MachineModuleInfo *MMI, unsigned Encoding,
                                MCStreamer &Streamer) const {
   const MCSymbol *Sym = Mang->getSymbol(GV);
-  return getExprForDwarfReference(Sym, Mang, MMI, Encoding, Streamer);
+  return getExprForDwarfReference(Sym, Encoding, Streamer);
 }
 
 const MCExpr *TargetLoweringObjectFile::
-getExprForDwarfReference(const MCSymbol *Sym, Mangler *Mang,
-                         MachineModuleInfo *MMI, unsigned Encoding,
+getExprForDwarfReference(const MCSymbol *Sym, unsigned Encoding,
                          MCStreamer &Streamer) const {
   const MCExpr *Res = MCSymbolRefExpr::Create(Sym, getContext());
 

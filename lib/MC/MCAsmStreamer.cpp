@@ -158,9 +158,9 @@ public:
   virtual void EmitIntValue(uint64_t Value, unsigned Size,
                             unsigned AddrSpace = 0);
 
-  virtual void EmitULEB128Value(const MCExpr *Value, unsigned AddrSpace = 0);
+  virtual void EmitULEB128Value(const MCExpr *Value);
 
-  virtual void EmitSLEB128Value(const MCExpr *Value, unsigned AddrSpace = 0);
+  virtual void EmitSLEB128Value(const MCExpr *Value);
 
   virtual void EmitGPRel32Value(const MCExpr *Value);
 
@@ -182,7 +182,8 @@ public:
   virtual bool EmitDwarfFileDirective(unsigned FileNo, StringRef Filename);
   virtual void EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                      unsigned Column, unsigned Flags,
-                                     unsigned Isa, unsigned Discriminator);
+                                     unsigned Isa, unsigned Discriminator,
+                                     StringRef FileName);
 
   virtual void EmitCFIStartProc();
   virtual void EmitCFIEndProc();
@@ -559,10 +560,10 @@ void MCAsmStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
   EmitEOL();
 }
 
-void MCAsmStreamer::EmitULEB128Value(const MCExpr *Value, unsigned AddrSpace) {
+void MCAsmStreamer::EmitULEB128Value(const MCExpr *Value) {
   int64_t IntValue;
   if (Value->EvaluateAsAbsolute(IntValue)) {
-    EmitULEB128IntValue(IntValue, AddrSpace);
+    EmitULEB128IntValue(IntValue);
     return;
   }
   assert(MAI.hasLEB128() && "Cannot print a .uleb");
@@ -570,10 +571,10 @@ void MCAsmStreamer::EmitULEB128Value(const MCExpr *Value, unsigned AddrSpace) {
   EmitEOL();
 }
 
-void MCAsmStreamer::EmitSLEB128Value(const MCExpr *Value, unsigned AddrSpace) {
+void MCAsmStreamer::EmitSLEB128Value(const MCExpr *Value) {
   int64_t IntValue;
   if (Value->EvaluateAsAbsolute(IntValue)) {
-    EmitSLEB128IntValue(IntValue, AddrSpace);
+    EmitSLEB128IntValue(IntValue);
     return;
   }
   assert(MAI.hasLEB128() && "Cannot print a .sleb");
@@ -689,9 +690,10 @@ bool MCAsmStreamer::EmitDwarfFileDirective(unsigned FileNo, StringRef Filename){
 void MCAsmStreamer::EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                           unsigned Column, unsigned Flags,
                                           unsigned Isa,
-                                          unsigned Discriminator) {
+                                          unsigned Discriminator,
+                                          StringRef FileName) {
   this->MCStreamer::EmitDwarfLocDirective(FileNo, Line, Column, Flags,
-                                          Isa, Discriminator);
+                                          Isa, Discriminator, FileName);
   if (!UseLoc)
     return;
 
@@ -717,6 +719,12 @@ void MCAsmStreamer::EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
     OS << "isa " << Isa;
   if (Discriminator)
     OS << "discriminator " << Discriminator;
+
+  if (IsVerboseAsm) {
+    OS.PadToColumn(MAI.getCommentColumn());
+    OS << MAI.getCommentString() << ' ' << FileName << ':' 
+       << Line << ':' << Column;
+  }
   EmitEOL();
 }
 

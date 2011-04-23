@@ -122,10 +122,9 @@ unsigned FastISel::getRegForValue(const Value *V) {
   // only locally. This is because Instructions already have the SSA
   // def-dominates-use requirement enforced.
   DenseMap<const Value *, unsigned>::iterator I = FuncInfo.ValueMap.find(V);
-  if (I != FuncInfo.ValueMap.end()) {
-    unsigned Reg = I->second;
-    return Reg;
-  }
+  if (I != FuncInfo.ValueMap.end())
+    return I->second;
+
   unsigned Reg = LocalValueMap[V];
   if (Reg != 0)
     return Reg;
@@ -331,23 +330,51 @@ bool FastISel::SelectBinaryOp(const User *I, unsigned ISDOpcode) {
       return false;
   }
 
+  // Check if the first operand is a constant, and handle it as "ri".  At -O0,
+  // we don't have anything that canonicalizes operand order.
+  if (ConstantInt *CI = dyn_cast<ConstantInt>(I->getOperand(0)))
+    if (isa<Instruction>(I) && cast<Instruction>(I)->isCommutative()) {
+      unsigned Op1 = getRegForValue(I->getOperand(1));
+      if (Op1 == 0) return false;
+
+      bool Op1IsKill = hasTrivialKill(I->getOperand(1));
+
+      unsigned ResultReg = FastEmit_ri_(VT.getSimpleVT(), ISDOpcode, Op1,
+                                        Op1IsKill, CI->getZExtValue(),
+                                        VT.getSimpleVT());
+      if (ResultReg == 0) return false;
+
+      // We successfully emitted code for the given LLVM Instruction.
+      UpdateValueMap(I, ResultReg);
+      return true;
+    }
+
+
   unsigned Op0 = getRegForValue(I->getOperand(0));
-  if (Op0 == 0)
-    // Unhandled operand. Halt "fast" selection and bail.
+  if (Op0 == 0)   // Unhandled operand. Halt "fast" selection and bail.
     return false;
 
   bool Op0IsKill = hasTrivialKill(I->getOperand(0));
 
   // Check if the second operand is a constant and handle it appropriately.
   if (ConstantInt *CI = dyn_cast<ConstantInt>(I->getOperand(1))) {
-    unsigned ResultReg = FastEmit_ri(VT.getSimpleVT(), VT.getSimpleVT(),
-                                     ISDOpcode, Op0, Op0IsKill,
-                                     CI->getZExtValue());
-    if (ResultReg != 0) {
-      // We successfully emitted code for the given LLVM Instruction.
-      UpdateValueMap(I, ResultReg);
-      return true;
+    uint64_t Imm = CI->getZExtValue();
+
+    // Transform "sdiv exact X, 8" -> "sra X, 3".
+    if (ISDOpcode == ISD::SDIV && isa<BinaryOperator>(I) &&
+        cast<BinaryOperator>(I)->isExact() &&
+        isPowerOf2_64(Imm)) {
+      Imm = Log2_64(Imm);
+      ISDOpcode = ISD::SRA;
     }
+
+    unsigned ResultReg = FastEmit_ri_(VT.getSimpleVT(), ISDOpcode, Op0,
+                                      Op0IsKill, Imm, VT.getSimpleVT());
+    if (ResultReg == 0) return false;
+
+    // We successfully emitted code for the given LLVM Instruction.
+    UpdateValueMap(I, ResultReg);
+    return true;
   }
 
   // Check if the second operand is a constant float.
@@ -459,8 +486,7 @@ bool FastISel::SelectCall(const User *I) {
   if (!F) return false;
 
   // Handle selected intrinsic function calls.
-  unsigned IID = F->getIntrinsicID();
-  switch (IID) {
+  switch (F->getIntrinsicID()) {
   default: break;
   case Intrinsic::dbg_declare: {
     const DbgDeclareInst *DI = cast<DbgDeclareInst>(I);
@@ -525,64 +551,57 @@ bool FastISel::SelectCall(const User *I) {
   }
   case Intrinsic::eh_exception: {
     EVT VT = TLI.getValueType(I->getType());
-    switch (TLI.getOperationAction(ISD::EXCEPTIONADDR, VT)) {
-    default: break;
-    case TargetLowering::Expand: {
-      assert(FuncInfo.MBB->isLandingPad() &&
-             "Call to eh.exception not in landing pad!");
-      unsigned Reg = TLI.getExceptionAddressRegister();
-      const TargetRegisterClass *RC = TLI.getRegClassFor(VT);
-      unsigned ResultReg = createResultReg(RC);
-      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(TargetOpcode::COPY),
-              ResultReg).addReg(Reg);
-      UpdateValueMap(I, ResultReg);
-      return true;
-    }
-    }
-    break;
+    if (TLI.getOperationAction(ISD::EXCEPTIONADDR, VT)!=TargetLowering::Expand)
+      break;
+
+    assert(FuncInfo.MBB->isLandingPad() &&
+           "Call to eh.exception not in landing pad!");
+    unsigned Reg = TLI.getExceptionAddressRegister();
+    const TargetRegisterClass *RC = TLI.getRegClassFor(VT);
+    unsigned ResultReg = createResultReg(RC);
+    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(TargetOpcode::COPY),
+            ResultReg).addReg(Reg);
+    UpdateValueMap(I, ResultReg);
+    return true;
   }
   case Intrinsic::eh_selector: {
     EVT VT = TLI.getValueType(I->getType());
-    switch (TLI.getOperationAction(ISD::EHSELECTION, VT)) {
-    default: break;
-    case TargetLowering::Expand: {
-      if (FuncInfo.MBB->isLandingPad())
-        AddCatchInfo(*cast<CallInst>(I), &FuncInfo.MF->getMMI(), FuncInfo.MBB);
-      else {
+    if (TLI.getOperationAction(ISD::EHSELECTION, VT) != TargetLowering::Expand)
+      break;
+    if (FuncInfo.MBB->isLandingPad())
+      AddCatchInfo(*cast<CallInst>(I), &FuncInfo.MF->getMMI(), FuncInfo.MBB);
+    else {
 #ifndef NDEBUG
-        FuncInfo.CatchInfoLost.insert(cast<CallInst>(I));
+      FuncInfo.CatchInfoLost.insert(cast<CallInst>(I));
 #endif
-        // FIXME: Mark exception selector register as live in.  Hack for PR1508.
-        unsigned Reg = TLI.getExceptionSelectorRegister();
-        if (Reg) FuncInfo.MBB->addLiveIn(Reg);
-      }
-
+      // FIXME: Mark exception selector register as live in.  Hack for PR1508.
       unsigned Reg = TLI.getExceptionSelectorRegister();
-      EVT SrcVT = TLI.getPointerTy();
-      const TargetRegisterClass *RC = TLI.getRegClassFor(SrcVT);
-      unsigned ResultReg = createResultReg(RC);
-      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(TargetOpcode::COPY),
-              ResultReg).addReg(Reg);
-
-      bool ResultRegIsKill = hasTrivialKill(I);
-
-      // Cast the register to the type of the selector.
-      if (SrcVT.bitsGT(MVT::i32))
-        ResultReg = FastEmit_r(SrcVT.getSimpleVT(), MVT::i32, ISD::TRUNCATE,
-                               ResultReg, ResultRegIsKill);
-      else if (SrcVT.bitsLT(MVT::i32))
-        ResultReg = FastEmit_r(SrcVT.getSimpleVT(), MVT::i32,
-                               ISD::SIGN_EXTEND, ResultReg, ResultRegIsKill);
-      if (ResultReg == 0)
-        // Unhandled operand. Halt "fast" selection and bail.
-        return false;
-
-      UpdateValueMap(I, ResultReg);
-
-      return true;
+      if (Reg) FuncInfo.MBB->addLiveIn(Reg);
     }
-    }
-    break;
+
+    unsigned Reg = TLI.getExceptionSelectorRegister();
+    EVT SrcVT = TLI.getPointerTy();
+    const TargetRegisterClass *RC = TLI.getRegClassFor(SrcVT);
+    unsigned ResultReg = createResultReg(RC);
+    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(TargetOpcode::COPY),
+            ResultReg).addReg(Reg);
+
+    bool ResultRegIsKill = hasTrivialKill(I);
+
+    // Cast the register to the type of the selector.
+    if (SrcVT.bitsGT(MVT::i32))
+      ResultReg = FastEmit_r(SrcVT.getSimpleVT(), MVT::i32, ISD::TRUNCATE,
+                             ResultReg, ResultRegIsKill);
+    else if (SrcVT.bitsLT(MVT::i32))
+      ResultReg = FastEmit_r(SrcVT.getSimpleVT(), MVT::i32,
+                             ISD::SIGN_EXTEND, ResultReg, ResultRegIsKill);
+    if (ResultReg == 0)
+      // Unhandled operand. Halt "fast" selection and bail.
+      return false;
+
+    UpdateValueMap(I, ResultReg);
+
+    return true;
   }
   }
 
@@ -967,6 +986,22 @@ unsigned FastISel::FastEmit_rri(MVT, MVT,
 unsigned FastISel::FastEmit_ri_(MVT VT, unsigned Opcode,
                                 unsigned Op0, bool Op0IsKill,
                                 uint64_t Imm, MVT ImmType) {
+  // If this is a multiply by a power of two, emit this as a shift left.
+  if (Opcode == ISD::MUL && isPowerOf2_64(Imm)) {
+    Opcode = ISD::SHL;
+    Imm = Log2_64(Imm);
+  } else if (Opcode == ISD::UDIV && isPowerOf2_64(Imm)) {
+    // div x, 8 -> srl x, 3
+    Opcode = ISD::SRL;
+    Imm = Log2_64(Imm);
+  }
+
+  // Horrible hack (to be removed), check to make sure shift amounts are
+  // in-range.
+  if ((Opcode == ISD::SHL || Opcode == ISD::SRA || Opcode == ISD::SRL) &&
+      Imm >= VT.getSizeInBits())
+    return 0;
+
   // First check if immediate type is legal. If not, we can't use the ri form.
   unsigned ResultReg = FastEmit_ri(VT, VT, Opcode, Op0, Op0IsKill, Imm);
   if (ResultReg != 0)
@@ -1178,6 +1213,23 @@ unsigned FastISel::FastEmitInst_i(unsigned MachineInstOpcode,
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg).addImm(Imm);
   else {
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II).addImm(Imm);
+    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(TargetOpcode::COPY),
+            ResultReg).addReg(II.ImplicitDefs[0]);
+  }
+  return ResultReg;
+}
+
+unsigned FastISel::FastEmitInst_ii(unsigned MachineInstOpcode,
+                                  const TargetRegisterClass *RC,
+                                  uint64_t Imm1, uint64_t Imm2) {
+  unsigned ResultReg = createResultReg(RC);
+  const TargetInstrDesc &II = TII.get(MachineInstOpcode);
+
+  if (II.getNumDefs() >= 1)
+    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
+      .addImm(Imm1).addImm(Imm2);
+  else {
+    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II).addImm(Imm1).addImm(Imm2);
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(TargetOpcode::COPY),
             ResultReg).addReg(II.ImplicitDefs[0]);
   }

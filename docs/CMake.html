@@ -6,9 +6,9 @@
   <link rel="stylesheet" href="llvm.css" type="text/css">
 </head>
 
-<div class="doc_title">
+<h1>
   Building LLVM with CMake
-</div>
+</h1>
 
 <ul>
   <li><a href="#intro">Introduction</a></li>
@@ -36,12 +36,12 @@
 </div>
 
 <!-- *********************************************************************** -->
-<div class="doc_section">
+<h2>
 <a name="intro">Introduction</a>
-</div>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
   <p><a href="http://www.cmake.org/">CMake</a> is a cross-platform
     build-generator tool. CMake does not build the project, it generates
@@ -59,12 +59,12 @@
 </div>
 
 <!-- *********************************************************************** -->
-<div class="doc_section">
+<h2>
 <a name="quickstart">Quick start</a>
-</div>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
 <p> We use here the command-line, non-interactive CMake interface </p>
 
@@ -112,12 +112,12 @@
 </div>
 
 <!-- *********************************************************************** -->
-<div class="doc_section">
+<h2>
   <a name="usage">Basic CMake usage</a>
-</div>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
   <p>This section explains basic aspects of CMake, mostly for
     explaining those options which you may need on your day-to-day
@@ -160,12 +160,12 @@
 </div>
 
 <!-- *********************************************************************** -->
-<div class="doc_section">
+<h2>
   <a name="options">Options and variables</a>
-</div>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
   <p>Variables customize how the build will be generated. Options are
     boolean variables, with possible values ON/OFF. Options and
@@ -194,14 +194,12 @@
     <p><tt>cmake -DVARIABLE:TYPE=value path/to/llvm/source</tt></p>
   </div>
 
-</div>
-
 <!-- ======================================================================= -->
-<div class="doc_subsection">
+<h3>
   <a name="freccmake">Frequently-used CMake variables</a>
-</div>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p>Here are listed some of the CMake variables that are used often,
   along with a brief explanation and LLVM-specific notes. For full
@@ -240,11 +238,11 @@
 </div>
 
 <!-- ======================================================================= -->
-<div class="doc_subsection">
+<h3>
   <a name="llvmvars">LLVM-specific variables</a>
-</div>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <dl>
   <dt><b>LLVM_TARGETS_TO_BUILD</b>:STRING</dt>
@@ -357,13 +355,15 @@
 
 </div>
 
-<!-- *********************************************************************** -->
-<div class="doc_section">
-  <a name="testing">Executing the test suite</a>
 </div>
+
+<!-- *********************************************************************** -->
+<h2>
+  <a name="testing">Executing the test suite</a>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
 <p>Testing is performed when the <i>check</i> target is built. For
   instance, if you are using makefiles, execute this command while on
@@ -378,12 +378,12 @@
 </div>
 
 <!-- *********************************************************************** -->
-<div class="doc_section">
+<h2>
   <a name="cross">Cross compiling</a>
-</div>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
 <p>See <a href="http://www.vtk.org/Wiki/CMake_Cross_Compiling">this
     wiki page</a> for generic instructions on how to cross-compile
@@ -399,12 +399,12 @@
 </div>
 
 <!-- *********************************************************************** -->
-<div class="doc_section">
+<h2>
   <a name="embedding">Embedding LLVM in your project</a>
-</div>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
   <p>The most difficult part of adding LLVM to the build of a project
     is to determine the set of LLVM libraries corresponding to the set
@@ -459,14 +459,12 @@
     </pre>
   </div>
 
-</div>
-
 <!-- ======================================================================= -->
-<div class="doc_subsection">
+<h3>
   <a name="passdev">Developing LLVM pass out of source</a>
-</div>
+</h3>
 
-<div class="doc_text">
+<div>
 
   <p>It is possible to develop LLVM passes against installed LLVM.
      An example of project layout provided below:</p>
@@ -518,23 +516,23 @@
 </div>
 <!-- *********************************************************************** -->
 
-<!-- *********************************************************************** -->
-<div class="doc_section">
-  <a name="specifics">Compiler/Platform specific topics</a>
 </div>
+
+<!-- *********************************************************************** -->
+<h2>
+  <a name="specifics">Compiler/Platform specific topics</a>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
 <p>Notes for specific compilers and/or platforms.</p>
 
-</div>
-
-<div class="doc_subsection">
+<h3>
   <a name="msvc">Microsoft Visual C++</a>
-</div>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <dl>
   <dt><b>LLVM_COMPILER_JOBS</b>:STRING</dt>
@@ -543,6 +541,8 @@
     Visual Studio 2008 and Visual Studio 2010 CMake generators. 0 means use all
     processors. Default is 0.</dd>
 </dl>
+
+</div>
 
 </div>
 

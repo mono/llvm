@@ -322,6 +322,21 @@ DIE *DwarfDebug::createSubprogramDIE(DISubprogram SP) {
     return SPDie;
 
   SPDie = new DIE(dwarf::DW_TAG_subprogram);
+  
+  // DW_TAG_inlined_subroutine may refer to this DIE.
+  SPCU->insertDIE(SP, SPDie);
+  
+  // Add to context owner.
+  SPCU->addToContextOwner(SPDie, SP.getContext());
+
+  // Add function template parameters.
+  SPCU->addTemplateParams(*SPDie, SP.getTemplateParams());
+
+  // If this DIE is going to refer declaration info using AT_specification
+  // then there is no need to add other attributes.
+  if (SP.getFunctionDeclaration().isSubprogram())
+    return SPDie;
+
   // Constructors and operators for anonymous aggregates do not have names.
   if (!SP.getName().empty())
     SPCU->addString(SPDie, dwarf::DW_AT_name, dwarf::DW_FORM_string, 
@@ -336,7 +351,7 @@ DIE *DwarfDebug::createSubprogramDIE(DISubprogram SP) {
 
   if (SP.isPrototyped()) 
     SPCU->addUInt(SPDie, dwarf::DW_AT_prototyped, dwarf::DW_FORM_flag, 1);
-  
+
   // Add Return Type.
   DICompositeType SPTy = SP.getType();
   DIArray Args = SPTy.getTypeArray();
@@ -390,15 +405,6 @@ DIE *DwarfDebug::createSubprogramDIE(DISubprogram SP) {
   if (unsigned isa = Asm->getISAEncoding()) {
     SPCU->addUInt(SPDie, dwarf::DW_AT_APPLE_isa, dwarf::DW_FORM_flag, isa);
   }
-
-  // Add function template parameters.
-  SPCU->addTemplateParams(*SPDie, SP.getTemplateParams());
-
-  // DW_TAG_inlined_subroutine may refer to this DIE.
-  SPCU->insertDIE(SP, SPDie);
-
-  // Add to context owner.
-  SPCU->addToContextOwner(SPDie, SP.getContext());
 
   return SPDie;
 }
@@ -454,36 +460,42 @@ DIE *DwarfDebug::updateSubprogramScopeDIE(const MDNode *SPNode) {
   assert(SPDie && "Unable to find subprogram DIE!");
   DISubprogram SP(SPNode);
 
-  // There is not any need to generate specification DIE for a function
-  // defined at compile unit level. If a function is defined inside another
-  // function then gdb prefers the definition at top level and but does not
-  // expect specification DIE in parent function. So avoid creating
-  // specification DIE for a function defined inside a function.
-  if (SP.isDefinition() && !SP.getContext().isCompileUnit() &&
-      !SP.getContext().isFile() &&
-      !isSubprogramContext(SP.getContext())) {
-   SPCU-> addUInt(SPDie, dwarf::DW_AT_declaration, dwarf::DW_FORM_flag, 1);
-
-    // Add arguments.
-    DICompositeType SPTy = SP.getType();
-    DIArray Args = SPTy.getTypeArray();
-    unsigned SPTag = SPTy.getTag();
-    if (SPTag == dwarf::DW_TAG_subroutine_type)
-      for (unsigned i = 1, N = Args.getNumElements(); i < N; ++i) {
-        DIE *Arg = new DIE(dwarf::DW_TAG_formal_parameter);
-        DIType ATy = DIType(DIType(Args.getElement(i)));
-        SPCU->addType(Arg, ATy);
-        if (ATy.isArtificial())
-          SPCU->addUInt(Arg, dwarf::DW_AT_artificial, dwarf::DW_FORM_flag, 1);
-        SPDie->addChild(Arg);
-      }
-    DIE *SPDeclDie = SPDie;
-    SPDie = new DIE(dwarf::DW_TAG_subprogram);
+  DISubprogram SPDecl = SP.getFunctionDeclaration();
+  if (SPDecl.isSubprogram())
+    // Refer function declaration directly.
     SPCU->addDIEEntry(SPDie, dwarf::DW_AT_specification, dwarf::DW_FORM_ref4,
-                      SPDeclDie);
-    SPCU->addDie(SPDie);
+                      createSubprogramDIE(SPDecl));
+  else {
+    // There is not any need to generate specification DIE for a function
+    // defined at compile unit level. If a function is defined inside another
+    // function then gdb prefers the definition at top level and but does not
+    // expect specification DIE in parent function. So avoid creating
+    // specification DIE for a function defined inside a function.
+    if (SP.isDefinition() && !SP.getContext().isCompileUnit() &&
+        !SP.getContext().isFile() &&
+        !isSubprogramContext(SP.getContext())) {
+      SPCU-> addUInt(SPDie, dwarf::DW_AT_declaration, dwarf::DW_FORM_flag, 1);
+      
+      // Add arguments.
+      DICompositeType SPTy = SP.getType();
+      DIArray Args = SPTy.getTypeArray();
+      unsigned SPTag = SPTy.getTag();
+      if (SPTag == dwarf::DW_TAG_subroutine_type)
+        for (unsigned i = 1, N = Args.getNumElements(); i < N; ++i) {
+          DIE *Arg = new DIE(dwarf::DW_TAG_formal_parameter);
+          DIType ATy = DIType(DIType(Args.getElement(i)));
+          SPCU->addType(Arg, ATy);
+          if (ATy.isArtificial())
+            SPCU->addUInt(Arg, dwarf::DW_AT_artificial, dwarf::DW_FORM_flag, 1);
+          SPDie->addChild(Arg);
+        }
+      DIE *SPDeclDie = SPDie;
+      SPDie = new DIE(dwarf::DW_TAG_subprogram);
+      SPCU->addDIEEntry(SPDie, dwarf::DW_AT_specification, dwarf::DW_FORM_ref4,
+                        SPDeclDie);
+      SPCU->addDie(SPDie);
+    }
   }
-
   // Pick up abstract subprogram DIE.
   if (DIE *AbsSPDIE = AbstractSPDies.lookup(SPNode)) {
     SPDie = new DIE(dwarf::DW_TAG_subprogram);
@@ -2061,7 +2073,7 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
 
   // Clear debug info
   CurrentFnDbgScope = NULL;
-  CurrentFnArguments.clear();
+  DeleteContainerPointers(CurrentFnArguments);
   DbgVariableToFrameIndexMap.clear();
   VarToAbstractVarMap.clear();
   DbgVariableToDbgInstMap.clear();
@@ -2146,9 +2158,8 @@ void DwarfDebug::recordSourceLine(unsigned Line, unsigned Col, const MDNode *S){
 
     Src = GetOrCreateSourceID(Fn, Dir);
   }
-
   Asm->OutStreamer.EmitDwarfLocDirective(Src, Line, Col, DWARF2_FLAG_IS_STMT,
-                                         0, 0);
+                                         0, 0, Fn);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2693,33 +2704,7 @@ void DwarfDebug::emitDebugLoc() {
     } else {
       Asm->OutStreamer.EmitSymbolValue(Entry.Begin, Size, 0);
       Asm->OutStreamer.EmitSymbolValue(Entry.End, Size, 0);
-      const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
-      unsigned Reg = RI->getDwarfRegNum(Entry.Loc.getReg(), false);
-      if (int Offset =  Entry.Loc.getOffset()) {
-        // If the value is at a certain offset from frame register then
-        // use DW_OP_fbreg.
-        unsigned OffsetSize = Offset ? MCAsmInfo::getSLEB128Size(Offset) : 1;
-        Asm->OutStreamer.AddComment("Loc expr size");
-        Asm->EmitInt16(1 + OffsetSize);
-        Asm->OutStreamer.AddComment(
-          dwarf::OperationEncodingString(dwarf::DW_OP_fbreg));
-        Asm->EmitInt8(dwarf::DW_OP_fbreg);
-        Asm->OutStreamer.AddComment("Offset");
-        Asm->EmitSLEB128(Offset);
-      } else {
-        if (Reg < 32) {
-          Asm->OutStreamer.AddComment("Loc expr size");
-          Asm->EmitInt16(1);
-          Asm->OutStreamer.AddComment(
-            dwarf::OperationEncodingString(dwarf::DW_OP_reg0 + Reg));
-          Asm->EmitInt8(dwarf::DW_OP_reg0 + Reg);
-        } else {
-          Asm->OutStreamer.AddComment("Loc expr size");
-          Asm->EmitInt16(1 + MCAsmInfo::getULEB128Size(Reg));
-          Asm->EmitInt8(dwarf::DW_OP_regx);
-          Asm->EmitULEB128(Reg);
-        }
-      }
+      Asm->EmitDwarfRegOp(Entry.Loc);
     }
   }
 }

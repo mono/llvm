@@ -8,7 +8,7 @@
 </head>
 <body>
 
-<h1 class="doc_title">LLVM 2.9 Release Notes</h1>
+<h1>LLVM 2.9 Release Notes</h1>
 
 <img align=right src="http://llvm.org/img/DragonSmall.png"
     width="136" height="136" alt="LLVM Dragon Logo">
@@ -36,12 +36,12 @@ Release Notes</a>.</h1>
  -->
 
 <!-- *********************************************************************** -->
-<h1>
+<h2>
   <a name="intro">Introduction</a>
-</h1>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
 <p>This document contains the release notes for the LLVM Compiler
 Infrastructure, release 2.9.  Here we describe the status of LLVM, including
@@ -72,12 +72,12 @@ current one.  To see the release notes for a specific release, please see the
  -->
  
 <!-- *********************************************************************** -->
-<h1>
+<h2>
   <a name="subproj">Sub-project Status Update</a>
-</h1>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 <p>
 The LLVM 2.9 distribution currently consists of code from the core LLVM
 repository (which roughly includes the LLVM optimizers, code generators
@@ -86,15 +86,12 @@ addition to this code, the LLVM Project includes other sub-projects that are in
 development.  Here we include updates on these subprojects.
 </p>
 
-</div>
-
-
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="clang">Clang: C/C++/Objective-C Frontend Toolkit</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p><a href="http://clang.llvm.org/">Clang</a> is an LLVM front end for the C,
 C++, and Objective-C languages. Clang aims to provide a better user experience
@@ -121,11 +118,11 @@ compatibility</a> guide to make sure this is not intentional or a known issue.
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="dragonegg">DragonEgg: GCC front-ends, LLVM back-end</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>
 <a href="http://dragonegg.llvm.org/">DragonEgg</a> is a
 <a href="http://gcc.gnu.org/wiki/plugins">gcc plugin</a> that replaces GCC's
@@ -153,11 +150,11 @@ work yet.</li>
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="compiler-rt">compiler-rt: Compiler Runtime Library</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>
 The new LLVM <a href="http://compiler-rt.llvm.org/">compiler-rt project</a>
 is a simple library that provides an implementation of the low-level
@@ -179,11 +176,11 @@ libgcc routines).</p>
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="lldb">LLDB: Low Level Debugger</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>
 <a href="http://lldb.llvm.org/">LLDB</a> is a brand new member of the LLVM
 umbrella of projects. LLDB is a next generation, high-performance debugger. It
@@ -201,11 +198,11 @@ GDB</a>.</p>
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="libc++">libc++: C++ Standard Library</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>
 <a href="http://libcxx.llvm.org/">libc++</a> is another new member of the LLVM
 family.  It is an implementation of the C++ standard library, written from the
@@ -226,11 +223,11 @@ Like compiler_rt, libc++ is now <a href="DeveloperPolicy.html#license">dual
 
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="LLBrowse">LLBrowse: IR Browser</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>
 <a href="http://llvm.org/svn/llvm-project/llbrowse/trunk/doc/LLBrowse.html">
   LLBrowse</a> is an interactive viewer for LLVM modules. It can load any LLVM
@@ -241,11 +238,11 @@ Like compiler_rt, libc++ is now <a href="DeveloperPolicy.html#license">dual
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="vmkit">VMKit</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>The <a href="http://vmkit.llvm.org/">VMKit project</a> is an implementation
   of a Java Virtual Machine (Java VM or JVM) that uses LLVM for static and
   just-in-time compilation. As of LLVM 2.9, VMKit now supports generational
@@ -258,11 +255,11 @@ Like compiler_rt, libc++ is now <a href="DeveloperPolicy.html#license">dual
   
 <!--=========================================================================-->
 <!--
-<h2>
+<h3>
 <a name="klee">KLEE: A Symbolic Execution Virtual Machine</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>
 <a href="http://klee.llvm.org/">KLEE</a> is a symbolic execution framework for
 programs in LLVM bitcode form. KLEE tries to symbolically evaluate "all" paths
@@ -274,25 +271,24 @@ be used to verify some algorithms.
 <p>UPDATE!</p>
 </div>-->
 
+</div>
 
 <!-- *********************************************************************** -->
-<h1>
+<h2>
   <a name="externalproj">External Open Source Projects Using LLVM 2.9</a>
-</h1>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
 <p>An exciting aspect of LLVM is that it is used as an enabling technology for
    a lot of other language and tools projects.  This section lists some of the
    projects that have already been updated to work with LLVM 2.9.</p>
-</div>
-
 
 <!--=========================================================================-->
-<h2>Crack Programming Language</h2>
+<h3>Crack Programming Language</h3>
 
-<div class="doc_text">
+<div>
 <p>
 <a href="http://code.google.com/p/crack-language/">Crack</a> aims to provide the
 ease of development of a scripting language with the performance of a compiled
@@ -302,9 +298,9 @@ object-oriented programming, operator overloading and strong typing.</p>
   
   
 <!--=========================================================================-->
-<h2>TTA-based Codesign Environment (TCE)</h2>
+<h3>TTA-based Codesign Environment (TCE)</h3>
   
-<div class="doc_text">
+<div>
 <p>TCE is a toolset for designing application-specific processors (ASP) based on
 the Transport triggered architecture (TTA). The toolset provides a complete
 co-design flow from C/C++ programs down to synthesizable VHDL and parallel
@@ -321,9 +317,9 @@ of larger parts of the compiler chain.</p>
 
   
 <!--=========================================================================-->
-<h2>PinaVM</h2>
+<h3>PinaVM</h3>
   
-<div class="doc_text">
+<div>
 <p><a href="http://gitorious.org/pinavm/pages/Home">PinaVM</a> is an open
 source, <a href="http://www.systemc.org/">SystemC</a> front-end. Unlike many
 other front-ends, PinaVM actually executes the elaboration of the
@@ -332,9 +328,9 @@ bitcode with SystemC-specific information.</p>
 </div>
 
 <!--=========================================================================-->
-<h2>Pure</h2>
+<h3>Pure</h3>
   
-<div class="doc_text">
+<div>
 <p><a href="http://pure-lang.googlecode.com/">Pure</a> is an
   algebraic/functional
   programming language based on term rewriting. Programs are collections
@@ -353,9 +349,9 @@ bitcode with SystemC-specific information.</p>
 </div>
 
 <!--=========================================================================-->
-<h2 id="icedtea">IcedTea Java Virtual Machine Implementation</h2>
+<h3 id="icedtea">IcedTea Java Virtual Machine Implementation</h3>
 
-<div class="doc_text">
+<div>
 <p>
 <a href="http://icedtea.classpath.org/wiki/Main_Page">IcedTea</a> provides a
 harness to build OpenJDK using only free software build tools and to provide
@@ -372,9 +368,9 @@ releases &gt;= 2.6 as well).</p>
 </div>
 
 <!--=========================================================================-->
-<h2>Glasgow Haskell Compiler (GHC)</h2>
+<h3>Glasgow Haskell Compiler (GHC)</h3>
   
-<div class="doc_text">
+<div>
 <p>GHC is an open source, state-of-the-art programming suite for Haskell,
 a standard lazy functional programming language. It includes an
 optimizing static compiler generating good code for a variety of
@@ -386,9 +382,9 @@ supports an LLVM code generator. GHC supports LLVM 2.7 and later.</p>
 </div>
 
 <!--=========================================================================-->
-<h2>Polly - Polyhedral optimizations for LLVM</h2>
+<h3>Polly - Polyhedral optimizations for LLVM</h3>
   
-<div class="doc_text">
+<div>
 <p>Polly is a project that aims to provide advanced memory access optimizations
 to better take advantage of SIMD units, cache hierarchies, multiple cores or
 even vector accelerators for LLVM. Built around an abstract mathematical
@@ -401,9 +397,9 @@ and parallelism.</p>
 </div>
 
 <!--=========================================================================-->
-<h2>Rubinius</h2>
+<h3>Rubinius</h3>
 
-<div class="doc_text">
+<div>
   <p><a href="http://github.com/evanphx/rubinius">Rubinius</a> is an environment
   for running Ruby code which strives to write as much of the implementation in
   Ruby as possible. Combined with a bytecode interpreting VM, it uses LLVM to
@@ -414,11 +410,11 @@ and parallelism.</p>
 
 
 <!--=========================================================================-->
-<div class="doc_subsection">
+<h3>
 <a name="FAUST">FAUST Real-Time Audio Signal Processing Language</a>
-</div>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>
 <a href="http://faust.grame.fr">FAUST</a> is a compiled language for real-time
 audio signal processing. The name FAUST stands for Functional AUdio STream. Its
@@ -428,27 +424,27 @@ Faust compiler can now generate LLVM bitcode, and works with LLVM 2.7-2.9.</p>
 
 </div>
   
+</div>
+
 <!-- *********************************************************************** -->
-<h1>
+<h2>
   <a name="whatsnew">What's New in LLVM 2.9?</a>
-</h1>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
 <p>This release includes a huge number of bug fixes, performance tweaks and
 minor improvements.  Some of the major improvements and new features are listed
 in this section.
 </p>
 
-</div>
-
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="majorfeatures">Major New Features</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p>LLVM 2.9 includes several major new capabilities:</p>
 
@@ -474,11 +470,11 @@ in this section.
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="coreimprovements">LLVM IR and Core Improvements</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>LLVM IR has several new features for better support of new targets and that
 expose new optimization opportunities:</p>
 
@@ -501,11 +497,11 @@ expose new optimization opportunities:</p>
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="optimizer">Optimizer Improvements</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p>In addition to a large array of minor performance tweaks and bug fixes, this
 release includes a few major enhancements and additions to the optimizers:</p>
@@ -569,11 +565,11 @@ release includes a few major enhancements and additions to the optimizers:</p>
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="mc">MC Level Improvements</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>
 The LLVM Machine Code (aka MC) subsystem was created to solve a number
 of problems in the realm of assembly, disassembly, object file format handling,
@@ -623,11 +619,11 @@ LLVM MC Project Blog Post</a>.
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="codegen">Target Independent Code Generator Improvements</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p>We have put a significant amount of work into the code generator
 infrastructure, which allows us to implement more aggressive algorithms and make
@@ -666,11 +662,11 @@ it run faster:</p>
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="x86">X86-32 and X86-64 Target Improvements</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>New features and major changes in the X86 target include:
 </p>
 
@@ -705,11 +701,11 @@ it run faster:</p>
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="ARM">ARM Target Improvements</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <p>New features of the ARM target include:
 </p>
 
@@ -729,11 +725,11 @@ it run faster:</p>
 </div>
   
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="OtherTS">Other Target Specific Improvements</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 <ul>
 <li>MicroBlaze: major updates for aggressive delay slot filler, MC-based
   assembly printing, assembly instruction parsing, ELF .o file emission, and MC
@@ -754,11 +750,11 @@ It also now supports lowering block addresses.</li>
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="changes">Major Changes and Removed Features</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p>If you're already an LLVM user or developer with out-of-tree changes based
 on LLVM 2.8, this section lists some "gotchas" that you may run into upgrading
@@ -790,11 +786,11 @@ from the previous release.</p>
 </div>
 
 <!--=========================================================================-->
-<h2>
+<h3>
 <a name="api_changes">Internal API Changes</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p>In addition, many APIs have changed in this release.  Some of the major
   LLVM API changes are:</p>
@@ -815,27 +811,27 @@ from the previous release.</p>
 </ul>
 </div>
 
+</div>
+
 <!-- *********************************************************************** -->
-<h1>
+<h2>
   <a name="knownproblems">Known Problems</a>
-</h1>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
 <p>This section contains significant known problems with the LLVM system,
 listed by component.  If you run into a problem, please check the <a
 href="http://llvm.org/bugs/">LLVM bug database</a> and submit a bug if
 there isn't already one.</p>
 
-</div>
-
 <!-- ======================================================================= -->
-<h2>
+<h3>
   <a name="experimental">Experimental features included with this release</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p>The following components of this LLVM release are either untested, known to
 be broken or unreliable, or are in early development.  These components should
@@ -855,11 +851,11 @@ href="http://lists.cs.uiuc.edu/mailman/listinfo/llvmdev">LLVMdev list</a>.</p>
 </div>
 
 <!-- ======================================================================= -->
-<h2>
+<h3>
   <a name="x86-be">Known problems with the X86 back-end</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <ul>
   <li>The X86 backend does not yet support
@@ -888,11 +884,11 @@ href="http://lists.cs.uiuc.edu/mailman/listinfo/llvmdev">LLVMdev list</a>.</p>
 </div>
 
 <!-- ======================================================================= -->
-<h2>
+<h3>
   <a name="ppc-be">Known problems with the PowerPC back-end</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <ul>
 <li>The Linux PPC32/ABI support needs testing for the interpreter and static
@@ -902,11 +898,11 @@ compilation, and lacks support for debug information.</li>
 </div>
 
 <!-- ======================================================================= -->
-<h2>
+<h3>
   <a name="arm-be">Known problems with the ARM back-end</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <ul>
 <li>Thumb mode works only on ARMv6 or higher processors. On sub-ARMv6
@@ -919,11 +915,11 @@ results (<a href="http://llvm.org/PR1388">PR1388</a>).</li>
 </div>
 
 <!-- ======================================================================= -->
-<h2>
+<h3>
   <a name="sparc-be">Known problems with the SPARC back-end</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <ul>
 <li>The SPARC backend only supports the 32-bit SPARC ABI (-m32); it does not
@@ -933,11 +929,11 @@ results (<a href="http://llvm.org/PR1388">PR1388</a>).</li>
 </div>
 
 <!-- ======================================================================= -->
-<h2>
+<h3>
   <a name="mips-be">Known problems with the MIPS back-end</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <ul>
 <li>64-bit MIPS targets are not supported yet.</li>
@@ -946,11 +942,11 @@ results (<a href="http://llvm.org/PR1388">PR1388</a>).</li>
 </div>
 
 <!-- ======================================================================= -->
-<h2>
+<h3>
   <a name="alpha-be">Known problems with the Alpha back-end</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <ul>
 
@@ -961,11 +957,11 @@ appropriate nops inserted to ensure restartability.</li>
 </div>
 
 <!-- ======================================================================= -->
-<h2>
+<h3>
   <a name="c-be">Known problems with the C back-end</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p>The C backend has numerous problems and is not being actively maintained.
 Depending on it for anything serious is not advised.</p>
@@ -984,11 +980,11 @@ Depending on it for anything serious is not advised.</p>
 
 
 <!-- ======================================================================= -->
-<h2>
+<h3>
   <a name="llvm-gcc">Known problems with the llvm-gcc front-end</a>
-</h2>
+</h3>
 
-<div class="doc_text">
+<div>
 
 <p><b>LLVM 2.9 will be the last release of llvm-gcc.</b></p>
 
@@ -1011,13 +1007,15 @@ actively maintained.  If you are interested in Ada, we recommend that you
 consider using <a href="#dragonegg">dragonegg</a> instead.</p>
 </div>
 
+</div>
+
 <!-- *********************************************************************** -->
-<h1>
+<h2>
   <a name="additionalinfo">Additional Information</a>
-</h1>
+</h2>
 <!-- *********************************************************************** -->
 
-<div class="doc_text">
+<div>
 
 <p>A wide variety of additional information is available on the <a
 href="http://llvm.org/">LLVM web page</a>, in particular in the <a

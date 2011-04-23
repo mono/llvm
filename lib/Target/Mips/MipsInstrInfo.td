@@ -20,8 +20,9 @@ include "MipsInstrFormats.td"
 def SDT_MipsRet          : SDTypeProfile<0, 1, [SDTCisInt<0>]>;
 def SDT_MipsJmpLink      : SDTypeProfile<0, 1, [SDTCisVT<0, iPTR>]>;
 def SDT_MipsCMov         : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>,
-                                         SDTCisSameAs<1, 2>, SDTCisSameAs<3, 4>,
-                                         SDTCisInt<4>]>;
+                                                SDTCisSameAs<1, 2>,
+                                                SDTCisSameAs<3, 4>,
+                                                SDTCisInt<4>]>;
 def SDT_MipsCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>]>;
 def SDT_MipsCallSeqEnd   : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
 def SDT_MipsMAddMSub     : SDTypeProfile<0, 4,
@@ -491,8 +492,9 @@ def MIPS_CMOV_ZERO  : PatLeaf<(i32 0)>;
 def MIPS_CMOV_NZERO : PatLeaf<(i32 1)>;
 
 // Conditional moves:
-// These instructions are expanded in MipsISelLowering::EmitInstrWithCustomInserter
-// if target does not have conditional move instructions.
+// These instructions are expanded in
+// MipsISelLowering::EmitInstrWithCustomInserter if target does not have
+// conditional move instructions.
 // flag:int, data:int
 let usesCustomInserter = 1, shamt = 0, Constraints = "$F = $dst" in
   class CondMovIntInt<bits<6> funct, string instr_asm> :

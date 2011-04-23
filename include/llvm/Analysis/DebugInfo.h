@@ -332,6 +332,32 @@ namespace llvm {
     /// return base type size.
     uint64_t getOriginalTypeSize() const;
 
+    StringRef getObjCPropertyName() const { return getStringField(10); }
+    StringRef getObjCPropertyGetterName() const {
+      return getStringField(11);
+    }
+    StringRef getObjCPropertySetterName() const {
+      return getStringField(12);
+    }
+    bool isReadOnlyObjCProperty() {
+      return (getUnsignedField(13) & dwarf::DW_APPLE_PROPERTY_readonly) != 0;
+    }
+    bool isReadWriteObjCProperty() {
+      return (getUnsignedField(13) & dwarf::DW_APPLE_PROPERTY_readwrite) != 0;
+    }
+    bool isAssignObjCProperty() {
+      return (getUnsignedField(13) & dwarf::DW_APPLE_PROPERTY_assign) != 0;
+    }
+    bool isRetainObjCProperty() {
+      return (getUnsignedField(13) & dwarf::DW_APPLE_PROPERTY_retain) != 0;
+    }
+    bool isCopyObjCProperty() {
+      return (getUnsignedField(13) & dwarf::DW_APPLE_PROPERTY_copy) != 0;
+    }
+    bool isNonAtomicObjCProperty() {
+      return (getUnsignedField(13) & dwarf::DW_APPLE_PROPERTY_nonatomic) != 0;
+    }
+
     /// Verify - Verify that a derived type descriptor is well formed.
     bool Verify() const;
 
@@ -512,6 +538,9 @@ namespace llvm {
 
     Function *getFunction() const { return getFunctionField(16); }
     DIArray getTemplateParams() const { return getFieldAs<DIArray>(17); }
+    DISubprogram getFunctionDeclaration() const {
+      return getFieldAs<DISubprogram>(18);
+    }
   };
 
   /// DIGlobalVariable - This is a wrapper for a global variable.

@@ -110,6 +110,11 @@ protected:
   /// over 16-bit ones.
   bool Pref32BitThumb;
 
+  /// AvoidCPSRPartialUpdate - If true, codegen would avoid using instructions
+  /// that partially update CPSR and add false dependency on the previous
+  /// CPSR setting instruction.
+  bool AvoidCPSRPartialUpdate;
+
   /// HasMPExtension - True if the subtarget supports Multiprocessing
   /// extension (ARMv7 only).
   bool HasMPExtension;
@@ -190,12 +195,15 @@ protected:
   bool isFPBrccSlow() const { return SlowFPBrcc; }
   bool isFPOnlySP() const { return FPOnlySP; }
   bool prefers32BitThumb() const { return Pref32BitThumb; }
+  bool avoidCPSRPartialUpdate() const { return AvoidCPSRPartialUpdate; }
   bool hasMPExtension() const { return HasMPExtension; }
 
   bool hasFP16() const { return HasFP16; }
   bool hasD16() const { return HasD16; }
 
-  bool isTargetDarwin() const { return TargetTriple.getOS() == Triple::Darwin; }
+  const Triple &getTargetTriple() const { return TargetTriple; }
+
+  bool isTargetDarwin() const { return TargetTriple.isOSDarwin(); }
   bool isTargetELF() const { return !isTargetDarwin(); }
 
   bool isAPCS_ABI() const { return TargetABI == ARM_ABI_APCS; }

@@ -77,7 +77,8 @@ namespace {
     }
     virtual void EmitFunctionBodyStart();
     virtual void EmitFunctionBodyEnd();
-    virtual bool isBlockOnlyReachableByFallthrough(const MachineBasicBlock *MBB) const;
+    virtual bool isBlockOnlyReachableByFallthrough(const MachineBasicBlock*
+                                                   MBB) const;
     static const char *getRegisterName(unsigned RegNo);
 
     virtual void EmitFunctionEntryLabel();
@@ -236,8 +237,8 @@ void MipsAsmPrinter::EmitFunctionBodyEnd() {
 /// isBlockOnlyReachableByFallthough - Return true if the basic block has
 /// exactly one predecessor and the control transfer mechanism between
 /// the predecessor and this block is a fall-through.
-bool MipsAsmPrinter::isBlockOnlyReachableByFallthrough(const MachineBasicBlock *MBB)
-    const {
+bool MipsAsmPrinter::isBlockOnlyReachableByFallthrough(const MachineBasicBlock*
+                                                       MBB) const {
   // The predecessor has to be immediately before this block.
   const MachineBasicBlock *Pred = *MBB->pred_begin();
 

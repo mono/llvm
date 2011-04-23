@@ -146,6 +146,30 @@ namespace llvm {
                             uint64_t AlignInBits, uint64_t OffsetInBits, 
                             unsigned Flags, DIType Ty);
 
+    /// createObjCIVar - Create debugging information entry for Objective-C
+    /// instance variable.
+    /// @param Name         Member name.
+    /// @param File         File where this member is defined.
+    /// @param LineNo       Line number.
+    /// @param SizeInBits   Member size.
+    /// @param AlignInBits  Member alignment.
+    /// @param OffsetInBits Member offset.
+    /// @param Flags        Flags to encode member attribute, e.g. private
+    /// @param Ty           Parent type.
+    /// @param PropertyName Name of the Objective C property assoicated with
+    ///                     this ivar.
+    /// @param GetterName   Name of the Objective C property getter selector.
+    /// @param SetterName   Name of the Objective C property setter selector.
+    /// @param PropertyAttributes Objective C property attributes.
+    DIType createObjCIVar(StringRef Name, DIFile File,
+                          unsigned LineNo, uint64_t SizeInBits, 
+                          uint64_t AlignInBits, uint64_t OffsetInBits, 
+                          unsigned Flags, DIType Ty,
+                          StringRef PropertyName = StringRef(),
+                          StringRef PropertyGetterName = StringRef(),
+                          StringRef PropertySetterName = StringRef(),
+                          unsigned PropertyAttributes = 0);
+
     /// createClassType - Create debugging information entry for a class.
     /// @param Scope        Scope in which this class is defined.
     /// @param Name         class name.
@@ -377,7 +401,8 @@ namespace llvm {
                                 unsigned Flags = 0,
                                 bool isOptimized = false,
                                 Function *Fn = 0,
-                                MDNode *TParam = 0);
+                                MDNode *TParam = 0,
+                                MDNode *Decl = 0);
 
     /// createMethod - Create a new descriptor for the specified C++ method.
     /// See comments in DISubprogram for descriptions of these fields.

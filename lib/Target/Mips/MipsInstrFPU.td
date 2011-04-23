@@ -265,8 +265,9 @@ let hasDelaySlot = 1, Defs=[FCR31] in {
 
 
 // Conditional moves:
-// These instructions are expanded in MipsISelLowering::EmitInstrWithCustomInserter
-// if target does not have conditional move instructions.
+// These instructions are expanded in
+// MipsISelLowering::EmitInstrWithCustomInserter if target does not have
+// conditional move instructions.
 // flag:int, data:float
 let usesCustomInserter = 1, Constraints = "$F = $dst" in
 class CondMovIntFP<RegisterClass RC, bits<5> fmt, bits<6> func,

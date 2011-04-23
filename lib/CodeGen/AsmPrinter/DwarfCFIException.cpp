@@ -58,19 +58,14 @@ void DwarfCFIException::EndModule() {
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
   unsigned PerEncoding = TLOF.getPersonalityEncoding();
 
-  // Begin eh frame section.
-  Asm->OutStreamer.SwitchSection(TLOF.getEHFrameSection());
-
   if ((PerEncoding & 0x70) != dwarf::DW_EH_PE_pcrel)
     return;
 
   // Emit references to all used personality functions
   const std::vector<const Function*> &Personalities = MMI->getPersonalities();
   for (size_t i = 0, e = Personalities.size(); i != e; ++i) {
-    Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("personality", i));
     const MCSymbol *Sym = Asm->Mang->getSymbol(Personalities[i]);
-    unsigned Size = Asm->TM.getTargetData()->getPointerSize();
-    Asm->OutStreamer.EmitSymbolValue(Sym, Size);
+    TLOF.emitPersonalityValue(Asm->OutStreamer, Asm->TM, Sym);
   }
 }
 
@@ -118,15 +113,12 @@ void DwarfCFIException::BeginFunction(const MachineFunction *MF) {
   switch (PerEncoding & 0x70) {
   default:
     report_fatal_error("We do not support this DWARF encoding yet!");
-  case dwarf::DW_EH_PE_absptr: {
+  case dwarf::DW_EH_PE_absptr:
     Sym = Asm->Mang->getSymbol(Per);
     break;
-  }
-  case dwarf::DW_EH_PE_pcrel: {
-    Sym = Asm->GetTempSymbol("personality",
-                             MMI->getPersonalityIndex());
+  case dwarf::DW_EH_PE_pcrel:
+    Sym = TLOF.getPersonalityPICSymbol(Per->getName());
     break;
-  }
   }
   Asm->OutStreamer.EmitCFIPersonality(Sym, PerEncoding);
 }
