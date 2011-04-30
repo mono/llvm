@@ -15,6 +15,9 @@
 |* are only close enough that LCOV will happily parse them. Anything that lcov
 |* ignores is missing.
 |*
+|* TODO: gcov is multi-process safe by having each exit open the existing file
+|* and append to it. We'd like to achieve that and be thread-safe too.
+|*
 \*===----------------------------------------------------------------------===*/
 
 #include "llvm/Support/DataTypes.h"
@@ -43,6 +46,24 @@ static void write_int64(uint64_t i) {
   write_int32(hi);
 }
 
+static char *mangle_filename(const char *orig_filename) {
+  /* TODO: handle GCOV_PREFIX_STRIP */
+  const char *prefix;
+  char *filename = 0;
+
+  prefix = getenv("GCOV_PREFIX");
+
+  if (!prefix)
+    return strdup(filename);
+
+  filename = malloc(strlen(prefix) + 1 + strlen(orig_filename) + 1);
+  strcpy(filename, prefix);
+  strcat(filename, "/");
+  strcat(filename, orig_filename);
+
+  return filename;
+}
+
 /*
  * --- LLVM line counter API ---
  */
@@ -51,20 +72,48 @@ static void write_int64(uint64_t i) {
  * profiling enabled will emit to a different file. Only one file may be
  * started at a time.
  */
-void llvm_gcda_start_file(const char *filename) {
-  output_file = fopen(filename, "w+");
+void llvm_gcda_start_file(const char *orig_filename) {
+  char *filename;
+  filename = mangle_filename(orig_filename);
+  output_file = fopen(filename, "wb");
 
   /* gcda file, version 404*, stamp LLVM. */
   fwrite("adcg*404MVLL", 12, 1, output_file);
 
 #ifdef DEBUG_GCDAPROFILING
-  printf("[%s]\n", filename);
+  printf("llvmgcda: [%s]\n", orig_filename);
+#endif
+
+  free(filename);
+}
+
+/* Given an array of pointers to counters (counters), increment the n-th one,
+ * where we're also given a pointer to n (predecessor).
+ */
+void llvm_gcda_increment_indirect_counter(uint32_t *predecessor,
+                                          uint64_t **counters) {
+  uint64_t *counter;
+  uint32_t pred;
+
+  pred = *predecessor;
+  if (pred == 0xffffffff)
+    return;
+  counter = counters[pred];
+
+  /* Don't crash if the pred# is out of sync. This can happen due to threads,
+     or because of a TODO in GCOVProfiling.cpp buildEdgeLookupTable(). */
+  if (counter)
+    ++*counter;
+#ifdef DEBUG_GCDAPROFILING
+  else
+    printf("llvmgcda: increment_indirect_counter counters=%x, pred=%u\n",
+           state_table_row, *predecessor);
 #endif
 }
 
 void llvm_gcda_emit_function(uint32_t ident) {
 #ifdef DEBUG_GCDAPROFILING
-  printf("function id=%x\n", ident);
+  printf("llvmgcda: function id=%x\n", ident);
 #endif
 
   /* function tag */  
@@ -84,9 +133,9 @@ void llvm_gcda_emit_arcs(uint32_t num_counters, uint64_t *counters) {
   }
 
 #ifdef DEBUG_GCDAPROFILING
-  printf("  %u arcs\n", num_counters);
+  printf("llvmgcda:   %u arcs\n", num_counters);
   for (i = 0; i < num_counters; ++i) {
-    printf("  %llu\n", (unsigned long long)counters[i]);
+    printf("llvmgcda:   %llu\n", (unsigned long long)counters[i]);
   }
 #endif
 }
@@ -98,6 +147,6 @@ void llvm_gcda_end_file() {
   output_file = NULL;
 
 #ifdef DEBUG_GCDAPROFILING
-  printf("-----\n");
+  printf("llvmgcda: -----\n");
 #endif
 }

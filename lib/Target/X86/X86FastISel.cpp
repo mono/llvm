@@ -124,6 +124,8 @@ private:
 
   unsigned TargetMaterializeAlloca(const AllocaInst *C);
 
+  unsigned TargetMaterializeFloatZero(const ConstantFP *CF);
+
   /// isScalarFPTypeInSSEReg - Return true if the specified scalar FP type is
   /// computed in an SSE register, not on the X87 floating point stack.
   bool isScalarFPTypeInSSEReg(EVT VT) const {
@@ -132,6 +134,9 @@ private:
   }
 
   bool isTypeLegal(const Type *Ty, MVT &VT, bool AllowI1 = false);
+
+  bool TryEmitSmallMemcpy(X86AddressMode DestAM,
+                          X86AddressMode SrcAM, uint64_t Len);
 };
 
 } // end anonymous namespace.
@@ -1098,11 +1103,13 @@ bool X86FastISel::X86SelectBranch(const Instruction *I) {
   }
 
   // Otherwise do a clumsy setcc and re-test it.
+  // Note that i1 essentially gets ANY_EXTEND'ed to i8 where it isn't used
+  // in an explicit cast, so make sure to handle that correctly.
   unsigned OpReg = getRegForValue(BI->getCondition());
   if (OpReg == 0) return false;
 
-  BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(X86::TEST8rr))
-    .addReg(OpReg).addReg(OpReg);
+  BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(X86::TEST8ri))
+    .addReg(OpReg).addImm(1);
   BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(X86::JNE_4))
     .addMBB(TrueMBB);
   FastEmitBranch(FalseMBB, DL);
@@ -1321,6 +1328,40 @@ bool X86FastISel::X86SelectExtractValue(const Instruction *I) {
   return false;
 }
 
+bool X86FastISel::TryEmitSmallMemcpy(X86AddressMode DestAM,
+                                     X86AddressMode SrcAM, uint64_t Len) {
+  // Make sure we don't bloat code by inlining very large memcpy's.
+  bool i64Legal = TLI.isTypeLegal(MVT::i64);
+  if (Len > (i64Legal ? 32 : 16)) return false;
+
+  // We don't care about alignment here since we just emit integer accesses.
+  while (Len) {
+    MVT VT;
+    if (Len >= 8 && i64Legal)
+      VT = MVT::i64;
+    else if (Len >= 4)
+      VT = MVT::i32;
+    else if (Len >= 2)
+      VT = MVT::i16;
+    else {
+      assert(Len == 1);
+      VT = MVT::i8;
+    }
+
+    unsigned Reg;
+    bool RV = X86FastEmitLoad(VT, SrcAM, Reg);
+    RV &= X86FastEmitStore(VT, Reg, DestAM);
+    assert(RV && "Failed to emit load or store??");
+
+    unsigned Size = VT.getSizeInBits()/8;
+    Len -= Size;
+    DestAM.Disp += Size;
+    SrcAM.Disp += Size;
+  }
+
+  return true;
+}
+
 bool X86FastISel::X86VisitIntrinsicCall(const IntrinsicInst &I) {
   // FIXME: Handle more intrinsics.
   switch (I.getIntrinsicID()) {
@@ -1330,45 +1371,16 @@ bool X86FastISel::X86VisitIntrinsicCall(const IntrinsicInst &I) {
     // Don't handle volatile or variable length memcpys.
     if (MCI.isVolatile() || !isa<ConstantInt>(MCI.getLength()))
       return false;
-    
-    // Don't inline super long memcpys.  We could lower these to a memcpy call,
-    // but we might as well bail out.
+
     uint64_t Len = cast<ConstantInt>(MCI.getLength())->getZExtValue();
-    bool i64Legal = TLI.isTypeLegal(MVT::i64);
-    if (Len > (i64Legal ? 32 : 16)) return false;
     
     // Get the address of the dest and source addresses.
     X86AddressMode DestAM, SrcAM;
     if (!X86SelectAddress(MCI.getRawDest(), DestAM) ||
         !X86SelectAddress(MCI.getRawSource(), SrcAM))
       return false;
-    
-    // We don't care about alignment here since we just emit integer accesses.
-    while (Len) {
-      MVT VT;
-      if (Len >= 8 && i64Legal)
-        VT = MVT::i64;
-      else if (Len >= 4)
-        VT = MVT::i32;
-      else if (Len >= 2)
-        VT = MVT::i16;
-      else {
-        assert(Len == 1);
-        VT = MVT::i8;
-      }
-      
-      unsigned Reg;
-      bool RV = X86FastEmitLoad(VT, SrcAM, Reg);
-      RV &= X86FastEmitStore(VT, Reg, DestAM);
-      assert(RV && "Failed to emit load or store??");
-      
-      unsigned Size = VT.getSizeInBits()/8;
-      Len -= Size;
-      DestAM.Disp += Size;
-      SrcAM.Disp += Size;
-    }
-    
-    return true;
+
+    return TryEmitSmallMemcpy(DestAM, SrcAM, Len);
   }
       
   case Intrinsic::stackprotector: {
@@ -1606,7 +1618,6 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
 
     // FIXME: Only handle *easy* calls for now.
     if (CS.paramHasAttr(AttrInd, Attribute::InReg) ||
-        CS.paramHasAttr(AttrInd, Attribute::StructRet) ||
         CS.paramHasAttr(AttrInd, Attribute::Nest) ||
         CS.paramHasAttr(AttrInd, Attribute::ByVal))
       return false;
@@ -1799,8 +1810,11 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
 
   // Issue CALLSEQ_END
   unsigned AdjStackUp = TM.getRegisterInfo()->getCallFrameDestroyOpcode();
+  unsigned NumBytesCallee = 0;
+  if (!Subtarget->is64Bit() && CS.paramHasAttr(1, Attribute::StructRet))
+    NumBytesCallee = 4;
   BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(AdjStackUp))
-    .addImm(NumBytes).addImm(0);
+    .addImm(NumBytes).addImm(NumBytesCallee);
 
   // Now handle call return value (if any).
   SmallVector<unsigned, 4> UsedRegs;
@@ -2038,6 +2052,45 @@ unsigned X86FastISel::TargetMaterializeAlloca(const AllocaInst *C) {
                          TII.get(Opc), ResultReg), AM);
   return ResultReg;
 }
+
+unsigned X86FastISel::TargetMaterializeFloatZero(const ConstantFP *CF) {
+  MVT VT;
+  if (!isTypeLegal(CF->getType(), VT))
+    return false;
+
+  // Get opcode and regclass for the given zero.
+  unsigned Opc = 0;
+  const TargetRegisterClass *RC = NULL;
+  switch (VT.SimpleTy) {
+    default: return false;
+    case MVT::f32:
+      if (Subtarget->hasSSE1()) {
+        Opc = X86::FsFLD0SS;
+        RC  = X86::FR32RegisterClass;
+      } else {
+        Opc = X86::LD_Fp032;
+        RC  = X86::RFP32RegisterClass;
+      }
+      break;
+    case MVT::f64:
+      if (Subtarget->hasSSE2()) {
+        Opc = X86::FsFLD0SD;
+        RC  = X86::FR64RegisterClass;
+      } else {
+        Opc = X86::LD_Fp064;
+        RC  = X86::RFP64RegisterClass;
+      }
+      break;
+    case MVT::f80:
+      // No f80 support yet.
+      return false;
+  }
+
+  unsigned ResultReg = createResultReg(RC);
+  BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(Opc), ResultReg);
+  return ResultReg;
+}
+
 
 /// TryToFoldLoad - The specified machine instr operand is a vreg, and that
 /// vreg is being provided by the specified load instruction.  If possible,

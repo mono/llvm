@@ -1384,9 +1384,9 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
           
           if (Value *NegVal = dyn_castNegVal(BOp1))
             return new ICmpInst(ICI.getPredicate(), BOp0, NegVal);
-          else if (Value *NegVal = dyn_castNegVal(BOp0))
+          if (Value *NegVal = dyn_castNegVal(BOp0))
             return new ICmpInst(ICI.getPredicate(), NegVal, BOp1);
-          else if (BO->hasOneUse()) {
+          if (BO->hasOneUse()) {
             Value *Neg = Builder->CreateNeg(BOp1);
             Neg->takeName(BO);
             return new ICmpInst(ICI.getPredicate(), BOp0, Neg);
@@ -2483,9 +2483,8 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
     }
 
     // (X&Z) == (Y&Z) -> (X^Y) & Z == 0
-    if (Op0->hasOneUse() && Op1->hasOneUse() &&
-        match(Op0, m_And(m_Value(A), m_Value(B))) && 
-        match(Op1, m_And(m_Value(C), m_Value(D)))) {
+    if (match(Op0, m_OneUse(m_And(m_Value(A), m_Value(B)))) && 
+        match(Op1, m_OneUse(m_And(m_Value(C), m_Value(D))))) {
       Value *X = 0, *Y = 0, *Z = 0;
       
       if (A == C) {
@@ -2504,6 +2503,32 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
         I.setOperand(0, Op1);
         I.setOperand(1, Constant::getNullValue(Op1->getType()));
         return &I;
+      }
+    }
+    
+    // Transform "icmp eq (trunc (lshr(X, cst1)), cst" to
+    // "icmp (and X, mask), cst"
+    uint64_t ShAmt = 0;
+    ConstantInt *Cst1;
+    if (Op0->hasOneUse() &&
+        match(Op0, m_Trunc(m_OneUse(m_LShr(m_Value(A),
+                                           m_ConstantInt(ShAmt))))) &&
+        match(Op1, m_ConstantInt(Cst1)) &&
+        // Only do this when A has multiple uses.  This is most important to do
+        // when it exposes other optimizations.
+        !A->hasOneUse()) {
+      unsigned ASize =cast<IntegerType>(A->getType())->getPrimitiveSizeInBits();
+      
+      if (ShAmt < ASize) {
+        APInt MaskV =
+          APInt::getLowBitsSet(ASize, Op0->getType()->getPrimitiveSizeInBits());
+        MaskV <<= ShAmt;
+        
+        APInt CmpV = Cst1->getValue().zext(ASize);
+        CmpV <<= ShAmt;
+        
+        Value *Mask = Builder->CreateAnd(A, Builder->getInt(MaskV));
+        return new ICmpInst(I.getPredicate(), Mask, Builder->getInt(CmpV));
       }
     }
   }

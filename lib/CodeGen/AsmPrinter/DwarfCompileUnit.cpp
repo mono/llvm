@@ -192,21 +192,61 @@ void CompileUnit::addSourceLine(DIE *Die, DINameSpace NS) {
   addUInt(Die, dwarf::DW_AT_decl_line, 0, Line);
 }
 
-/// addVariableAddress - Add DW_AT_location attribute for a DbgVariable based
-/// on provided frame index.
-void CompileUnit::addVariableAddress(DbgVariable *&DV, DIE *Die, int64_t FI) {
-  MachineLocation Location;
-  unsigned FrameReg;
-  const TargetFrameLowering *TFI = Asm->TM.getFrameLowering();
-  int Offset = TFI->getFrameIndexReference(*Asm->MF, FI, FrameReg);
-  Location.set(FrameReg, Offset);
-
+/// addVariableAddress - Add DW_AT_location attribute for a 
+/// DbgVariable based on provided MachineLocation.
+void CompileUnit::addVariableAddress(DbgVariable *&DV, DIE *Die, 
+                                     MachineLocation Location) {
   if (DV->variableHasComplexAddress())
     addComplexAddress(DV, Die, dwarf::DW_AT_location, Location);
   else if (DV->isBlockByrefVariable())
     addBlockByrefAddress(DV, Die, dwarf::DW_AT_location, Location);
   else
     addAddress(Die, dwarf::DW_AT_location, Location);
+}
+
+/// addRegisterOp - Add register operand.
+void CompileUnit::addRegisterOp(DIE *TheDie, unsigned Reg) {
+  const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
+  unsigned DWReg = RI->getDwarfRegNum(Reg, false);
+  if (DWReg < 32)
+    addUInt(TheDie, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_reg0 + DWReg);
+  else {
+    addUInt(TheDie, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_regx);
+    addUInt(TheDie, 0, dwarf::DW_FORM_udata, DWReg);
+  }
+}
+
+/// addRegisterOffset - Add register offset.
+void CompileUnit::addRegisterOffset(DIE *TheDie, unsigned Reg,
+                                    int64_t Offset) {
+  const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
+  unsigned DWReg = RI->getDwarfRegNum(Reg, false);
+  const TargetRegisterInfo *TRI = Asm->TM.getRegisterInfo();
+  if (Reg == TRI->getFrameRegister(*Asm->MF))
+    // If variable offset is based in frame register then use fbreg.
+    addUInt(TheDie, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_fbreg);
+  else if (DWReg < 32)
+    addUInt(TheDie, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_breg0 + DWReg);
+  else {
+    addUInt(TheDie, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_bregx);
+    addUInt(TheDie, 0, dwarf::DW_FORM_udata, DWReg);
+  }
+  addSInt(TheDie, 0, dwarf::DW_FORM_sdata, Offset);
+}
+
+/// addAddress - Add an address attribute to a die based on the location
+/// provided.
+void CompileUnit::addAddress(DIE *Die, unsigned Attribute,
+                             const MachineLocation &Location) {
+  DIEBlock *Block = new (DIEValueAllocator) DIEBlock();
+
+  if (Location.isReg())
+    addRegisterOp(Block, Location.getReg());
+  else
+    addRegisterOffset(Block, Location.getReg(), Location.getOffset());
+
+  // Now attach the location information to the DIE.
+  addBlock(Die, Attribute, 0, Block);
 }
 
 /// addComplexAddress - Start with the address based on the location provided,
@@ -217,35 +257,23 @@ void CompileUnit::addVariableAddress(DbgVariable *&DV, DIE *Die, int64_t FI) {
 void CompileUnit::addComplexAddress(DbgVariable *&DV, DIE *Die,
                                     unsigned Attribute,
                                     const MachineLocation &Location) {
-  DIType Ty = DV->getType();
-
-  // Decode the original location, and use that as the start of the byref
-  // variable's location.
-  const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
-  unsigned Reg = RI->getDwarfRegNum(Location.getReg(), false);
   DIEBlock *Block = new (DIEValueAllocator) DIEBlock();
-
+  unsigned N = DV->getNumAddrElements();
+  unsigned i = 0;
   if (Location.isReg()) {
-    if (Reg < 32) {
-      addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_reg0 + Reg);
-    } else {
-      addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_regx);
-      addUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
-    }
-  } else {
-    if (Reg < 32)
-      addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_breg0 + Reg);
-    else {
-      addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_bregx);
-      addUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
-    }
-
-    addUInt(Block, 0, dwarf::DW_FORM_sdata, Location.getOffset());
+    if (N >= 2 && DV->getAddrElement(0) == DIBuilder::OpPlus) {
+      // If first address element is OpPlus then emit
+      // DW_OP_breg + Offset instead of DW_OP_reg + Offset.
+      addRegisterOffset(Block, Location.getReg(), DV->getAddrElement(1));
+      i = 2;
+    } else
+      addRegisterOp(Block, Location.getReg());
   }
+  else
+    addRegisterOffset(Block, Location.getReg(), Location.getOffset());
 
-  for (unsigned i = 0, N = DV->getNumAddrElements(); i < N; ++i) {
+  for (;i < N; ++i) {
     uint64_t Element = DV->getAddrElement(i);
-
     if (Element == DIBuilder::OpPlus) {
       addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_plus_uconst);
       addUInt(Block, 0, dwarf::DW_FORM_udata, DV->getAddrElement(++i));
@@ -409,55 +437,6 @@ void CompileUnit::addBlockByrefAddress(DbgVariable *&DV, DIE *Die,
 
   // Now attach the location information to the DIE.
   addBlock(Die, Attribute, 0, Block);
-}
-
-/// addAddress - Add an address attribute to a die based on the location
-/// provided.
-void CompileUnit::addAddress(DIE *Die, unsigned Attribute,
-                             const MachineLocation &Location) {
-  const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
-  unsigned Reg = RI->getDwarfRegNum(Location.getReg(), false);
-  DIEBlock *Block = new (DIEValueAllocator) DIEBlock();
-
-  if (RI->getFrameRegister(*Asm->MF) == Location.getReg()
-      && Location.getOffset()) {
-    // If variable offset is based in frame register then use fbreg.
-    addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_fbreg);
-    addSInt(Block, 0, dwarf::DW_FORM_sdata, Location.getOffset());
-    addBlock(Die, Attribute, 0, Block);
-    return;
-  }
-
-  if (Location.isReg()) {
-    if (Reg < 32) {
-      addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_reg0 + Reg);
-    } else {
-      addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_regx);
-      addUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
-    }
-  } else {
-    if (Reg < 32) {
-      addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_breg0 + Reg);
-    } else {
-      addUInt(Block, 0, dwarf::DW_FORM_data1, dwarf::DW_OP_bregx);
-      addUInt(Block, 0, dwarf::DW_FORM_udata, Reg);
-    }
-
-    addUInt(Block, 0, dwarf::DW_FORM_sdata, Location.getOffset());
-  }
-
-  addBlock(Die, Attribute, 0, Block);
-}
-
-/// addRegisterAddress - Add register location entry in variable DIE.
-bool CompileUnit::addRegisterAddress(DIE *Die, const MachineOperand &MO) {
-  assert (MO.isReg() && "Invalid machine operand!");
-  if (!MO.getReg())
-    return false;
-  MachineLocation Location;
-  Location.set(MO.getReg());
-  addAddress(Die, dwarf::DW_AT_location, Location);
-  return true;
 }
 
 /// addConstantValue - Add constant value entry in variable DIE.

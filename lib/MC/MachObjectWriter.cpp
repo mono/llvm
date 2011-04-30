@@ -121,6 +121,33 @@ private:
   }
   uint64_t getSymbolAddress(const MCSymbolData* SD,
                             const MCAsmLayout &Layout) const {
+    const MCSymbol &S = SD->getSymbol();
+
+    // If this is a variable, then recursively evaluate now.
+    if (S.isVariable()) {
+      MCValue Target;
+      if (!S.getVariableValue()->EvaluateAsRelocatable(Target, Layout))
+        report_fatal_error("unable to evaluate offset for variable '" +
+                           S.getName() + "'");
+
+      // Verify that any used symbols are defined.
+      if (Target.getSymA() && Target.getSymA()->getSymbol().isUndefined())
+        report_fatal_error("unable to evaluate offset to undefined symbol '" +
+                           Target.getSymA()->getSymbol().getName() + "'");
+      if (Target.getSymB() && Target.getSymB()->getSymbol().isUndefined())
+        report_fatal_error("unable to evaluate offset to undefined symbol '" +
+                           Target.getSymB()->getSymbol().getName() + "'");
+
+      uint64_t Address = Target.getConstant();
+      if (Target.getSymA())
+        Address += getSymbolAddress(&Layout.getAssembler().getSymbolData(
+                                      Target.getSymA()->getSymbol()), Layout);
+      if (Target.getSymB())
+        Address += getSymbolAddress(&Layout.getAssembler().getSymbolData(
+                                      Target.getSymB()->getSymbol()), Layout);
+      return Address;
+    }
+
     return getSectionAddress(SD->getFragment()->getParent()) +
       Layout.getSymbolOffset(SD);
   }
@@ -550,7 +577,7 @@ public:
         // Add the local offset, if needed.
         if (Base != &SD)
           Value += Layout.getSymbolOffset(&SD) - Layout.getSymbolOffset(Base);
-      } else if (Symbol->isInSection()) {
+      } else if (Symbol->isInSection() && !Symbol->isVariable()) {
         // The index is the section ordinal (1-based).
         Index = SD.getFragment()->getParent()->getOrdinal() + 1;
         IsExtern = 0;
@@ -1028,17 +1055,17 @@ public:
       // FIXME!
       report_fatal_error("FIXME: relocations to absolute targets "
                          "not yet implemented");
-    } else if (SD->getSymbol().isVariable()) {
-      int64_t Res;
-      if (SD->getSymbol().getVariableValue()->EvaluateAsAbsolute(
-            Res, Layout, SectionAddress)) {
-        FixedValue = Res;
-        return;
+    } else {
+      // Resolve constant variables.
+      if (SD->getSymbol().isVariable()) {
+        int64_t Res;
+        if (SD->getSymbol().getVariableValue()->EvaluateAsAbsolute(
+              Res, Layout, SectionAddress)) {
+          FixedValue = Res;
+          return;
+        }
       }
 
-      report_fatal_error("unsupported relocation of variable '" +
-                         SD->getSymbol().getName() + "'");
-    } else {
       // Check whether we need an external or internal relocation.
       if (doesSymbolRequireExternRelocation(SD)) {
         IsExtern = 1;
@@ -1050,8 +1077,10 @@ public:
           FixedValue -= Layout.getSymbolOffset(SD);
       } else {
         // The index is the section ordinal (1-based).
-        Index = SD->getFragment()->getParent()->getOrdinal() + 1;
-        FixedValue += getSectionAddress(SD->getFragment()->getParent());
+        const MCSectionData &SymSD = Asm.getSectionData(
+          SD->getSymbol().getSection());
+        Index = SymSD.getOrdinal() + 1;
+        FixedValue += getSectionAddress(&SymSD);
       }
       if (IsPCRel)
         FixedValue -= getSectionAddress(Fragment->getParent());
@@ -1127,17 +1156,17 @@ public:
       // FIXME: Currently, these are never generated (see code below). I cannot
       // find a case where they are actually emitted.
       Type = macho::RIT_Vanilla;
-    } else if (SD->getSymbol().isVariable()) {
-      int64_t Res;
-      if (SD->getSymbol().getVariableValue()->EvaluateAsAbsolute(
-            Res, Layout, SectionAddress)) {
-        FixedValue = Res;
-        return;
+    } else {
+      // Resolve constant variables.
+      if (SD->getSymbol().isVariable()) {
+        int64_t Res;
+        if (SD->getSymbol().getVariableValue()->EvaluateAsAbsolute(
+              Res, Layout, SectionAddress)) {
+          FixedValue = Res;
+          return;
+        }
       }
 
-      report_fatal_error("unsupported relocation of variable '" +
-                         SD->getSymbol().getName() + "'");
-    } else {
       // Check whether we need an external or internal relocation.
       if (doesSymbolRequireExternRelocation(SD)) {
         IsExtern = 1;
@@ -1149,8 +1178,10 @@ public:
           FixedValue -= Layout.getSymbolOffset(SD);
       } else {
         // The index is the section ordinal (1-based).
-        Index = SD->getFragment()->getParent()->getOrdinal() + 1;
-        FixedValue += getSectionAddress(SD->getFragment()->getParent());
+        const MCSectionData &SymSD = Asm.getSectionData(
+          SD->getSymbol().getSection());
+        Index = SymSD.getOrdinal() + 1;
+        FixedValue += getSectionAddress(&SymSD);
       }
       if (IsPCRel)
         FixedValue -= getSectionAddress(Fragment->getParent());

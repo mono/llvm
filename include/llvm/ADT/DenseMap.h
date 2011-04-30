@@ -73,7 +73,7 @@ public:
     }
 #ifndef NDEBUG
     if (NumBuckets)
-      memset(Buckets, 0x5a, sizeof(BucketT)*NumBuckets);
+      memset((void*)Buckets, 0x5a, sizeof(BucketT)*NumBuckets);
 #endif
     operator delete(Buckets);
   }
@@ -252,7 +252,7 @@ private:
 
     if (NumBuckets) {
 #ifndef NDEBUG
-      memset(Buckets, 0x5a, sizeof(BucketT)*NumBuckets);
+      memset((void*)Buckets, 0x5a, sizeof(BucketT)*NumBuckets);
 #endif
       operator delete(Buckets);
     }
@@ -426,7 +426,7 @@ private:
 
 #ifndef NDEBUG
     if (OldNumBuckets)
-      memset(OldBuckets, 0x5a, sizeof(BucketT)*OldNumBuckets);
+      memset((void*)OldBuckets, 0x5a, sizeof(BucketT)*OldNumBuckets);
 #endif
     // Free the old table.
     operator delete(OldBuckets);
@@ -459,12 +459,21 @@ private:
     }
 
 #ifndef NDEBUG
-    memset(OldBuckets, 0x5a, sizeof(BucketT)*OldNumBuckets);
+    memset((void*)OldBuckets, 0x5a, sizeof(BucketT)*OldNumBuckets);
 #endif
     // Free the old table.
     operator delete(OldBuckets);
 
     NumEntries = 0;
+  }
+  
+public:
+  /// Return the approximate size (in bytes) of the actual map.
+  /// This is just the raw memory used by DenseMap.
+  /// If entries are pointers to objects, the size of the referenced objects
+  /// are not included.
+  size_t getMemorySize() const {
+    return NumBuckets * sizeof(BucketT);
   }
 };
 

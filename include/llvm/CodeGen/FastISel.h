@@ -204,15 +204,6 @@ protected:
                         unsigned Op0, bool Op0IsKill,
                         uint64_t Imm, MVT ImmType);
 
-  /// FastEmit_rf_ - This method is a wrapper of FastEmit_rf. It first tries
-  /// to emit an instruction with an immediate operand using FastEmit_rf.
-  /// If that fails, it materializes the immediate into a register and try
-  /// FastEmit_rr instead.
-  unsigned FastEmit_rf_(MVT VT,
-                        unsigned Opcode,
-                        unsigned Op0, bool Op0IsKill,
-                        const ConstantFP *FPImm, MVT ImmType);
-
   /// FastEmit_i - This method is called by target-independent code
   /// to request that an instruction with the given type, opcode, and
   /// immediate operand be emitted.
@@ -323,6 +314,10 @@ protected:
   /// TargetMaterializeAlloca - Emit an alloca address in a register using
   /// target-specific logic.
   virtual unsigned TargetMaterializeAlloca(const AllocaInst* C) {
+    return 0;
+  }
+
+  virtual unsigned TargetMaterializeFloatZero(const ConstantFP* CF) {
     return 0;
   }
 

@@ -12,6 +12,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCObjectWriter.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/SmallString.h"
@@ -25,6 +26,29 @@ MCStreamer::MCStreamer(MCContext &Ctx) : Context(Ctx) {
 }
 
 MCStreamer::~MCStreamer() {
+}
+
+const MCExpr *MCStreamer::BuildSymbolDiff(MCContext &Context,
+                                          const MCSymbol *A,
+                                          const MCSymbol *B) {
+  MCSymbolRefExpr::VariantKind Variant = MCSymbolRefExpr::VK_None;
+  const MCExpr *ARef =
+    MCSymbolRefExpr::Create(A, Variant, Context);
+  const MCExpr *BRef =
+    MCSymbolRefExpr::Create(B, Variant, Context);
+  const MCExpr *AddrDelta =
+    MCBinaryExpr::Create(MCBinaryExpr::Sub, ARef, BRef, Context);
+  return AddrDelta;
+}
+
+const MCExpr *MCStreamer::ForceExpAbs(MCStreamer *Streamer,
+                                      MCContext &Context, const MCExpr* Expr) {
+ if (Context.getAsmInfo().hasAggressiveSymbolFolding())
+   return Expr;
+
+ MCSymbol *ABS = Context.CreateTempSymbol();
+ Streamer->EmitAssignment(ABS, Expr);
+ return MCSymbolRefExpr::Create(ABS, Context);
 }
 
 raw_ostream &MCStreamer::GetCommentOS() {
@@ -153,12 +177,27 @@ void MCStreamer::EnsureValidFrame() {
     report_fatal_error("No open frame");
 }
 
+void MCStreamer::EmitEHSymAttributes(const MCSymbol *Symbol,
+                                     MCSymbol *EHSymbol) {
+}
+
+void MCStreamer::EmitLabel(MCSymbol *Symbol) {
+  assert(!Symbol->isVariable() && "Cannot emit a variable symbol!");
+  assert(getCurrentSection() && "Cannot emit before setting section!");
+  Symbol->setSection(*getCurrentSection());
+
+  StringRef Prefix = getContext().getAsmInfo().getPrivateGlobalPrefix();
+  if (!Symbol->getName().startswith(Prefix))
+    LastNonPrivate = Symbol;
+}
+
 void MCStreamer::EmitCFIStartProc() {
   MCDwarfFrameInfo *CurFrame = getCurrentFrameInfo();
   if (CurFrame && !CurFrame->End)
     report_fatal_error("Starting a frame before finishing the previous one!");
   MCDwarfFrameInfo Frame;
   Frame.Begin = getContext().CreateTempSymbol();
+  Frame.Function = LastNonPrivate;
   EmitLabel(Frame.Begin);
   FrameInfos.push_back(Frame);
 }

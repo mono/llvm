@@ -55,10 +55,10 @@ FunctionPass *llvm::createRegisterAllocator(CodeGenOpt::Level OptLevel) {
     RegisterRegAlloc::setDefault(RegAlloc);
   }
 
-  // This forces linking of the greedy register allocator, so -regalloc=greedy
-  // works in clang.
-  if (Ctor == createGreedyRegisterAllocator)
-    return createGreedyRegisterAllocator();
+  // This forces linking of the linear scan register allocator,
+  // so -regalloc=linearscan still works in clang.
+  if (Ctor == createLinearScanRegisterAllocator)
+    return createLinearScanRegisterAllocator();
 
   if (Ctor != createDefaultRegisterAllocator)
     return Ctor();
@@ -68,6 +68,6 @@ FunctionPass *llvm::createRegisterAllocator(CodeGenOpt::Level OptLevel) {
   case CodeGenOpt::None:
     return createFastRegisterAllocator();
   default:
-    return createLinearScanRegisterAllocator();
+    return createGreedyRegisterAllocator();
   }
 }

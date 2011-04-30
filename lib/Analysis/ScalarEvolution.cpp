@@ -2015,7 +2015,7 @@ const SCEV *ScalarEvolution::getUDivExpr(const SCEV *LHS,
           }
       }
       // (A+B)/C --> (A/C + B/C) if safe and A/C and B/C can be folded.
-      if (const SCEVAddRecExpr *A = dyn_cast<SCEVAddRecExpr>(LHS)) {
+      if (const SCEVAddExpr *A = dyn_cast<SCEVAddExpr>(LHS)) {
         SmallVector<const SCEV *, 4> Operands;
         for (unsigned i = 0, e = A->getNumOperands(); i != e; ++i)
           Operands.push_back(getZeroExtendExpr(A->getOperand(i), ExtTy));
@@ -3788,19 +3788,20 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
   if (!Pair.second)
     return Pair.first->second;
 
-  BackedgeTakenInfo BECount = ComputeBackedgeTakenCount(L);
-  if (BECount.Exact != getCouldNotCompute()) {
-    assert(isLoopInvariant(BECount.Exact, L) &&
-           isLoopInvariant(BECount.Max, L) &&
+  BackedgeTakenInfo Result = getCouldNotCompute();
+  BackedgeTakenInfo Computed = ComputeBackedgeTakenCount(L);
+  if (Computed.Exact != getCouldNotCompute()) {
+    assert(isLoopInvariant(Computed.Exact, L) &&
+           isLoopInvariant(Computed.Max, L) &&
            "Computed backedge-taken count isn't loop invariant for loop!");
     ++NumTripCountsComputed;
 
     // Update the value in the map.
-    Pair.first->second = BECount;
+    Result = Computed;
   } else {
-    if (BECount.Max != getCouldNotCompute())
+    if (Computed.Max != getCouldNotCompute())
       // Update the value in the map.
-      Pair.first->second = BECount;
+      Result = Computed;
     if (isa<PHINode>(L->getHeader()->begin()))
       // Only count loops that have phi nodes as not being computable.
       ++NumTripCountsNotComputed;
@@ -3811,7 +3812,7 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
   // conservative estimates made without the benefit of trip count
   // information. This is similar to the code in forgetLoop, except that
   // it handles SCEVUnknown PHI nodes specially.
-  if (BECount.hasAnyInfo()) {
+  if (Computed.hasAnyInfo()) {
     SmallVector<Instruction *, 16> Worklist;
     PushLoopPHIs(L, Worklist);
 
@@ -3842,7 +3843,13 @@ ScalarEvolution::getBackedgeTakenInfo(const Loop *L) {
       PushDefUseChildren(I, Worklist);
     }
   }
-  return Pair.first->second;
+
+  // Re-lookup the insert position, since the call to
+  // ComputeBackedgeTakenCount above could result in a
+  // recusive call to getBackedgeTakenInfo (on a different
+  // loop), which would invalidate the iterator computed
+  // earlier.
+  return BackedgeTakenCounts.find(L)->second = Result;
 }
 
 /// forgetLoop - This method should be called by the client when it has
@@ -4694,9 +4701,15 @@ const SCEV *ScalarEvolution::computeSCEVAtScope(const SCEV *V, const Loop *L) {
       for (++i; i != e; ++i)
         NewOps.push_back(getSCEVAtScope(AddRec->getOperand(i), L));
 
-      AddRec = cast<SCEVAddRecExpr>(
+      const SCEV *FoldedRec =
         getAddRecExpr(NewOps, AddRec->getLoop(),
-                      AddRec->getNoWrapFlags(SCEV::FlagNW)));
+                      AddRec->getNoWrapFlags(SCEV::FlagNW));
+      AddRec = dyn_cast<SCEVAddRecExpr>(FoldedRec);
+      // The addrec may be folded to a nonrecurrence, for example, if the
+      // induction variable is multiplied by zero after constant folding. Go
+      // ahead and return the folded value.
+      if (!AddRec)
+        return FoldedRec;
       break;
     }
 

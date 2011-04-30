@@ -182,6 +182,26 @@ def PTXcopyaddress
 // Instruction Class Templates
 //===----------------------------------------------------------------------===//
 
+//===- Floating-Point Instructions - 2 Operand Form -----------------------===//
+multiclass PTX_FLOAT_2OP<string opcstr, SDNode opnode> {
+  def rr32 : InstPTX<(outs RRegf32:$d),
+                     (ins RRegf32:$a),
+                     !strconcat(opcstr, ".f32\t$d, $a"),
+                     [(set RRegf32:$d, (opnode RRegf32:$a))]>;
+  def ri32 : InstPTX<(outs RRegf32:$d),
+                     (ins f32imm:$a),
+                     !strconcat(opcstr, ".f32\t$d, $a"),
+                     [(set RRegf32:$d, (opnode fpimm:$a))]>;
+  def rr64 : InstPTX<(outs RRegf64:$d),
+                     (ins RRegf64:$a),
+                     !strconcat(opcstr, ".f64\t$d, $a"),
+                     [(set RRegf64:$d, (opnode RRegf64:$a))]>;
+  def ri64 : InstPTX<(outs RRegf64:$d),
+                     (ins f64imm:$a),
+                     !strconcat(opcstr, ".f64\t$d, $a"),
+                     [(set RRegf64:$d, (opnode fpimm:$a))]>;
+}
+
 //===- Floating-Point Instructions - 3 Operand Form -----------------------===//
 multiclass PTX_FLOAT_3OP<string opcstr, SDNode opnode> {
   def rr32 : InstPTX<(outs RRegf32:$d),
@@ -258,6 +278,14 @@ multiclass INT3<string opcstr, SDNode opnode> {
 }
 
 multiclass PTX_LOGIC<string opcstr, SDNode opnode> {
+  def ripreds : InstPTX<(outs Preds:$d),
+                     (ins Preds:$a, i1imm:$b),
+                     !strconcat(opcstr, ".pred\t$d, $a, $b"),
+                     [(set Preds:$d, (opnode Preds:$a, imm:$b))]>;
+  def rrpreds : InstPTX<(outs Preds:$d),
+                     (ins Preds:$a, Preds:$b),
+                     !strconcat(opcstr, ".pred\t$d, $a, $b"),
+                     [(set Preds:$d, (opnode Preds:$a, Preds:$b))]>;
   def rr16 : InstPTX<(outs RRegu16:$d),
                      (ins RRegu16:$a, RRegu16:$b),
                      !strconcat(opcstr, ".b16\t$d, $a, $b"),
@@ -455,6 +483,13 @@ multiclass PTX_SETP_FP<RegisterClass RC, string regclsname,
               [(set Preds:$p, (xor (setcc RC:$a, RC:$b, ocmp), (not Preds:$c)))]>;
 }
 
+multiclass PTX_SELP<RegisterClass RC, string regclsname> {
+  def rr
+    : InstPTX<(outs RC:$r), (ins Preds:$a, RC:$b, RC:$c),
+              !strconcat("selp.", regclsname, "\t$r, $b, $c, $a"),
+              [(set RC:$r, (select Preds:$a, RC:$b, RC:$c))]>;
+}
+
 multiclass PTX_LD<string opstr, string typestr, RegisterClass RC, PatFrag pat_load> {
   def rr32 : InstPTX<(outs RC:$d),
                      (ins MEMri32:$a),
@@ -538,6 +573,9 @@ defm DIV : INT3<"div", udiv>;
 defm REM : INT3<"rem", urem>;
 
 ///===- Floating-Point Arithmetic Instructions ----------------------------===//
+
+// Standard Unary Operations
+defm FNEG : PTX_FLOAT_2OP<"neg", fneg>;
 
 // Standard Binary Operations
 defm FADD : PTX_FLOAT_3OP<"add", fadd>;
@@ -672,6 +710,14 @@ defm SETPLEf64 : PTX_SETP_FP<RRegf64, "f64", SETULE, SETOLE, "le">;
 defm SETPGTf64 : PTX_SETP_FP<RRegf64, "f64", SETUGT, SETOGT, "gt">;
 defm SETPGEf64 : PTX_SETP_FP<RRegf64, "f64", SETUGE, SETOGE, "ge">;
 
+// .selp
+
+defm PTX_SELPu16 : PTX_SELP<RRegu16, "u16">;
+defm PTX_SELPu32 : PTX_SELP<RRegu32, "u32">;
+defm PTX_SELPu64 : PTX_SELP<RRegu64, "u64">;
+defm PTX_SELPf32 : PTX_SELP<RRegf32, "f32">;
+defm PTX_SELPf64 : PTX_SELP<RRegf64, "f64">;
+
 ///===- Logic and Shift Instructions --------------------------------------===//
 
 defm SHL : INT3ntnc<"shl.b", PTXshl>;
@@ -709,7 +755,7 @@ let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
   def MOVU32ri
     : InstPTX<(outs RRegu32:$d), (ins i32imm:$a), "mov.u32\t$d, $a",
               [(set RRegu32:$d, imm:$a)]>;
-  def MOVU164ri
+  def MOVU64ri
     : InstPTX<(outs RRegu64:$d), (ins i64imm:$a), "mov.u64\t$d, $a",
               [(set RRegu64:$d, imm:$a)]>;
   def MOVF32ri
@@ -771,11 +817,11 @@ def CVT_pred_u64
             [(set Preds:$d, (trunc RRegu64:$a))]>;
 
 def CVT_pred_f32
-  : InstPTX<(outs Preds:$d), (ins RRegf32:$a), "cvt.pred.f32\t$d, $a",
+  : InstPTX<(outs Preds:$d), (ins RRegf32:$a), "cvt.rni.pred.f32\t$d, $a",
             [(set Preds:$d, (fp_to_uint RRegf32:$a))]>;
 
 def CVT_pred_f64
-  : InstPTX<(outs Preds:$d), (ins RRegf64:$a), "cvt.pred.f64\t$d, $a",
+  : InstPTX<(outs Preds:$d), (ins RRegf64:$a), "cvt.rni.pred.f64\t$d, $a",
             [(set Preds:$d, (fp_to_uint RRegf64:$a))]>;
 
 // Conversion to u16
@@ -793,11 +839,11 @@ def CVT_u16_u64
             [(set RRegu16:$d, (trunc RRegu64:$a))]>;
 
 def CVT_u16_f32
-  : InstPTX<(outs RRegu16:$d), (ins RRegf32:$a), "cvt.u16.f32\t$d, $a",
+  : InstPTX<(outs RRegu16:$d), (ins RRegf32:$a), "cvt.rni.u16.f32\t$d, $a",
             [(set RRegu16:$d, (fp_to_uint RRegf32:$a))]>;
 
 def CVT_u16_f64
-  : InstPTX<(outs RRegu16:$d), (ins RRegf64:$a), "cvt.u16.f64\t$d, $a",
+  : InstPTX<(outs RRegu16:$d), (ins RRegf64:$a), "cvt.rni.u16.f64\t$d, $a",
             [(set RRegu16:$d, (fp_to_uint RRegf64:$a))]>;
 
 // Conversion to u32
@@ -815,11 +861,11 @@ def CVT_u32_u64
             [(set RRegu32:$d, (trunc RRegu64:$a))]>;
 
 def CVT_u32_f32
-  : InstPTX<(outs RRegu32:$d), (ins RRegf32:$a), "cvt.u32.f32\t$d, $a",
+  : InstPTX<(outs RRegu32:$d), (ins RRegf32:$a), "cvt.rni.u32.f32\t$d, $a",
             [(set RRegu32:$d, (fp_to_uint RRegf32:$a))]>;
 
 def CVT_u32_f64
-  : InstPTX<(outs RRegu32:$d), (ins RRegf64:$a), "cvt.u32.f64\t$d, $a",
+  : InstPTX<(outs RRegu32:$d), (ins RRegf64:$a), "cvt.rni.u32.f64\t$d, $a",
             [(set RRegu32:$d, (fp_to_uint RRegf64:$a))]>;
 
 // Conversion to u64
@@ -837,51 +883,51 @@ def CVT_u64_u32
             [(set RRegu64:$d, (zext RRegu32:$a))]>;
 
 def CVT_u64_f32
-  : InstPTX<(outs RRegu64:$d), (ins RRegf32:$a), "cvt.u64.f32\t$d, $a",
+  : InstPTX<(outs RRegu64:$d), (ins RRegf32:$a), "cvt.rni.u64.f32\t$d, $a",
             [(set RRegu64:$d, (fp_to_uint RRegf32:$a))]>;
 
 def CVT_u64_f64
-  : InstPTX<(outs RRegu64:$d), (ins RRegf64:$a), "cvt.u64.f32\t$d, $a",
+  : InstPTX<(outs RRegu64:$d), (ins RRegf64:$a), "cvt.rni.u64.f64\t$d, $a",
             [(set RRegu64:$d, (fp_to_uint RRegf64:$a))]>;
 
 // Conversion to f32
 
 def CVT_f32_pred
-  : InstPTX<(outs RRegf32:$d), (ins Preds:$a), "cvt.f32.pred\t$d, $a",
+  : InstPTX<(outs RRegf32:$d), (ins Preds:$a), "cvt.rn.f32.pred\t$d, $a",
             [(set RRegf32:$d, (uint_to_fp Preds:$a))]>;
 
 def CVT_f32_u16
-  : InstPTX<(outs RRegf32:$d), (ins RRegu16:$a), "cvt.f32.u16\t$d, $a",
+  : InstPTX<(outs RRegf32:$d), (ins RRegu16:$a), "cvt.rn.f32.u16\t$d, $a",
             [(set RRegf32:$d, (uint_to_fp RRegu16:$a))]>;
 
 def CVT_f32_u32
-  : InstPTX<(outs RRegf32:$d), (ins RRegu32:$a), "cvt.f32.u32\t$d, $a",
+  : InstPTX<(outs RRegf32:$d), (ins RRegu32:$a), "cvt.rn.f32.u32\t$d, $a",
             [(set RRegf32:$d, (uint_to_fp RRegu32:$a))]>;
 
 def CVT_f32_u64
-  : InstPTX<(outs RRegf32:$d), (ins RRegu64:$a), "cvt.f32.u64\t$d, $a",
+  : InstPTX<(outs RRegf32:$d), (ins RRegu64:$a), "cvt.rn.f32.u64\t$d, $a",
             [(set RRegf32:$d, (uint_to_fp RRegu64:$a))]>;
 
 def CVT_f32_f64
-  : InstPTX<(outs RRegf32:$d), (ins RRegf64:$a), "cvt.f32.f64\t$d, $a",
+  : InstPTX<(outs RRegf32:$d), (ins RRegf64:$a), "cvt.rn.f32.f64\t$d, $a",
             [(set RRegf32:$d, (fround RRegf64:$a))]>;
 
 // Conversion to f64
 
 def CVT_f64_pred
-  : InstPTX<(outs RRegf64:$d), (ins Preds:$a), "cvt.f64.pred\t$d, $a",
+  : InstPTX<(outs RRegf64:$d), (ins Preds:$a), "cvt.rn.f64.pred\t$d, $a",
             [(set RRegf64:$d, (uint_to_fp Preds:$a))]>;
 
 def CVT_f64_u16
-  : InstPTX<(outs RRegf64:$d), (ins RRegu16:$a), "cvt.f64.u16\t$d, $a",
+  : InstPTX<(outs RRegf64:$d), (ins RRegu16:$a), "cvt.rn.f64.u16\t$d, $a",
             [(set RRegf64:$d, (uint_to_fp RRegu16:$a))]>;
 
 def CVT_f64_u32
-  : InstPTX<(outs RRegf64:$d), (ins RRegu32:$a), "cvt.f64.u32\t$d, $a",
+  : InstPTX<(outs RRegf64:$d), (ins RRegu32:$a), "cvt.rn.f64.u32\t$d, $a",
             [(set RRegf64:$d, (uint_to_fp RRegu32:$a))]>;
 
 def CVT_f64_u64
-  : InstPTX<(outs RRegf64:$d), (ins RRegu64:$a), "cvt.f64.u64\t$d, $a",
+  : InstPTX<(outs RRegf64:$d), (ins RRegu64:$a), "cvt.rn.f64.u64\t$d, $a",
             [(set RRegf64:$d, (uint_to_fp RRegu64:$a))]>;
 
 def CVT_f64_f32

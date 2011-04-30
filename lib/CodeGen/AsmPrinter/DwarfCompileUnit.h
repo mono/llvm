@@ -181,9 +181,6 @@ public:
   void addAddress(DIE *Die, unsigned Attribute,
                   const MachineLocation &Location);
 
-  /// addRegisterAddress - Add register location entry in variable DIE.
-  bool addRegisterAddress(DIE *Die, const MachineOperand &MO);
-
   /// addConstantValue - Add constant value entry in variable DIE.
   bool addConstantValue(DIE *Die, const MachineOperand &MO);
   bool addConstantValue(DIE *Die, ConstantInt *CI, bool Unsigned);
@@ -193,6 +190,12 @@ public:
 
   /// addTemplateParams - Add template parameters in buffer.
   void addTemplateParams(DIE &Buffer, DIArray TParams);
+
+  /// addRegisterOp - Add register operand.
+  void addRegisterOp(DIE *TheDie, unsigned Reg);
+
+  /// addRegisterOffset - Add register offset.
+  void addRegisterOffset(DIE *TheDie, unsigned Reg, int64_t Offset);
 
   /// addComplexAddress - Start with the address based on the location provided,
   /// and generate the DWARF information necessary to find the actual variable
@@ -212,9 +215,9 @@ public:
   void addBlockByrefAddress(DbgVariable *&DV, DIE *Die, unsigned Attribute,
                             const MachineLocation &Location);
 
-  /// addVariableAddress - Add DW_AT_location attribute for a DbgVariable based
-  /// on provided frame index.
-  void addVariableAddress(DbgVariable *&DV, DIE *Die, int64_t FI);
+  /// addVariableAddress - Add DW_AT_location attribute for a 
+  /// DbgVariable based on provided MachineLocation.
+  void addVariableAddress(DbgVariable *&DV, DIE *Die, MachineLocation Location);
 
   /// addToContextOwner - Add Die into the list of its context owner's children.
   void addToContextOwner(DIE *Die, DIDescriptor Context);

@@ -1728,26 +1728,6 @@ are functionally identical.
 //===---------------------------------------------------------------------===//
 
 Take the following C code:
-int x(int y) { return (y & 63) << 14; }
-
-Code produced by gcc:
-	andl	$63, %edi
-	sall	$14, %edi
-	movl	%edi, %eax
-	ret
-
-Code produced by clang:
-	shll	$14, %edi
-	movl	%edi, %eax
-	andl	$1032192, %eax
-	ret
-
-The code produced by gcc is 3 bytes shorter.  This sort of construct often
-shows up with bitfields.
-
-//===---------------------------------------------------------------------===//
-
-Take the following C code:
 int f(int a, int b) { return (unsigned char)a == (unsigned char)b; }
 
 We generate the following IR with clang:
@@ -2030,5 +2010,33 @@ clamp_float:                            # @clamp_float
         ret
 
 with -ffast-math.
+
+//===---------------------------------------------------------------------===//
+
+This function (from PR9803):
+
+int clamp2(int a) {
+        if (a > 5)
+                a = 5;
+        if (a < 0) 
+                return 0;
+        return a;
+}
+
+Compiles to:
+
+_clamp2:                                ## @clamp2
+        pushq   %rbp
+        movq    %rsp, %rbp
+        cmpl    $5, %edi
+        movl    $5, %ecx
+        cmovlel %edi, %ecx
+        testl   %ecx, %ecx
+        movl    $0, %eax
+        cmovnsl %ecx, %eax
+        popq    %rbp
+        ret
+
+The move of 0 could be scheduled above the test to make it is xor reg,reg.
 
 //===---------------------------------------------------------------------===//

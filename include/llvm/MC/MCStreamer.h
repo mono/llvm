@@ -57,6 +57,8 @@ namespace llvm {
     MCDwarfFrameInfo *getCurrentFrameInfo();
     void EnsureValidFrame();
 
+    const MCSymbol* LastNonPrivate;
+
     /// SectionStack - This is stack of current and previous section
     /// values saved by PushSection.
     SmallVector<std::pair<const MCSection *,
@@ -64,6 +66,12 @@ namespace llvm {
 
   protected:
     MCStreamer(MCContext &Ctx);
+
+    const MCExpr *BuildSymbolDiff(MCContext &Context, const MCSymbol *A,
+                                  const MCSymbol *B);
+
+    const MCExpr *ForceExpAbs(MCStreamer *Streamer, MCContext &Context,
+                              const MCExpr* Expr);
 
   public:
     virtual ~MCStreamer();
@@ -180,7 +188,10 @@ namespace llvm {
     /// @param Symbol - The symbol to emit. A given symbol should only be
     /// emitted as a label once, and symbols emitted as a label should never be
     /// used in an assignment.
-    virtual void EmitLabel(MCSymbol *Symbol) = 0;
+    virtual void EmitLabel(MCSymbol *Symbol);
+
+    virtual void EmitEHSymAttributes(const MCSymbol *Symbol,
+                                     MCSymbol *EHSymbol);
 
     /// EmitAssemblerFlag - Note in the output the specified @p Flag
     virtual void EmitAssemblerFlag(MCAssemblerFlag Flag) = 0;
@@ -499,6 +510,7 @@ namespace llvm {
   MCStreamer *createAsmStreamer(MCContext &Ctx, formatted_raw_ostream &OS,
                                 bool isVerboseAsm,
                                 bool useLoc,
+                                bool useCFI,
                                 MCInstPrinter *InstPrint = 0,
                                 MCCodeEmitter *CE = 0,
                                 TargetAsmBackend *TAB = 0,

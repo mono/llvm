@@ -141,7 +141,6 @@ public:
   const MCSection *getStaticDtorSection() const { return StaticDtorSection; }
   const MCSection *getLSDASection() const { return LSDASection; }
   virtual const MCSection *getEHFrameSection() const = 0;
-  virtual MCSymbol *getPersonalityPICSymbol(StringRef Name) const;
   virtual void emitPersonalityValue(MCStreamer &Streamer,
                                     const TargetMachine &TM,
                                     const MCSymbol *Sym) const;
@@ -222,6 +221,11 @@ public:
   getExprForDwarfGlobalReference(const GlobalValue *GV, Mangler *Mang,
                                  MachineModuleInfo *MMI, unsigned Encoding,
                                  MCStreamer &Streamer) const;
+
+  // getCFIPersonalitySymbol - The symbol that gets passed to .cfi_personality.
+  virtual MCSymbol *
+  getCFIPersonalitySymbol(const GlobalValue *GV, Mangler *Mang,
+                          MachineModuleInfo *MMI) const;
 
   /// 
   const MCExpr *

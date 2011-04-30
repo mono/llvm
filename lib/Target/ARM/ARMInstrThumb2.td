@@ -44,7 +44,9 @@ def t2_so_imm_neg_XFORM : SDNodeXForm<imm, [{
 // t2_so_imm - Match a 32-bit immediate operand, which is an
 // 8-bit immediate rotated by an arbitrary number of bits, or an 8-bit
 // immediate splatted into multiple bytes of the word.
-def t2_so_imm : Operand<i32>, PatLeaf<(imm), [{ return Pred_t2_so_imm(N); }]> {
+def t2_so_imm : Operand<i32>, ImmLeaf<i32, [{
+    return ARM_AM::getT2SOImmVal(Imm) != -1;
+  }]> {
   let EncoderMethod = "getT2SOImmOpValue";
 }
 
@@ -62,14 +64,14 @@ def t2_so_imm_neg : Operand<i32>,
 }], t2_so_imm_neg_XFORM>;
 
 /// imm1_31 predicate - True if the 32-bit immediate is in the range [1,31].
-def imm1_31 : PatLeaf<(i32 imm), [{
-  return (int32_t)N->getZExtValue() >= 1 && (int32_t)N->getZExtValue() < 32;
+def imm1_31 : ImmLeaf<i32, [{
+  return (int32_t)Imm >= 1 && (int32_t)Imm < 32;
 }]>;
 
 /// imm0_4095 predicate - True if the 32-bit immediate is in the range [0.4095].
 def imm0_4095 : Operand<i32>,
-                PatLeaf<(i32 imm), [{
-  return (uint32_t)N->getZExtValue() < 4096;
+                ImmLeaf<i32, [{
+  return Imm >= 0 && Imm < 4096;
 }]>;
 
 def imm0_4095_neg : PatLeaf<(i32 imm), [{
@@ -83,6 +85,11 @@ def imm0_255_neg : PatLeaf<(i32 imm), [{
 def imm0_255_not : PatLeaf<(i32 imm), [{
   return (uint32_t)(~N->getZExtValue()) < 255;
 }], imm_comp_XFORM>;
+
+def lo5AllOne : PatLeaf<(i32 imm), [{
+  // Returns true if all low 5-bits are 1.
+  return (((uint32_t)N->getZExtValue()) & 0x1FUL) == 0x1FUL;
+}]>;
 
 // Define Thumb2 specific addressing modes.
 
@@ -2022,6 +2029,10 @@ defm t2LSL  : T2I_sh_ir<0b00, "lsl", BinOpFrag<(shl  node:$LHS, node:$RHS)>>;
 defm t2LSR  : T2I_sh_ir<0b01, "lsr", BinOpFrag<(srl  node:$LHS, node:$RHS)>>;
 defm t2ASR  : T2I_sh_ir<0b10, "asr", BinOpFrag<(sra  node:$LHS, node:$RHS)>>;
 defm t2ROR  : T2I_sh_ir<0b11, "ror", BinOpFrag<(rotr node:$LHS, node:$RHS)>>;
+
+// (rotr x, (and y, 0x...1f)) ==> (ROR x, y)
+def : Pat<(rotr rGPR:$lhs, (and rGPR:$rhs, lo5AllOne)),
+          (t2RORrr rGPR:$lhs, rGPR:$rhs)>;
 
 let Uses = [CPSR] in {
 def t2RRX : T2sTwoReg<(outs rGPR:$Rd), (ins rGPR:$Rm), IIC_iMOVsi,

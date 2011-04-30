@@ -107,10 +107,7 @@ void MCObjectStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
 }
 
 void MCObjectStreamer::EmitLabel(MCSymbol *Symbol) {
-  assert(!Symbol->isVariable() && "Cannot emit a variable symbol!");
-  assert(getCurrentSection() && "Cannot emit before setting section!");
-
-  Symbol->setSection(*getCurrentSection());
+  MCStreamer::EmitLabel(Symbol);
 
   MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
 
@@ -130,6 +127,7 @@ void MCObjectStreamer::EmitULEB128Value(const MCExpr *Value) {
     EmitULEB128IntValue(IntValue);
     return;
   }
+  Value = ForceExpAbs(this, getContext(), Value);
   new MCLEBFragment(*Value, false, getCurrentSectionData());
 }
 
@@ -139,6 +137,7 @@ void MCObjectStreamer::EmitSLEB128Value(const MCExpr *Value) {
     EmitSLEB128IntValue(IntValue);
     return;
   }
+  Value = ForceExpAbs(this, getContext(), Value);
   new MCLEBFragment(*Value, true, getCurrentSectionData());
 }
 
@@ -194,28 +193,6 @@ void MCObjectStreamer::EmitInstToFragment(const MCInst &Inst) {
   getAssembler().getEmitter().EncodeInstruction(Inst, VecOS, IF->getFixups());
   VecOS.flush();
   IF->getCode().append(Code.begin(), Code.end());
-}
-
-static const MCExpr *BuildSymbolDiff(MCContext &Context,
-                                     const MCSymbol *A, const MCSymbol *B) {
-  MCSymbolRefExpr::VariantKind Variant = MCSymbolRefExpr::VK_None;
-  const MCExpr *ARef =
-    MCSymbolRefExpr::Create(A, Variant, Context);
-  const MCExpr *BRef =
-    MCSymbolRefExpr::Create(B, Variant, Context);
-  const MCExpr *AddrDelta =
-    MCBinaryExpr::Create(MCBinaryExpr::Sub, ARef, BRef, Context);
-  return AddrDelta;
-}
-
-static const MCExpr *ForceExpAbs(MCObjectStreamer *Streamer,
-                                  MCContext &Context, const MCExpr* Expr) {
- if (Context.getAsmInfo().hasAggressiveSymbolFolding())
-   return Expr;
-
- MCSymbol *ABS = Context.CreateTempSymbol();
- Streamer->EmitAssignment(ABS, Expr);
- return MCSymbolRefExpr::Create(ABS, Context);
 }
 
 void MCObjectStreamer::EmitDwarfAdvanceLineAddr(int64_t LineDelta,

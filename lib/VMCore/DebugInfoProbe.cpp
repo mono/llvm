@@ -53,6 +53,7 @@ namespace llvm {
     Function *TheFn;
     std::set<unsigned> LineNos;
     std::set<MDNode *> DbgVariables;
+    std::set<Instruction *> MissingDebugLoc;
   };
 }
 
@@ -89,6 +90,8 @@ void DebugInfoProbeImpl::initialize(StringRef PName, Function &F) {
   for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ++FI)
     for (BasicBlock::iterator BI = FI->begin(), BE = FI->end(); 
          BI != BE; ++BI) {
+      if (BI->getDebugLoc().isUnknown())
+        MissingDebugLoc.insert(BI);
       if (!isa<DbgInfoIntrinsic>(BI)) continue;
       Value *Addr = NULL;
       MDNode *Node = NULL;
@@ -136,7 +139,9 @@ void DebugInfoProbeImpl::finalize(Function &F) {
     unsigned LineNo = *I;
     if (LineNos2.count(LineNo) == 0) {
       DEBUG(dbgs() 
-            << "DebugInfoProbe: Losing dbg info for source line " 
+            << "DebugInfoProbe("
+            << PassName
+            << "): Losing dbg info for source line " 
             << LineNo << "\n");
       ++NumDbgLineLost;
     }
@@ -146,6 +151,12 @@ void DebugInfoProbeImpl::finalize(Function &F) {
   for (Function::iterator FI = F.begin(), FE = F.end(); FI != FE; ++FI)
     for (BasicBlock::iterator BI = FI->begin(), BE = FI->end(); 
          BI != BE; ++BI) {
+      if (BI->getDebugLoc().isUnknown() &&
+          MissingDebugLoc.count(BI) == 0) {
+        DEBUG(dbgs() << "DebugInfoProbe(" << PassName << "): --- ");
+        DEBUG(BI->print(dbgs()));
+        DEBUG(dbgs() << "\n");
+      }
       if (!isa<DbgInfoIntrinsic>(BI)) continue;
       Value *Addr = NULL;
       MDNode *Node = NULL;
@@ -162,9 +173,17 @@ void DebugInfoProbeImpl::finalize(Function &F) {
 
   for (std::set<MDNode *>::iterator I = DbgVariables.begin(), 
          E = DbgVariables.end(); I != E; ++I) {
-    if (DbgVariables2.count(*I) == 0) {
-      DEBUG(dbgs() << "DebugInfoProbe: Losing dbg info for variable: ");
-      DEBUG((*I)->print(dbgs()));
+    if (DbgVariables2.count(*I) == 0 && (*I)->getNumOperands() >= 2) {
+      DEBUG(dbgs() 
+            << "DebugInfoProbe("
+            << PassName
+            << "): Losing dbg info for variable: ";
+            if (MDString *MDS = dyn_cast_or_null<MDString>(
+                (*I)->getOperand(2)))
+              dbgs() << MDS->getString();
+            else
+              dbgs() << "...";
+            dbgs() << "\n");
       ++NumDbgValueLost;
     }
   }
