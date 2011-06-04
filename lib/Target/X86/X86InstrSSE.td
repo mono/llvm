@@ -1875,21 +1875,6 @@ defm RCP   : sse1_fp_unop_s<0x53, "rcp", X86frcp, int_x86_sse_rcp_ss>,
 // SSE 1 & 2 - Non-temporal stores
 //===----------------------------------------------------------------------===//
 
-def VMOVNTPSmr_Int : VPSI<0x2B, MRMDestMem, (outs),
-                       (ins i128mem:$dst, VR128:$src),
-                       "movntps\t{$src, $dst|$dst, $src}",
-                       [(int_x86_sse_movnt_ps addr:$dst, VR128:$src)]>, VEX;
-def VMOVNTPDmr_Int : VPDI<0x2B, MRMDestMem, (outs),
-                       (ins i128mem:$dst, VR128:$src),
-                       "movntpd\t{$src, $dst|$dst, $src}",
-                       [(int_x86_sse2_movnt_pd addr:$dst, VR128:$src)]>, VEX;
-
-let ExeDomain = SSEPackedInt in
-  def VMOVNTDQmr_Int : VPDI<0xE7, MRMDestMem, (outs),
-                     (ins f128mem:$dst, VR128:$src),
-                     "movntdq\t{$src, $dst|$dst, $src}",
-                     [(int_x86_sse2_movnt_dq addr:$dst, VR128:$src)]>, VEX;
-
 let AddedComplexity = 400 in { // Prefer non-temporal versions
   def VMOVNTPSmr : VPSI<0x2B, MRMDestMem, (outs),
                        (ins f128mem:$dst, VR128:$src),
@@ -1906,12 +1891,16 @@ let AddedComplexity = 400 in { // Prefer non-temporal versions
                         "movntdq\t{$src, $dst|$dst, $src}",
                         [(alignednontemporalstore (v2f64 VR128:$src),
                                                   addr:$dst)]>, VEX;
+
   let ExeDomain = SSEPackedInt in
-  def VMOVNTDQmr : VPDI<0xE7, MRMDestMem, (outs),
-                      (ins f128mem:$dst, VR128:$src),
-                      "movntdq\t{$src, $dst|$dst, $src}",
-                      [(alignednontemporalstore (v4f32 VR128:$src),
-                                                addr:$dst)]>, VEX;
+  def VMOVNTDQmr    : VPDI<0xE7, MRMDestMem, (outs),
+                           (ins f128mem:$dst, VR128:$src),
+                           "movntdq\t{$src, $dst|$dst, $src}",
+                           [(alignednontemporalstore (v4f32 VR128:$src),
+                                                     addr:$dst)]>, VEX;
+
+  def : Pat<(alignednontemporalstore (v2i64 VR128:$src), addr:$dst),
+            (VMOVNTDQmr addr:$dst, VR128:$src)>, Requires<[HasAVX]>;
 
   def VMOVNTPSYmr : VPSI<0x2B, MRMDestMem, (outs),
                        (ins f256mem:$dst, VR256:$src),
@@ -1943,18 +1932,6 @@ def : Pat<(int_x86_avx_movnt_pd_256 addr:$dst, VR256:$src),
 def : Pat<(int_x86_avx_movnt_ps_256 addr:$dst, VR256:$src),
           (VMOVNTPSYmr addr:$dst, VR256:$src)>;
 
-def MOVNTPSmr_Int : PSI<0x2B, MRMDestMem, (outs), (ins i128mem:$dst, VR128:$src),
-                    "movntps\t{$src, $dst|$dst, $src}",
-                    [(int_x86_sse_movnt_ps addr:$dst, VR128:$src)]>;
-def MOVNTPDmr_Int : PDI<0x2B, MRMDestMem, (outs), (ins i128mem:$dst, VR128:$src),
-                        "movntpd\t{$src, $dst|$dst, $src}",
-                        [(int_x86_sse2_movnt_pd addr:$dst, VR128:$src)]>;
-
-let ExeDomain = SSEPackedInt in
-def MOVNTDQmr_Int : PDI<0xE7, MRMDestMem, (outs), (ins f128mem:$dst, VR128:$src),
-                        "movntdq\t{$src, $dst|$dst, $src}",
-                        [(int_x86_sse2_movnt_dq addr:$dst, VR128:$src)]>;
-
 let AddedComplexity = 400 in { // Prefer non-temporal versions
 def MOVNTPSmr : PSI<0x2B, MRMDestMem, (outs), (ins f128mem:$dst, VR128:$src),
                     "movntps\t{$src, $dst|$dst, $src}",
@@ -1972,22 +1949,19 @@ def MOVNTDQmr : PDI<0xE7, MRMDestMem, (outs), (ins f128mem:$dst, VR128:$src),
                     "movntdq\t{$src, $dst|$dst, $src}",
                     [(alignednontemporalstore (v4f32 VR128:$src), addr:$dst)]>;
 
+def : Pat<(alignednontemporalstore (v2i64 VR128:$src), addr:$dst),
+          (MOVNTDQmr addr:$dst, VR128:$src)>;
+
 // There is no AVX form for instructions below this point
 def MOVNTImr : I<0xC3, MRMDestMem, (outs), (ins i32mem:$dst, GR32:$src),
                  "movnti\t{$src, $dst|$dst, $src}",
                  [(nontemporalstore (i32 GR32:$src), addr:$dst)]>,
                TB, Requires<[HasSSE2]>;
-
 def MOVNTI_64mr : RI<0xC3, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src),
                      "movnti\t{$src, $dst|$dst, $src}",
                      [(nontemporalstore (i64 GR64:$src), addr:$dst)]>,
                   TB, Requires<[HasSSE2]>;
-
 }
-def MOVNTImr_Int  :   I<0xC3, MRMDestMem, (outs), (ins i32mem:$dst, GR32:$src),
-                    "movnti\t{$src, $dst|$dst, $src}",
-                    [(int_x86_sse2_movnt_i addr:$dst, GR32:$src)]>,
-                  TB, Requires<[HasSSE2]>;
 
 //===----------------------------------------------------------------------===//
 // SSE 1 & 2 - Misc Instructions (No AVX form)
@@ -4733,14 +4707,14 @@ let Uses = [XMM0], Constraints = "$src1 = $dst" in {
     def rr0 : SS48I<opc, MRMSrcReg, (outs VR128:$dst),
                     (ins VR128:$src1, VR128:$src2),
                     !strconcat(OpcodeStr,
-                     "\t{%xmm0, $src2, $dst|$dst, $src2, %xmm0}"),
+                     "\t{$src2, $dst|$dst, $src2}"),
                     [(set VR128:$dst, (IntId VR128:$src1, VR128:$src2, XMM0))]>,
                     OpSize;
 
     def rm0 : SS48I<opc, MRMSrcMem, (outs VR128:$dst),
                     (ins VR128:$src1, i128mem:$src2),
                     !strconcat(OpcodeStr,
-                     "\t{%xmm0, $src2, $dst|$dst, $src2, %xmm0}"),
+                     "\t{$src2, $dst|$dst, $src2}"),
                     [(set VR128:$dst,
                       (IntId VR128:$src1,
                        (bitconvert (memopv16i8 addr:$src2)), XMM0))]>, OpSize;
@@ -4961,66 +4935,66 @@ defm PCMPESTRIZ : SS42AI_pcmpestri<int_x86_sse42_pcmpestriz128>;
 // This set of instructions are only rm, the only difference is the size
 // of r and m.
 let Constraints = "$src1 = $dst" in {
-  def CRC32m8  : SS42FI<0xF0, MRMSrcMem, (outs GR32:$dst),
+  def CRC32r32m8  : SS42FI<0xF0, MRMSrcMem, (outs GR32:$dst),
                       (ins GR32:$src1, i8mem:$src2),
                       "crc32{b} \t{$src2, $src1|$src1, $src2}",
                        [(set GR32:$dst,
-                         (int_x86_sse42_crc32_8 GR32:$src1,
+                         (int_x86_sse42_crc32_32_8 GR32:$src1,
                          (load addr:$src2)))]>;
-  def CRC32r8  : SS42FI<0xF0, MRMSrcReg, (outs GR32:$dst),
+  def CRC32r32r8  : SS42FI<0xF0, MRMSrcReg, (outs GR32:$dst),
                       (ins GR32:$src1, GR8:$src2),
                       "crc32{b} \t{$src2, $src1|$src1, $src2}",
                        [(set GR32:$dst,
-                         (int_x86_sse42_crc32_8 GR32:$src1, GR8:$src2))]>;
-  def CRC32m16  : SS42FI<0xF1, MRMSrcMem, (outs GR32:$dst),
+                         (int_x86_sse42_crc32_32_8 GR32:$src1, GR8:$src2))]>;
+  def CRC32r32m16  : SS42FI<0xF1, MRMSrcMem, (outs GR32:$dst),
                       (ins GR32:$src1, i16mem:$src2),
                       "crc32{w} \t{$src2, $src1|$src1, $src2}",
                        [(set GR32:$dst,
-                         (int_x86_sse42_crc32_16 GR32:$src1,
+                         (int_x86_sse42_crc32_32_16 GR32:$src1,
                          (load addr:$src2)))]>,
                          OpSize;
-  def CRC32r16  : SS42FI<0xF1, MRMSrcReg, (outs GR32:$dst),
+  def CRC32r32r16  : SS42FI<0xF1, MRMSrcReg, (outs GR32:$dst),
                       (ins GR32:$src1, GR16:$src2),
                       "crc32{w} \t{$src2, $src1|$src1, $src2}",
                        [(set GR32:$dst,
-                         (int_x86_sse42_crc32_16 GR32:$src1, GR16:$src2))]>,
+                         (int_x86_sse42_crc32_32_16 GR32:$src1, GR16:$src2))]>,
                          OpSize;
-  def CRC32m32  : SS42FI<0xF1, MRMSrcMem, (outs GR32:$dst),
+  def CRC32r32m32  : SS42FI<0xF1, MRMSrcMem, (outs GR32:$dst),
                       (ins GR32:$src1, i32mem:$src2),
                       "crc32{l} \t{$src2, $src1|$src1, $src2}",
                        [(set GR32:$dst,
-                         (int_x86_sse42_crc32_32 GR32:$src1,
+                         (int_x86_sse42_crc32_32_32 GR32:$src1,
                          (load addr:$src2)))]>;
-  def CRC32r32  : SS42FI<0xF1, MRMSrcReg, (outs GR32:$dst),
+  def CRC32r32r32  : SS42FI<0xF1, MRMSrcReg, (outs GR32:$dst),
                       (ins GR32:$src1, GR32:$src2),
                       "crc32{l} \t{$src2, $src1|$src1, $src2}",
                        [(set GR32:$dst,
-                         (int_x86_sse42_crc32_32 GR32:$src1, GR32:$src2))]>;
-  def CRC64m8  : SS42FI<0xF0, MRMSrcMem, (outs GR64:$dst),
+                         (int_x86_sse42_crc32_32_32 GR32:$src1, GR32:$src2))]>;
+  def CRC32r64m8  : SS42FI<0xF0, MRMSrcMem, (outs GR64:$dst),
                       (ins GR64:$src1, i8mem:$src2),
                       "crc32{b} \t{$src2, $src1|$src1, $src2}",
                        [(set GR64:$dst,
-                         (int_x86_sse42_crc64_8 GR64:$src1,
+                         (int_x86_sse42_crc32_64_8 GR64:$src1,
                          (load addr:$src2)))]>,
                          REX_W;
-  def CRC64r8  : SS42FI<0xF0, MRMSrcReg, (outs GR64:$dst),
+  def CRC32r64r8  : SS42FI<0xF0, MRMSrcReg, (outs GR64:$dst),
                       (ins GR64:$src1, GR8:$src2),
                       "crc32{b} \t{$src2, $src1|$src1, $src2}",
                        [(set GR64:$dst,
-                         (int_x86_sse42_crc64_8 GR64:$src1, GR8:$src2))]>,
+                         (int_x86_sse42_crc32_64_8 GR64:$src1, GR8:$src2))]>,
                          REX_W;
-  def CRC64m64  : SS42FI<0xF1, MRMSrcMem, (outs GR64:$dst),
+  def CRC32r64m64  : SS42FI<0xF1, MRMSrcMem, (outs GR64:$dst),
                       (ins GR64:$src1, i64mem:$src2),
                       "crc32{q} \t{$src2, $src1|$src1, $src2}",
                        [(set GR64:$dst,
-                         (int_x86_sse42_crc64_64 GR64:$src1,
+                         (int_x86_sse42_crc32_64_64 GR64:$src1,
                          (load addr:$src2)))]>,
                          REX_W;
-  def CRC64r64  : SS42FI<0xF1, MRMSrcReg, (outs GR64:$dst),
+  def CRC32r64r64  : SS42FI<0xF1, MRMSrcReg, (outs GR64:$dst),
                       (ins GR64:$src1, GR64:$src2),
                       "crc32{q} \t{$src2, $src1|$src1, $src2}",
                        [(set GR64:$dst,
-                         (int_x86_sse42_crc64_64 GR64:$src1, GR64:$src2))]>,
+                         (int_x86_sse42_crc32_64_64 GR64:$src1, GR64:$src2))]>,
                          REX_W;
 }
 

@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Function.h"
 
 using namespace llvm;
 
@@ -185,7 +186,7 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   DebugLoc dl = MBBI != MBB.end() ? MBBI->getDebugLoc() : DebugLoc();
   unsigned FramePtr = RegInfo->getFrameRegister(MF);
   MachineModuleInfo &MMI = MF.getMMI();
-  bool NeedsFrameMoves = UnwindTablesMandatory;
+  bool NeedsFrameMoves = MF.getFunction()->needsUnwindTableEntry();
   // The cfa register
   int CfaReg = ARM::SP;
   // The offset between the value of CfaReg and the CFA

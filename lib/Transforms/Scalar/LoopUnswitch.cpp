@@ -786,8 +786,13 @@ void LoopUnswitch::RemoveBlockIfDead(BasicBlock *BB,
   // If this is the edge to the header block for a loop, remove the loop and
   // promote all subloops.
   if (Loop *BBLoop = LI->getLoopFor(BB)) {
-    if (BBLoop->getLoopLatch() == BB)
+    if (BBLoop->getLoopLatch() == BB) {
       RemoveLoopFromHierarchy(BBLoop);
+      if (currentLoop == BBLoop) {
+        currentLoop = 0;
+        redoLoop = false;
+      }
+    }
   }
 
   // Remove the block from the loop info, which removes it from any loops it
@@ -859,7 +864,6 @@ void LoopUnswitch::RewriteLoopBodyWithConditionConstant(Loop *L, Value *LIC,
   
   // FOLD boolean conditions (X|LIC), (X&LIC).  Fold conditional branches,
   // selects, switches.
-  std::vector<User*> Users(LIC->use_begin(), LIC->use_end());
   std::vector<Instruction*> Worklist;
   LLVMContext &Context = Val->getContext();
 
@@ -875,13 +879,14 @@ void LoopUnswitch::RewriteLoopBodyWithConditionConstant(Loop *L, Value *LIC,
       Replacement = ConstantInt::get(Type::getInt1Ty(Val->getContext()), 
                                      !cast<ConstantInt>(Val)->getZExtValue());
     
-    for (unsigned i = 0, e = Users.size(); i != e; ++i)
-      if (Instruction *U = cast<Instruction>(Users[i])) {
-        if (!L->contains(U))
-          continue;
-        U->replaceUsesOfWith(LIC, Replacement);
-        Worklist.push_back(U);
-      }
+    for (Value::use_iterator UI = LIC->use_begin(), E = LIC->use_end();
+         UI != E; ++UI) {
+      Instruction *U = dyn_cast<Instruction>(*UI);
+      if (!U || !L->contains(U))
+        continue;
+      U->replaceUsesOfWith(LIC, Replacement);
+      Worklist.push_back(U);
+    }
     SimplifyCode(Worklist, L);
     return;
   }
@@ -889,9 +894,10 @@ void LoopUnswitch::RewriteLoopBodyWithConditionConstant(Loop *L, Value *LIC,
   // Otherwise, we don't know the precise value of LIC, but we do know that it
   // is certainly NOT "Val".  As such, simplify any uses in the loop that we
   // can.  This case occurs when we unswitch switch statements.
-  for (unsigned i = 0, e = Users.size(); i != e; ++i) {
-    Instruction *U = cast<Instruction>(Users[i]);
-    if (!L->contains(U))
+  for (Value::use_iterator UI = LIC->use_begin(), E = LIC->use_end();
+       UI != E; ++UI) {
+    Instruction *U = dyn_cast<Instruction>(*UI);
+    if (!U || !L->contains(U))
       continue;
 
     Worklist.push_back(U);
@@ -910,12 +916,20 @@ void LoopUnswitch::RewriteLoopBodyWithConditionConstant(Loop *L, Value *LIC,
     // successor if they become single-entry, those PHI nodes may
     // be in the Users list.
         
+    BasicBlock *Switch = SI->getParent();
+    BasicBlock *SISucc = SI->getSuccessor(DeadCase);
+    BasicBlock *Latch = L->getLoopLatch();
+    // If the DeadCase successor dominates the loop latch, then the
+    // transformation isn't safe since it will delete the sole predecessor edge
+    // to the latch.
+    if (Latch && DT->dominates(SISucc, Latch))
+      continue;
+
     // FIXME: This is a hack.  We need to keep the successor around
     // and hooked up so as to preserve the loop structure, because
     // trying to update it is complicated.  So instead we preserve the
     // loop structure and put the block on a dead code path.
-    BasicBlock *Switch = SI->getParent();
-    SplitEdge(Switch, SI->getSuccessor(DeadCase), this);
+    SplitEdge(Switch, SISucc, this);
     // Compute the successors instead of relying on the return value
     // of SplitEdge, since it may have split the switch successor
     // after PHI nodes.

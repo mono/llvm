@@ -396,12 +396,12 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
     setLibcallCallingConv(RTLIB::UDIV_I8, CallingConv::ARM_AAPCS);
     setLibcallCallingConv(RTLIB::UDIV_I16, CallingConv::ARM_AAPCS);
     setLibcallCallingConv(RTLIB::UDIV_I32, CallingConv::ARM_AAPCS);
-  }
 
-  // Use divmod iOS compiler-rt calls.
-  if (Subtarget->getTargetTriple().getOS() == Triple::IOS) {
-    setLibcallName(RTLIB::SDIVREM_I32, "__divmodsi4");
-    setLibcallName(RTLIB::UDIVREM_I32, "__udivmodsi4");
+    // Memory operations
+    // RTABI chapter 4.3.4
+    setLibcallName(RTLIB::MEMCPY,  "__aeabi_memcpy");
+    setLibcallName(RTLIB::MEMMOVE, "__aeabi_memmove");
+    setLibcallName(RTLIB::MEMSET,  "__aeabi_memset");
   }
 
   if (Subtarget->isThumb1Only())
@@ -730,6 +730,8 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setMinStackArgumentAlignment(4);
 
   benefitFromCodePlacementOpt = true;
+
+  setMinFunctionAlignment(Subtarget->isThumb() ? 1 : 2);
 }
 
 // FIXME: It might make sense to define the representative register class as the
@@ -929,11 +931,6 @@ TargetRegisterClass *ARMTargetLowering::getRegClassFor(EVT VT) const {
 FastISel *
 ARMTargetLowering::createFastISel(FunctionLoweringInfo &funcInfo) const {
   return ARM::createFastISel(funcInfo);
-}
-
-/// getFunctionAlignment - Return the Log2 alignment of this function.
-unsigned ARMTargetLowering::getFunctionAlignment(const Function *F) const {
-  return getTargetMachine().getSubtarget<ARMSubtarget>().isThumb() ? 1 : 2;
 }
 
 /// getMaximalGlobalOffset - Returns the maximal possible offset which can
@@ -2095,7 +2092,8 @@ SDValue ARMTargetLowering::LowerGlobalAddressDarwin(SDValue Op,
   MachineFunction &MF = DAG.getMachineFunction();
   ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
 
-  if (Subtarget->useMovt()) {
+  // FIXME: Enable this for static codegen when tool issues are fixed.
+  if (Subtarget->useMovt() && RelocM != Reloc::Static) {
     ++NumMovwMovt;
     // FIXME: Once remat is capable of dealing with instructions with register
     // operands, expand this into two nodes.
@@ -2170,7 +2168,7 @@ ARMTargetLowering::LowerEH_SJLJ_DISPATCHSETUP(SDValue Op, SelectionDAG &DAG)
   const {
   DebugLoc dl = Op.getDebugLoc();
   return DAG.getNode(ARMISD::EH_SJLJ_DISPATCHSETUP, dl, MVT::Other,
-                     Op.getOperand(0));
+                     Op.getOperand(0), Op.getOperand(1));
 }
 
 SDValue
@@ -2712,10 +2710,11 @@ SDValue ARMTargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
       }
 
       if (True.getNode() && False.getNode()) {
-        EVT VT = Cond.getValueType();
+        EVT VT = Op.getValueType();
         SDValue ARMcc = Cond.getOperand(2);
         SDValue CCR = Cond.getOperand(3);
         SDValue Cmp = duplicateCmp(Cond.getOperand(4), DAG);
+        assert(True.getValueType() == VT);
         return DAG.getNode(ARMISD::CMOV, dl, VT, True, False, ARMcc, CCR, Cmp);
       }
     }
@@ -4201,7 +4200,16 @@ static SDValue GeneratePerfectShuffle(unsigned PFEntry, SDValue LHS,
   switch (OpNum) {
   default: llvm_unreachable("Unknown shuffle opcode!");
   case OP_VREV:
-    return DAG.getNode(ARMISD::VREV64, dl, VT, OpLHS);
+    // VREV divides the vector in half and swaps within the half.
+    if (VT.getVectorElementType() == MVT::i32 ||
+        VT.getVectorElementType() == MVT::f32)
+      return DAG.getNode(ARMISD::VREV64, dl, VT, OpLHS);
+    // vrev <4 x i16> -> VREV32
+    if (VT.getVectorElementType() == MVT::i16)
+      return DAG.getNode(ARMISD::VREV32, dl, VT, OpLHS);
+    // vrev <4 x i8> -> VREV16
+    assert(VT.getVectorElementType() == MVT::i8);
+    return DAG.getNode(ARMISD::VREV16, dl, VT, OpLHS);
   case OP_VDUP0:
   case OP_VDUP1:
   case OP_VDUP2:
@@ -4672,10 +4680,10 @@ LowerSDIV_v4i16(SDValue N0, SDValue N1, DebugLoc dl, SelectionDAG &DAG) {
   // Because short has a smaller range than ushort, we can actually get away
   // with only a single newton step.  This requires that we use a weird bias
   // of 89, however (again, this has been exhaustively tested).
-  // float4 result = as_float4(as_int4(xf*recip) + 89);
+  // float4 result = as_float4(as_int4(xf*recip) + 0x89);
   N0 = DAG.getNode(ISD::FMUL, dl, MVT::v4f32, N0, N2);
   N0 = DAG.getNode(ISD::BITCAST, dl, MVT::v4i32, N0);
-  N1 = DAG.getConstant(89, MVT::i32);
+  N1 = DAG.getConstant(0x89, MVT::i32);
   N1 = DAG.getNode(ISD::BUILD_VECTOR, dl, MVT::v4i32, N1, N1, N1, N1);
   N0 = DAG.getNode(ISD::ADD, dl, MVT::v4i32, N0, N1);
   N0 = DAG.getNode(ISD::BITCAST, dl, MVT::v4f32, N0);
@@ -4762,26 +4770,26 @@ static SDValue LowerUDIV(SDValue Op, SelectionDAG &DAG) {
   N0 = DAG.getNode(ISD::ZERO_EXTEND, dl, MVT::v4i32, N0);
   N1 = DAG.getNode(ISD::ZERO_EXTEND, dl, MVT::v4i32, N1);
   N0 = DAG.getNode(ISD::SINT_TO_FP, dl, MVT::v4f32, N0);
-  N1 = DAG.getNode(ISD::SINT_TO_FP, dl, MVT::v4f32, N1);
+  SDValue BN1 = DAG.getNode(ISD::SINT_TO_FP, dl, MVT::v4f32, N1);
 
   // Use reciprocal estimate and two refinement steps.
   // float4 recip = vrecpeq_f32(yf);
   // recip *= vrecpsq_f32(yf, recip);
   // recip *= vrecpsq_f32(yf, recip);
   N2 = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, MVT::v4f32,
-                   DAG.getConstant(Intrinsic::arm_neon_vrecpe, MVT::i32), N1);
+                   DAG.getConstant(Intrinsic::arm_neon_vrecpe, MVT::i32), BN1);
   N1 = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, MVT::v4f32,
                    DAG.getConstant(Intrinsic::arm_neon_vrecps, MVT::i32),
-                   N1, N2);
+                   BN1, N2);
   N2 = DAG.getNode(ISD::FMUL, dl, MVT::v4f32, N1, N2);
   N1 = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl, MVT::v4f32,
                    DAG.getConstant(Intrinsic::arm_neon_vrecps, MVT::i32),
-                   N1, N2);
+                   BN1, N2);
   N2 = DAG.getNode(ISD::FMUL, dl, MVT::v4f32, N1, N2);
   // Simply multiplying by the reciprocal estimate can leave us a few ulps
   // too low, so we add 2 ulps (exhaustive testing shows that this is enough,
   // and that it will never cause us to return an answer too large).
-  // float4 result = as_float4(as_int4(xf*recip) + 89);
+  // float4 result = as_float4(as_int4(xf*recip) + 2);
   N0 = DAG.getNode(ISD::FMUL, dl, MVT::v4f32, N0, N2);
   N0 = DAG.getNode(ISD::BITCAST, dl, MVT::v4i32, N0);
   N1 = DAG.getConstant(2, MVT::i32);
@@ -4879,11 +4887,20 @@ ARMTargetLowering::EmitAtomicCmpSwap(MachineInstr *MI,
   unsigned ptr     = MI->getOperand(1).getReg();
   unsigned oldval  = MI->getOperand(2).getReg();
   unsigned newval  = MI->getOperand(3).getReg();
-  unsigned scratch = BB->getParent()->getRegInfo()
-    .createVirtualRegister(ARM::GPRRegisterClass);
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
   DebugLoc dl = MI->getDebugLoc();
   bool isThumb2 = Subtarget->isThumb2();
+
+  MachineRegisterInfo &MRI = BB->getParent()->getRegInfo();
+  unsigned scratch =
+    MRI.createVirtualRegister(isThumb2 ? ARM::rGPRRegisterClass
+                                       : ARM::GPRRegisterClass);
+
+  if (isThumb2) {
+    MRI.constrainRegClass(dest, ARM::rGPRRegisterClass);
+    MRI.constrainRegClass(oldval, ARM::rGPRRegisterClass);
+    MRI.constrainRegClass(newval, ARM::rGPRRegisterClass);
+  }
 
   unsigned ldrOpc, strOpc;
   switch (Size) {
@@ -4976,8 +4993,14 @@ ARMTargetLowering::EmitAtomicBinary(MachineInstr *MI, MachineBasicBlock *BB,
   unsigned ptr = MI->getOperand(1).getReg();
   unsigned incr = MI->getOperand(2).getReg();
   DebugLoc dl = MI->getDebugLoc();
-
   bool isThumb2 = Subtarget->isThumb2();
+
+  MachineRegisterInfo &MRI = BB->getParent()->getRegInfo();
+  if (isThumb2) {
+    MRI.constrainRegClass(dest, ARM::rGPRRegisterClass);
+    MRI.constrainRegClass(ptr, ARM::rGPRRegisterClass);
+  }
+
   unsigned ldrOpc, strOpc;
   switch (Size) {
   default: llvm_unreachable("unsupported size for AtomicCmpSwap!");
@@ -5006,10 +5029,10 @@ ARMTargetLowering::EmitAtomicBinary(MachineInstr *MI, MachineBasicBlock *BB,
                   BB->end());
   exitMBB->transferSuccessorsAndUpdatePHIs(BB);
 
-  MachineRegisterInfo &RegInfo = MF->getRegInfo();
-  unsigned scratch = RegInfo.createVirtualRegister(ARM::GPRRegisterClass);
-  unsigned scratch2 = (!BinOpcode) ? incr :
-    RegInfo.createVirtualRegister(ARM::GPRRegisterClass);
+  TargetRegisterClass *TRC =
+    isThumb2 ? ARM::tGPRRegisterClass : ARM::GPRRegisterClass;
+  unsigned scratch = MRI.createVirtualRegister(TRC);
+  unsigned scratch2 = (!BinOpcode) ? incr : MRI.createVirtualRegister(TRC);
 
   //  thisMBB:
   //   ...
@@ -5072,8 +5095,14 @@ ARMTargetLowering::EmitAtomicBinaryMinMax(MachineInstr *MI,
   unsigned incr = MI->getOperand(2).getReg();
   unsigned oldval = dest;
   DebugLoc dl = MI->getDebugLoc();
-
   bool isThumb2 = Subtarget->isThumb2();
+
+  MachineRegisterInfo &MRI = BB->getParent()->getRegInfo();
+  if (isThumb2) {
+    MRI.constrainRegClass(dest, ARM::rGPRRegisterClass);
+    MRI.constrainRegClass(ptr, ARM::rGPRRegisterClass);
+  }
+
   unsigned ldrOpc, strOpc, extendOpc;
   switch (Size) {
   default: llvm_unreachable("unsupported size for AtomicCmpSwap!");
@@ -5105,9 +5134,10 @@ ARMTargetLowering::EmitAtomicBinaryMinMax(MachineInstr *MI,
                   BB->end());
   exitMBB->transferSuccessorsAndUpdatePHIs(BB);
 
-  MachineRegisterInfo &RegInfo = MF->getRegInfo();
-  unsigned scratch = RegInfo.createVirtualRegister(ARM::GPRRegisterClass);
-  unsigned scratch2 = RegInfo.createVirtualRegister(ARM::GPRRegisterClass);
+  TargetRegisterClass *TRC =
+    isThumb2 ? ARM::tGPRRegisterClass : ARM::GPRRegisterClass;
+  unsigned scratch = MRI.createVirtualRegister(TRC);
+  unsigned scratch2 = MRI.createVirtualRegister(TRC);
 
   //  thisMBB:
   //   ...
@@ -5128,7 +5158,7 @@ ARMTargetLowering::EmitAtomicBinaryMinMax(MachineInstr *MI,
 
   // Sign extend the value, if necessary.
   if (signExtend && extendOpc) {
-    oldval = RegInfo.createVirtualRegister(ARM::GPRRegisterClass);
+    oldval = MRI.createVirtualRegister(ARM::GPRRegisterClass);
     AddDefaultPred(BuildMI(BB, dl, TII->get(extendOpc), oldval).addReg(dest));
   }
 
@@ -6994,6 +7024,14 @@ bool ARMTargetLowering::isLegalICmpImmediate(int64_t Imm) const {
   return Imm >= 0 && Imm <= 255;
 }
 
+/// isLegalAddImmediate - Return true if the specified immediate is legal
+/// add immediate, that is the target has add instructions which can add
+/// a register with the immediate without having to materialize the
+/// immediate into a register.
+bool ARMTargetLowering::isLegalAddImmediate(int64_t Imm) const {
+  return ARM_AM::getSOImmVal(Imm) != -1;
+}
+
 static bool getARMIndexedAddressParts(SDNode *Ptr, EVT VT,
                                       bool isSEXTLoad, SDValue &Base,
                                       SDValue &Offset, bool &isInc,
@@ -7628,6 +7666,28 @@ bool ARMTargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
     Info.vol = false; // volatile stores with NEON intrinsics not supported
     Info.readMem = false;
     Info.writeMem = true;
+    return true;
+  }
+  case Intrinsic::arm_strexd: {
+    Info.opc = ISD::INTRINSIC_W_CHAIN;
+    Info.memVT = MVT::i64;
+    Info.ptrVal = I.getArgOperand(2);
+    Info.offset = 0;
+    Info.align = 8;
+    Info.vol = false;
+    Info.readMem = false;
+    Info.writeMem = true;
+    return true;
+  }
+  case Intrinsic::arm_ldrexd: {
+    Info.opc = ISD::INTRINSIC_W_CHAIN;
+    Info.memVT = MVT::i64;
+    Info.ptrVal = I.getArgOperand(0);
+    Info.offset = 0;
+    Info.align = 8;
+    Info.vol = false;
+    Info.readMem = true;
+    Info.writeMem = false;
     return true;
   }
   default:

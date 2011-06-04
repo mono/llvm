@@ -43,7 +43,7 @@ let Namespace = "MBlaze" in {
   def R1  : MBlazeGPRReg< 1,  "r1">,   DwarfRegNum<[1]>;
   def R2  : MBlazeGPRReg< 2,  "r2">,   DwarfRegNum<[2]>;
   def R3  : MBlazeGPRReg< 3,  "r3">,   DwarfRegNum<[3]>;
-  def R4  : MBlazeGPRReg< 4,  "r4">,   DwarfRegNum<[5]>;
+  def R4  : MBlazeGPRReg< 4,  "r4">,   DwarfRegNum<[4]>;
   def R5  : MBlazeGPRReg< 5,  "r5">,   DwarfRegNum<[5]>;
   def R6  : MBlazeGPRReg< 6,  "r6">,   DwarfRegNum<[6]>;
   def R7  : MBlazeGPRReg< 7,  "r7">,   DwarfRegNum<[7]>;
@@ -102,7 +102,7 @@ let Namespace = "MBlaze" in {
   // The carry bit. In the Microblaze this is really bit 29 of the
   // MSR register but this is the only bit of that register that we
   // are interested in modeling.
-  def CARRY  : MBlazeSPRReg<0x0000, "rmsr[c]">, DwarfRegNum<[33]>;
+  def CARRY  : MBlazeSPRReg<0x0000, "rmsr[c]">;
 }
 
 //===----------------------------------------------------------------------===//

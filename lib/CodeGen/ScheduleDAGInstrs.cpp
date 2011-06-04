@@ -120,7 +120,7 @@ static const Value *getUnderlyingObjectForInstr(const MachineInstr *MI,
     // such aliases.
     if (PSV->isAliased(MFI))
       return 0;
-    
+
     MayAlias = PSV->mayAlias(MFI);
     return V;
   }
@@ -174,7 +174,7 @@ void ScheduleDAGInstrs::AddSchedBarrierDeps() {
     for (MachineBasicBlock::succ_iterator SI = BB->succ_begin(),
            SE = BB->succ_end(); SI != SE; ++SI)
       for (MachineBasicBlock::livein_iterator I = (*SI)->livein_begin(),
-             E = (*SI)->livein_end(); I != E; ++I) {    
+             E = (*SI)->livein_end(); I != E; ++I) {
         unsigned Reg = *I;
         if (Seen.insert(Reg))
           Uses[Reg].push_back(&ExitSU);
@@ -220,6 +220,10 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
   // ExitSU.
   AddSchedBarrierDeps();
 
+  for (int i = 0, e = TRI->getNumRegs(); i != e; ++i) {
+    assert(Defs[i].empty() && "Only BuildGraph should push/pop Defs");
+  }
+
   // Walk the list of instructions, from bottom moving up.
   for (MachineBasicBlock::iterator MII = InsertPos, MIE = Begin;
        MII != MIE; --MII) {
@@ -264,6 +268,7 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
       }
 
       std::vector<SUnit *> &UseList = Uses[Reg];
+      // Defs are push in the order they are visited and never reordered.
       std::vector<SUnit *> &DefList = Defs[Reg];
       // Optionally add output and anti dependencies. For anti
       // dependencies we use a latency of 0 because for a multi-issue
@@ -283,9 +288,9 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
           DefSU->addPred(SDep(SU, Kind, AOLatency, /*Reg=*/Reg));
       }
       for (const unsigned *Alias = TRI->getAliasSet(Reg); *Alias; ++Alias) {
-        std::vector<SUnit *> &DefList = Defs[*Alias];
-        for (unsigned i = 0, e = DefList.size(); i != e; ++i) {
-          SUnit *DefSU = DefList[i];
+        std::vector<SUnit *> &MemDefList = Defs[*Alias];
+        for (unsigned i = 0, e = MemDefList.size(); i != e; ++i) {
+          SUnit *DefSU = MemDefList[i];
           if (DefSU == &ExitSU)
             continue;
           if (DefSU != SU &&
@@ -393,6 +398,16 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
         UseList.clear();
         if (!MO.isDead())
           DefList.clear();
+
+        // Calls will not be reordered because of chain dependencies (see
+        // below). Since call operands are dead, calls may continue to be added
+        // to the DefList making dependence checking quadratic in the size of
+        // the block. Instead, we leave only one call at the back of the
+        // DefList.
+        if (SU->isCall) {
+          while (!DefList.empty() && DefList.back()->isCall)
+            DefList.pop_back();
+        }
         DefList.push_back(SU);
       } else {
         UseList.push_back(SU);
@@ -411,11 +426,11 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
 #define STORE_LOAD_LATENCY 1
     unsigned TrueMemOrderLatency = 0;
     if (TID.isCall() || MI->hasUnmodeledSideEffects() ||
-        (MI->hasVolatileMemoryRef() && 
+        (MI->hasVolatileMemoryRef() &&
          (!TID.mayLoad() || !MI->isInvariantLoad(AA)))) {
       // Be conservative with these and add dependencies on all memory
       // references, even those that are known to not alias.
-      for (std::map<const Value *, SUnit *>::iterator I = 
+      for (std::map<const Value *, SUnit *>::iterator I =
              NonAliasMemDefs.begin(), E = NonAliasMemDefs.end(); I != E; ++I) {
         I->second->addPred(SDep(SU, SDep::Order, /*Latency=*/0));
       }
@@ -458,9 +473,9 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
         // A store to a specific PseudoSourceValue. Add precise dependencies.
         // Record the def in MemDefs, first adding a dep if there is
         // an existing def.
-        std::map<const Value *, SUnit *>::iterator I = 
+        std::map<const Value *, SUnit *>::iterator I =
           ((MayAlias) ? AliasMemDefs.find(V) : NonAliasMemDefs.find(V));
-        std::map<const Value *, SUnit *>::iterator IE = 
+        std::map<const Value *, SUnit *>::iterator IE =
           ((MayAlias) ? AliasMemDefs.end() : NonAliasMemDefs.end());
         if (I != IE) {
           I->second->addPred(SDep(SU, SDep::Order, /*Latency=*/0, /*Reg=*/0,
@@ -513,37 +528,37 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
       if (MI->isInvariantLoad(AA)) {
         // Invariant load, no chain dependencies needed!
       } else {
-        if (const Value *V = 
+        if (const Value *V =
             getUnderlyingObjectForInstr(MI, MFI, MayAlias)) {
           // A load from a specific PseudoSourceValue. Add precise dependencies.
-          std::map<const Value *, SUnit *>::iterator I = 
+          std::map<const Value *, SUnit *>::iterator I =
             ((MayAlias) ? AliasMemDefs.find(V) : NonAliasMemDefs.find(V));
-          std::map<const Value *, SUnit *>::iterator IE = 
+          std::map<const Value *, SUnit *>::iterator IE =
             ((MayAlias) ? AliasMemDefs.end() : NonAliasMemDefs.end());
           if (I != IE)
             I->second->addPred(SDep(SU, SDep::Order, /*Latency=*/0, /*Reg=*/0,
                                     /*isNormalMemory=*/true));
           if (MayAlias)
             AliasMemUses[V].push_back(SU);
-          else 
+          else
             NonAliasMemUses[V].push_back(SU);
         } else {
           // A load with no underlying object. Depend on all
           // potentially aliasing stores.
-          for (std::map<const Value *, SUnit *>::iterator I = 
+          for (std::map<const Value *, SUnit *>::iterator I =
                  AliasMemDefs.begin(), E = AliasMemDefs.end(); I != E; ++I)
             I->second->addPred(SDep(SU, SDep::Order, /*Latency=*/0));
-          
+
           PendingLoads.push_back(SU);
           MayAlias = true;
         }
-        
+
         // Add dependencies on alias and barrier chains, if needed.
         if (MayAlias && AliasChain)
           AliasChain->addPred(SDep(SU, SDep::Order, /*Latency=*/0));
         if (BarrierChain)
           BarrierChain->addPred(SDep(SU, SDep::Order, /*Latency=*/0));
-      } 
+      }
     }
   }
 
@@ -572,11 +587,11 @@ void ScheduleDAGInstrs::ComputeLatency(SUnit *SU) {
   }
 }
 
-void ScheduleDAGInstrs::ComputeOperandLatency(SUnit *Def, SUnit *Use, 
+void ScheduleDAGInstrs::ComputeOperandLatency(SUnit *Def, SUnit *Use,
                                               SDep& dep) const {
   if (!InstrItins || InstrItins->isEmpty())
     return;
-  
+
   // For a data dependency with a known register...
   if ((dep.getKind() != SDep::Data) || (dep.getReg() == 0))
     return;

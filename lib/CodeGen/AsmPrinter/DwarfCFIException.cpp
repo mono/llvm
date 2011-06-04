@@ -31,6 +31,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
@@ -39,27 +40,29 @@
 #include "llvm/ADT/Twine.h"
 using namespace llvm;
 
+static cl::opt<bool> EnableMonoEH("enable-mono-eh-frame", cl::NotHidden,
+     cl::desc("Enable generation of Mono specific EH tables"));
+
+static cl::opt<bool> DisableGNUEH("disable-gnu-eh-frame", cl::NotHidden,
+     cl::desc("Disable generation of GNU .eh_frame"));
+
 DwarfCFIException::DwarfCFIException(AsmPrinter *A)
   : DwarfException(A),
-    shouldEmitPersonality(false), shouldEmitLSDA(false), shouldEmitMoves(false)
-    {}
+    shouldEmitPersonality(false), shouldEmitLSDA(false), shouldEmitMoves(false),
+    moveTypeModule(AsmPrinter::CFI_M_None) {}
 
 DwarfCFIException::~DwarfCFIException() {}
 
 /// EndModule - Emit all exception information that should come after the
 /// content.
 void DwarfCFIException::EndModule() {
+  if (moveTypeModule == AsmPrinter::CFI_M_Debug)
+    Asm->OutStreamer.EmitCFISections(false, true);
+
   if (!Asm->MAI->isExceptionHandlingDwarf())
     return;
 
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
-
-  if (!TLOF.isFunctionEHFrameSymbolPrivate()) {
-    // This is a temporary hack to keep sections in the same order they
-    // were before. This lets us produce bit identical outputs while
-    // transitioning to CFI.
-    Asm->OutStreamer.SwitchSection(TLOF.getEHFrameSection());
-  }
 
   unsigned PerEncoding = TLOF.getPersonalityEncoding();
 
@@ -67,13 +70,25 @@ void DwarfCFIException::EndModule() {
     return;
 
   // Emit references to all used personality functions
+  bool AtLeastOne = false;
   const std::vector<const Function*> &Personalities = MMI->getPersonalities();
   for (size_t i = 0, e = Personalities.size(); i != e; ++i) {
     if (!Personalities[i])
       continue;
     MCSymbol *Sym = Asm->Mang->getSymbol(Personalities[i]);
     TLOF.emitPersonalityValue(Asm->OutStreamer, Asm->TM, Sym);
+    AtLeastOne = true;
   }
+
+  if (AtLeastOne && !TLOF.isFunctionEHFrameSymbolPrivate()) {
+    // This is a temporary hack to keep sections in the same order they
+    // were before. This lets us produce bit identical outputs while
+    // transitioning to CFI.
+    Asm->OutStreamer.SwitchSection(TLOF.getEHFrameSection());
+  }
+
+  if (EnableMonoEH)
+    EmitMonoEHFrame(Personalities[0]);
 }
 
 /// BeginFunction - Gather pre-function exception information. Assumes it's
@@ -85,7 +100,13 @@ void DwarfCFIException::BeginFunction(const MachineFunction *MF) {
   bool hasLandingPads = !MMI->getLandingPads().empty();
 
   // See if we need frame move info.
-  shouldEmitMoves = Asm->needsCFIMoves();
+  AsmPrinter::CFIMoveType MoveType = Asm->needsCFIMoves();
+  if (MoveType == AsmPrinter::CFI_M_EH ||
+      (MoveType == AsmPrinter::CFI_M_Debug &&
+       moveTypeModule == AsmPrinter::CFI_M_None))
+    moveTypeModule = MoveType;
+
+  shouldEmitMoves = MoveType != AsmPrinter::CFI_M_None;
 
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
   unsigned PerEncoding = TLOF.getPersonalityEncoding();
@@ -104,22 +125,20 @@ void DwarfCFIException::BeginFunction(const MachineFunction *MF) {
   Asm->OutStreamer.EmitCFIStartProc();
 
   // Indicate personality routine, if any.
-  if (!shouldEmitPersonality)
-    return;
-
-  const MCSymbol *Sym = TLOF.getCFIPersonalitySymbol(Per, Asm->Mang, MMI);
-  Asm->OutStreamer.EmitCFIPersonality(Sym, PerEncoding);
+  if (shouldEmitPersonality) {
+    const MCSymbol *Sym = TLOF.getCFIPersonalitySymbol(Per, Asm->Mang, MMI);
+    Asm->OutStreamer.EmitCFIPersonality(Sym, PerEncoding);
+  }
 
   Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("eh_func_begin",
                                                 Asm->getFunctionNumber()));
 
   // Provide LSDA information.
-  if (!shouldEmitLSDA)
-    return;
-
-  Asm->OutStreamer.EmitCFILsda(Asm->GetTempSymbol("exception",
+  if (shouldEmitLSDA) {
+    Asm->OutStreamer.EmitCFILsda(Asm->GetTempSymbol("exception",
                                                   Asm->getFunctionNumber()),
-                               LSDAEncoding);
+                                 LSDAEncoding);
+  }
 }
 
 /// EndFunction - Gather and emit post-function exception information.
@@ -138,4 +157,25 @@ void DwarfCFIException::EndFunction() {
 
   if (shouldEmitPersonality)
     EmitExceptionTable();
+
+  const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
+  MCSymbol *FunctionEHSym =
+    Asm->GetSymbolWithGlobalValueBase(Asm->MF->getFunction(), ".eh",
+                                      TLOF.isFunctionEHFrameSymbolPrivate());
+
+  // Save EH frame information
+  FunctionEHFrameInfo EHFrameInfo =
+    FunctionEHFrameInfo(FunctionEHSym,
+                        Asm->getFunctionNumber(),
+                        MMI->getPersonalityIndex(),
+                        Asm->MF->getFrameInfo()->adjustsStack(),
+                        !MMI->getLandingPads().empty(),
+                        MMI->getFrameMoves(),
+                        Asm->MF->getFunction());
+
+  if (EnableMonoEH)
+    PrepareMonoLSDA(&EHFrameInfo);
+
+  EHFrames.push_back(EHFrameInfo);
+
 }

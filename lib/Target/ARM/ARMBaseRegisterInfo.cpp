@@ -1120,8 +1120,11 @@ materializeFrameBaseRegister(MachineBasicBlock *MBB,
   if (Ins != MBB->end())
     DL = Ins->getDebugLoc();
 
-  MachineInstrBuilder MIB =
-    BuildMI(*MBB, Ins, DL, TII.get(ADDriOpc), BaseReg)
+  const TargetInstrDesc &TID = TII.get(ADDriOpc);
+  MachineRegisterInfo &MRI = MBB->getParent()->getRegInfo();
+  MRI.constrainRegClass(BaseReg, TID.OpInfo[0].getRegClass(this));
+
+  MachineInstrBuilder MIB = BuildMI(*MBB, Ins, DL, TID, BaseReg)
     .addFrameIndex(FrameIdx).addImm(Offset);
 
   if (!AFI->isThumb1OnlyFunction())

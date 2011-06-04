@@ -26,12 +26,12 @@ namespace llvm {
   class MCSymbol;
   class MCContext;
 
-  /// MCAsmInfo - This class is intended to be used as a base class for asm
-  /// properties and features specific to the target.
   namespace ExceptionHandling {
-    enum ExceptionsType { None, DwarfTable, DwarfCFI, SjLj, ARM };
+    enum ExceptionsType { None, DwarfCFI, SjLj, ARM, Win64 };
   }
 
+  /// MCAsmInfo - This class is intended to be used as a base class for asm
+  /// properties and features specific to the target.
   class MCAsmInfo {
   protected:
     //===------------------------------------------------------------------===//
@@ -269,9 +269,6 @@ namespace llvm {
     /// SupportsExceptionHandling - True if target supports exception handling.
     ExceptionHandling::ExceptionsType ExceptionsType; // Defaults to None
 
-    /// RequiresFrameSection - true if the Dwarf2 output needs a frame section
-    bool DwarfRequiresFrameSection;          // Defaults to true.
-
     /// DwarfUsesInlineInfoSection - True if DwarfDebugInlineSection is used to
     /// encode inline subroutine information.
     bool DwarfUsesInlineInfoSection;         // Defaults to false.
@@ -279,9 +276,9 @@ namespace llvm {
     /// DwarfSectionOffsetDirective - Special section offset directive.
     const char* DwarfSectionOffsetDirective; // Defaults to NULL
 
-    /// DwarfUsesAbsoluteLabelForStmtList - True if DW_AT_stmt_list needs
-    /// absolute label instead of offset.
-    bool DwarfUsesAbsoluteLabelForStmtList;  // Defaults to true;
+    /// DwarfRequiresRelocationForSectionOffset - True if we need to produce a
+    // relocation when we want a section offset in dwarf.
+    bool DwarfRequiresRelocationForSectionOffset;  // Defaults to true;
 
     // DwarfUsesLabelOffsetDifference - True if Dwarf2 output can
     // use EmitLabelOffsetDifference.
@@ -326,10 +323,13 @@ namespace llvm {
 
     virtual const MCExpr *
     getExprForPersonalitySymbol(const MCSymbol *Sym,
+                                unsigned Encoding,
                                 MCStreamer &Streamer) const;
 
-    virtual const MCExpr *
-    getExprForFDESymbol(const MCSymbol *Sym, MCStreamer &Streamer) const;
+    const MCExpr *
+    getExprForFDESymbol(const MCSymbol *Sym,
+                        unsigned Encoding,
+                        MCStreamer &Streamer) const;
 
     bool usesSunStyleELFSectionSwitchSyntax() const {
       return SunStyleELFSectionSwitchSyntax;
@@ -459,13 +459,8 @@ namespace llvm {
     }
     bool isExceptionHandlingDwarf() const {
       return
-        (ExceptionsType == ExceptionHandling::DwarfTable ||
-         ExceptionsType == ExceptionHandling::DwarfCFI ||
+        (ExceptionsType == ExceptionHandling::DwarfCFI ||
          ExceptionsType == ExceptionHandling::ARM);
-    }
-
-    bool doesDwarfRequireFrameSection() const {
-      return DwarfRequiresFrameSection;
     }
     bool doesDwarfUsesInlineInfoSection() const {
       return DwarfUsesInlineInfoSection;
@@ -473,8 +468,8 @@ namespace llvm {
     const char *getDwarfSectionOffsetDirective() const {
       return DwarfSectionOffsetDirective;
     }
-    bool doesDwarfUsesAbsoluteLabelForStmtList() const {
-      return DwarfUsesAbsoluteLabelForStmtList;
+    bool doesDwarfRequireRelocationForSectionOffset() const {
+      return DwarfRequiresRelocationForSectionOffset;
     }
     bool doesDwarfUsesLabelOffsetForRanges() const {
       return DwarfUsesLabelOffsetForRanges;

@@ -53,9 +53,6 @@ ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
   Data64bitsDirective = 0;
   CommentString = "@";
   SupportsDebugInformation = true;
-
-  // Exceptions handling
-  ExceptionsType = ExceptionHandling::DwarfTable;
 }
 
 ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
@@ -70,10 +67,6 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
   WeakRefDirective = "\t.weak\t";
   HasLCOMMDirective = true;
   PCSymbol = ".";
-
-  DwarfRequiresFrameSection = false;
-
-  ExceptionsType = ExceptionHandling::DwarfTable;
 
   SupportsDebugInformation = true;
 

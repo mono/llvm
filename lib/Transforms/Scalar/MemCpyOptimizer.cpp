@@ -23,11 +23,13 @@
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/IRBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetData.h"
+#include "llvm/Target/TargetLibraryInfo.h"
 #include <list>
 using namespace llvm;
 
@@ -299,12 +301,15 @@ void MemsetRanges::addRange(int64_t Start, int64_t Size, Value *Ptr,
 namespace {
   class MemCpyOpt : public FunctionPass {
     MemoryDependenceAnalysis *MD;
+    TargetLibraryInfo *TLI;
     const TargetData *TD;
   public:
     static char ID; // Pass identification, replacement for typeid
     MemCpyOpt() : FunctionPass(ID) {
       initializeMemCpyOptPass(*PassRegistry::getPassRegistry());
       MD = 0;
+      TLI = 0;
+      TD = 0;
     }
 
     bool runOnFunction(Function &F);
@@ -316,6 +321,7 @@ namespace {
       AU.addRequired<DominatorTree>();
       AU.addRequired<MemoryDependenceAnalysis>();
       AU.addRequired<AliasAnalysis>();
+      AU.addRequired<TargetLibraryInfo>();
       AU.addPreserved<AliasAnalysis>();
       AU.addPreserved<MemoryDependenceAnalysis>();
     }
@@ -346,6 +352,7 @@ INITIALIZE_PASS_BEGIN(MemCpyOpt, "memcpyopt", "MemCpy Optimization",
                       false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTree)
 INITIALIZE_PASS_DEPENDENCY(MemoryDependenceAnalysis)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfo)
 INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_END(MemCpyOpt, "memcpyopt", "MemCpy Optimization",
                     false, false)
@@ -453,7 +460,10 @@ Instruction *MemCpyOpt::tryMergingIntoMemset(Instruction *StartInst,
           for (unsigned i = 0, e = Range.TheStores.size(); i != e; ++i)
             dbgs() << *Range.TheStores[i] << '\n';
           dbgs() << "With: " << *AMemSet << '\n');
-    
+
+    if (!Range.TheStores.empty())
+      AMemSet->setDebugLoc(Range.TheStores[0]->getDebugLoc());
+
     // Zap all the stores.
     for (SmallVector<Instruction*, 16>::const_iterator
          SI = Range.TheStores.begin(),
@@ -804,6 +814,9 @@ bool MemCpyOpt::processMemCpy(MemCpyInst *M) {
 bool MemCpyOpt::processMemMove(MemMoveInst *M) {
   AliasAnalysis &AA = getAnalysis<AliasAnalysis>();
 
+  if (!TLI->has(LibFunc::memmove))
+    return false;
+  
   // See if the pointers alias.
   if (!AA.isNoAlias(AA.getLocationForDest(M), AA.getLocationForSource(M)))
     return false;
@@ -854,12 +867,16 @@ bool MemCpyOpt::processByValArgument(CallSite CS, unsigned ArgNo) {
   if (C1 == 0 || C1->getValue().getZExtValue() < ByValSize)
     return false;
 
-  // Get the alignment of the byval.  If it is greater than the memcpy, then we
-  // can't do the substitution.  If the call doesn't specify the alignment, then
-  // it is some target specific value that we can't know.
+  // Get the alignment of the byval.  If the call doesn't specify the alignment,
+  // then it is some target specific value that we can't know.
   unsigned ByValAlign = CS.getParamAlignment(ArgNo+1);
-  if (ByValAlign == 0 || MDep->getAlignment() < ByValAlign)
-    return false;  
+  if (ByValAlign == 0) return false;
+  
+  // If it is greater than the memcpy, then we check to see if we can force the
+  // source of the memcpy to the alignment we need.  If we fail, we bail out.
+  if (MDep->getAlignment() < ByValAlign &&
+      getOrEnforceKnownAlignment(MDep->getSource(),ByValAlign, TD) < ByValAlign)
+    return false;
   
   // Verify that the copied-from memory doesn't change in between the memcpy and
   // the byval call.
@@ -935,6 +952,14 @@ bool MemCpyOpt::runOnFunction(Function &F) {
   bool MadeChange = false;
   MD = &getAnalysis<MemoryDependenceAnalysis>();
   TD = getAnalysisIfAvailable<TargetData>();
+  TLI = &getAnalysis<TargetLibraryInfo>();
+  
+  // If we don't have at least memset and memcpy, there is little point of doing
+  // anything here.  These are required by a freestanding implementation, so if
+  // even they are disabled, there is no point in trying hard.
+  if (!TLI->has(LibFunc::memset) || !TLI->has(LibFunc::memcpy))
+    return false;
+  
   while (1) {
     if (!iterateOnFunction(F))
       break;

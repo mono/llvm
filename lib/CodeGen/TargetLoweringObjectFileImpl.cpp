@@ -225,10 +225,11 @@ void TargetLoweringObjectFileELF::emitPersonalityValue(MCStreamer &Streamer,
 
 static SectionKind
 getELFKindForNamedSection(StringRef Name, SectionKind K) {
-  // FIXME: Why is this here? Codegen is should not be in the business
-  // of figuring section flags. If the user wrote section(".eh_frame"),
-  // we should just pass that to MC which will defer to the assembly
-  // or use its default if producing an object file.
+  // N.B.: The defaults used in here are no the same ones used in MC.
+  // We follow gcc, MC follows gas. For example, given ".section .eh_frame",
+  // both gas and MC will produce a section with no flags. Given
+  // section(".eh_frame") gcc will produce
+  // .section	.eh_frame,"a",@progbits
   if (Name.empty() || Name[0] != '.') return K;
 
   // Some lame default implementation based on some magic section names.
@@ -255,7 +256,7 @@ getELFKindForNamedSection(StringRef Name, SectionKind K) {
     return SectionKind::getThreadBSS();
 
   if (Name == ".eh_frame")
-    return SectionKind::getDataRel();
+    return SectionKind::getReadOnlyWithRel();
 
   return K;
 }
@@ -289,7 +290,7 @@ getELFSectionFlags(SectionKind K) {
   if (K.isText())
     Flags |= ELF::SHF_EXECINSTR;
 
-  if (K.isWriteable())
+  if (K.isWriteable() && !K.isReadOnlyWithRel())
     Flags |= ELF::SHF_WRITE;
 
   if (K.isThreadLocal())
@@ -484,11 +485,6 @@ getExprForDwarfGlobalReference(const GlobalValue *GV, Mangler *Mang,
 
 void TargetLoweringObjectFileMachO::Initialize(MCContext &Ctx,
                                                const TargetMachine &TM) {
-  // _foo.eh symbols are currently always exported so that the linker knows
-  // about them.  This is not necessary on 10.6 and later, but it
-  // doesn't hurt anything.
-  // FIXME: I need to get this from Triple.
-  IsFunctionEHSymbolGlobal = true;
   IsFunctionEHFrameSymbolPrivate = false;
   SupportsWeakOmittedEHFrame = false;
 
@@ -879,7 +875,7 @@ unsigned TargetLoweringObjectFileMachO::getLSDAEncoding() const {
   return DW_EH_PE_pcrel;
 }
 
-unsigned TargetLoweringObjectFileMachO::getFDEEncoding() const {
+unsigned TargetLoweringObjectFileMachO::getFDEEncoding(bool CFI) const {
   return DW_EH_PE_pcrel;
 }
 
@@ -994,10 +990,46 @@ void TargetLoweringObjectFileCOFF::Initialize(MCContext &Ctx,
     getContext().getCOFFSection(".drectve",
                                 COFF::IMAGE_SCN_LNK_INFO,
                                 SectionKind::getMetadata());
+
+  PDataSection =
+    getContext().getCOFFSection(".pdata",
+                                COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                COFF::IMAGE_SCN_MEM_READ |
+                                COFF::IMAGE_SCN_MEM_WRITE,
+                                SectionKind::getDataRel());
+
+  XDataSection =
+    getContext().getCOFFSection(".xdata",
+                                COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                COFF::IMAGE_SCN_MEM_READ |
+                                COFF::IMAGE_SCN_MEM_WRITE,
+                                SectionKind::getDataRel());
 }
 
 const MCSection *TargetLoweringObjectFileCOFF::getEHFrameSection() const {
   return getContext().getCOFFSection(".eh_frame",
+                                     COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                     COFF::IMAGE_SCN_MEM_READ |
+                                     COFF::IMAGE_SCN_MEM_WRITE,
+                                     SectionKind::getDataRel());
+}
+
+const MCSection *TargetLoweringObjectFileCOFF::getWin64EHFuncTableSection(
+                                                       StringRef suffix) const {
+  if (suffix == "")
+    return PDataSection;
+  return getContext().getCOFFSection((".pdata"+suffix).str(),
+                                     COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                     COFF::IMAGE_SCN_MEM_READ |
+                                     COFF::IMAGE_SCN_MEM_WRITE,
+                                     SectionKind::getDataRel());
+}
+
+const MCSection *TargetLoweringObjectFileCOFF::getWin64EHTableSection(
+                                                       StringRef suffix) const {
+  if (suffix == "")
+    return XDataSection;
+  return getContext().getCOFFSection((".xdata"+suffix).str(),
                                      COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
                                      COFF::IMAGE_SCN_MEM_READ |
                                      COFF::IMAGE_SCN_MEM_WRITE,

@@ -67,7 +67,9 @@ namespace llvm {
       DivRemU,
 
       BuildPairF64,
-      ExtractElementF64
+      ExtractElementF64,
+
+      WrapperPIC
     };
   }
 
@@ -89,9 +91,6 @@ namespace llvm {
     /// getSetCCResultType - get the ISD::SETCC result ValueType
     MVT::SimpleValueType getSetCCResultType(EVT VT) const;
 
-    /// getFunctionAlignment - Return the Log2 alignment of this function.
-    virtual unsigned getFunctionAlignment(const Function *F) const;
-
     virtual SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const;
   private:
     // Subtarget Info
@@ -109,13 +108,13 @@ namespace llvm {
     SDValue LowerBRCOND(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerConstantPool(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerFP_TO_SINT(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerBlockAddress(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSELECT(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG) const;
 
     virtual SDValue
       LowerFormalArguments(SDValue Chain,

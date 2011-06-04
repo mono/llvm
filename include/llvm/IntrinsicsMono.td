@@ -9,11 +9,11 @@
 def int_mono_load : Intrinsic<[llvm_anyint_ty],
                               [LLVMAnyPointerType<LLVMMatchType<0>>,
 							   llvm_i32_ty, llvm_i1_ty],
-                              [IntrReadArgMem, IntrUnwind, NoCapture<0>]>;
+                              [IntrReadArgMem, Throws, NoCapture<0>]>;
 
 def int_mono_store : Intrinsic<[],
                               [llvm_anyint_ty,
                                LLVMAnyPointerType<LLVMMatchType<0>>,
 							   llvm_i32_ty, llvm_i1_ty],
-                              [IntrReadWriteArgMem, IntrUnwind]>;
+                              [IntrReadWriteArgMem, Throws]>;
 

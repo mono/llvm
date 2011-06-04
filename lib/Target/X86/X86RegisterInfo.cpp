@@ -96,6 +96,27 @@ int X86RegisterInfo::getDwarfRegNum(unsigned RegNo, bool isEH) const {
   return X86GenRegisterInfo::getDwarfRegNumFull(RegNo, Flavour);
 }
 
+int
+X86RegisterInfo::getSEHRegNum(unsigned i) const {
+  int reg = getX86RegNum(i);
+  switch (i) {
+  case X86::R8:  case X86::R8D:  case X86::R8W:  case X86::R8B:
+  case X86::R9:  case X86::R9D:  case X86::R9W:  case X86::R9B:
+  case X86::R10: case X86::R10D: case X86::R10W: case X86::R10B:
+  case X86::R11: case X86::R11D: case X86::R11W: case X86::R11B:
+  case X86::R12: case X86::R12D: case X86::R12W: case X86::R12B:
+  case X86::R13: case X86::R13D: case X86::R13W: case X86::R13B:
+  case X86::R14: case X86::R14D: case X86::R14W: case X86::R14B:
+  case X86::R15: case X86::R15D: case X86::R15W: case X86::R15B:
+  case X86::XMM8: case X86::XMM9: case X86::XMM10: case X86::XMM11:
+  case X86::XMM12: case X86::XMM13: case X86::XMM14: case X86::XMM15:
+  case X86::YMM8: case X86::YMM9: case X86::YMM10: case X86::YMM11:
+  case X86::YMM12: case X86::YMM13: case X86::YMM14: case X86::YMM15:
+    reg += 8;
+  }
+  return reg;
+}
+
 /// getX86RegNum - This function maps LLVM register identifiers to their X86
 /// specific numbering, which is used in various places encoding instructions.
 unsigned X86RegisterInfo::getX86RegNum(unsigned RegNo) {
@@ -229,19 +250,14 @@ X86RegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
     }
     break;
   case X86::sub_8bit_hi:
-    if (B == &X86::GR8_ABCD_HRegClass) {
-      if (A == &X86::GR64RegClass || A == &X86::GR64_ABCDRegClass ||
-          A == &X86::GR64_NOREXRegClass ||
-          A == &X86::GR64_NOSPRegClass ||
-          A == &X86::GR64_NOREX_NOSPRegClass)
-        return &X86::GR64_ABCDRegClass;
-      else if (A == &X86::GR32RegClass || A == &X86::GR32_ABCDRegClass ||
-               A == &X86::GR32_NOREXRegClass || A == &X86::GR32_NOSPRegClass)
-        return &X86::GR32_ABCDRegClass;
-      else if (A == &X86::GR16RegClass || A == &X86::GR16_ABCDRegClass ||
-               A == &X86::GR16_NOREXRegClass)
-        return &X86::GR16_ABCDRegClass;
-    }
+    if (B == &X86::GR8_ABCD_HRegClass ||
+        B->hasSubClass(&X86::GR8_ABCD_HRegClass))
+      switch (A->getSize()) {
+        case 2: return getCommonSubClass(A, &X86::GR16_ABCDRegClass);
+        case 4: return getCommonSubClass(A, &X86::GR32_ABCDRegClass);
+        case 8: return getCommonSubClass(A, &X86::GR64_ABCDRegClass);
+        default: return 0;
+      }
     break;
   case X86::sub_16bit:
     if (B == &X86::GR16RegClass) {
@@ -285,9 +301,16 @@ X86RegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
           A == &X86::GR64_NOREX_NOSPRegClass)
         return &X86::GR64_ABCDRegClass;
     } else if (B == &X86::GR32_NOREXRegClass) {
+      if (A == &X86::GR64RegClass || A == &X86::GR64_NOREXRegClass)
+        return &X86::GR64_NOREXRegClass;
+      else if (A == &X86::GR64_NOSPRegClass || A == &X86::GR64_NOREX_NOSPRegClass)
+        return &X86::GR64_NOREX_NOSPRegClass;
+      else if (A == &X86::GR64_ABCDRegClass)
+        return &X86::GR64_ABCDRegClass;
+    } else if (B == &X86::GR32_NOREX_NOSPRegClass) {
       if (A == &X86::GR64RegClass || A == &X86::GR64_NOREXRegClass ||
           A == &X86::GR64_NOSPRegClass || A == &X86::GR64_NOREX_NOSPRegClass)
-        return &X86::GR64_NOREXRegClass;
+        return &X86::GR64_NOREX_NOSPRegClass;
       else if (A == &X86::GR64_ABCDRegClass)
         return &X86::GR64_ABCDRegClass;
     }
@@ -473,6 +496,15 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(X86::ST5);
   Reserved.set(X86::ST6);
   Reserved.set(X86::ST7);
+
+  // Mark the segment registers as reserved.
+  Reserved.set(X86::CS);
+  Reserved.set(X86::SS);
+  Reserved.set(X86::DS);
+  Reserved.set(X86::ES);
+  Reserved.set(X86::FS);
+  Reserved.set(X86::GS);
+
   return Reserved;
 }
 

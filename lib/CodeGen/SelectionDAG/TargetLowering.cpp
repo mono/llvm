@@ -596,6 +596,8 @@ TargetLowering::TargetLowering(const TargetMachine &tm,
   SchedPreferenceInfo = Sched::Latency;
   JumpBufSize = 0;
   JumpBufAlignment = 0;
+  MinFunctionAlignment = 0;
+  PrefFunctionAlignment = 0;
   PrefLoopAlignment = 0;
   MinStackArgumentAlignment = 1;
   ShouldFoldAtomicFences = false;
@@ -890,7 +892,7 @@ unsigned TargetLowering::getVectorTypeBreakdown(LLVMContext &Context, EVT VT,
   // If there is a wider vector type with the same element type as this one,
   // we should widen to that legal vector type.  This handles things like
   // <2 x float> -> <4 x float>.
-  if (NumElts != 1 && getTypeAction(VT) == Promote) {
+  if (NumElts != 1 && getTypeAction(Context, VT) == Promote) {
     RegisterVT = getTypeToTransformTo(Context, VT);
     if (isTypeLegal(RegisterVT)) {
       IntermediateVT = RegisterVT;
@@ -1726,19 +1728,20 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
 #if 0
     // If this is an FP->Int bitcast and if the sign bit is the only thing that
     // is demanded, turn this into a FGETSIGN.
-    if (NewMask == EVT::getIntegerVTSignBit(Op.getValueType()) &&
-        MVT::isFloatingPoint(Op.getOperand(0).getValueType()) &&
-        !MVT::isVector(Op.getOperand(0).getValueType())) {
+    if (NewMask == APInt::getSignBit(Op.getValueType().getSizeInBits()) &&
+        Op.getOperand(0).getValueType().isFloatingPoint() &&
+        !Op.getOperand(0).getValueType().isVector()) {
       // Only do this xform if FGETSIGN is valid or if before legalize.
-      if (!TLO.AfterLegalize ||
+      if (TLO.isBeforeLegalize() ||
           isOperationLegal(ISD::FGETSIGN, Op.getValueType())) {
         // Make a FGETSIGN + SHL to move the sign bit into the appropriate
         // place.  We expect the SHL to be eliminated by other optimizations.
-        SDValue Sign = TLO.DAG.getNode(ISD::FGETSIGN, Op.getValueType(),
+        SDValue Sign = TLO.DAG.getNode(ISD::FGETSIGN, dl, Op.getValueType(),
                                          Op.getOperand(0));
         unsigned ShVal = Op.getValueType().getSizeInBits()-1;
         SDValue ShAmt = TLO.DAG.getConstant(ShVal, getShiftAmountTy());
-        return TLO.CombineTo(Op, TLO.DAG.getNode(ISD::SHL, Op.getValueType(),
+        return TLO.CombineTo(Op, TLO.DAG.getNode(ISD::SHL, dl,
+                                                 Op.getValueType(),
                                                  Sign, ShAmt));
       }
     }
@@ -2810,6 +2813,12 @@ TargetLowering::AsmOperandInfoVector TargetLowering::ParseConstraints(
           report_fatal_error("Indirect operand for inline asm not a pointer!");
         OpTy = PtrTy->getElementType();
       }
+      
+      // Look for vector wrapped in a struct. e.g. { <16 x i8> }.
+      if (const StructType *STy = dyn_cast<StructType>(OpTy))
+        if (STy->getNumElements() == 1)
+          OpTy = STy->getElementType(0);
+
       // If OpTy is not a single value, it may be a struct/union that we
       // can tile with integers.
       if (!OpTy->isSingleValueType() && OpTy->isSized()) {

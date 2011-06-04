@@ -394,6 +394,10 @@ PPCTargetLowering::PPCTargetLowering(PPCTargetMachine &TM)
     setLibcallName(RTLIB::EXP2_PPCF128, "exp2l$LDBL128");
   }
 
+  setMinFunctionAlignment(2);
+  if (PPCSubTarget.isDarwin())
+    setPrefFunctionAlignment(4);
+
   computeRegisterProperties();
 }
 
@@ -458,14 +462,6 @@ const char *PPCTargetLowering::getTargetNodeName(unsigned Opcode) const {
 
 MVT::SimpleValueType PPCTargetLowering::getSetCCResultType(EVT VT) const {
   return MVT::i32;
-}
-
-/// getFunctionAlignment - Return the Log2 alignment of this function.
-unsigned PPCTargetLowering::getFunctionAlignment(const Function *F) const {
-  if (getTargetMachine().getSubtarget<PPCSubtarget>().isDarwin())
-    return F->hasFnAttr(Attribute::OptimizeForSize) ? 2 : 4;
-  else
-    return 2;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1014,7 +1010,8 @@ bool PPCTargetLowering::SelectAddressRegImmShift(SDValue N, SDValue &Disp,
       short Imm;
       if (isIntS16Immediate(CN, Imm)) {
         Disp = DAG.getTargetConstant((unsigned short)Imm >> 2, getPointerTy());
-        Base = DAG.getRegister(PPC::R0, CN->getValueType(0));
+        Base = DAG.getRegister(PPCSubTarget.isPPC64() ? PPC::X0 : PPC::R0,
+                               CN->getValueType(0));
         return true;
       }
 

@@ -2019,6 +2019,11 @@ def : InstAlias&lt;"fcomi $reg", (COM_FIr RST:$reg)&gt;;
 <p>Instruction aliases can also have a Requires clause to make them
 subtarget specific.</p>
 
+<p>If the back-end supports it, the instruction printer can automatically emit
+   the alias rather than what's being aliased. It typically leads to better,
+   more readable code. If it's better to print out what's being aliased, then
+   pass a '0' as the third parameter to the InstAlias definition.</p>
+
 </div>
 
 </div>
@@ -2464,11 +2469,14 @@ entry:
 <p>The following target-specific calling conventions are known to backend:</p>
 
 <ul>
-  <li><b>x86_StdCall</b> &mdash; stdcall calling convention seen on Microsoft
-      Windows platform (CC ID = 64).</li>
-
-  <li><b>x86_FastCall</b> &mdash; fastcall calling convention seen on Microsoft
-      Windows platform (CC ID = 65).</li>
+<li><b>x86_StdCall</b> &mdash; stdcall calling convention seen on Microsoft
+    Windows platform (CC ID = 64).</li>
+<li><b>x86_FastCall</b> &mdash; fastcall calling convention seen on Microsoft
+    Windows platform (CC ID = 65).</li>
+<li><b>x86_ThisCall</b> &mdash; Similar to X86_StdCall. Passes first argument
+    in ECX,  others via stack. Callee is responsible for stack cleaning. This
+    convention is used by MSVC by default for methods in its ABI
+    (CC ID = 70).</li>
 </ul>
 
 </div>

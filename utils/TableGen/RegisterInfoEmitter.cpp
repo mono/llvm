@@ -56,7 +56,7 @@ void RegisterInfoEmitter::runEnums(raw_ostream &OS) {
     OS << "enum {\n  NoSubRegister,\n";
     for (unsigned i = 0, e = SubRegIndices.size(); i != e; ++i)
       OS << "  " << SubRegIndices[i]->getName() << ",\t// " << i+1 << "\n";
-    OS << "  NUM_TARGET_SUBREGS = " << SubRegIndices.size()+1 << "\n";
+    OS << "  NUM_TARGET_NAMED_SUBREGS = " << SubRegIndices.size()+1 << "\n";
     OS << "};\n";
     if (!Namespace.empty())
       OS << "}\n";
@@ -172,7 +172,7 @@ struct RegisterMaps {
   typedef std::map<Record*, SubRegMap> SubRegMaps;
 
   SubRegMaps SubReg;
-  SubRegMap &inferSubRegIndices(Record *Reg);
+  SubRegMap &inferSubRegIndices(Record *Reg, CodeGenTarget &);
 
   // Composite SubRegIndex instances.
   // Map (SubRegIndex,SubRegIndex) -> SubRegIndex
@@ -185,7 +185,8 @@ struct RegisterMaps {
 };
 
 // Calculate all subregindices for Reg. Loopy subregs cause infinite recursion.
-RegisterMaps::SubRegMap &RegisterMaps::inferSubRegIndices(Record *Reg) {
+RegisterMaps::SubRegMap &RegisterMaps::inferSubRegIndices(Record *Reg,
+                                                        CodeGenTarget &Target) {
   SubRegMap &SRM = SubReg[Reg];
   if (!SRM.empty())
     return SRM;
@@ -199,7 +200,7 @@ RegisterMaps::SubRegMap &RegisterMaps::inferSubRegIndices(Record *Reg) {
     if (!SRM.insert(std::make_pair(Indices[i], SubRegs[i])).second)
       throw "SubRegIndex " + Indices[i]->getName()
         + " appears twice in Register " + Reg->getName();
-    inferSubRegIndices(SubRegs[i]);
+    inferSubRegIndices(SubRegs[i], Target);
   }
 
   // Keep track of inherited subregs and how they can be reached.
@@ -248,18 +249,17 @@ RegisterMaps::SubRegMap &RegisterMaps::inferSubRegIndices(Record *Reg) {
     Orphans.erase(R2);
   }
 
-  // Now, Orphans contains the inherited subregisters without a direct index.
-  if (!Orphans.empty()) {
-    errs() << "Error: Register " << getQualifiedName(Reg)
-           << " inherited subregisters without an index:\n";
-    for (OrphanMap::iterator i = Orphans.begin(), e = Orphans.end(); i != e;
-         ++i) {
-      errs() << "  " << getQualifiedName(i->first)
-             << " = " << i->second.first->getName()
-             << ", " << i->second.second->getName() << "\n";
-    }
-    abort();
+  // Now Orphans contains the inherited subregisters without a direct index.
+  // Create inferred indexes for all missing entries.
+  for (OrphanMap::iterator I = Orphans.begin(), E = Orphans.end(); I != E;
+       ++I) {
+    Record *&Comp = Composite[I->second];
+    if (!Comp)
+      Comp = Target.createSubRegIndex(I->second.first->getName() + "_then_" +
+                                      I->second.second->getName());
+    SRM[Comp] = I->first;
   }
+
   return SRM;
 }
 
@@ -293,14 +293,13 @@ void RegisterMaps::computeComposites() {
           if (i1d->second == Reg3) {
             std::pair<CompositeMap::iterator,bool> Ins =
               Composite.insert(std::make_pair(IdxPair, i1d->first));
-            // Conflicting composition?
+            // Conflicting composition? Emit a warning but allow it.
             if (!Ins.second && Ins.first->second != i1d->first) {
-              errs() << "Error: SubRegIndex " << getQualifiedName(Idx1)
+              errs() << "Warning: SubRegIndex " << getQualifiedName(Idx1)
                      << " and " << getQualifiedName(IdxPair.second)
                      << " compose ambiguously as "
                      << getQualifiedName(Ins.first->second) << " or "
                      << getQualifiedName(i1d->first) << "\n";
-              abort();
             }
           }
         }
@@ -861,6 +860,13 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
   }
   OS << "  };\n";      // End of register descriptors...
 
+  // Calculate the mapping of subregister+index pairs to physical registers.
+  // This will also create further anonymous indexes.
+  unsigned NamedIndices = Target.getSubRegIndices().size();
+  RegisterMaps RegMaps;
+  for (unsigned i = 0, e = Regs.size(); i != e; ++i)
+    RegMaps.inferSubRegIndices(Regs[i].TheDef, Target);
+
   // Emit SubRegIndex names, skipping 0
   const std::vector<Record*> SubRegIndices = Target.getSubRegIndices();
   OS << "\n  const char *const SubRegIndexTable[] = { \"";
@@ -870,12 +876,20 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
       OS << "\", \"";
   }
   OS << "\" };\n\n";
+
+  // Emit names of the anonymus subreg indexes.
+  if (SubRegIndices.size() > NamedIndices) {
+    OS << "  enum {";
+    for (unsigned i = NamedIndices, e = SubRegIndices.size(); i != e; ++i) {
+      OS << "\n    " << SubRegIndices[i]->getName() << " = " << i+1;
+      if (i+1 != e)
+        OS << ',';
+    }
+    OS << "\n  };\n\n";
+  }
   OS << "}\n\n";       // End of anonymous namespace...
 
   std::string ClassName = Target.getName() + "GenRegisterInfo";
-
-  // Calculate the mapping of subregister+index pairs to physical registers.
-  RegisterMaps RegMaps;
 
   // Emit the subregister + index mapping function based on the information
   // calculated above.
@@ -884,7 +898,7 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
      << "  switch (RegNo) {\n"
      << "  default:\n    return 0;\n";
   for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
-    RegisterMaps::SubRegMap &SRM = RegMaps.inferSubRegIndices(Regs[i].TheDef);
+    RegisterMaps::SubRegMap &SRM = RegMaps.SubReg[Regs[i].TheDef];
     if (SRM.empty())
       continue;
     OS << "  case " << getQualifiedName(Regs[i].TheDef) << ":\n";
@@ -996,13 +1010,8 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
     for (DwarfRegNumsMapTy::iterator
            I = DwarfRegNums.begin(), E = DwarfRegNums.end(); I != E; ++I) {
       int RegNo = I->second[i];
-      if (RegNo != -2)
-        OS << "    case " << getQualifiedName(I->first) << ":\n"
-           << "      return " << RegNo << ";\n";
-      else
-        OS << "    case " << getQualifiedName(I->first) << ":\n"
-           << "      assert(0 && \"Invalid register for this mode\");\n"
-           << "      return -1;\n";
+      OS << "    case " << getQualifiedName(I->first) << ":\n"
+         << "      return " << RegNo << ";\n";
     }
     OS << "    };\n";
   }

@@ -30,6 +30,7 @@
 #include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
+#include "llvm/Analysis/DIBuilder.h"
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -1051,8 +1052,9 @@ namespace {
 class AllocaPromoter : public LoadAndStorePromoter {
   AllocaInst *AI;
 public:
-  AllocaPromoter(const SmallVectorImpl<Instruction*> &Insts, SSAUpdater &S)
-    : LoadAndStorePromoter(Insts, S), AI(0) {}
+  AllocaPromoter(const SmallVectorImpl<Instruction*> &Insts, SSAUpdater &S,
+                 DbgDeclareInst *DD, DIBuilder *&DB)
+    : LoadAndStorePromoter(Insts, S, DD, DB), AI(0) {}
   
   void run(AllocaInst *AI, const SmallVectorImpl<Instruction*> &Insts) {
     // Remember which alloca we're promoting (for isInstInList).
@@ -1329,7 +1331,6 @@ static bool tryToMakeAllocaBePromotable(AllocaInst *AI, const TargetData *TD) {
   return true;
 }
 
-
 bool SROA::performPromotion(Function &F) {
   std::vector<AllocaInst*> Allocas;
   DominatorTree *DT = 0;
@@ -1340,6 +1341,7 @@ bool SROA::performPromotion(Function &F) {
 
   bool Changed = false;
   SmallVector<Instruction*, 64> Insts;
+  DIBuilder *DIB = 0;
   while (1) {
     Allocas.clear();
 
@@ -1363,14 +1365,21 @@ bool SROA::performPromotion(Function &F) {
         for (Value::use_iterator UI = AI->use_begin(), E = AI->use_end();
              UI != E; ++UI)
           Insts.push_back(cast<Instruction>(*UI));
-        
-        AllocaPromoter(Insts, SSA).run(AI, Insts);
+
+        DbgDeclareInst *DDI = FindAllocaDbgDeclare(AI);
+        if (DDI && !DIB)
+          DIB = new DIBuilder(*AI->getParent()->getParent()->getParent());
+        AllocaPromoter(Insts, SSA, DDI, DIB).run(AI, Insts);
         Insts.clear();
       }
     }
     NumPromoted += Allocas.size();
     Changed = true;
   }
+
+  // FIXME: Is there a better way to handle the lazy initialization of DIB
+  // so that there doesn't need to be an explicit delete?
+  delete DIB;
 
   return Changed;
 }
@@ -2481,19 +2490,22 @@ static bool isOnlyCopiedFromConstantGlobal(Value *V, MemTransferInst *&TheCopy,
     }
 
     if (CallSite CS = U) {
-      // If this is a readonly/readnone call site, then we know it is just a
-      // load and we can ignore it.
-      if (CS.onlyReadsMemory())
-        continue;
-
       // If this is the function being called then we treat it like a load and
       // ignore it.
       if (CS.isCallee(UI))
         continue;
 
+      // If this is a readonly/readnone call site, then we know it is just a
+      // load (but one that potentially returns the value itself), so we can
+      // ignore it if we know that the value isn't captured.
+      unsigned ArgNo = CS.getArgumentNo(UI);
+      if (CS.onlyReadsMemory() &&
+          (CS.getInstruction()->use_empty() ||
+           CS.paramHasAttr(ArgNo+1, Attribute::NoCapture)))
+        continue;
+
       // If this is being passed as a byval argument, the caller is making a
       // copy, so it is only a read of the alloca.
-      unsigned ArgNo = CS.getArgumentNo(UI);
       if (CS.paramHasAttr(ArgNo+1, Attribute::ByVal))
         continue;
     }

@@ -98,12 +98,12 @@ std::string llvm::getEnumName(MVT::SimpleValueType T) {
 /// namespace qualifier if the record contains one.
 ///
 std::string llvm::getQualifiedName(const Record *R) {
-  std::string Namespace = R->getValueAsString("Namespace");
+  std::string Namespace;
+  if (R->getValue("Namespace"))
+     Namespace = R->getValueAsString("Namespace");
   if (Namespace.empty()) return R->getName();
   return Namespace + "::" + R->getName();
 }
-
-
 
 
 /// getTarget - Return the current instance of the Target class.
@@ -180,6 +180,13 @@ const std::string &CodeGenRegister::getName() const {
 void CodeGenTarget::ReadSubRegIndices() const {
   SubRegIndices = Records.getAllDerivedDefinitions("SubRegIndex");
   std::sort(SubRegIndices.begin(), SubRegIndices.end(), LessRecord());
+}
+
+Record *CodeGenTarget::createSubRegIndex(const std::string &Name) {
+  Record *R = new Record(Name, SMLoc(), Records);
+  Records.addDef(R);
+  SubRegIndices.push_back(R);
+  return R;
 }
 
 void CodeGenTarget::ReadRegisterClasses() const {
@@ -454,7 +461,7 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
   isOverloaded = false;
   isCommutative = false;
   canThrow = false;
-  
+
   if (DefName.size() <= 4 ||
       std::string(DefName.begin(), DefName.begin() + 4) != "int_")
     throw "Intrinsic '" + DefName + "' does not start with 'int_'!";
@@ -576,7 +583,7 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
       ModRef = ReadWriteArgMem;
     else if (Property->getName() == "Commutative")
       isCommutative = true;
-    else if (Property->getName() == "IntrUnwind")
+    else if (Property->getName() == "Throws")
       canThrow = true;
     else if (Property->isSubClassOf("NoCapture")) {
       unsigned ArgNo = Property->getValueAsInt("ArgNo");
@@ -584,4 +591,7 @@ CodeGenIntrinsic::CodeGenIntrinsic(Record *R) {
     } else
       assert(0 && "Unknown property!");
   }
+
+  // Sort the argument attributes for later benefit.
+  std::sort(ArgumentAttributes.begin(), ArgumentAttributes.end());
 }

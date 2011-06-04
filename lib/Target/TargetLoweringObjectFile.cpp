@@ -58,7 +58,6 @@ TargetLoweringObjectFile::TargetLoweringObjectFile() : Ctx(0) {
   DwarfRangesSection = 0;
   DwarfMacroInfoSection = 0;
   
-  IsFunctionEHSymbolGlobal = false;
   IsFunctionEHFrameSymbolPrivate = true;
   SupportsWeakOmittedEHFrame = true;
 }
@@ -350,7 +349,7 @@ unsigned TargetLoweringObjectFile::getLSDAEncoding() const {
   return dwarf::DW_EH_PE_absptr;
 }
 
-unsigned TargetLoweringObjectFile::getFDEEncoding() const {
+unsigned TargetLoweringObjectFile::getFDEEncoding(bool CFI) const {
   return dwarf::DW_EH_PE_absptr;
 }
 

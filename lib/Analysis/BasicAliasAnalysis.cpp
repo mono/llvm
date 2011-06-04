@@ -281,17 +281,20 @@ DecomposeGEPExpression(const Value *V, int64_t &BaseOffs,
       continue;
     }
 
-    if (const Instruction *I = dyn_cast<Instruction>(V))
-      // TODO: Get a DominatorTree and use it here.
-      if (const Value *Simplified =
-            SimplifyInstruction(const_cast<Instruction *>(I), TD)) {
-        V = Simplified;
-        continue;
-      }
-    
     const GEPOperator *GEPOp = dyn_cast<GEPOperator>(Op);
-    if (GEPOp == 0)
+    if (GEPOp == 0) {
+      // If it's not a GEP, hand it off to SimplifyInstruction to see if it
+      // can come up with something. This matches what GetUnderlyingObject does.
+      if (const Instruction *I = dyn_cast<Instruction>(V))
+        // TODO: Get a DominatorTree and use it here.
+        if (const Value *Simplified =
+              SimplifyInstruction(const_cast<Instruction *>(I), TD)) {
+          V = Simplified;
+          continue;
+        }
+    
       return V;
+    }
     
     // Don't attempt to analyze GEPs over unsized objects.
     if (!cast<PointerType>(GEPOp->getOperand(0)->getType())
@@ -680,9 +683,12 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
     unsigned ArgNo = 0;
     for (ImmutableCallSite::arg_iterator CI = CS.arg_begin(), CE = CS.arg_end();
          CI != CE; ++CI, ++ArgNo) {
-      // Only look at the no-capture pointer arguments.
+      // Only look at the no-capture or byval pointer arguments.  If this
+      // pointer were passed to arguments that were neither of these, then it
+      // couldn't be no-capture.
       if (!(*CI)->getType()->isPointerTy() ||
-          !CS.paramHasAttr(ArgNo+1, Attribute::NoCapture))
+          (!CS.paramHasAttr(ArgNo+1, Attribute::NoCapture) &&
+           !CS.paramHasAttr(ArgNo+1, Attribute::ByVal)))
         continue;
       
       // If this is a no-capture pointer argument, see if we can tell that it

@@ -351,13 +351,13 @@ public:
   /// The first virtual register in a function will get the index 0.
   static unsigned virtReg2Index(unsigned Reg) {
     assert(isVirtualRegister(Reg) && "Not a virtual register");
-    return Reg - (1u << 31);
+    return Reg & ~(1u << 31);
   }
 
   /// index2VirtReg - Convert a 0-based index to a virtual register number.
   /// This is the inverse operation of VirtReg2IndexFunctor below.
   static unsigned index2VirtReg(unsigned Index) {
-    return Index + (1u << 31);
+    return Index | (1u << 31);
   }
 
   /// getMinimalPhysRegClass - Returns the Register Class of a physical
@@ -809,6 +809,12 @@ public:
   /// getRARegister - This method should return the register where the return
   /// address can be found.
   virtual unsigned getRARegister() const = 0;
+
+  /// getSEHRegNum - Map a target register to an equivalent SEH register
+  /// number.  Returns -1 if there is no equivalent value.
+  virtual int getSEHRegNum(unsigned i) const {
+    return i;
+  }
 };
 
 

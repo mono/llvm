@@ -253,6 +253,10 @@ class DwarfDebug {
   DebugLoc PrevInstLoc;
   MCSymbol *PrevLabel;
 
+  /// PrologEndLoc - This location indicates end of function prologue and
+  /// beginning of function body.
+  DebugLoc PrologEndLoc;
+
   struct FunctionDebugFrameInfo {
     unsigned Number;
     std::vector<MachineMove> Moves;
@@ -269,7 +273,7 @@ class DwarfDebug {
   // Section Symbols: these are assembler temporary labels that are emitted at
   // the beginning of each supported dwarf section.  These are used to form
   // section offsets and are created by EmitSectionLabels.
-  MCSymbol *DwarfFrameSectionSym, *DwarfInfoSectionSym, *DwarfAbbrevSectionSym;
+  MCSymbol *DwarfInfoSectionSym, *DwarfAbbrevSectionSym;
   MCSymbol *DwarfStrSectionSym, *TextSectionSym, *DwarfDebugRangeSectionSym;
   MCSymbol *DwarfDebugLocSectionSym;
   MCSymbol *FunctionBeginSym, *FunctionEndSym;
@@ -338,14 +342,6 @@ private:
   ///
   void emitEndOfLineMatrix(unsigned SectionEnd);
 
-  /// emitCommonDebugFrame - Emit common frame info into a debug frame section.
-  ///
-  void emitCommonDebugFrame();
-
-  /// emitFunctionDebugFrame - Emit per function frame info into a debug frame
-  /// section.
-  void emitFunctionDebugFrame(const FunctionDebugFrameInfo &DebugFrameInfo);
-
   /// emitDebugPubNames - Emit visible names into a debug pubnames section.
   ///
   void emitDebugPubNames();
@@ -410,7 +406,8 @@ private:
   /// recordSourceLine - Register a source line with debug info. Returns the
   /// unique label that was emitted and which provides correspondence to
   /// the source line list.
-  void recordSourceLine(unsigned Line, unsigned Col, const MDNode *Scope);
+  void recordSourceLine(unsigned Line, unsigned Col, const MDNode *Scope,
+                        unsigned Flags);
   
   /// recordVariableFrameIndex - Record a variable's index.
   void recordVariableFrameIndex(const DbgVariable *V, int Index);

@@ -122,7 +122,9 @@ typedef enum {
     LLVMNoImplicitFloatAttribute = 1<<23,
     LLVMNakedAttribute      = 1<<24,
     LLVMInlineHintAttribute = 1<<25,
-    LLVMStackAlignment = 7<<26
+    LLVMStackAlignment      = 7<<26,
+	LLVMHotpatchAttribute   = 1<<29,
+	LLVMUWTableAttribute    = 1<<30
 } LLVMAttribute;
 
 typedef enum {
@@ -282,6 +284,8 @@ typedef enum {
   LLVMRealUNE,            /**< True if unordered or not equal */
   LLVMRealPredicateTrue   /**< Always true (always folded) */
 } LLVMRealPredicate;
+
+void LLVMInitializeCore(LLVMPassRegistryRef R);
 
 
 /*===-- Error handling ----------------------------------------------------===*/

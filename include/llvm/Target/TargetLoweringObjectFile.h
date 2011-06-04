@@ -97,10 +97,6 @@ protected:
   /// weak_definition of constant 0 for an omitted EH frame.
   bool SupportsWeakOmittedEHFrame;
   
-  /// IsFunctionEHSymbolGlobal - This flag is set to true if the ".eh" symbol
-  /// for a function should be marked .globl.
-  bool IsFunctionEHSymbolGlobal;
-  
   /// IsFunctionEHFrameSymbolPrivate - This flag is set to true if the
   /// "EH_frame" symbol for EH information should be an assembler temporary (aka
   /// private linkage, aka an L or .L label) or false if it should be a normal
@@ -119,9 +115,6 @@ public:
     Ctx = &ctx;
   }
   
-  bool isFunctionEHSymbolGlobal() const {
-    return IsFunctionEHSymbolGlobal;
-  }
   bool isFunctionEHFrameSymbolPrivate() const {
     return IsFunctionEHFrameSymbolPrivate;
   }
@@ -163,6 +156,8 @@ public:
   const MCSection *getTLSExtraDataSection() const {
     return TLSExtraDataSection;
   }
+  virtual const MCSection *getWin64EHFuncTableSection(StringRef suffix)const=0;
+  virtual const MCSection *getWin64EHTableSection(StringRef suffix) const = 0;
   
   /// shouldEmitUsedDirectiveFor - This hook allows targets to selectively
   /// decide not to emit the UsedDirective for some symbols in llvm.used.
@@ -234,7 +229,7 @@ public:
   
   virtual unsigned getPersonalityEncoding() const;
   virtual unsigned getLSDAEncoding() const;
-  virtual unsigned getFDEEncoding() const;
+  virtual unsigned getFDEEncoding(bool CFI) const;
   virtual unsigned getTTypeEncoding() const;
 
 protected:

@@ -71,11 +71,12 @@ X86MCAsmInfoDarwin::X86MCAsmInfoDarwin(const Triple &Triple) {
   DwarfUsesInlineInfoSection = true;
 
   // Exceptions handling
-  ExceptionsType = ExceptionHandling::DwarfTable;
+  ExceptionsType = ExceptionHandling::DwarfCFI;
 }
 
 const MCExpr *
 X86_64MCAsmInfoDarwin::getExprForPersonalitySymbol(const MCSymbol *Sym,
+                                                   unsigned Encoding,
                                                    MCStreamer &Streamer) const {
   MCContext &Context = Streamer.getContext();
   const MCExpr *Res =
@@ -106,8 +107,6 @@ X86ELFMCAsmInfo::X86ELFMCAsmInfo(const Triple &T) {
 
   // Exceptions handling
   ExceptionsType = ExceptionHandling::DwarfCFI;
-
-  DwarfRequiresFrameSection = false;
 
   // OpenBSD has buggy support for .quad in 32-bit mode, just split into two
   // .words.

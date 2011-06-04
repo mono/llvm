@@ -27,6 +27,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCDwarf.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
@@ -35,6 +36,10 @@
 #include <cctype>
 #include <vector>
 using namespace llvm;
+
+static cl::opt<bool>
+FatalAssemblerWarnings("fatal-assembler-warnings",
+                       cl::desc("Consider warnings as error"));
 
 namespace {
 
@@ -128,7 +133,7 @@ public:
   virtual MCContext &getContext() { return Ctx; }
   virtual MCStreamer &getStreamer() { return Out; }
 
-  virtual void Warning(SMLoc L, const Twine &Meg);
+  virtual bool Warning(SMLoc L, const Twine &Meg);
   virtual bool Error(SMLoc L, const Twine &Msg);
 
   const AsmToken &Lex();
@@ -243,6 +248,8 @@ public:
     AddDirectiveHandler<&GenericAsmParser::ParseDirectiveStabs>(".stabs");
 
     // CFI directives.
+    AddDirectiveHandler<&GenericAsmParser::ParseDirectiveCFISections>(
+                                                               ".cfi_sections");
     AddDirectiveHandler<&GenericAsmParser::ParseDirectiveCFIStartProc>(
                                                               ".cfi_startproc");
     AddDirectiveHandler<&GenericAsmParser::ParseDirectiveCFIEndProc>(
@@ -289,6 +296,7 @@ public:
   bool ParseDirectiveLine(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveLoc(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveStabs(StringRef, SMLoc DirectiveLoc);
+  bool ParseDirectiveCFISections(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveCFIStartProc(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveCFIEndProc(StringRef, SMLoc DirectiveLoc);
   bool ParseDirectiveCFIDefCfa(StringRef, SMLoc DirectiveLoc);
@@ -367,9 +375,12 @@ void AsmParser::PrintMacroInstantiations() {
                  "note");
 }
 
-void AsmParser::Warning(SMLoc L, const Twine &Msg) {
+bool AsmParser::Warning(SMLoc L, const Twine &Msg) {
+  if (FatalAssemblerWarnings)
+    return Error(L, Msg);
   PrintMessage(L, Msg, "warning");
   PrintMacroInstantiations();
+  return false;
 }
 
 bool AsmParser::Error(SMLoc L, const Twine &Msg) {
@@ -542,7 +553,7 @@ bool AsmParser::ParsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
 
     StringRef Identifier;
     if (ParseIdentifier(Identifier))
-      return false;
+      return true;
 
     // This is a symbol reference.
     std::pair<StringRef, StringRef> Split = Identifier.split('@');
@@ -1126,9 +1137,9 @@ bool AsmParser::ParseStatement() {
     if (!getTargetParser().ParseDirective(ID))
       return false;
 
-    Warning(IDLoc, "ignoring directive for now");
+    bool retval = Warning(IDLoc, "ignoring directive for now");
     EatToEndOfStatement();
-    return false;
+    return retval;
   }
 
   CheckForValidSection();
@@ -2263,6 +2274,39 @@ bool GenericAsmParser::ParseDirectiveLoc(StringRef, SMLoc DirectiveLoc) {
 bool GenericAsmParser::ParseDirectiveStabs(StringRef Directive,
                                            SMLoc DirectiveLoc) {
   return TokError("unsupported directive '" + Directive + "'");
+}
+
+/// ParseDirectiveCFISections
+/// ::= .cfi_sections section [, section]
+bool GenericAsmParser::ParseDirectiveCFISections(StringRef,
+                                                 SMLoc DirectiveLoc) {
+  StringRef Name;
+  bool EH = false;
+  bool Debug = false;
+
+  if (getParser().ParseIdentifier(Name))
+    return TokError("Expected an identifier");
+
+  if (Name == ".eh_frame")
+    EH = true;
+  else if (Name == ".debug_frame")
+    Debug = true;
+
+  if (getLexer().is(AsmToken::Comma)) {
+    Lex();
+
+    if (getParser().ParseIdentifier(Name))
+      return TokError("Expected an identifier");
+
+    if (Name == ".eh_frame")
+      EH = true;
+    else if (Name == ".debug_frame")
+      Debug = true;
+  }
+
+  getStreamer().EmitCFISections(EH, Debug);
+
+  return false;
 }
 
 /// ParseDirectiveCFIStartProc

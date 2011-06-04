@@ -111,6 +111,8 @@ void MCMachOStreamer::EmitEHSymAttributes(const MCSymbol *Symbol,
     EmitSymbolAttribute(EHSymbol, MCSA_Global);
   if (SD.getFlags() & SF_WeakDefinition)
     EmitSymbolAttribute(EHSymbol, MCSA_WeakDefinition);
+  if (SD.isPrivateExtern())
+    EmitSymbolAttribute(EHSymbol, MCSA_PrivateExtern);
 }
 
 void MCMachOStreamer::EmitLabel(MCSymbol *Symbol) {
@@ -375,6 +377,8 @@ void MCMachOStreamer::EmitInstToData(const MCInst &Inst) {
 }
 
 void MCMachOStreamer::Finish() {
+  EmitFrames(true);
+
   // We have to set the fragment atom associations so we can relax properly for
   // Mach-O.
 
