@@ -192,6 +192,7 @@ bool SplitAnalysis::calcLiveBlockInfo() {
         SlotIndex LastStop = LVI->end;
         if (++LVI == LVE || LVI->start >= Stop) {
           BI.LiveOut = false;
+          BI.LastUse = LastStop;
           break;
         }
         if (LastStop < LVI->start) {

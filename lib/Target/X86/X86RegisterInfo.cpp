@@ -73,27 +73,38 @@ X86RegisterInfo::X86RegisterInfo(X86TargetMachine &tm,
   }
 }
 
+static unsigned getFlavour(const X86Subtarget *Subtarget, bool isEH) {
+  if (!Subtarget->is64Bit()) {
+    if (Subtarget->isTargetDarwin()) {
+      if (isEH)
+        return DWARFFlavour::X86_32_DarwinEH;
+      else
+        return DWARFFlavour::X86_32_Generic;
+    } else if (Subtarget->isTargetCygMing()) {
+      // Unsupported by now, just quick fallback
+      return DWARFFlavour::X86_32_Generic;
+    } else {
+      return DWARFFlavour::X86_32_Generic;
+    }
+  }
+  return DWARFFlavour::X86_64;
+}
+
 /// getDwarfRegNum - This function maps LLVM register identifiers to the DWARF
 /// specific numbering, used in debug info and exception tables.
 int X86RegisterInfo::getDwarfRegNum(unsigned RegNo, bool isEH) const {
   const X86Subtarget *Subtarget = &TM.getSubtarget<X86Subtarget>();
-  unsigned Flavour = DWARFFlavour::X86_64;
-
-  if (!Subtarget->is64Bit()) {
-    if (Subtarget->isTargetDarwin()) {
-      if (isEH)
-        Flavour = DWARFFlavour::X86_32_DarwinEH;
-      else
-        Flavour = DWARFFlavour::X86_32_Generic;
-    } else if (Subtarget->isTargetCygMing()) {
-      // Unsupported by now, just quick fallback
-      Flavour = DWARFFlavour::X86_32_Generic;
-    } else {
-      Flavour = DWARFFlavour::X86_32_Generic;
-    }
-  }
+  unsigned Flavour = getFlavour(Subtarget, isEH);
 
   return X86GenRegisterInfo::getDwarfRegNumFull(RegNo, Flavour);
+}
+
+/// getLLVMRegNum - This function maps DWARF register numbers to LLVM register.
+int X86RegisterInfo::getLLVMRegNum(unsigned DwarfRegNo, bool isEH) const {
+  const X86Subtarget *Subtarget = &TM.getSubtarget<X86Subtarget>();
+  unsigned Flavour = getFlavour(Subtarget, isEH);
+
+  return X86GenRegisterInfo::getLLVMRegNumFull(DwarfRegNo, Flavour);
 }
 
 int
@@ -250,8 +261,7 @@ X86RegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
     }
     break;
   case X86::sub_8bit_hi:
-    if (B == &X86::GR8_ABCD_HRegClass ||
-        B->hasSubClass(&X86::GR8_ABCD_HRegClass))
+    if (B->hasSubClassEq(&X86::GR8_ABCD_HRegClass))
       switch (A->getSize()) {
         case 2: return getCommonSubClass(A, &X86::GR16_ABCDRegClass);
         case 4: return getCommonSubClass(A, &X86::GR32_ABCDRegClass);

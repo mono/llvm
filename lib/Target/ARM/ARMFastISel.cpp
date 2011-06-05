@@ -207,7 +207,8 @@ class ARMFastISel : public FastISel {
     bool DefinesOptionalPredicate(MachineInstr *MI, bool *CPSR);
     const MachineInstrBuilder &AddOptionalDefs(const MachineInstrBuilder &MIB);
     void AddLoadStoreOperands(EVT VT, Address &Addr,
-                              const MachineInstrBuilder &MIB);
+                              const MachineInstrBuilder &MIB,
+                              unsigned Flags);
 };
 
 } // end anonymous namespace
@@ -576,9 +577,6 @@ unsigned ARMFastISel::ARMMaterializeGV(const GlobalValue *GV, EVT VT) {
 
   Reloc::Model RelocM = TM.getRelocationModel();
 
-  // TODO: No external globals for now.
-  if (Subtarget->GVIsIndirectSymbol(GV, RelocM)) return 0;
-
   // TODO: Need more magic for ARM PIC.
   if (!isThumb && (RelocM == Reloc::PIC_)) return 0;
 
@@ -613,6 +611,23 @@ unsigned ARMFastISel::ARMMaterializeGV(const GlobalValue *GV, EVT VT) {
           .addImm(0);
   }
   AddOptionalDefs(MIB);
+
+  if (Subtarget->GVIsIndirectSymbol(GV, RelocM)) {
+    unsigned NewDestReg = createResultReg(TLI.getRegClassFor(VT));
+    if (isThumb)
+      MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(ARM::t2LDRi12),
+                    NewDestReg)
+            .addReg(DestReg)
+            .addImm(0);
+    else
+      MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(ARM::LDRi12),
+                    NewDestReg)
+            .addReg(DestReg)
+            .addImm(0);
+    DestReg = NewDestReg;
+    AddOptionalDefs(MIB);
+  }
+
   return DestReg;
 }
 
@@ -852,7 +867,8 @@ void ARMFastISel::ARMSimplifyAddress(Address &Addr, EVT VT) {
 }
 
 void ARMFastISel::AddLoadStoreOperands(EVT VT, Address &Addr,
-                                       const MachineInstrBuilder &MIB) {
+                                       const MachineInstrBuilder &MIB,
+                                       unsigned Flags) {
   // addrmode5 output depends on the selection dag addressing dividing the
   // offset by 4 that it then later multiplies. Do this here as well.
   if (VT.getSimpleVT().SimpleTy == MVT::f32 ||
@@ -866,7 +882,7 @@ void ARMFastISel::AddLoadStoreOperands(EVT VT, Address &Addr,
     MachineMemOperand *MMO =
           FuncInfo.MF->getMachineMemOperand(
                                   MachinePointerInfo::getFixedStack(FI, Offset),
-                                  MachineMemOperand::MOLoad,
+                                  Flags,
                                   MFI.getObjectSize(FI),
                                   MFI.getObjectAlignment(FI));
     // Now add the rest of the operands.
@@ -925,7 +941,7 @@ bool ARMFastISel::ARMEmitLoad(EVT VT, unsigned &ResultReg, Address &Addr) {
   ResultReg = createResultReg(RC);
   MachineInstrBuilder MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                                     TII.get(Opc), ResultReg);
-  AddLoadStoreOperands(VT, Addr, MIB);
+  AddLoadStoreOperands(VT, Addr, MIB, MachineMemOperand::MOLoad);
   return true;
 }
 
@@ -984,7 +1000,7 @@ bool ARMFastISel::ARMEmitStore(EVT VT, unsigned SrcReg, Address &Addr) {
   MachineInstrBuilder MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                                     TII.get(StrOpc))
                             .addReg(SrcReg, getKillRegState(true));
-  AddLoadStoreOperands(VT, Addr, MIB);
+  AddLoadStoreOperands(VT, Addr, MIB, MachineMemOperand::MOStore);
   return true;
 }
 

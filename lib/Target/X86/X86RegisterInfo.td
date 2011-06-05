@@ -97,15 +97,15 @@ let Namespace = "X86" in {
   }
   // 32-bit registers
   let SubRegIndices = [sub_16bit] in {
-  def EAX : RegisterWithSubRegs<"eax", [AX]>, DwarfRegNum<[0, 0, 0]>;
-  def EDX : RegisterWithSubRegs<"edx", [DX]>, DwarfRegNum<[1, 2, 2]>;
-  def ECX : RegisterWithSubRegs<"ecx", [CX]>, DwarfRegNum<[2, 1, 1]>;
-  def EBX : RegisterWithSubRegs<"ebx", [BX]>, DwarfRegNum<[3, 3, 3]>;
-  def ESI : RegisterWithSubRegs<"esi", [SI]>, DwarfRegNum<[4, 6, 6]>;
-  def EDI : RegisterWithSubRegs<"edi", [DI]>, DwarfRegNum<[5, 7, 7]>;
-  def EBP : RegisterWithSubRegs<"ebp", [BP]>, DwarfRegNum<[6, 4, 5]>;
-  def ESP : RegisterWithSubRegs<"esp", [SP]>, DwarfRegNum<[7, 5, 4]>;
-  def EIP : RegisterWithSubRegs<"eip", [IP]>, DwarfRegNum<[16, 8, 8]>;
+  def EAX : RegisterWithSubRegs<"eax", [AX]>, DwarfRegNum<[-2, 0, 0]>;
+  def EDX : RegisterWithSubRegs<"edx", [DX]>, DwarfRegNum<[-2, 2, 2]>;
+  def ECX : RegisterWithSubRegs<"ecx", [CX]>, DwarfRegNum<[-2, 1, 1]>;
+  def EBX : RegisterWithSubRegs<"ebx", [BX]>, DwarfRegNum<[-2, 3, 3]>;
+  def ESI : RegisterWithSubRegs<"esi", [SI]>, DwarfRegNum<[-2, 6, 6]>;
+  def EDI : RegisterWithSubRegs<"edi", [DI]>, DwarfRegNum<[-2, 7, 7]>;
+  def EBP : RegisterWithSubRegs<"ebp", [BP]>, DwarfRegNum<[-2, 4, 5]>;
+  def ESP : RegisterWithSubRegs<"esp", [SP]>, DwarfRegNum<[-2, 5, 4]>;
+  def EIP : RegisterWithSubRegs<"eip", [IP]>, DwarfRegNum<[-2, 8, 8]>;
 
   // X86-64 only, requires REX
   let CostPerUse = 1 in {
@@ -188,22 +188,22 @@ let Namespace = "X86" in {
 
   // YMM Registers, used by AVX instructions
   let SubRegIndices = [sub_xmm] in {
-  def YMM0: RegisterWithSubRegs<"ymm0", [XMM0]>, DwarfRegNum<[17, 21, 21]>;
-  def YMM1: RegisterWithSubRegs<"ymm1", [XMM1]>, DwarfRegNum<[18, 22, 22]>;
-  def YMM2: RegisterWithSubRegs<"ymm2", [XMM2]>, DwarfRegNum<[19, 23, 23]>;
-  def YMM3: RegisterWithSubRegs<"ymm3", [XMM3]>, DwarfRegNum<[20, 24, 24]>;
-  def YMM4: RegisterWithSubRegs<"ymm4", [XMM4]>, DwarfRegNum<[21, 25, 25]>;
-  def YMM5: RegisterWithSubRegs<"ymm5", [XMM5]>, DwarfRegNum<[22, 26, 26]>;
-  def YMM6: RegisterWithSubRegs<"ymm6", [XMM6]>, DwarfRegNum<[23, 27, 27]>;
-  def YMM7: RegisterWithSubRegs<"ymm7", [XMM7]>, DwarfRegNum<[24, 28, 28]>;
-  def YMM8:  RegisterWithSubRegs<"ymm8", [XMM8]>,  DwarfRegNum<[25, -2, -2]>;
-  def YMM9:  RegisterWithSubRegs<"ymm9", [XMM9]>,  DwarfRegNum<[26, -2, -2]>;
-  def YMM10: RegisterWithSubRegs<"ymm10", [XMM10]>, DwarfRegNum<[27, -2, -2]>;
-  def YMM11: RegisterWithSubRegs<"ymm11", [XMM11]>, DwarfRegNum<[28, -2, -2]>;
-  def YMM12: RegisterWithSubRegs<"ymm12", [XMM12]>, DwarfRegNum<[29, -2, -2]>;
-  def YMM13: RegisterWithSubRegs<"ymm13", [XMM13]>, DwarfRegNum<[30, -2, -2]>;
-  def YMM14: RegisterWithSubRegs<"ymm14", [XMM14]>, DwarfRegNum<[31, -2, -2]>;
-  def YMM15: RegisterWithSubRegs<"ymm15", [XMM15]>, DwarfRegNum<[32, -2, -2]>;
+  def YMM0: RegisterWithSubRegs<"ymm0", [XMM0]>, DwarfRegAlias<XMM0>;
+  def YMM1: RegisterWithSubRegs<"ymm1", [XMM1]>, DwarfRegAlias<XMM1>;
+  def YMM2: RegisterWithSubRegs<"ymm2", [XMM2]>, DwarfRegAlias<XMM2>;
+  def YMM3: RegisterWithSubRegs<"ymm3", [XMM3]>, DwarfRegAlias<XMM3>;
+  def YMM4: RegisterWithSubRegs<"ymm4", [XMM4]>, DwarfRegAlias<XMM4>;
+  def YMM5: RegisterWithSubRegs<"ymm5", [XMM5]>, DwarfRegAlias<XMM5>;
+  def YMM6: RegisterWithSubRegs<"ymm6", [XMM6]>, DwarfRegAlias<XMM6>;
+  def YMM7: RegisterWithSubRegs<"ymm7", [XMM7]>, DwarfRegAlias<XMM7>;
+  def YMM8:  RegisterWithSubRegs<"ymm8", [XMM8]>, DwarfRegAlias<XMM8>;
+  def YMM9:  RegisterWithSubRegs<"ymm9", [XMM9]>, DwarfRegAlias<XMM9>;
+  def YMM10: RegisterWithSubRegs<"ymm10", [XMM10]>, DwarfRegAlias<XMM10>;
+  def YMM11: RegisterWithSubRegs<"ymm11", [XMM11]>, DwarfRegAlias<XMM11>;
+  def YMM12: RegisterWithSubRegs<"ymm12", [XMM12]>, DwarfRegAlias<XMM12>;
+  def YMM13: RegisterWithSubRegs<"ymm13", [XMM13]>, DwarfRegAlias<XMM13>;
+  def YMM14: RegisterWithSubRegs<"ymm14", [XMM14]>, DwarfRegAlias<XMM14>;
+  def YMM15: RegisterWithSubRegs<"ymm15", [XMM15]>, DwarfRegAlias<XMM15>;
   }
 
   // Floating point stack registers
@@ -681,15 +681,7 @@ def RFP80 : RegisterClass<"X86",[f80], 32, [FP0, FP1, FP2, FP3, FP4, FP5, FP6]>;
 // for transforming FPn allocations to STn registers)
 def RST : RegisterClass<"X86", [f80, f64, f32], 32,
                         [ST0, ST1, ST2, ST3, ST4, ST5, ST6, ST7]> {
-    let MethodProtos = [{
-    iterator allocation_order_end(const MachineFunction &MF) const;
-  }];
-  let MethodBodies = [{
-    RSTClass::iterator
-    RSTClass::allocation_order_end(const MachineFunction &MF) const {
-      return begin();
-    }
-  }];
+  let isAllocatable = 0;
 }
 
 // Generic vector registers: VR64 and VR128.
@@ -742,15 +734,5 @@ def VR256 : RegisterClass<"X86", [v32i8, v8i32, v4i64, v8f32, v4f64], 256,
 // Status flags registers.
 def CCR : RegisterClass<"X86", [i32], 32, [EFLAGS]> {
   let CopyCost = -1;  // Don't allow copying of status registers.
-
-  // EFLAGS is not allocatable.
-  let MethodProtos = [{
-    iterator allocation_order_end(const MachineFunction &MF) const;
-  }];
-  let MethodBodies = [{
-    CCRClass::iterator
-    CCRClass::allocation_order_end(const MachineFunction &MF) const {
-      return allocation_order_begin(MF);
-    }
-  }];
+  let isAllocatable = 0;
 }

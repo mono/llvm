@@ -80,6 +80,8 @@ void RegisterInfoEmitter::runHeader(raw_ostream &OS) {
      << "(int CallFrameSetupOpcode = -1, int CallFrameDestroyOpcode = -1);\n"
      << "  virtual int getDwarfRegNumFull(unsigned RegNum, "
      << "unsigned Flavour) const;\n"
+     << "  virtual int getLLVMRegNumFull(unsigned DwarfRegNum, "
+     << "unsigned Flavour) const;\n"
      << "  virtual int getDwarfRegNum(unsigned RegNum, bool isEH) const = 0;\n"
      << "  virtual bool needsStackRealignment(const MachineFunction &) const\n"
      << "     { return false; }\n"
@@ -340,23 +342,23 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
 
   OS << "namespace llvm {\n\n";
 
-  // Start out by emitting each of the register classes... to do this, we build
-  // a set of registers which belong to a register class, this is to ensure that
-  // each register is only in a single register class.
-  //
+  // Start out by emitting each of the register classes.
   const std::vector<CodeGenRegisterClass> &RegisterClasses =
     Target.getRegisterClasses();
+
+  // Collect all registers belonging to any allocatable class.
+  std::set<Record*> AllocatableRegs;
 
   // Loop over all of the register classes... emitting each one.
   OS << "namespace {     // Register classes...\n";
 
-  // RegClassesBelongedTo - Keep track of which register classes each reg
-  // belongs to.
-  std::multimap<Record*, const CodeGenRegisterClass*> RegClassesBelongedTo;
-
   // Emit the register enum value arrays for each RegisterClass
   for (unsigned rc = 0, e = RegisterClasses.size(); rc != e; ++rc) {
     const CodeGenRegisterClass &RC = RegisterClasses[rc];
+
+    // Collect allocatable registers.
+    if (RC.Allocatable)
+      AllocatableRegs.insert(RC.Elements.begin(), RC.Elements.end());
 
     // Give the register class a legal C name if it's anonymous.
     std::string Name = RC.TheDef->getName();
@@ -368,9 +370,6 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
     for (unsigned i = 0, e = RC.Elements.size(); i != e; ++i) {
       Record *Reg = RC.Elements[i];
       OS << getQualifiedName(Reg) << ", ";
-
-      // Keep track of which regclasses this register is in.
-      RegClassesBelongedTo.insert(std::make_pair(Reg, &RC));
     }
     OS << "\n  };\n\n";
   }
@@ -566,6 +565,7 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
          << RC.SpillSize/8 << ", "
          << RC.SpillAlignment/8 << ", "
          << RC.CopyCost << ", "
+         << RC.Allocatable << ", "
          << RC.getName() << ", " << RC.getName() << " + " << RC.Elements.size()
          << ") {}\n";
     }
@@ -840,7 +840,7 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
   }
 
   OS<<"\n  const TargetRegisterDesc RegisterDescriptors[] = { // Descriptors\n";
-  OS << "    { \"NOREG\",\t0,\t0,\t0,\t0 },\n";
+  OS << "    { \"NOREG\",\t0,\t0,\t0,\t0,\t0 },\n";
 
   // Now that register alias and sub-registers sets have been emitted, emit the
   // register descriptors now.
@@ -856,7 +856,8 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
       OS << Reg.getName() << "_SuperRegsSet,\t";
     else
       OS << "Empty_SuperRegsSet,\t";
-    OS << Reg.CostPerUse << " },\n";
+    OS << Reg.CostPerUse << ",\t"
+       << int(AllocatableRegs.count(Reg.TheDef)) << " },\n";
   }
   OS << "  };\n";      // End of register descriptors...
 
@@ -988,6 +989,44 @@ void RegisterInfoEmitter::run(raw_ostream &OS) {
        I = DwarfRegNums.begin(), E = DwarfRegNums.end(); I != E; ++I)
     for (unsigned i = I->second.size(), e = maxLength; i != e; ++i)
       I->second.push_back(-1);
+
+  // Emit reverse information about the dwarf register numbers.
+  OS << "int " << ClassName << "::getLLVMRegNumFull(unsigned DwarfRegNum, "
+     << "unsigned Flavour) const {\n"
+     << "  switch (Flavour) {\n"
+     << "  default:\n"
+     << "    assert(0 && \"Unknown DWARF flavour\");\n"
+     << "    return -1;\n";
+
+  for (unsigned i = 0, e = maxLength; i != e; ++i) {
+    OS << "  case " << i << ":\n"
+       << "    switch (DwarfRegNum) {\n"
+       << "    default:\n"
+       << "      assert(0 && \"Invalid DwarfRegNum\");\n"
+       << "      return -1;\n";
+
+    for (DwarfRegNumsMapTy::iterator
+           I = DwarfRegNums.begin(), E = DwarfRegNums.end(); I != E; ++I) {
+      int DwarfRegNo = I->second[i];
+      if (DwarfRegNo >= 0)
+        OS << "    case " <<  DwarfRegNo << ":\n"
+           << "      return " << getQualifiedName(I->first) << ";\n";
+    }
+    OS << "    };\n";
+  }
+
+  OS << "  };\n}\n\n";
+
+  for (unsigned i = 0, e = Regs.size(); i != e; ++i) {
+    Record *Reg = Regs[i].TheDef;
+    const RecordVal *V = Reg->getValue("DwarfAlias");
+    if (!V || !V->getValue())
+      continue;
+
+    DefInit *DI = dynamic_cast<DefInit*>(V->getValue());
+    Record *Alias = DI->getDef();
+    DwarfRegNums[Reg] = DwarfRegNums[Alias];
+  }
 
   // Emit information about the dwarf register numbers.
   OS << "int " << ClassName << "::getDwarfRegNumFull(unsigned RegNum, "

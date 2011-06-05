@@ -94,6 +94,15 @@ namespace llvm {
       // one's or all zero's.
       SETCC_CARRY,  // R = carry_bit ? ~0 : 0
 
+      /// X86 FP SETCC, implemented with CMP{cc}SS/CMP{cc}SD.
+      /// Operands are two FP values to compare; result is a mask of
+      /// 0s or 1s.  Generally DTRT for C/C++ with NaNs.
+      FSETCCss, FSETCCsd,
+
+      /// X86 MOVMSK{pd|ps}, extracts sign bits of two or four FP values,
+      /// result in an integer GPR.  Needs masking for scalar result.
+      FGETSIGNx86,
+
       /// X86 conditional moves. Operand 0 and operand 1 are the two values
       /// to select from. Operand 2 is the condition code, and operand 3 is the
       /// flag operand produced by a CMP or TEST instruction. It also writes a
@@ -592,7 +601,7 @@ namespace llvm {
     /// true it means one of the asm constraint of the inline asm instruction
     /// being processed is 'm'.
     virtual void LowerAsmOperandForConstraint(SDValue Op,
-                                              char ConstraintLetter,
+                                              std::string &Constraint,
                                               std::vector<SDValue> &Ops,
                                               SelectionDAG &DAG) const;
 
@@ -783,6 +792,7 @@ namespace llvm {
     SDValue LowerFABS(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFNEG(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerFGETSIGN(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerToBT(SDValue And, ISD::CondCode CC,
                       DebugLoc dl, SelectionDAG &DAG) const;
     SDValue LowerSETCC(SDValue Op, SelectionDAG &DAG) const;

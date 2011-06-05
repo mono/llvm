@@ -252,10 +252,7 @@ bool DwarfEHPrepare::HandleURoRInvokes() {
 
   if (!URoR) {
     URoR = F->getParent()->getFunction("_Unwind_Resume_or_Rethrow");
-    if (!URoR) {
-      URoR = F->getParent()->getFunction("_Unwind_SjLj_Resume");
-      if (!URoR) return CleanupSelectors(CatchAllSels);
-    }
+    if (!URoR) return CleanupSelectors(CatchAllSels);
   }
 
   SmallPtrSet<InvokeInst*, 32> URoRInvokes;
@@ -532,13 +529,14 @@ bool DwarfEHPrepare::LowerUnwindsAndResumes() {
     if (isa<UnwindInst>(RI))
       new UnreachableInst(RI->getContext(), RI);
 
-    // Nuke the resume instruction.
-    RI->eraseFromParent();
-
     if (isa<UnwindInst>(RI))
       ++NumUnwindsLowered;
     else
       ++NumResumesLowered;
+
+    // Nuke the resume instruction.
+    RI->eraseFromParent();
+
     Changed = true;
   }
 

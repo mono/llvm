@@ -574,6 +574,10 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setOperationAction(ISD::FCOPYSIGN, MVT::f64, Custom);
     setOperationAction(ISD::FCOPYSIGN, MVT::f32, Custom);
 
+    // Lower this to FGETSIGNx86 plus an AND.
+    setOperationAction(ISD::FGETSIGN, MVT::i64, Custom);
+    setOperationAction(ISD::FGETSIGN, MVT::i32, Custom);
+
     // We don't support sin/cos/fmod
     setOperationAction(ISD::FSIN , MVT::f64, Expand);
     setOperationAction(ISD::FCOS , MVT::f64, Expand);
@@ -6707,6 +6711,11 @@ SDValue X86TargetLowering::LowerSINT_TO_FP(SDValue Op,
   DebugLoc dl = Op.getDebugLoc();
   unsigned Size = SrcVT.getSizeInBits()/8;
   MachineFunction &MF = DAG.getMachineFunction();
+
+  SDValue Addr = Op.getOperand(0);
+  if (Addr.getOpcode() == ISD::LOAD)
+    return BuildFILD(Op, SrcVT, DAG.getEntryNode(), Addr, DAG);
+
   int SSFI = MF.getFrameInfo()->CreateStackObject(Size, Size, false);
   SDValue StackSlot = DAG.getFrameIndex(SSFI, getPointerTy());
   SDValue Chain = DAG.getStore(DAG.getEntryNode(), dl, Op.getOperand(0),
@@ -6730,12 +6739,18 @@ SDValue X86TargetLowering::BuildFILD(SDValue Op, EVT SrcVT, SDValue Chain,
 
   unsigned ByteSize = SrcVT.getSizeInBits()/8;
 
-  int SSFI = cast<FrameIndexSDNode>(StackSlot)->getIndex();
-  MachineMemOperand *MMO =
-    DAG.getMachineFunction()
-    .getMachineMemOperand(MachinePointerInfo::getFixedStack(SSFI),
-                          MachineMemOperand::MOLoad, ByteSize, ByteSize);
-
+  FrameIndexSDNode *FI = dyn_cast<FrameIndexSDNode>(StackSlot);
+  MachineMemOperand *MMO;
+  if (FI) {
+    int SSFI = FI->getIndex();
+    MMO =
+      DAG.getMachineFunction()
+      .getMachineMemOperand(MachinePointerInfo::getFixedStack(SSFI),
+                            MachineMemOperand::MOLoad, ByteSize, ByteSize);
+  } else {
+    MMO = cast<LoadSDNode>(StackSlot)->getMemOperand();
+    StackSlot = StackSlot.getOperand(1);
+  }
   SDValue Ops[] = { Chain, StackSlot, DAG.getValueType(SrcVT) };
   SDValue Result = DAG.getMemIntrinsicNode(useSSE ? X86ISD::FILD_FLAG :
                                            X86ISD::FILD, DL,
@@ -7224,6 +7239,17 @@ SDValue X86TargetLowering::LowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG) const {
 
   // Or the value with the sign bit.
   return DAG.getNode(X86ISD::FOR, dl, VT, Val, SignBit);
+}
+
+SDValue X86TargetLowering::LowerFGETSIGN(SDValue Op, SelectionDAG &DAG) const {
+  SDValue N0 = Op.getOperand(0);
+  DebugLoc dl = Op.getDebugLoc();
+  EVT VT = Op.getValueType();
+
+  // Lower ISD::FGETSIGN to (AND (X86ISD::FGETSIGNx86 ...) 1).
+  SDValue xFGETSIGN = DAG.getNode(X86ISD::FGETSIGNx86, dl, VT, N0,
+                                  DAG.getConstant(1, VT));
+  return DAG.getNode(ISD::AND, dl, VT, xFGETSIGN, DAG.getConstant(1, VT));
 }
 
 /// Emit nodes that will be selected as "test Op0,Op0", or something
@@ -9197,6 +9223,7 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::FABS:               return LowerFABS(Op, DAG);
   case ISD::FNEG:               return LowerFNEG(Op, DAG);
   case ISD::FCOPYSIGN:          return LowerFCOPYSIGN(Op, DAG);
+  case ISD::FGETSIGN:           return LowerFGETSIGN(Op, DAG);
   case ISD::SETCC:              return LowerSETCC(Op, DAG);
   case ISD::VSETCC:             return LowerVSETCC(Op, DAG);
   case ISD::SELECT:             return LowerSELECT(Op, DAG);
@@ -9386,6 +9413,8 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::UCOMI:              return "X86ISD::UCOMI";
   case X86ISD::SETCC:              return "X86ISD::SETCC";
   case X86ISD::SETCC_CARRY:        return "X86ISD::SETCC_CARRY";
+  case X86ISD::FSETCCsd:           return "X86ISD::FSETCCsd";
+  case X86ISD::FSETCCss:           return "X86ISD::FSETCCss";
   case X86ISD::CMOV:               return "X86ISD::CMOV";
   case X86ISD::BRCOND:             return "X86ISD::BRCOND";
   case X86ISD::RET_FLAG:           return "X86ISD::RET_FLAG";
@@ -11663,11 +11692,93 @@ static SDValue PerformShiftCombine(SDNode* N, SelectionDAG &DAG,
 }
 
 
+// CMPEQCombine - Recognize the distinctive  (AND (setcc ...) (setcc ..))
+// where both setccs reference the same FP CMP, and rewrite for CMPEQSS
+// and friends.  Likewise for OR -> CMPNEQSS.
+static SDValue CMPEQCombine(SDNode *N, SelectionDAG &DAG,
+                            TargetLowering::DAGCombinerInfo &DCI,
+                            const X86Subtarget *Subtarget) {
+  unsigned opcode;
+
+  // SSE1 supports CMP{eq|ne}SS, and SSE2 added CMP{eq|ne}SD, but
+  // we're requiring SSE2 for both.
+  if (Subtarget->hasSSE2() && isAndOrOfSetCCs(SDValue(N, 0U), opcode)) {
+    SDValue N0 = N->getOperand(0);
+    SDValue N1 = N->getOperand(1);
+    SDValue CMP0 = N0->getOperand(1);
+    SDValue CMP1 = N1->getOperand(1);
+    DebugLoc DL = N->getDebugLoc();
+
+    // The SETCCs should both refer to the same CMP.
+    if (CMP0.getOpcode() != X86ISD::CMP || CMP0 != CMP1)
+      return SDValue();
+
+    SDValue CMP00 = CMP0->getOperand(0);
+    SDValue CMP01 = CMP0->getOperand(1);
+    EVT     VT    = CMP00.getValueType();
+
+    if (VT == MVT::f32 || VT == MVT::f64) {
+      bool ExpectingFlags = false;
+      // Check for any users that want flags:
+      for (SDNode::use_iterator UI = N->use_begin(),
+             UE = N->use_end();
+           !ExpectingFlags && UI != UE; ++UI)
+        switch (UI->getOpcode()) {
+        default:
+        case ISD::BR_CC:
+        case ISD::BRCOND:
+        case ISD::SELECT:
+          ExpectingFlags = true;
+          break;
+        case ISD::CopyToReg:
+        case ISD::SIGN_EXTEND:
+        case ISD::ZERO_EXTEND:
+        case ISD::ANY_EXTEND:
+          break;
+        }
+
+      if (!ExpectingFlags) {
+        enum X86::CondCode cc0 = (enum X86::CondCode)N0.getConstantOperandVal(0);
+        enum X86::CondCode cc1 = (enum X86::CondCode)N1.getConstantOperandVal(0);
+
+        if (cc1 == X86::COND_E || cc1 == X86::COND_NE) {
+          X86::CondCode tmp = cc0;
+          cc0 = cc1;
+          cc1 = tmp;
+        }
+
+        if ((cc0 == X86::COND_E  && cc1 == X86::COND_NP) ||
+            (cc0 == X86::COND_NE && cc1 == X86::COND_P)) {
+          bool is64BitFP = (CMP00.getValueType() == MVT::f64);
+          X86ISD::NodeType NTOperator = is64BitFP ?
+            X86ISD::FSETCCsd : X86ISD::FSETCCss;
+          // FIXME: need symbolic constants for these magic numbers.
+          // See X86ATTInstPrinter.cpp:printSSECC().
+          unsigned x86cc = (cc0 == X86::COND_E) ? 0 : 4;
+          SDValue OnesOrZeroesF = DAG.getNode(NTOperator, DL, MVT::f32, CMP00, CMP01,
+                                              DAG.getConstant(x86cc, MVT::i8));
+          SDValue OnesOrZeroesI = DAG.getNode(ISD::BITCAST, DL, MVT::i32,
+                                              OnesOrZeroesF);
+          SDValue ANDed = DAG.getNode(ISD::AND, DL, MVT::i32, OnesOrZeroesI,
+                                      DAG.getConstant(1, MVT::i32));
+          SDValue OneBitOfTruth = DAG.getNode(ISD::TRUNCATE, DL, MVT::i8, ANDed);
+          return OneBitOfTruth;
+        }
+      }
+    }
+  }
+  return SDValue();
+}
+
 static SDValue PerformAndCombine(SDNode *N, SelectionDAG &DAG,
                                  TargetLowering::DAGCombinerInfo &DCI,
                                  const X86Subtarget *Subtarget) {
   if (DCI.isBeforeLegalizeOps())
     return SDValue();
+
+  SDValue R = CMPEQCombine(N, DAG, DCI, Subtarget);
+  if (R.getNode())
+    return R;
 
   // Want to form PANDN nodes, in the hopes of then easily combining them with
   // OR and AND nodes to form PBLEND/PSIGN.
@@ -11697,6 +11808,10 @@ static SDValue PerformOrCombine(SDNode *N, SelectionDAG &DAG,
                                 const X86Subtarget *Subtarget) {
   if (DCI.isBeforeLegalizeOps())
     return SDValue();
+
+  SDValue R = CMPEQCombine(N, DAG, DCI, Subtarget);
+  if (R.getNode())
+    return R;
 
   EVT VT = N->getValueType(0);
   if (VT != MVT::i16 && VT != MVT::i32 && VT != MVT::i64 && VT != MVT::v2i64)
@@ -12578,12 +12693,16 @@ LowerXConstraint(EVT ConstraintVT) const {
 /// LowerAsmOperandForConstraint - Lower the specified operand into the Ops
 /// vector.  If it is invalid, don't add anything to Ops.
 void X86TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
-                                                     char Constraint,
+                                                     std::string &Constraint,
                                                      std::vector<SDValue>&Ops,
                                                      SelectionDAG &DAG) const {
   SDValue Result(0, 0);
 
-  switch (Constraint) {
+  // Only support length 1 constraints for now.
+  if (Constraint.length() > 1) return;
+  
+  char ConstraintLetter = Constraint[0];
+  switch (ConstraintLetter) {
   default: break;
   case 'I':
     if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Op)) {

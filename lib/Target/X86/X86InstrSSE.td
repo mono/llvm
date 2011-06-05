@@ -1056,13 +1056,37 @@ let neverHasSideEffects = 1 in {
                   XD, VEX_4V;
 }
 
+let Constraints = "$src1 = $dst" in {
+def CMPSSrr : SIi8<0xC2, MRMSrcReg,
+                  (outs FR32:$dst), (ins FR32:$src1, FR32:$src2, SSECC:$cc),
+                  "cmp${cc}ss\t{$src2, $dst|$dst, $src2}",
+                  [(set FR32:$dst, (X86cmpss (f32 FR32:$src1), FR32:$src2, imm:$cc))]>, XS;
+def CMPSSrm : SIi8<0xC2, MRMSrcMem,
+                  (outs FR32:$dst), (ins FR32:$src1, f32mem:$src2, SSECC:$cc),
+                  "cmp${cc}ss\t{$src2, $dst|$dst, $src2}",
+                  [(set FR32:$dst, (X86cmpss (f32 FR32:$src1), (loadf32 addr:$src2), imm:$cc))]>, XS;
+def CMPSDrr : SIi8<0xC2, MRMSrcReg,
+                  (outs FR64:$dst), (ins FR64:$src1, FR64:$src2, SSECC:$cc),
+                  "cmp${cc}sd\t{$src2, $dst|$dst, $src2}",
+                  [(set FR64:$dst, (X86cmpsd (f64 FR64:$src1), FR64:$src2, imm:$cc))]>, XD;
+def CMPSDrm : SIi8<0xC2, MRMSrcMem,
+                  (outs FR64:$dst), (ins FR64:$src1, f64mem:$src2, SSECC:$cc),
+                  "cmp${cc}sd\t{$src2, $dst|$dst, $src2}",
+                  [(set FR64:$dst, (X86cmpsd (f64 FR64:$src1), (loadf64 addr:$src2), imm:$cc))]>, XD;
+}
 let Constraints = "$src1 = $dst", neverHasSideEffects = 1 in {
-  defm CMPSS  : sse12_cmp_scalar<FR32, f32mem,
-                    "cmp${cc}ss\t{$src, $dst|$dst, $src}",
-                    "cmpss\t{$src2, $src, $dst|$dst, $src, $src2}">, XS;
-  defm CMPSD  : sse12_cmp_scalar<FR64, f64mem,
-                    "cmp${cc}sd\t{$src, $dst|$dst, $src}",
-                    "cmpsd\t{$src2, $src, $dst|$dst, $src, $src2}">, XD;
+def CMPSSrr_alt : SIi8<0xC2, MRMSrcReg,
+                  (outs FR32:$dst), (ins FR32:$src1, FR32:$src, i8imm:$src2),
+                  "cmpss\t{$src2, $src, $dst|$dst, $src, $src2}", []>, XS;
+def CMPSSrm_alt : SIi8<0xC2, MRMSrcMem,
+                  (outs FR32:$dst), (ins FR32:$src1, f32mem:$src, i8imm:$src2),
+                  "cmpss\t{$src2, $src, $dst|$dst, $src, $src2}", []>, XS;
+def CMPSDrr_alt : SIi8<0xC2, MRMSrcReg,
+                  (outs FR64:$dst), (ins FR64:$src1, FR64:$src, i8imm:$src2),
+                  "cmpsd\t{$src2, $src, $dst|$dst, $src, $src2}", []>, XD;
+def CMPSDrm_alt : SIi8<0xC2, MRMSrcMem,
+                  (outs FR64:$dst), (ins FR64:$src1, f64mem:$src, i8imm:$src2),
+                  "cmpsd\t{$src2, $src, $dst|$dst, $src, $src2}", []>, XD;
 }
 
 multiclass sse12_cmp_scalar_int<RegisterClass RC, X86MemOperand x86memop,
@@ -1327,11 +1351,6 @@ multiclass sse12_extr_sign_mask<RegisterClass RC, Intrinsic Int, string asm,
 }
 
 // Mask creation
-defm MOVMSKPS : sse12_extr_sign_mask<VR128, int_x86_sse_movmsk_ps, "movmskps",
-                                     SSEPackedSingle>, TB;
-defm MOVMSKPD : sse12_extr_sign_mask<VR128, int_x86_sse2_movmsk_pd, "movmskpd",
-                                     SSEPackedDouble>, TB, OpSize;
-
 defm VMOVMSKPS : sse12_extr_sign_mask<VR128, int_x86_sse_movmsk_ps,
                                       "movmskps", SSEPackedSingle>, VEX;
 defm VMOVMSKPD : sse12_extr_sign_mask<VR128, int_x86_sse2_movmsk_pd,
@@ -1342,6 +1361,24 @@ defm VMOVMSKPSY : sse12_extr_sign_mask<VR256, int_x86_avx_movmsk_ps_256,
 defm VMOVMSKPDY : sse12_extr_sign_mask<VR256, int_x86_avx_movmsk_pd_256,
                                       "movmskpd", SSEPackedDouble>, OpSize,
                                       VEX;
+defm MOVMSKPS : sse12_extr_sign_mask<VR128, int_x86_sse_movmsk_ps, "movmskps",
+                                     SSEPackedSingle>, TB;
+defm MOVMSKPD : sse12_extr_sign_mask<VR128, int_x86_sse2_movmsk_pd, "movmskpd",
+                                     SSEPackedDouble>, TB, OpSize;
+
+// X86fgetsign
+def MOVMSKPDrr32_alt : PI<0x50, MRMSrcReg, (outs GR32:$dst), (ins FR64:$src),
+                    "movmskpd\t{$src, $dst|$dst, $src}",
+                    [(set GR32:$dst, (X86fgetsign FR64:$src))], SSEPackedDouble>, TB, OpSize;
+def MOVMSKPDrr64_alt : PI<0x50, MRMSrcReg, (outs GR64:$dst), (ins FR64:$src),
+                    "movmskpd\t{$src, $dst|$dst, $src}",
+                    [(set GR64:$dst, (X86fgetsign FR64:$src))], SSEPackedDouble>, TB, OpSize;
+def MOVMSKPSrr32_alt : PI<0x50, MRMSrcReg, (outs GR32:$dst), (ins FR32:$src),
+                    "movmskps\t{$src, $dst|$dst, $src}",
+                    [(set GR32:$dst, (X86fgetsign FR32:$src))], SSEPackedSingle>, TB;
+def MOVMSKPSrr64_alt : PI<0x50, MRMSrcReg, (outs GR64:$dst), (ins FR32:$src),
+                    "movmskps\t{$src, $dst|$dst, $src}",
+                    [(set GR64:$dst, (X86fgetsign FR32:$src))], SSEPackedSingle>, TB;
 
 // Assembler Only
 def VMOVMSKPSr64r : PI<0x50, MRMSrcReg, (outs GR64:$dst), (ins VR128:$src),

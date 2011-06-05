@@ -135,6 +135,29 @@ Instruction *InstCombiner::visitMul(BinaryOperator &I) {
         return BinaryOperator::CreateAdd(Add, Builder->CreateMul(C1, CI));
       }
     }
+
+    // (Y - X) * (-(2**n)) -> (X - Y) * (2**n), for positive nonzero n
+    // (Y + const) * (-(2**n)) -> (-constY) * (2**n), for positive nonzero n
+    // The "* (2**n)" thus becomes a potential shifting opportunity.
+    {
+      const APInt &   Val = CI->getValue();
+      const APInt &PosVal = Val.abs();
+      if (Val.isNegative() && PosVal.isPowerOf2()) {
+        Value *X = 0, *Y = 0;
+        if (Op0->hasOneUse()) {
+          ConstantInt *C1;
+          Value *Sub = 0;
+          if (match(Op0, m_Sub(m_Value(Y), m_Value(X))))
+            Sub = Builder->CreateSub(X, Y, "suba");
+          else if (match(Op0, m_Add(m_Value(Y), m_ConstantInt(C1))))
+            Sub = Builder->CreateSub(Builder->CreateNeg(C1), Y, "subc");
+          if (Sub)
+            return
+              BinaryOperator::CreateMul(Sub,
+                                        ConstantInt::get(Y->getType(), PosVal));
+        }
+      }
+    }
   }
   
   // Simplify mul instructions with a constant RHS.
