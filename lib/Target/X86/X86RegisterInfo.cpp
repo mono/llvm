@@ -515,6 +515,32 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(X86::FS);
   Reserved.set(X86::GS);
 
+  // Reserve the registers that only exist in 64-bit mode.
+  if (!Is64Bit) {
+    // These 8-bit registers are part of the x86-64 extension even though their
+    // super-registers are old 32-bits.
+    Reserved.set(X86::SIL);
+    Reserved.set(X86::DIL);
+    Reserved.set(X86::BPL);
+    Reserved.set(X86::SPL);
+
+    for (unsigned n = 0; n != 8; ++n) {
+      // R8, R9, ...
+      const unsigned GPR64[] = {
+        X86::R8,  X86::R9,  X86::R10, X86::R11,
+        X86::R12, X86::R13, X86::R14, X86::R15
+      };
+      for (const unsigned *AI = getOverlaps(GPR64[n]); unsigned Reg = *AI; ++AI)
+        Reserved.set(Reg);
+
+      // XMM8, XMM9, ...
+      assert(X86::XMM15 == X86::XMM8+7);
+      for (const unsigned *AI = getOverlaps(X86::XMM8 + n); unsigned Reg = *AI;
+           ++AI)
+        Reserved.set(Reg);
+    }
+  }
+
   return Reserved;
 }
 

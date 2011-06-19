@@ -254,7 +254,7 @@ public:
   /// to get to the smaller register. For illegal floating point types, this
   /// returns the integer type to transform to.
   EVT getTypeToTransformTo(LLVMContext &Context, EVT VT) const {
-    return getTypeConversion(Context, VT).second; 
+    return getTypeConversion(Context, VT).second;
   }
 
   /// getTypeToExpandTo - For types supported by the target, this is an
@@ -1211,7 +1211,8 @@ public:
   /// return values described by the Outs array can fit into the return
   /// registers.  If false is returned, an sret-demotion is performed.
   ///
-  virtual bool CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
+  virtual bool CanLowerReturn(CallingConv::ID CallConv,
+			      MachineFunction &MF, bool isVarArg,
                const SmallVectorImpl<ISD::OutputArg> &Outs,
                LLVMContext &Context) const
   {
@@ -1835,9 +1836,8 @@ private:
 
         // Build a new vector type and check if it is legal.
         MVT NVT = MVT::getVectorVT(EltVT.getSimpleVT(), NumElts);
-
         // Found a legal promoted vector type.
-        if (ValueTypeActions.getTypeAction(NVT) == TypeLegal)
+        if (NVT != MVT() && ValueTypeActions.getTypeAction(NVT) == TypeLegal)
           return LegalizeKind(TypePromoteInteger,
                               EVT::getVectorVT(Context, EltVT, NumElts));
       }
@@ -1852,6 +1852,7 @@ private:
       // If there is no simple vector type with this many elements then there
       // cannot be a larger legal vector type.  Note that this assumes that
       // there are no skipped intermediate vector types in the simple types.
+      if (!EltVT.isSimple()) break;
       MVT LargerVector = MVT::getVectorVT(EltVT.getSimpleVT(), NumElts);
       if (LargerVector == MVT()) break;
 

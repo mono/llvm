@@ -34,6 +34,7 @@ STATISTIC(NumTails     , "Number of tails duplicated");
 STATISTIC(NumTailDups  , "Number of tail duplicated blocks");
 STATISTIC(NumInstrDups , "Additional instructions due to tail duplication");
 STATISTIC(NumDeadBlocks, "Number of dead blocks removed");
+STATISTIC(NumAddedPHIs , "Number of phis added");
 
 // Heuristic for tail duplication.
 static cl::opt<unsigned>
@@ -80,16 +81,21 @@ namespace {
     void ProcessPHI(MachineInstr *MI, MachineBasicBlock *TailBB,
                     MachineBasicBlock *PredBB,
                     DenseMap<unsigned, unsigned> &LocalVRMap,
-                    SmallVector<std::pair<unsigned,unsigned>, 4> &Copies);
+                    SmallVector<std::pair<unsigned,unsigned>, 4> &Copies,
+                    const DenseSet<unsigned> &UsedByPhi,
+                    bool Remove);
     void DuplicateInstruction(MachineInstr *MI,
                               MachineBasicBlock *TailBB,
                               MachineBasicBlock *PredBB,
                               MachineFunction &MF,
-                              DenseMap<unsigned, unsigned> &LocalVRMap);
+                              DenseMap<unsigned, unsigned> &LocalVRMap,
+                              const DenseSet<unsigned> &UsedByPhi);
     void UpdateSuccessorsPHIs(MachineBasicBlock *FromBB, bool isDead,
                               SmallVector<MachineBasicBlock*, 8> &TDBBs,
                               SmallSetVector<MachineBasicBlock*, 8> &Succs);
     bool TailDuplicateBlocks(MachineFunction &MF);
+    bool shouldTailDuplicate(const MachineFunction &MF,
+                             MachineBasicBlock &TailBB);
     bool TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
                        SmallVector<MachineBasicBlock*, 8> &TDBBs,
                        SmallVector<MachineInstr*, 16> &Copies);
@@ -146,11 +152,11 @@ static void VerifyPHIs(MachineFunction &MF, bool CheckExtra) {
       for (unsigned i = 1, e = MI->getNumOperands(); i != e; i += 2) {
         MachineBasicBlock *PHIBB = MI->getOperand(i+1).getMBB();
         if (CheckExtra && !Preds.count(PHIBB)) {
-          // This is not a hard error.
           dbgs() << "Warning: malformed PHI in BB#" << MBB->getNumber()
                  << ": " << *MI;
           dbgs() << "  extra input from predecessor BB#"
                  << PHIBB->getNumber() << '\n';
+          llvm_unreachable(0);
         }
         if (PHIBB->getNumber() < 0) {
           dbgs() << "Malformed PHI in BB#" << MBB->getNumber() << ": " << *MI;
@@ -182,10 +188,6 @@ bool TailDuplicatePass::TailDuplicateBlocks(MachineFunction &MF) {
 
     if (NumTails == TailDupLimit)
       break;
-
-    // Only duplicate blocks that end with unconditional branches.
-    if (MBB->canFallThrough())
-      continue;
 
     // Save the successors list.
     SmallSetVector<MachineBasicBlock*, 8> Succs(MBB->succ_begin(),
@@ -240,7 +242,15 @@ bool TailDuplicatePass::TailDuplicateBlocks(MachineFunction &MF) {
             MachineOperand &UseMO = UI.getOperand();
             MachineInstr *UseMI = &*UI;
             ++UI;
-            if (UseMI->getParent() == DefBB)
+            if (UseMI->isDebugValue()) {
+              // SSAUpdate can replace the use with an undef. That creates
+              // a debug instruction that is a kill.
+              // FIXME: Should it SSAUpdate job to delete debug instructions
+              // instead of replacing the use with undef?
+              UseMI->eraseFromParent();
+              continue;
+            }
+            if (UseMI->getParent() == DefBB && !UseMI->isPHI())
               continue;
             SSAUpdate.RewriteUse(UseMO);
           }
@@ -271,6 +281,7 @@ bool TailDuplicatePass::TailDuplicateBlocks(MachineFunction &MF) {
       MadeChange = true;
     }
   }
+  NumAddedPHIs += NewPHIs.size();
 
   return MadeChange;
 }
@@ -280,6 +291,8 @@ static bool isDefLiveOut(unsigned Reg, MachineBasicBlock *BB,
   for (MachineRegisterInfo::use_iterator UI = MRI->use_begin(Reg),
          UE = MRI->use_end(); UI != UE; ++UI) {
     MachineInstr *UseMI = &*UI;
+    if (UseMI->isDebugValue())
+      continue;
     if (UseMI->getParent() != BB)
       return true;
   }
@@ -291,6 +304,24 @@ static unsigned getPHISrcRegOpIdx(MachineInstr *MI, MachineBasicBlock *SrcBB) {
     if (MI->getOperand(i+1).getMBB() == SrcBB)
       return i;
   return 0;
+}
+
+
+// Remember which registers are used by phis in this block. This is
+// used to determine which registers are liveout while modifying the
+// block (which is why we need to copy the information).
+static void getRegsUsedByPHIs(const MachineBasicBlock &BB,
+                              DenseSet<unsigned> *UsedByPhi) {
+  for(MachineBasicBlock::const_iterator I = BB.begin(), E = BB.end();
+      I != E; ++I) {
+    const MachineInstr &MI = *I;
+    if (!MI.isPHI())
+      break;
+    for (unsigned i = 1, e = MI.getNumOperands(); i != e; i += 2) {
+      unsigned SrcReg = MI.getOperand(i).getReg();
+      UsedByPhi->insert(SrcReg);
+    }
+  }
 }
 
 /// AddSSAUpdateEntry - Add a definition and source virtual registers pair for
@@ -315,7 +346,9 @@ void TailDuplicatePass::ProcessPHI(MachineInstr *MI,
                                    MachineBasicBlock *TailBB,
                                    MachineBasicBlock *PredBB,
                                    DenseMap<unsigned, unsigned> &LocalVRMap,
-                         SmallVector<std::pair<unsigned,unsigned>, 4> &Copies) {
+                           SmallVector<std::pair<unsigned,unsigned>, 4> &Copies,
+                                   const DenseSet<unsigned> &RegsUsedByPhi,
+                                   bool Remove) {
   unsigned DefReg = MI->getOperand(0).getReg();
   unsigned SrcOpIdx = getPHISrcRegOpIdx(MI, PredBB);
   assert(SrcOpIdx && "Unable to find matching PHI source?");
@@ -327,8 +360,11 @@ void TailDuplicatePass::ProcessPHI(MachineInstr *MI,
   // available value liveout of the block.
   unsigned NewDef = MRI->createVirtualRegister(RC);
   Copies.push_back(std::make_pair(NewDef, SrcReg));
-  if (isDefLiveOut(DefReg, TailBB, MRI))
+  if (isDefLiveOut(DefReg, TailBB, MRI) || RegsUsedByPhi.count(DefReg))
     AddSSAUpdateEntry(DefReg, NewDef, PredBB);
+
+  if (!Remove)
+    return;
 
   // Remove PredBB from the PHI node.
   MI->RemoveOperand(SrcOpIdx+1);
@@ -343,7 +379,8 @@ void TailDuplicatePass::DuplicateInstruction(MachineInstr *MI,
                                      MachineBasicBlock *TailBB,
                                      MachineBasicBlock *PredBB,
                                      MachineFunction &MF,
-                                     DenseMap<unsigned, unsigned> &LocalVRMap) {
+                                     DenseMap<unsigned, unsigned> &LocalVRMap,
+                                     const DenseSet<unsigned> &UsedByPhi) {
   MachineInstr *NewMI = TII->duplicate(MI, MF);
   for (unsigned i = 0, e = NewMI->getNumOperands(); i != e; ++i) {
     MachineOperand &MO = NewMI->getOperand(i);
@@ -357,7 +394,7 @@ void TailDuplicatePass::DuplicateInstruction(MachineInstr *MI,
       unsigned NewReg = MRI->createVirtualRegister(RC);
       MO.setReg(NewReg);
       LocalVRMap.insert(std::make_pair(Reg, NewReg));
-      if (isDefLiveOut(Reg, TailBB, MRI))
+      if (isDefLiveOut(Reg, TailBB, MRI) || UsedByPhi.count(Reg))
         AddSSAUpdateEntry(Reg, NewReg, PredBB);
     } else {
       DenseMap<unsigned, unsigned>::iterator VI = LocalVRMap.find(Reg);
@@ -416,6 +453,13 @@ TailDuplicatePass::UpdateSuccessorsPHIs(MachineBasicBlock *FromBB, bool isDead,
         // This register is defined in the tail block.
         for (unsigned j = 0, ee = LI->second.size(); j != ee; ++j) {
           MachineBasicBlock *SrcBB = LI->second[j].first;
+          // If we didn't duplicate a bb into a particular predecessor, we
+          // might still have added an entry to SSAUpdateVals to correcly
+          // recompute SSA. If that case, avoid adding a dummy extra argument
+          // this PHI.
+          if (!SrcBB->isSuccessor(SuccBB))
+            continue;
+
           unsigned SrcReg = LI->second[j].second;
           if (Idx != 0) {
             II->getOperand(Idx).setReg(SrcReg);
@@ -448,14 +492,19 @@ TailDuplicatePass::UpdateSuccessorsPHIs(MachineBasicBlock *FromBB, bool isDead,
   }
 }
 
-/// TailDuplicate - If it is profitable, duplicate TailBB's contents in each
-/// of its predecessors.
+/// shouldTailDuplicate - Determine if it is profitable to duplicate this block.
 bool
-TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
-                                 SmallVector<MachineBasicBlock*, 8> &TDBBs,
-                                 SmallVector<MachineInstr*, 16> &Copies) {
-  // Set the limit on the number of instructions to duplicate, with a default
-  // of one less than the tail-merge threshold. When optimizing for size,
+TailDuplicatePass::shouldTailDuplicate(const MachineFunction &MF,
+                                       MachineBasicBlock &TailBB) {
+  // Only duplicate blocks that end with unconditional branches.
+  if (TailBB.canFallThrough())
+    return false;
+
+  // Don't try to tail-duplicate single-block loops.
+  if (TailBB.isSuccessor(&TailBB))
+    return false;
+
+  // Set the limit on the cost to duplicate. When optimizing for size,
   // duplicate only one, because one branch instruction can be eliminated to
   // compensate for the duplication.
   unsigned MaxDuplicateCount;
@@ -465,49 +514,56 @@ TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
   else
     MaxDuplicateCount = TailDuplicateSize;
 
-  if (PreRegAlloc) {
-    if (TailBB->empty())
-      return false;
-    const TargetInstrDesc &TID = TailBB->back().getDesc();
-    // Pre-regalloc tail duplication hurts compile time and doesn't help
-    // much except for indirect branches and returns.
-    if (!TID.isIndirectBranch() && !TID.isReturn())
-      return false;
-    // If the target has hardware branch prediction that can handle indirect
-    // branches, duplicating them can often make them predictable when there
-    // are common paths through the code.  The limit needs to be high enough
-    // to allow undoing the effects of tail merging and other optimizations
-    // that rearrange the predecessors of the indirect branch.
-    MaxDuplicateCount = 20;
-  }
+  // If the target has hardware branch prediction that can handle indirect
+  // branches, duplicating them can often make them predictable when there
+  // are common paths through the code.  The limit needs to be high enough
+  // to allow undoing the effects of tail merging and other optimizations
+  // that rearrange the predecessors of the indirect branch.
 
-  // Don't try to tail-duplicate single-block loops.
-  if (TailBB->isSuccessor(TailBB))
-    return false;
+  if (PreRegAlloc && !TailBB.empty()) {
+    const TargetInstrDesc &TID = TailBB.back().getDesc();
+    if (TID.isIndirectBranch())
+      MaxDuplicateCount = 20;
+  }
 
   // Check the instructions in the block to determine whether tail-duplication
   // is invalid or unlikely to be profitable.
   unsigned InstrCount = 0;
-  bool HasCall = false;
-  for (MachineBasicBlock::iterator I = TailBB->begin();
-       I != TailBB->end(); ++I) {
+  for (MachineBasicBlock::const_iterator I = TailBB.begin(); I != TailBB.end();
+       ++I) {
     // Non-duplicable things shouldn't be tail-duplicated.
-    if (I->getDesc().isNotDuplicable()) return false;
+    if (I->getDesc().isNotDuplicable())
+      return false;
+
     // Do not duplicate 'return' instructions if this is a pre-regalloc run.
     // A return may expand into a lot more instructions (e.g. reload of callee
     // saved registers) after PEI.
-    if (PreRegAlloc && I->getDesc().isReturn()) return false;
-    // Don't duplicate more than the threshold.
-    if (InstrCount == MaxDuplicateCount) return false;
-    // Remember if we saw a call.
-    if (I->getDesc().isCall()) HasCall = true;
+    if (PreRegAlloc && I->getDesc().isReturn())
+      return false;
+
+    // Avoid duplicating calls before register allocation. Calls presents a
+    // barrier to register allocation so duplicating them may end up increasing
+    // spills.
+    if (PreRegAlloc && I->getDesc().isCall())
+      return false;
+
     if (!I->isPHI() && !I->isDebugValue())
       InstrCount += 1;
+
+    if (InstrCount > MaxDuplicateCount)
+      return false;
   }
-  // Don't tail-duplicate calls before register allocation. Calls presents a
-  // barrier to register allocation so duplicating them may end up increasing
-  // spills.
-  if (InstrCount > 1 && (PreRegAlloc && HasCall))
+
+  return true;
+}
+
+/// TailDuplicate - If it is profitable, duplicate TailBB's contents in each
+/// of its predecessors.
+bool
+TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
+                                 SmallVector<MachineBasicBlock*, 8> &TDBBs,
+                                 SmallVector<MachineInstr*, 16> &Copies) {
+  if (!shouldTailDuplicate(MF, *TailBB))
     return false;
 
   DEBUG(dbgs() << "\n*** Tail-duplicating BB#" << TailBB->getNumber() << '\n');
@@ -518,22 +574,23 @@ TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
   bool Changed = false;
   SmallSetVector<MachineBasicBlock*, 8> Preds(TailBB->pred_begin(),
                                               TailBB->pred_end());
+  DenseSet<unsigned> UsedByPhi;
+  getRegsUsedByPHIs(*TailBB, &UsedByPhi);
   for (SmallSetVector<MachineBasicBlock *, 8>::iterator PI = Preds.begin(),
        PE = Preds.end(); PI != PE; ++PI) {
     MachineBasicBlock *PredBB = *PI;
 
     assert(TailBB != PredBB &&
            "Single-block loop should have been rejected earlier!");
-    if (PredBB->succ_size() > 1) continue;
+    // EH edges are ignored by AnalyzeBranch.
+    if (PredBB->succ_size() > 1)
+      continue;
 
     MachineBasicBlock *PredTBB, *PredFBB;
     SmallVector<MachineOperand, 4> PredCond;
     if (TII->AnalyzeBranch(*PredBB, PredTBB, PredFBB, PredCond, true))
       continue;
     if (!PredCond.empty())
-      continue;
-    // EH edges are ignored by AnalyzeBranch.
-    if (PredBB->succ_size() != 1)
       continue;
     // Don't duplicate into a fall-through predecessor (at least for now).
     if (PredBB->isLayoutSuccessor(TailBB) && PredBB->canFallThrough())
@@ -557,11 +614,11 @@ TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
       if (MI->isPHI()) {
         // Replace the uses of the def of the PHI with the register coming
         // from PredBB.
-        ProcessPHI(MI, TailBB, PredBB, LocalVRMap, CopyInfos);
+        ProcessPHI(MI, TailBB, PredBB, LocalVRMap, CopyInfos, UsedByPhi, true);
       } else {
         // Replace def of virtual registers with new registers, and update
         // uses with PHI source register or the new registers.
-        DuplicateInstruction(MI, TailBB, PredBB, MF, LocalVRMap);
+        DuplicateInstruction(MI, TailBB, PredBB, MF, LocalVRMap, UsedByPhi);
       }
     }
     MachineBasicBlock::iterator Loc = PredBB->getFirstTerminator();
@@ -570,6 +627,10 @@ TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
                                TII->get(TargetOpcode::COPY),
                                CopyInfos[i].first).addReg(CopyInfos[i].second));
     }
+
+    // Simplify
+    TII->AnalyzeBranch(*PredBB, PredTBB, PredFBB, PredCond, true);
+
     NumInstrDups += TailBB->size() - 1; // subtract one for removed branch
 
     // Update the CFG.
@@ -590,12 +651,11 @@ TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
   MachineBasicBlock *PrevBB = prior(MachineFunction::iterator(TailBB));
   MachineBasicBlock *PriorTBB = 0, *PriorFBB = 0;
   SmallVector<MachineOperand, 4> PriorCond;
-  bool PriorUnAnalyzable =
-    TII->AnalyzeBranch(*PrevBB, PriorTBB, PriorFBB, PriorCond, true);
   // This has to check PrevBB->succ_size() because EH edges are ignored by
   // AnalyzeBranch.
-  if (!PriorUnAnalyzable && PriorCond.empty() && !PriorTBB &&
-      TailBB->pred_size() == 1 && PrevBB->succ_size() == 1 &&
+  if (PrevBB->succ_size() == 1 && 
+      !TII->AnalyzeBranch(*PrevBB, PriorTBB, PriorFBB, PriorCond, true) &&
+      PriorCond.empty() && !PriorTBB && TailBB->pred_size() == 1 &&
       !TailBB->hasAddressTaken()) {
     DEBUG(dbgs() << "\nMerging into block: " << *PrevBB
           << "From MBB: " << *TailBB);
@@ -608,7 +668,7 @@ TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
         // Replace the uses of the def of the PHI with the register coming
         // from PredBB.
         MachineInstr *MI = &*I++;
-        ProcessPHI(MI, TailBB, PrevBB, LocalVRMap, CopyInfos);
+        ProcessPHI(MI, TailBB, PrevBB, LocalVRMap, CopyInfos, UsedByPhi, true);
         if (MI->getParent())
           MI->eraseFromParent();
       }
@@ -618,7 +678,7 @@ TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
         // Replace def of virtual registers with new registers, and update
         // uses with PHI source register or the new registers.
         MachineInstr *MI = &*I++;
-        DuplicateInstruction(MI, TailBB, PrevBB, MF, LocalVRMap);
+        DuplicateInstruction(MI, TailBB, PrevBB, MF, LocalVRMap, UsedByPhi);
         MI->eraseFromParent();
       }
       MachineBasicBlock::iterator Loc = PrevBB->getFirstTerminator();
@@ -639,6 +699,57 @@ TailDuplicatePass::TailDuplicate(MachineBasicBlock *TailBB, MachineFunction &MF,
     Changed = true;
   }
 
+  // If this is after register allocation, there are no phis to fix.
+  if (!PreRegAlloc)
+    return Changed;
+
+  // If we made no changes so far, we are safe.
+  if (!Changed)
+    return Changed;
+
+
+  // Handle the nasty case in that we duplicated a block that is part of a loop
+  // into some but not all of its predecessors. For example:
+  //    1 -> 2 <-> 3                 |
+  //          \                      |
+  //           \---> rest            |
+  // if we duplicate 2 into 1 but not into 3, we end up with
+  // 12 -> 3 <-> 2 -> rest           |
+  //   \             /               |
+  //    \----->-----/                |
+  // If there was a "var = phi(1, 3)" in 2, it has to be ultimately replaced
+  // with a phi in 3 (which now dominates 2).
+  // What we do here is introduce a copy in 3 of the register defined by the
+  // phi, just like when we are duplicating 2 into 3, but we don't copy any
+  // real instructions or remove the 3 -> 2 edge from the phi in 2.
+  for (SmallSetVector<MachineBasicBlock *, 8>::iterator PI = Preds.begin(),
+       PE = Preds.end(); PI != PE; ++PI) {
+    MachineBasicBlock *PredBB = *PI;
+    if (std::find(TDBBs.begin(), TDBBs.end(), PredBB) != TDBBs.end())
+      continue;
+
+    // EH edges
+    if (PredBB->succ_size() != 1)
+      continue;
+
+    DenseMap<unsigned, unsigned> LocalVRMap;
+    SmallVector<std::pair<unsigned,unsigned>, 4> CopyInfos;
+    MachineBasicBlock::iterator I = TailBB->begin();
+    // Process PHI instructions first.
+    while (I != TailBB->end() && I->isPHI()) {
+      // Replace the uses of the def of the PHI with the register coming
+      // from PredBB.
+      MachineInstr *MI = &*I++;
+      ProcessPHI(MI, TailBB, PredBB, LocalVRMap, CopyInfos, UsedByPhi, false);
+    }
+    MachineBasicBlock::iterator Loc = PredBB->getFirstTerminator();
+    for (unsigned i = 0, e = CopyInfos.size(); i != e; ++i) {
+      Copies.push_back(BuildMI(*PredBB, Loc, DebugLoc(),
+                               TII->get(TargetOpcode::COPY),
+                               CopyInfos[i].first).addReg(CopyInfos[i].second));
+    }
+  }
+
   return Changed;
 }
 
@@ -655,4 +766,3 @@ void TailDuplicatePass::RemoveDeadBlock(MachineBasicBlock *MBB) {
   // Remove the block.
   MBB->eraseFromParent();
 }
-

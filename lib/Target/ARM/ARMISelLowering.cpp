@@ -72,6 +72,21 @@ ARMInterworking("arm-interworking", cl::Hidden,
   cl::desc("Enable / disable ARM interworking (for debugging only)"),
   cl::init(true));
 
+namespace llvm {
+  class ARMCCState : public CCState {
+  public:
+    ARMCCState(CallingConv::ID CC, bool isVarArg, MachineFunction &MF,
+               const TargetMachine &TM, SmallVector<CCValAssign, 16> &locs,
+               LLVMContext &C, ParmContext PC)
+        : CCState(CC, isVarArg, MF, TM, locs, C) {
+      assert(((PC == Call) || (PC == Prologue)) &&
+             "ARMCCState users must specify whether their context is call"
+             "or prologue generation.");
+      CallOrPrologue = PC;
+    }
+  };
+}
+
 // The APCS parameter registers.
 static const unsigned GPRArgRegs[] = {
   ARM::R0, ARM::R1, ARM::R2, ARM::R3
@@ -1081,8 +1096,8 @@ ARMTargetLowering::LowerCallResult(SDValue Chain, SDValue InFlag,
 
   // Assign locations to each value returned by this call.
   SmallVector<CCValAssign, 16> RVLocs;
-  CCState CCInfo(CallConv, isVarArg, getTargetMachine(),
-                 RVLocs, *DAG.getContext());
+  ARMCCState CCInfo(CallConv, isVarArg, DAG.getMachineFunction(),
+                    getTargetMachine(), RVLocs, *DAG.getContext(), Call);
   CCInfo.AnalyzeCallResult(Ins,
                            CCAssignFnForNode(CallConv, /* Return*/ true,
                                              isVarArg));
@@ -1216,9 +1231,8 @@ ARMTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 
   // Analyze operands of the call, assigning locations to each operand.
   SmallVector<CCValAssign, 16> ArgLocs;
-  CCState CCInfo(CallConv, isVarArg, getTargetMachine(), ArgLocs,
-                 *DAG.getContext());
-  CCInfo.setCallOrPrologue(Call);
+  ARMCCState CCInfo(CallConv, isVarArg, DAG.getMachineFunction(),
+                 getTargetMachine(), ArgLocs, *DAG.getContext(), Call);
   CCInfo.AnalyzeCallOperands(Outs,
                              CCAssignFnForNode(CallConv, /* Return*/ false,
                                                isVarArg));
@@ -1648,13 +1662,13 @@ ARMTargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
   // results are returned in the same way as what the caller expects.
   if (!CCMatch) {
     SmallVector<CCValAssign, 16> RVLocs1;
-    CCState CCInfo1(CalleeCC, false, getTargetMachine(),
-                    RVLocs1, *DAG.getContext());
+    ARMCCState CCInfo1(CalleeCC, false, DAG.getMachineFunction(),
+                       getTargetMachine(), RVLocs1, *DAG.getContext(), Call);
     CCInfo1.AnalyzeCallResult(Ins, CCAssignFnForNode(CalleeCC, true, isVarArg));
 
     SmallVector<CCValAssign, 16> RVLocs2;
-    CCState CCInfo2(CallerCC, false, getTargetMachine(),
-                    RVLocs2, *DAG.getContext());
+    ARMCCState CCInfo2(CallerCC, false, DAG.getMachineFunction(),
+                       getTargetMachine(), RVLocs2, *DAG.getContext(), Call);
     CCInfo2.AnalyzeCallResult(Ins, CCAssignFnForNode(CallerCC, true, isVarArg));
 
     if (RVLocs1.size() != RVLocs2.size())
@@ -1680,8 +1694,8 @@ ARMTargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
     // Check if stack adjustment is needed. For now, do not do this if any
     // argument is passed on the stack.
     SmallVector<CCValAssign, 16> ArgLocs;
-    CCState CCInfo(CalleeCC, isVarArg, getTargetMachine(),
-                   ArgLocs, *DAG.getContext());
+    ARMCCState CCInfo(CalleeCC, isVarArg, DAG.getMachineFunction(),
+                      getTargetMachine(), ArgLocs, *DAG.getContext(), Call);
     CCInfo.AnalyzeCallOperands(Outs,
                                CCAssignFnForNode(CalleeCC, false, isVarArg));
     if (CCInfo.getNextStackOffset()) {
@@ -1740,8 +1754,8 @@ ARMTargetLowering::LowerReturn(SDValue Chain,
   SmallVector<CCValAssign, 16> RVLocs;
 
   // CCState - Info about the registers and stack slots.
-  CCState CCInfo(CallConv, isVarArg, getTargetMachine(), RVLocs,
-                 *DAG.getContext());
+  ARMCCState CCInfo(CallConv, isVarArg, DAG.getMachineFunction(),
+                    getTargetMachine(), RVLocs, *DAG.getContext(), Call);
 
   // Analyze outgoing return values.
   CCInfo.AnalyzeReturn(Outs, CCAssignFnForNode(CallConv, /* Return */ true,
@@ -2277,12 +2291,13 @@ static SDValue LowerPREFETCH(SDValue Op, SelectionDAG &DAG,
     // ARMv7 with MP extension has PLDW.
     return Op.getOperand(0);
 
-  if (Subtarget->isThumb())
+  unsigned isData = cast<ConstantSDNode>(Op.getOperand(4))->getZExtValue();
+  if (Subtarget->isThumb()) {
     // Invert the bits.
     isRead = ~isRead & 1;
-  unsigned isData = Subtarget->isThumb() ? 0 : 1;
+    isData = ~isData & 1;
+  }
 
-  // Currently there is no intrinsic that matches pli.
   return DAG.getNode(ARMISD::PRELOAD, dl, MVT::Other, Op.getOperand(0),
                      Op.getOperand(1), DAG.getConstant(isRead, MVT::i32),
                      DAG.getConstant(isData, MVT::i32));
@@ -2434,9 +2449,8 @@ ARMTargetLowering::LowerFormalArguments(SDValue Chain,
 
   // Assign locations to all of the incoming arguments.
   SmallVector<CCValAssign, 16> ArgLocs;
-  CCState CCInfo(CallConv, isVarArg, getTargetMachine(), ArgLocs,
-                 *DAG.getContext());
-  CCInfo.setCallOrPrologue(Prologue);
+  ARMCCState CCInfo(CallConv, isVarArg, DAG.getMachineFunction(),
+                    getTargetMachine(), ArgLocs, *DAG.getContext(), Prologue);
   CCInfo.AnalyzeFormalArguments(Ins,
                                 CCAssignFnForNode(CallConv, /* Return*/ false,
                                                   isVarArg));
@@ -2534,7 +2548,7 @@ ARMTargetLowering::LowerFormalArguments(SDValue Chain,
       if (index != lastInsIndex)
         {
           ISD::ArgFlagsTy Flags = Ins[index].Flags;
-          // FIXME: For now, all byval parameter objects are marked mutable. 
+          // FIXME: For now, all byval parameter objects are marked mutable.
           // This can be changed with more analysis.
           // In case of tail call optimization mark all arguments mutable.
           // Since they could be overwritten by lowering of arguments in case of
@@ -5519,12 +5533,108 @@ SDValue combineSelectAndUse(SDNode *N, SDValue Slct, SDValue OtherOp,
   return SDValue();
 }
 
+// AddCombineToVPADDL- For pair-wise add on neon, use the vpaddl instruction 
+// (only after legalization).
+static SDValue AddCombineToVPADDL(SDNode *N, SDValue N0, SDValue N1,
+                                 TargetLowering::DAGCombinerInfo &DCI,
+                                 const ARMSubtarget *Subtarget) {
+
+  // Only perform optimization if after legalize, and if NEON is available. We
+  // also expected both operands to be BUILD_VECTORs.
+  if (DCI.isBeforeLegalize() || !Subtarget->hasNEON()
+      || N0.getOpcode() != ISD::BUILD_VECTOR
+      || N1.getOpcode() != ISD::BUILD_VECTOR)
+    return SDValue();
+
+  // Check output type since VPADDL operand elements can only be 8, 16, or 32.
+  EVT VT = N->getValueType(0);
+  if (!VT.isInteger() || VT.getVectorElementType() == MVT::i64)
+    return SDValue();
+
+  // Check that the vector operands are of the right form.
+  // N0 and N1 are BUILD_VECTOR nodes with N number of EXTRACT_VECTOR
+  // operands, where N is the size of the formed vector.
+  // Each EXTRACT_VECTOR should have the same input vector and odd or even
+  // index such that we have a pair wise add pattern.
+
+  // Grab the vector that all EXTRACT_VECTOR nodes should be referencing.
+  if (N0->getOperand(0)->getOpcode() != ISD::EXTRACT_VECTOR_ELT)
+    return SDValue();
+  SDValue Vec = N0->getOperand(0)->getOperand(0);
+  SDNode *V = Vec.getNode();
+  unsigned nextIndex = 0;
+
+  // For each operands to the ADD which are BUILD_VECTORs, 
+  // check to see if each of their operands are an EXTRACT_VECTOR with
+  // the same vector and appropriate index.
+  for (unsigned i = 0, e = N0->getNumOperands(); i != e; ++i) {
+    if (N0->getOperand(i)->getOpcode() == ISD::EXTRACT_VECTOR_ELT
+        && N1->getOperand(i)->getOpcode() == ISD::EXTRACT_VECTOR_ELT) {
+      
+      SDValue ExtVec0 = N0->getOperand(i);
+      SDValue ExtVec1 = N1->getOperand(i);
+      
+      // First operand is the vector, verify its the same.
+      if (V != ExtVec0->getOperand(0).getNode() ||
+          V != ExtVec1->getOperand(0).getNode())
+        return SDValue();
+      
+      // Second is the constant, verify its correct.
+      ConstantSDNode *C0 = dyn_cast<ConstantSDNode>(ExtVec0->getOperand(1));
+      ConstantSDNode *C1 = dyn_cast<ConstantSDNode>(ExtVec1->getOperand(1));
+      
+      // For the constant, we want to see all the even or all the odd.
+      if (!C0 || !C1 || C0->getZExtValue() != nextIndex
+          || C1->getZExtValue() != nextIndex+1)
+        return SDValue();
+
+      // Increment index.
+      nextIndex+=2;
+    } else 
+      return SDValue();
+  }
+
+  // Create VPADDL node.
+  SelectionDAG &DAG = DCI.DAG;
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+
+  // Build operand list.
+  SmallVector<SDValue, 8> Ops;
+  Ops.push_back(DAG.getConstant(Intrinsic::arm_neon_vpaddls,
+                                TLI.getPointerTy()));
+
+  // Input is the vector.
+  Ops.push_back(Vec);
+  
+  // Get widened type and narrowed type.
+  MVT widenType;
+  unsigned numElem = VT.getVectorNumElements();
+  switch (VT.getVectorElementType().getSimpleVT().SimpleTy) {
+    case MVT::i8: widenType = MVT::getVectorVT(MVT::i16, numElem); break;
+    case MVT::i16: widenType = MVT::getVectorVT(MVT::i32, numElem); break;
+    case MVT::i32: widenType = MVT::getVectorVT(MVT::i64, numElem); break;
+    default:
+      assert(0 && "Invalid vector element type for padd optimization.");
+  }
+
+  SDValue tmp = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, N->getDebugLoc(),
+                            widenType, &Ops[0], Ops.size());
+  return DAG.getNode(ISD::TRUNCATE, N->getDebugLoc(), VT, tmp);
+}
+
 /// PerformADDCombineWithOperands - Try DAG combinations for an ADD with
 /// operands N0 and N1.  This is a helper for PerformADDCombine that is
 /// called with the default operands, and if that fails, with commuted
 /// operands.
 static SDValue PerformADDCombineWithOperands(SDNode *N, SDValue N0, SDValue N1,
-                                         TargetLowering::DAGCombinerInfo &DCI) {
+                                          TargetLowering::DAGCombinerInfo &DCI,
+                                          const ARMSubtarget *Subtarget){
+
+  // Attempt to create vpaddl for this add.
+  SDValue Result = AddCombineToVPADDL(N, N0, N1, DCI, Subtarget);
+  if (Result.getNode())
+    return Result;
+  
   // fold (add (select cc, 0, c), x) -> (select cc, x, (add, x, c))
   if (N0.getOpcode() == ISD::SELECT && N0.getNode()->hasOneUse()) {
     SDValue Result = combineSelectAndUse(N, N0, N1, DCI);
@@ -5536,17 +5646,18 @@ static SDValue PerformADDCombineWithOperands(SDNode *N, SDValue N0, SDValue N1,
 /// PerformADDCombine - Target-specific dag combine xforms for ISD::ADD.
 ///
 static SDValue PerformADDCombine(SDNode *N,
-                                 TargetLowering::DAGCombinerInfo &DCI) {
+                                 TargetLowering::DAGCombinerInfo &DCI,
+                                 const ARMSubtarget *Subtarget) {
   SDValue N0 = N->getOperand(0);
   SDValue N1 = N->getOperand(1);
 
   // First try with the default operand order.
-  SDValue Result = PerformADDCombineWithOperands(N, N0, N1, DCI);
+  SDValue Result = PerformADDCombineWithOperands(N, N0, N1, DCI, Subtarget);
   if (Result.getNode())
     return Result;
 
   // If that didn't work, try again with the operands commuted.
-  return PerformADDCombineWithOperands(N, N1, N0, DCI);
+  return PerformADDCombineWithOperands(N, N1, N0, DCI, Subtarget);
 }
 
 /// PerformSUBCombine - Target-specific dag combine xforms for ISD::SUB.
@@ -5585,7 +5696,7 @@ static SDValue PerformVMULCombine(SDNode *N,
   unsigned Opcode = N0.getOpcode();
   if (Opcode != ISD::ADD && Opcode != ISD::SUB &&
       Opcode != ISD::FADD && Opcode != ISD::FSUB) {
-    Opcode = N0.getOpcode();
+    Opcode = N1.getOpcode();
     if (Opcode != ISD::ADD && Opcode != ISD::SUB &&
         Opcode != ISD::FADD && Opcode != ISD::FSUB)
       return SDValue();
@@ -5871,8 +5982,8 @@ static SDValue PerformORCombine(SDNode *N,
   return SDValue();
 }
 
-/// PerformBFICombine - (bfi A, (and B, C1), C2) -> (bfi A, B, C2) iff
-/// C1 & C2 == C1.
+/// PerformBFICombine - (bfi A, (and B, Mask1), Mask2) -> (bfi A, B, Mask2) iff
+/// the bits being cleared by the AND are not demanded by the BFI.
 static SDValue PerformBFICombine(SDNode *N,
                                  TargetLowering::DAGCombinerInfo &DCI) {
   SDValue N1 = N->getOperand(1);
@@ -5880,9 +5991,12 @@ static SDValue PerformBFICombine(SDNode *N,
     ConstantSDNode *N11C = dyn_cast<ConstantSDNode>(N1.getOperand(1));
     if (!N11C)
       return SDValue();
-    unsigned Mask = cast<ConstantSDNode>(N->getOperand(2))->getZExtValue();
+    unsigned InvMask = cast<ConstantSDNode>(N->getOperand(2))->getZExtValue();
+    unsigned LSB = CountTrailingZeros_32(~InvMask);
+    unsigned Width = (32 - CountLeadingZeros_32(~InvMask)) - LSB;
+    unsigned Mask = (1 << Width)-1;
     unsigned Mask2 = N11C->getZExtValue();
-    if ((Mask & Mask2) == Mask2)
+    if ((Mask & (~Mask2)) == 0)
       return DCI.DAG.getNode(ARMISD::BFI, N->getDebugLoc(), N->getValueType(0),
                              N->getOperand(0), N1.getOperand(0),
                              N->getOperand(2));
@@ -6751,7 +6865,7 @@ SDValue ARMTargetLowering::PerformDAGCombine(SDNode *N,
                                              DAGCombinerInfo &DCI) const {
   switch (N->getOpcode()) {
   default: break;
-  case ISD::ADD:        return PerformADDCombine(N, DCI);
+  case ISD::ADD:        return PerformADDCombine(N, DCI, Subtarget);
   case ISD::SUB:        return PerformSUBCombine(N, DCI);
   case ISD::MUL:        return PerformMULCombine(N, DCI, Subtarget);
   case ISD::OR:         return PerformORCombine(N, DCI, Subtarget);
@@ -7396,7 +7510,7 @@ void ARMTargetLowering::LowerAsmOperandForConstraint(SDValue Op,
 
   // Currently only support length 1 constraints.
   if (Constraint.length() != 1) return;
-  
+
   char ConstraintLetter = Constraint[0];
   switch (ConstraintLetter) {
   default: break;
@@ -7682,7 +7796,7 @@ bool ARMTargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
     Info.ptrVal = I.getArgOperand(2);
     Info.offset = 0;
     Info.align = 8;
-    Info.vol = false;
+    Info.vol = true;
     Info.readMem = false;
     Info.writeMem = true;
     return true;
@@ -7693,7 +7807,7 @@ bool ARMTargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
     Info.ptrVal = I.getArgOperand(0);
     Info.offset = 0;
     Info.align = 8;
-    Info.vol = false;
+    Info.vol = true;
     Info.readMem = true;
     Info.writeMem = false;
     return true;

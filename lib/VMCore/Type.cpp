@@ -12,23 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLVMContextImpl.h"
-#include "llvm/DerivedTypes.h"
-#include "llvm/Constants.h"
-#include "llvm/Assembly/Writer.h"
-#include "llvm/LLVMContext.h"
-#include "llvm/Metadata.h"
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/SCCIterator.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Compiler.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/ManagedStatic.h"
-#include "llvm/Support/MathExtras.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Support/Threading.h"
 #include <algorithm>
 #include <cstdarg>
 using namespace llvm;
@@ -87,7 +71,9 @@ void Type::destroy() const {
     operator delete(const_cast<Type *>(this));
 
     return;
-  } else if (const OpaqueType *opaque_this = dyn_cast<OpaqueType>(this)) {
+  }
+  
+  if (const OpaqueType *opaque_this = dyn_cast<OpaqueType>(this)) {
     LLVMContextImpl *pImpl = this->getContext().pImpl;
     pImpl->OpaqueTypes.erase(opaque_this);
   }
@@ -114,15 +100,6 @@ const Type *Type::getPrimitiveType(LLVMContext &C, TypeID IDNumber) {
   default:
     return 0;
   }
-}
-
-const Type *Type::getVAArgsPromotedType(LLVMContext &C) const {
-  if (ID == IntegerTyID && getSubclassData() < 32)
-    return Type::getInt32Ty(C);
-  else if (ID == FloatTyID)
-    return Type::getDoubleTy(C);
-  else
-    return this;
 }
 
 /// getScalarType - If this is a vector type, return the element type,
@@ -262,8 +239,8 @@ bool Type::isSizedDerivedType() const {
   if (const ArrayType *ATy = dyn_cast<ArrayType>(this))
     return ATy->getElementType()->isSized();
 
-  if (const VectorType *PTy = dyn_cast<VectorType>(this))
-    return PTy->getElementType()->isSized();
+  if (const VectorType *VTy = dyn_cast<VectorType>(this))
+    return VTy->getElementType()->isSized();
 
   if (!this->isStructTy()) 
     return false;
@@ -309,44 +286,41 @@ void Type::typeBecameConcrete(const DerivedType *AbsTy) {
   llvm_unreachable("DerivedType is already a concrete type!");
 }
 
-
-std::string Type::getDescription() const {
-  LLVMContextImpl *pImpl = getContext().pImpl;
-  TypePrinting &Map =
-    isAbstract() ?
-      pImpl->AbstractTypeDescriptions :
-      pImpl->ConcreteTypeDescriptions;
+const Type *CompositeType::getTypeAtIndex(const Value *V) const {
+  if (const StructType *STy = dyn_cast<StructType>(this)) {
+    unsigned Idx = (unsigned)cast<ConstantInt>(V)->getZExtValue();
+    assert(indexValid(Idx) && "Invalid structure index!");
+    return STy->getElementType(Idx);
+  }
+    
+  return cast<SequentialType>(this)->getElementType();
+}
+const Type *CompositeType::getTypeAtIndex(unsigned Idx) const {
+  if (const StructType *STy = dyn_cast<StructType>(this)) {
+    assert(indexValid(Idx) && "Invalid structure index!");
+    return STy->getElementType(Idx);
+  }
   
-  std::string DescStr;
-  raw_string_ostream DescOS(DescStr);
-  Map.print(this, DescOS);
-  return DescOS.str();
+  return cast<SequentialType>(this)->getElementType();
+}
+bool CompositeType::indexValid(const Value *V) const {
+  if (const StructType *STy = dyn_cast<StructType>(this)) {
+    // Structure indexes require 32-bit integer constants.
+    if (V->getType()->isIntegerTy(32))
+      if (const ConstantInt *CU = dyn_cast<ConstantInt>(V))
+        return CU->getZExtValue() < STy->getNumElements();
+    return false;
+  }
+  
+  // Sequential types can be indexed by any integer.
+  return V->getType()->isIntegerTy();
 }
 
-
-bool StructType::indexValid(const Value *V) const {
-  // Structure indexes require 32-bit integer constants.
-  if (V->getType()->isIntegerTy(32))
-    if (const ConstantInt *CU = dyn_cast<ConstantInt>(V))
-      return indexValid(CU->getZExtValue());
-  return false;
-}
-
-bool StructType::indexValid(unsigned V) const {
-  return V < NumContainedTys;
-}
-
-// getTypeAtIndex - Given an index value into the type, return the type of the
-// element.  For a structure type, this must be a constant value...
-//
-const Type *StructType::getTypeAtIndex(const Value *V) const {
-  unsigned Idx = (unsigned)cast<ConstantInt>(V)->getZExtValue();
-  return getTypeAtIndex(Idx);
-}
-
-const Type *StructType::getTypeAtIndex(unsigned Idx) const {
-  assert(indexValid(Idx) && "Invalid structure index!");
-  return ContainedTys[Idx];
+bool CompositeType::indexValid(unsigned Idx) const {
+  if (const StructType *STy = dyn_cast<StructType>(this))
+    return Idx < STy->getNumElements();
+  // Sequential types can be indexed by any integer.
+  return true;
 }
 
 
@@ -482,11 +456,11 @@ bool FunctionType::isValidArgumentType(const Type *ArgTy) {
 FunctionType::FunctionType(const Type *Result,
                            ArrayRef<const Type*> Params,
                            bool IsVarArgs)
-  : DerivedType(Result->getContext(), FunctionTyID), isVarArgs(IsVarArgs) {
+  : DerivedType(Result->getContext(), FunctionTyID) {
   ContainedTys = reinterpret_cast<PATypeHandle*>(this+1);
   NumContainedTys = Params.size() + 1; // + 1 for result type
   assert(isValidReturnType(Result) && "invalid return type for function");
-
+  setSubclassData(IsVarArgs);
 
   bool isAbstract = Result->isAbstract();
   new (&ContainedTys[0]) PATypeHandle(Result, this);
@@ -542,7 +516,7 @@ VectorType::VectorType(const Type *ElType, unsigned NumEl)
 
 PointerType::PointerType(const Type *E, unsigned AddrSpace)
   : SequentialType(PointerTyID, E) {
-  AddressSpace = AddrSpace;
+  setSubclassData(AddrSpace);
   // Calculate whether or not this type is abstract
   setAbstract(E->isAbstract());
 }
@@ -855,6 +829,9 @@ FunctionValType FunctionValType::get(const FunctionType *FT) {
   return FunctionValType(FT->getReturnType(), ParamTypes, FT->isVarArg());
 }
 
+FunctionType *FunctionType::get(const Type *Result, bool isVarArg) {
+  return get(Result, ArrayRef<const Type *>(), isVarArg);
+}
 
 // FunctionType::get - The factory function for the FunctionType class...
 FunctionType *FunctionType::get(const Type *ReturnType,
@@ -931,8 +908,13 @@ bool VectorType::isValidElementType(const Type *ElemTy) {
 }
 
 //===----------------------------------------------------------------------===//
-// Struct Type Factory...
+// Struct Type Factory.
 //
+
+StructType *StructType::get(LLVMContext &Context, bool isPacked) {
+  return get(Context, llvm::ArrayRef<const Type*>(), isPacked);
+}
+
 
 StructType *StructType::get(LLVMContext &Context,
                             ArrayRef<const Type*> ETypes, 
@@ -957,15 +939,17 @@ StructType *StructType::get(LLVMContext &Context,
   return ST;
 }
 
-StructType *StructType::get(LLVMContext &Context, const Type *type, ...) {
+StructType *StructType::get(const Type *type, ...) {
+  assert(type != 0 && "Cannot create a struct type with no elements with this");
+  LLVMContext &Ctx = type->getContext();
   va_list ap;
-  std::vector<const llvm::Type*> StructFields;
+  SmallVector<const llvm::Type*, 8> StructFields;
   va_start(ap, type);
   while (type) {
     StructFields.push_back(type);
     type = va_arg(ap, llvm::Type*);
   }
-  return llvm::StructType::get(Context, StructFields);
+  return llvm::StructType::get(Ctx, StructFields);
 }
 
 bool StructType::isValidElementType(const Type *ElemTy) {
@@ -1081,11 +1065,6 @@ void DerivedType::refineAbstractTypeTo(const Type *NewType) {
   assert(isAbstract() && "refineAbstractTypeTo: Current type is not abstract!");
   assert(this != NewType && "Can't refine to myself!");
   assert(ForwardType == 0 && "This type has already been refined!");
-
-  LLVMContextImpl *pImpl = getContext().pImpl;
-
-  // The descriptions may be out of date.  Conservatively clear them all!
-  pImpl->AbstractTypeDescriptions.clear();
 
 #ifdef DEBUG_MERGE_TYPES
   DEBUG(dbgs() << "REFINING abstract type [" << (void*)this << " "
@@ -1234,12 +1213,6 @@ void PointerType::refineAbstractType(const DerivedType *OldType,
 void PointerType::typeBecameConcrete(const DerivedType *AbsTy) {
   LLVMContextImpl *pImpl = AbsTy->getContext().pImpl;
   pImpl->PointerTypes.TypeBecameConcrete(this, AbsTy);
-}
-
-bool SequentialType::indexValid(const Value *V) const {
-  if (V->getType()->isIntegerTy()) 
-    return true;
-  return false;
 }
 
 namespace llvm {

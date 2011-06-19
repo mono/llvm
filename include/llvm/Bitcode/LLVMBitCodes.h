@@ -112,20 +112,16 @@ namespace bitc {
 
   enum MetadataCodes {
     METADATA_STRING        = 1,   // MDSTRING:      [values]
-    // FIXME: Remove NODE in favor of NODE2 in LLVM 3.0
-    METADATA_NODE          = 2,   // NODE with potentially invalid metadata
-    // FIXME: Remove FN_NODE in favor of FN_NODE2 in LLVM 3.0
-    METADATA_FN_NODE       = 3,   // FN_NODE with potentially invalid metadata
+    // 2 is unused.
+    // 3 is unused.
     METADATA_NAME          = 4,   // STRING:        [values]
-    // FIXME: Remove NAMED_NODE in favor of NAMED_NODE2 in LLVM 3.0
-    METADATA_NAMED_NODE    = 5,   // NAMED_NODE with potentially invalid metadata
+    // 5 is unused.
     METADATA_KIND          = 6,   // [n x [id, name]]
-    // FIXME: Remove ATTACHMENT in favor of ATTACHMENT2 in LLVM 3.0
-    METADATA_ATTACHMENT    = 7,   // ATTACHMENT with potentially invalid metadata
-    METADATA_NODE2         = 8,   // NODE2:         [n x (type num, value num)]
-    METADATA_FN_NODE2      = 9,   // FN_NODE2:      [n x (type num, value num)]
-    METADATA_NAMED_NODE2   = 10,  // NAMED_NODE2:   [n x mdnodes]
-    METADATA_ATTACHMENT2   = 11   // [m x [value, [n x [id, mdnode]]]
+    // 7 is unused.
+    METADATA_NODE          = 8,   // NODE:          [n x (type num, value num)]
+    METADATA_FN_NODE       = 9,   // FN_NODE:       [n x (type num, value num)]
+    METADATA_NAMED_NODE    = 10,  // NAMED_NODE:    [n x mdnodes]
+    METADATA_ATTACHMENT    = 11   // [m x [value, [n x [id, mdnode]]]
   };
   // The constants block (CONSTANTS_BLOCK_ID) describes emission for each
   // constant and maintains an implicit current type value.
@@ -227,21 +223,18 @@ namespace bitc {
     FUNC_CODE_INST_UNREACHABLE = 15, // UNREACHABLE
 
     FUNC_CODE_INST_PHI         = 16, // PHI:        [ty, val0,bb0, ...]
-    FUNC_CODE_INST_MALLOC      = 17, // MALLOC:     [instty, op, align]
-    FUNC_CODE_INST_FREE        = 18, // FREE:       [opty, op]
+    // 17 is unused.
+    // 18 is unused.
     FUNC_CODE_INST_ALLOCA      = 19, // ALLOCA:     [instty, op, align]
     FUNC_CODE_INST_LOAD        = 20, // LOAD:       [opty, op, align, vol]
-    // FIXME: Remove STORE in favor of STORE2 in LLVM 3.0
-    FUNC_CODE_INST_STORE       = 21, // STORE:      [valty,val,ptr, align, vol]
-    // FIXME: Remove CALL in favor of CALL2 in LLVM 3.0
-    FUNC_CODE_INST_CALL        = 22, // CALL with potentially invalid metadata
+    // 21 is unused.
+    // 22 is unused.
     FUNC_CODE_INST_VAARG       = 23, // VAARG:      [valistty, valist, instty]
     // This store code encodes the pointer type, rather than the value type
     // this is so information only available in the pointer type (e.g. address
     // spaces) is retained.
-    FUNC_CODE_INST_STORE2      = 24, // STORE:      [ptrty,ptr,val, align, vol]
-    // FIXME: Remove GETRESULT in favor of EXTRACTVAL in LLVM 3.0
-    FUNC_CODE_INST_GETRESULT   = 25, // GETRESULT:  [ty, opval, n]
+    FUNC_CODE_INST_STORE       = 24, // STORE:      [ptrty,ptr,val, align, vol]
+    // 25 is unused.
     FUNC_CODE_INST_EXTRACTVAL  = 26, // EXTRACTVAL: [n x operands]
     FUNC_CODE_INST_INSERTVAL   = 27, // INSERTVAL:  [n x operands]
     // fcmp/icmp returning Int1TY or vector of Int1Ty. Same as CMP, exists to
@@ -251,14 +244,12 @@ namespace bitc {
     FUNC_CODE_INST_VSELECT     = 29, // VSELECT:    [ty,opval,opval,predty,pred]
     FUNC_CODE_INST_INBOUNDS_GEP= 30, // INBOUNDS_GEP: [n x operands]
     FUNC_CODE_INST_INDIRECTBR  = 31, // INDIRECTBR: [opty, op0, op1, ...]
-    
-    // FIXME: Remove DEBUG_LOC in favor of DEBUG_LOC2 in LLVM 3.0
-    FUNC_CODE_DEBUG_LOC        = 32, // DEBUG_LOC with potentially invalid metadata
+    // 32 is unused.
     FUNC_CODE_DEBUG_LOC_AGAIN  = 33, // DEBUG_LOC_AGAIN
 
-    FUNC_CODE_INST_CALL2       = 34, // CALL2:      [attr, fnty, fnid, args...]
+    FUNC_CODE_INST_CALL        = 34, // CALL:       [attr, fnty, fnid, args...]
 
-    FUNC_CODE_DEBUG_LOC2       = 35  // DEBUG_LOC2: [Line,Col,ScopeVal, IAVal]
+    FUNC_CODE_DEBUG_LOC        = 35  // DEBUG_LOC:  [Line,Col,ScopeVal, IAVal]
   };
 } // End bitc namespace
 } // End llvm namespace

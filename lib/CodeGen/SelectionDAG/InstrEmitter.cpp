@@ -76,6 +76,12 @@ EmitCopyFromReg(SDNode *Node, unsigned ResNo, bool IsClone, bool IsCloned,
   // the CopyToReg'd destination register instead of creating a new vreg.
   bool MatchReg = true;
   const TargetRegisterClass *UseRC = NULL;
+  EVT VT = Node->getValueType(ResNo);
+
+  // Stick to the preferred register classes for legal types.
+  if (TLI->isTypeLegal(VT))
+    UseRC = TLI->getRegClassFor(VT);
+
   if (!IsClone && !IsCloned)
     for (SDNode::use_iterator UI = Node->use_begin(), E = Node->use_end();
          UI != E; ++UI) {
@@ -121,10 +127,9 @@ EmitCopyFromReg(SDNode *Node, unsigned ResNo, bool IsClone, bool IsCloned,
         break;
     }
 
-  EVT VT = Node->getValueType(ResNo);
   const TargetRegisterClass *SrcRC = 0, *DstRC = 0;
   SrcRC = TRI->getMinimalPhysRegClass(SrcReg, VT);
-  
+
   // Figure out the register class to create for the destreg.
   if (VRBase) {
     DstRC = MRI->getRegClass(VRBase);
@@ -543,17 +548,18 @@ InstrEmitter::EmitCopyToRegClassNode(SDNode *Node,
 void InstrEmitter::EmitRegSequence(SDNode *Node,
                                   DenseMap<SDValue, unsigned> &VRBaseMap,
                                   bool IsClone, bool IsCloned) {
-  const TargetRegisterClass *RC = TLI->getRegClassFor(Node->getValueType(0));
+  unsigned DstRCIdx = cast<ConstantSDNode>(Node->getOperand(0))->getZExtValue();
+  const TargetRegisterClass *RC = TRI->getRegClass(DstRCIdx);
   unsigned NewVReg = MRI->createVirtualRegister(RC);
   MachineInstr *MI = BuildMI(*MF, Node->getDebugLoc(),
                              TII->get(TargetOpcode::REG_SEQUENCE), NewVReg);
   unsigned NumOps = Node->getNumOperands();
-  assert((NumOps & 1) == 0 &&
-         "REG_SEQUENCE must have an even number of operands!");
+  assert((NumOps & 1) == 1 &&
+         "REG_SEQUENCE must have an odd number of operands!");
   const TargetInstrDesc &II = TII->get(TargetOpcode::REG_SEQUENCE);
-  for (unsigned i = 0; i != NumOps; ++i) {
+  for (unsigned i = 1; i != NumOps; ++i) {
     SDValue Op = Node->getOperand(i);
-    if (i & 1) {
+    if ((i & 1) == 0) {
       unsigned SubIdx = cast<ConstantSDNode>(Op)->getZExtValue();
       unsigned SubReg = getVR(Node->getOperand(i-1), VRBaseMap);
       const TargetRegisterClass *TRC = MRI->getRegClass(SubReg);

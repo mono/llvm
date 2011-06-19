@@ -110,6 +110,12 @@ getReservedRegs(const MachineFunction &MF) const {
     // passing even if it is 'reserved'.
     Reserved.set(ARM::R8);
 
+  // Reserve D16-D31 if the subtarget doesn't support them.
+  if (!STI.hasVFP3() || STI.hasD16()) {
+    assert(ARM::D31 == ARM::D16 + 15);
+    for (unsigned i = 0; i != 16; ++i)
+      Reserved.set(ARM::D16 + i);
+  }
   return Reserved;
 }
 
@@ -397,12 +403,12 @@ ARMBaseRegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
   }
 }
 
-/// getAllocationOrder - Returns the register allocation order for a specified
-/// register class in the form of a pair of TargetRegisterClass iterators.
-std::pair<TargetRegisterClass::iterator,TargetRegisterClass::iterator>
-ARMBaseRegisterInfo::getAllocationOrder(const TargetRegisterClass *RC,
-                                        unsigned HintType, unsigned HintReg,
-                                        const MachineFunction &MF) const {
+/// getRawAllocationOrder - Returns the register allocation order for a
+/// specified register class with a target-dependent hint.
+ArrayRef<unsigned>
+ARMBaseRegisterInfo::getRawAllocationOrder(const TargetRegisterClass *RC,
+                                           unsigned HintType, unsigned HintReg,
+                                           const MachineFunction &MF) const {
   const TargetFrameLowering *TFI = MF.getTarget().getFrameLowering();
   // Alternative register allocation orders when favoring even / odd registers
   // of register pairs.
@@ -479,70 +485,54 @@ ARMBaseRegisterInfo::getAllocationOrder(const TargetRegisterClass *RC,
 
   // We only support even/odd hints for GPR and rGPR.
   if (RC != ARM::GPRRegisterClass && RC != ARM::rGPRRegisterClass)
-    return std::make_pair(RC->allocation_order_begin(MF),
-                          RC->allocation_order_end(MF));
+    return RC->getRawAllocationOrder(MF);
 
   if (HintType == ARMRI::RegPairEven) {
     if (isPhysicalRegister(HintReg) && getRegisterPairEven(HintReg, MF) == 0)
       // It's no longer possible to fulfill this hint. Return the default
       // allocation order.
-      return std::make_pair(RC->allocation_order_begin(MF),
-                            RC->allocation_order_end(MF));
+      return RC->getRawAllocationOrder(MF);
 
     if (!TFI->hasFP(MF)) {
       if (!STI.isR9Reserved())
-        return std::make_pair(GPREven1,
-                              GPREven1 + (sizeof(GPREven1)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPREven1);
       else
-        return std::make_pair(GPREven4,
-                              GPREven4 + (sizeof(GPREven4)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPREven4);
     } else if (FramePtr == ARM::R7) {
       if (!STI.isR9Reserved())
-        return std::make_pair(GPREven2,
-                              GPREven2 + (sizeof(GPREven2)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPREven2);
       else
-        return std::make_pair(GPREven5,
-                              GPREven5 + (sizeof(GPREven5)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPREven5);
     } else { // FramePtr == ARM::R11
       if (!STI.isR9Reserved())
-        return std::make_pair(GPREven3,
-                              GPREven3 + (sizeof(GPREven3)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPREven3);
       else
-        return std::make_pair(GPREven6,
-                              GPREven6 + (sizeof(GPREven6)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPREven6);
     }
   } else if (HintType == ARMRI::RegPairOdd) {
     if (isPhysicalRegister(HintReg) && getRegisterPairOdd(HintReg, MF) == 0)
       // It's no longer possible to fulfill this hint. Return the default
       // allocation order.
-      return std::make_pair(RC->allocation_order_begin(MF),
-                            RC->allocation_order_end(MF));
+      return RC->getRawAllocationOrder(MF);
 
     if (!TFI->hasFP(MF)) {
       if (!STI.isR9Reserved())
-        return std::make_pair(GPROdd1,
-                              GPROdd1 + (sizeof(GPROdd1)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPROdd1);
       else
-        return std::make_pair(GPROdd4,
-                              GPROdd4 + (sizeof(GPROdd4)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPROdd4);
     } else if (FramePtr == ARM::R7) {
       if (!STI.isR9Reserved())
-        return std::make_pair(GPROdd2,
-                              GPROdd2 + (sizeof(GPROdd2)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPROdd2);
       else
-        return std::make_pair(GPROdd5,
-                              GPROdd5 + (sizeof(GPROdd5)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPROdd5);
     } else { // FramePtr == ARM::R11
       if (!STI.isR9Reserved())
-        return std::make_pair(GPROdd3,
-                              GPROdd3 + (sizeof(GPROdd3)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPROdd3);
       else
-        return std::make_pair(GPROdd6,
-                              GPROdd6 + (sizeof(GPROdd6)/sizeof(unsigned)));
+        return ArrayRef<unsigned>(GPROdd6);
     }
   }
-  return std::make_pair(RC->allocation_order_begin(MF),
-                        RC->allocation_order_end(MF));
+  return RC->getRawAllocationOrder(MF);
 }
 
 /// ResolveRegAllocHint - Resolves the specified register allocation hint

@@ -545,6 +545,7 @@ void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
 
     // Delete the pseudo instruction TCRETURN.
     MBB.erase(MBBI);
+    MBBI = NewMI;
   }
 
   if (VARegSaveSize)
@@ -959,9 +960,14 @@ ARMFrameLowering::processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
     if (AFI->getVarArgsRegSaveSize() > 0)
       MF.getRegInfo().setPhysRegUsed(ARM::LR);
 
-    // Spill R4 if Thumb1 epilogue has to restore SP from FP since 
+    // Spill R4 if Thumb1 epilogue has to restore SP from FP. We don't know
+    // for sure what the stack size will be, but for this, an estimate is good
+    // enough. If there anything changes it, it'll be a spill, which implies
+    // we've used all the registers and so R4 is already used, so not marking
+    // it here will be OK.
     // FIXME: It will be better just to find spare register here.
-    if (MFI->hasVarSizedObjects())
+    unsigned StackSize = estimateStackSize(MF);
+    if (MFI->hasVarSizedObjects() || StackSize > 508)
       MF.getRegInfo().setPhysRegUsed(ARM::R4);
   }
 

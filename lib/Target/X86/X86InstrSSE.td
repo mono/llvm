@@ -2006,13 +2006,13 @@ def MOVNTI_64mr : RI<0xC3, MRMDestMem, (outs), (ins i64mem:$dst, GR64:$src),
 
 // Prefetch intrinsic.
 def PREFETCHT0   : PSI<0x18, MRM1m, (outs), (ins i8mem:$src),
-    "prefetcht0\t$src", [(prefetch addr:$src, imm, (i32 3))]>;
+    "prefetcht0\t$src", [(prefetch addr:$src, imm, (i32 3), (i32 1))]>;
 def PREFETCHT1   : PSI<0x18, MRM2m, (outs), (ins i8mem:$src),
-    "prefetcht1\t$src", [(prefetch addr:$src, imm, (i32 2))]>;
+    "prefetcht1\t$src", [(prefetch addr:$src, imm, (i32 2), (i32 1))]>;
 def PREFETCHT2   : PSI<0x18, MRM3m, (outs), (ins i8mem:$src),
-    "prefetcht2\t$src", [(prefetch addr:$src, imm, (i32 1))]>;
+    "prefetcht2\t$src", [(prefetch addr:$src, imm, (i32 1), (i32 1))]>;
 def PREFETCHNTA  : PSI<0x18, MRM0m, (outs), (ins i8mem:$src),
-    "prefetchnta\t$src", [(prefetch addr:$src, imm, (i32 0))]>;
+    "prefetchnta\t$src", [(prefetch addr:$src, imm, (i32 0), (i32 1))]>;
 
 // Load, store, and memory fence
 def SFENCE : I<0xAE, MRM_F8, (outs), (ins), "sfence", [(int_x86_sse_sfence)]>,
@@ -2062,6 +2062,15 @@ def : Pat<(v16i8 immAllZerosV), (V_SET0PI)>;
 
 def : Pat<(f32 (vector_extract (v4f32 VR128:$src), (iPTR 0))),
           (f32 (EXTRACT_SUBREG (v4f32 VR128:$src), sub_ss))>;
+
+// FIXME: According to the intel manual, DEST[127:64] <- SRC1[127:64], while
+// in the non-AVX version bits 127:64 aren't touched. Find a better way to
+// represent this instead of always zeroing SRC1. One possible solution is
+// to represent the instruction w/ something similar as the "$src1 = $dst"
+// constraint but without the tied operands.
+def : Pat<(extloadf32 addr:$src),
+          (VCVTSS2SDrm (f32 (EXTRACT_SUBREG (AVX_SET0PS), sub_ss)), addr:$src)>,
+      Requires<[HasAVX, OptForSpeed]>;
 
 //===----------------------------------------------------------------------===//
 // SSE 1 & 2 - Load/Store XCSR register
@@ -3588,6 +3597,16 @@ def : InstAlias<"monitor %rax, %rcx, %rdx", (MONITORrrr)>,
 let Predicates = [HasSSE2] in
  def : Pat<(fextend (loadf32 addr:$src)),
            (CVTSS2SDrm addr:$src)>;
+
+// FIXME: According to the intel manual, DEST[127:64] <- SRC1[127:64], while
+// in the non-AVX version bits 127:64 aren't touched. Find a better way to
+// represent this instead of always zeroing SRC1. One possible solution is
+// to represent the instruction w/ something similar as the "$src1 = $dst"
+// constraint but without the tied operands.
+let Predicates = [HasAVX] in
+ def : Pat<(fextend (loadf32 addr:$src)),
+           (VCVTSS2SDrm (f32 (EXTRACT_SUBREG (AVX_SET0PS), sub_ss)),
+                        addr:$src)>;
 
 // bit_convert
 let Predicates = [HasXMMInt] in {

@@ -18,6 +18,7 @@
 
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/ValueTypes.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include <cassert>
 #include <functional>
@@ -236,27 +237,23 @@ public:
     return SuperClasses[0] != 0;
   }
 
-  /// allocation_order_begin/end - These methods define a range of registers
-  /// which specify the registers in this class that are valid to register
-  /// allocate, and the preferred order to allocate them in.  For example,
-  /// callee saved registers should be at the end of the list, because it is
-  /// cheaper to allocate caller saved registers.
+  /// getRawAllocationOrder - Returns the preferred order for allocating
+  /// registers from this register class in MF. The raw order comes directly
+  /// from the .td file and may include reserved registers that are not
+  /// allocatable. Register allocators should also make sure to allocate
+  /// callee-saved registers only after all the volatiles are used. The
+  /// RegisterClassInfo class provides filtered allocation orders with
+  /// callee-saved registers moved to the end.
   ///
-  /// These methods take a MachineFunction argument, which can be used to tune
-  /// the allocatable registers based on the characteristics of the function,
-  /// subtarget, or other criteria.
+  /// The MachineFunction argument can be used to tune the allocatable
+  /// registers based on the characteristics of the function, subtarget, or
+  /// other criteria.
   ///
-  /// Register allocators should account for the fact that an allocation
-  /// order iterator may return a reserved register and always check
-  /// if the register is allocatable (getAllocatableSet()) before using it.
+  /// By default, this method returns all registers in the class.
   ///
-  /// By default, these methods return all registers in the class.
-  ///
-  virtual iterator allocation_order_begin(const MachineFunction &MF) const {
-    return begin();
-  }
-  virtual iterator allocation_order_end(const MachineFunction &MF)   const {
-    return end();
+  virtual
+  ArrayRef<unsigned> getRawAllocationOrder(const MachineFunction &MF) const {
+    return ArrayRef<unsigned>(begin(), getNumRegs());
   }
 
   /// getSize - Return the size of the register in bytes, which is also the size
@@ -285,11 +282,6 @@ public:
 /// descriptor.
 ///
 class TargetRegisterInfo {
-protected:
-  const unsigned* SubregHash;
-  const unsigned SubregHashSize;
-  const unsigned* AliasesHash;
-  const unsigned AliasesHashSize;
 public:
   typedef const TargetRegisterClass * const * regclass_iterator;
 private:
@@ -307,11 +299,7 @@ protected:
                      regclass_iterator RegClassEnd,
                      const char *const *subregindexnames,
                      int CallFrameSetupOpcode = -1,
-                     int CallFrameDestroyOpcode = -1,
-                     const unsigned* subregs = 0,
-                     const unsigned subregsize = 0,
-                     const unsigned* aliases = 0,
-                     const unsigned aliasessize = 0);
+                     int CallFrameDestroyOpcode = -1);
   virtual ~TargetRegisterInfo();
 public:
 
@@ -434,7 +422,7 @@ public:
   /// getSuperRegisters - Return the list of registers that are super-registers
   /// of the specified register, or a null list of there are none. The list
   /// returned is zero terminated and sorted according to super-sub register
-  /// relations. e.g. X86::AL's super-register list is RAX, EAX, AX.
+  /// relations. e.g. X86::AL's super-register list is AX, EAX, RAX.
   ///
   const unsigned *getSuperRegisters(unsigned RegNo) const {
     return get(RegNo).SuperRegs;
@@ -468,49 +456,28 @@ public:
   /// regsOverlap - Returns true if the two registers are equal or alias each
   /// other. The registers may be virtual register.
   bool regsOverlap(unsigned regA, unsigned regB) const {
-    if (regA == regB)
-      return true;
-
+    if (regA == regB) return true;
     if (isVirtualRegister(regA) || isVirtualRegister(regB))
       return false;
-
-    // regA and regB are distinct physical registers. Do they alias?
-    size_t index = (regA + regB * 37) & (AliasesHashSize-1);
-    unsigned ProbeAmt = 0;
-    while (AliasesHash[index*2] != 0 &&
-           AliasesHash[index*2+1] != 0) {
-      if (AliasesHash[index*2] == regA && AliasesHash[index*2+1] == regB)
-        return true;
-
-      index = (index + ProbeAmt) & (AliasesHashSize-1);
-      ProbeAmt += 2;
+    for (const unsigned *regList = getOverlaps(regA)+1; *regList; ++regList) {
+      if (*regList == regB) return true;
     }
-
     return false;
   }
 
   /// isSubRegister - Returns true if regB is a sub-register of regA.
   ///
   bool isSubRegister(unsigned regA, unsigned regB) const {
-    // SubregHash is a simple quadratically probed hash table.
-    size_t index = (regA + regB * 37) & (SubregHashSize-1);
-    unsigned ProbeAmt = 2;
-    while (SubregHash[index*2] != 0 &&
-           SubregHash[index*2+1] != 0) {
-      if (SubregHash[index*2] == regA && SubregHash[index*2+1] == regB)
-        return true;
-
-      index = (index + ProbeAmt) & (SubregHashSize-1);
-      ProbeAmt += 2;
-    }
-
-    return false;
+    return isSuperRegister(regB, regA);
   }
 
   /// isSuperRegister - Returns true if regB is a super-register of regA.
   ///
   bool isSuperRegister(unsigned regA, unsigned regB) const {
-    return isSubRegister(regB, regA);
+    for (const unsigned *regList = getSuperRegisters(regA); *regList;++regList){
+      if (*regList == regB) return true;
+    }
+    return false;
   }
 
   /// getCalleeSavedRegs - Return a null-terminated list of all of the
@@ -642,14 +609,17 @@ public:
     return 0;
   }
 
-  /// getAllocationOrder - Returns the register allocation order for a specified
-  /// register class in the form of a pair of TargetRegisterClass iterators.
-  virtual std::pair<TargetRegisterClass::iterator,TargetRegisterClass::iterator>
-  getAllocationOrder(const TargetRegisterClass *RC,
-                     unsigned HintType, unsigned HintReg,
-                     const MachineFunction &MF) const {
-    return std::make_pair(RC->allocation_order_begin(MF),
-                          RC->allocation_order_end(MF));
+  /// getRawAllocationOrder - Returns the register allocation order for a
+  /// specified register class with a target-dependent hint. The returned list
+  /// may contain reserved registers that cannot be allocated.
+  ///
+  /// Register allocators need only call this function to resolve
+  /// target-dependent hints, but it should work without hinting as well.
+  virtual ArrayRef<unsigned>
+  getRawAllocationOrder(const TargetRegisterClass *RC,
+                        unsigned HintType, unsigned HintReg,
+                        const MachineFunction &MF) const {
+    return RC->getRawAllocationOrder(MF);
   }
 
   /// ResolveRegAllocHint - Resolves the specified register allocation hint

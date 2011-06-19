@@ -23,6 +23,7 @@
 #include "llvm/Operator.h"
 #include "llvm/TypeSymbolTable.h"
 #include "llvm/ValueSymbolTable.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
@@ -489,8 +490,8 @@ static void WriteMDNode(const MDNode *N,
       Record.push_back(0);
     }
   }
-  unsigned MDCode = N->isFunctionLocal() ? bitc::METADATA_FN_NODE2 :
-                                           bitc::METADATA_NODE2;
+  unsigned MDCode = N->isFunctionLocal() ? bitc::METADATA_FN_NODE :
+                                           bitc::METADATA_NODE;
   Stream.EmitRecord(MDCode, Record, 0);
   Record.clear();
 }
@@ -553,7 +554,7 @@ static void WriteModuleMetadata(const Module *M,
     // Write named metadata operands.
     for (unsigned i = 0, e = NMD->getNumOperands(); i != e; ++i)
       Record.push_back(VE.getValueID(NMD->getOperand(i)));
-    Stream.EmitRecord(bitc::METADATA_NAMED_NODE2, Record, 0);
+    Stream.EmitRecord(bitc::METADATA_NAMED_NODE, Record, 0);
     Record.clear();
   }
 
@@ -589,7 +590,7 @@ static void WriteMetadataAttachment(const Function &F,
   SmallVector<uint64_t, 64> Record;
 
   // Write metadata attachments
-  // METADATA_ATTACHMENT2 - [m x [value, [n x [id, mdnode]]]
+  // METADATA_ATTACHMENT - [m x [value, [n x [id, mdnode]]]
   SmallVector<std::pair<unsigned, MDNode*>, 4> MDs;
   
   for (Function::const_iterator BB = F.begin(), E = F.end(); BB != E; ++BB)
@@ -607,7 +608,7 @@ static void WriteMetadataAttachment(const Function &F,
         Record.push_back(MDs[i].first);
         Record.push_back(VE.getValueID(MDs[i].second));
       }
-      Stream.EmitRecord(bitc::METADATA_ATTACHMENT2, Record, 0);
+      Stream.EmitRecord(bitc::METADATA_ATTACHMENT, Record, 0);
       Record.clear();
     }
 
@@ -1102,7 +1103,7 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     Vals.push_back(cast<LoadInst>(I).isVolatile());
     break;
   case Instruction::Store:
-    Code = bitc::FUNC_CODE_INST_STORE2;
+    Code = bitc::FUNC_CODE_INST_STORE;
     PushValueAndType(I.getOperand(1), InstID, Vals, VE);  // ptrty + ptr
     Vals.push_back(VE.getValueID(I.getOperand(0)));       // val.
     Vals.push_back(Log2_32(cast<StoreInst>(I).getAlignment())+1);
@@ -1113,7 +1114,7 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     const PointerType *PTy = cast<PointerType>(CI.getCalledValue()->getType());
     const FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
 
-    Code = bitc::FUNC_CODE_INST_CALL2;
+    Code = bitc::FUNC_CODE_INST_CALL;
 
     Vals.push_back(VE.getAttributeID(CI.getAttributes()));
     Vals.push_back((CI.getCallingConv() << 1) | unsigned(CI.isTailCall()));
@@ -1257,7 +1258,7 @@ static void WriteFunction(const Function &F, ValueEnumerator &VE,
         Vals.push_back(DL.getCol());
         Vals.push_back(Scope ? VE.getValueID(Scope)+1 : 0);
         Vals.push_back(IA ? VE.getValueID(IA)+1 : 0);
-        Stream.EmitRecord(bitc::FUNC_CODE_DEBUG_LOC2, Vals);
+        Stream.EmitRecord(bitc::FUNC_CODE_DEBUG_LOC, Vals);
         Vals.clear();
         
         LastDL = DL;
@@ -1543,40 +1544,7 @@ enum {
   DarwinBCHeaderSize = 5*4
 };
 
-/// isARMTriplet - Return true if the triplet looks like:
-/// arm-*, thumb-*, armv[0-9]-*, thumbv[0-9]-*, armv5te-*, or armv6t2-*.
-static bool isARMTriplet(const std::string &TT) {
-  size_t Pos = 0;
-  size_t Size = TT.size();
-  if (Size >= 6 &&
-      TT[0] == 't' && TT[1] == 'h' && TT[2] == 'u' &&
-      TT[3] == 'm' && TT[4] == 'b')
-    Pos = 5;
-  else if (Size >= 4 && TT[0] == 'a' && TT[1] == 'r' && TT[2] == 'm')
-    Pos = 3;
-  else
-    return false;
-
-  if (TT[Pos] == '-')
-    return true;
-  else if (TT[Pos] == 'v') {
-    if (Size >= Pos+4 &&
-        TT[Pos+1] == '6' && TT[Pos+2] == 't' && TT[Pos+3] == '2')
-      return true;
-    else if (Size >= Pos+4 &&
-             TT[Pos+1] == '5' && TT[Pos+2] == 't' && TT[Pos+3] == 'e')
-      return true;
-  } else
-    return false;
-  while (++Pos < Size && TT[Pos] != '-') {
-    if (!isdigit(TT[Pos]))
-      return false;
-  }
-  return true;
-}
-
-static void EmitDarwinBCHeader(BitstreamWriter &Stream,
-                               const std::string &TT) {
+static void EmitDarwinBCHeader(BitstreamWriter &Stream, const Triple &TT) {
   unsigned CPUType = ~0U;
 
   // Match x86_64-*, i[3-9]86-*, powerpc-*, powerpc64-*, arm-*, thumb-*,
@@ -1590,16 +1558,16 @@ static void EmitDarwinBCHeader(BitstreamWriter &Stream,
     DARWIN_CPU_TYPE_POWERPC    = 18
   };
 
-  if (TT.find("x86_64-") == 0)
+  Triple::ArchType Arch = TT.getArch();
+  if (Arch == Triple::x86_64)
     CPUType = DARWIN_CPU_TYPE_X86 | DARWIN_CPU_ARCH_ABI64;
-  else if (TT.size() >= 5 && TT[0] == 'i' && TT[2] == '8' && TT[3] == '6' &&
-           TT[4] == '-' && TT[1] - '3' < 6)
+  else if (Arch == Triple::x86)
     CPUType = DARWIN_CPU_TYPE_X86;
-  else if (TT.find("powerpc-") == 0)
+  else if (Arch == Triple::ppc)
     CPUType = DARWIN_CPU_TYPE_POWERPC;
-  else if (TT.find("powerpc64-") == 0)
+  else if (Arch == Triple::ppc64)
     CPUType = DARWIN_CPU_TYPE_POWERPC | DARWIN_CPU_ARCH_ABI64;
-  else if (isARMTriplet(TT))
+  else if (Arch == Triple::arm || Arch == Triple::thumb)
     CPUType = DARWIN_CPU_TYPE_ARM;
 
   // Traditional Bitcode starts after header.
@@ -1645,11 +1613,9 @@ void llvm::WriteBitcodeToFile(const Module *M, raw_ostream &Out) {
 void llvm::WriteBitcodeToStream(const Module *M, BitstreamWriter &Stream) {
   // If this is darwin or another generic macho target, emit a file header and
   // trailer if needed.
-  bool isMacho =
-    M->getTargetTriple().find("-darwin") != std::string::npos ||
-    M->getTargetTriple().find("-macho") != std::string::npos;
-  if (isMacho)
-    EmitDarwinBCHeader(Stream, M->getTargetTriple());
+  Triple TT(M->getTargetTriple());
+  if (TT.isOSDarwin())
+    EmitDarwinBCHeader(Stream, TT);
 
   // Emit the file header.
   Stream.Emit((unsigned)'B', 8);
@@ -1662,6 +1628,6 @@ void llvm::WriteBitcodeToStream(const Module *M, BitstreamWriter &Stream) {
   // Emit the module.
   WriteModule(M, Stream);
 
-  if (isMacho)
+  if (TT.isOSDarwin())
     EmitDarwinBCTrailer(Stream, Stream.getBuffer().size());
 }

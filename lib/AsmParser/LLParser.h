@@ -131,11 +131,10 @@ namespace llvm {
     std::map<ValID, std::vector<std::pair<ValID, GlobalValue*> > >
       ForwardRefBlockAddresses;
     
-    Function *MallocF;
   public:
     LLParser(MemoryBuffer *F, SourceMgr &SM, SMDiagnostic &Err, Module *m) : 
       Context(m->getContext()), Lex(F, SM, Err, m->getContext()),
-      M(m), MallocF(NULL) {}
+      M(m) {}
     bool Run();
 
     LLVMContext& getContext() { return Context; }
@@ -341,7 +340,7 @@ namespace llvm {
                          PerFunctionState &PFS);
     bool ParseCmpPredicate(unsigned &Pred, unsigned Opc);
 
-    int ParseRet(Instruction *&Inst, BasicBlock *BB, PerFunctionState &PFS);
+    bool ParseRet(Instruction *&Inst, BasicBlock *BB, PerFunctionState &PFS);
     bool ParseBr(Instruction *&Inst, PerFunctionState &PFS);
     bool ParseSwitch(Instruction *&Inst, PerFunctionState &PFS);
     bool ParseIndirectBr(Instruction *&Inst, PerFunctionState &PFS);
@@ -359,12 +358,9 @@ namespace llvm {
     bool ParseShuffleVector(Instruction *&I, PerFunctionState &PFS);
     int ParsePHI(Instruction *&I, PerFunctionState &PFS);
     bool ParseCall(Instruction *&I, PerFunctionState &PFS, bool isTail);
-    int ParseAlloc(Instruction *&I, PerFunctionState &PFS,
-                    BasicBlock *BB = 0, bool isAlloca = true);
-    bool ParseFree(Instruction *&I, PerFunctionState &PFS, BasicBlock *BB);
+    int ParseAlloc(Instruction *&I, PerFunctionState &PFS);
     int ParseLoad(Instruction *&I, PerFunctionState &PFS, bool isVolatile);
     int ParseStore(Instruction *&I, PerFunctionState &PFS, bool isVolatile);
-    bool ParseGetResult(Instruction *&I, PerFunctionState &PFS);
     int ParseGetElementPtr(Instruction *&I, PerFunctionState &PFS);
     int ParseExtractValue(Instruction *&I, PerFunctionState &PFS);
     int ParseInsertValue(Instruction *&I, PerFunctionState &PFS);

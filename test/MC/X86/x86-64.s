@@ -308,10 +308,10 @@ fucomi
 fucomi	%st(2)
 fucomi	%st(2), %st
 
-// CHECK: fnstsw %ax
-// CHECK: fnstsw %ax
-// CHECK: fnstsw %ax
-// CHECK: fnstsw %ax
+// CHECK: fnstsw
+// CHECK: fnstsw
+// CHECK: fnstsw
+// CHECK: fnstsw
 
 fnstsw
 fnstsw %ax
@@ -457,7 +457,7 @@ cdq   // CHECK: cltd
 // rdar://8456378 and PR7557 - fstsw
 fstsw %ax
 // CHECK: wait
-// CHECK: fnstsw %ax
+// CHECK: fnstsw
 fstsw (%rax)
 // CHECK: wait
 // CHECK: fnstsw (%rax)

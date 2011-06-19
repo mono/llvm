@@ -276,6 +276,33 @@ private:
 };
 }  // end anonymous namespace
 
+/// GetCostForDef - Looks up the register class and cost for a given definition.
+/// Typically this just means looking up the representative register class,
+/// but for untyped values (MVT::untyped) it means inspecting the node's
+/// opcode to determine what register class is being generated.
+static void GetCostForDef(const ScheduleDAGSDNodes::RegDefIter &RegDefPos,
+                          const TargetLowering *TLI,
+                          const TargetInstrInfo *TII,
+                          const TargetRegisterInfo *TRI,
+                          unsigned &RegClass, unsigned &Cost) {
+  EVT VT = RegDefPos.GetValue();
+
+  // Special handling for untyped values.  These values can only come from
+  // the expansion of custom DAG-to-DAG patterns.
+  if (VT == MVT::untyped) {
+    unsigned Opcode = RegDefPos.GetNode()->getMachineOpcode();
+    unsigned Idx = RegDefPos.GetIdx();
+    const TargetInstrDesc Desc = TII->get(Opcode);
+    const TargetRegisterClass *RC = Desc.getRegClass(Idx, TRI);
+    RegClass = RC->getID();
+    // FIXME: Cost arbitrarily set to 1 because there doesn't seem to be a
+    // better way to determine it.
+    Cost = 1;
+  } else {
+    RegClass = TLI->getRepRegClassFor(VT)->getID();
+    Cost = TLI->getRepRegClassCostFor(VT);
+  }
+}
 
 /// Schedule - Schedule the DAG using list scheduling.
 void ScheduleDAGRRList::Schedule() {
@@ -1008,14 +1035,15 @@ static void CheckForLiveRegDef(SUnit *SU, unsigned Reg,
   for (const unsigned *AliasI = TRI->getOverlaps(Reg); *AliasI; ++AliasI) {
 
     // Check if Ref is live.
-    if (!LiveRegDefs[Reg]) continue;
+    if (!LiveRegDefs[*AliasI]) continue;
 
     // Allow multiple uses of the same def.
-    if (LiveRegDefs[Reg] == SU) continue;
+    if (LiveRegDefs[*AliasI] == SU) continue;
 
     // Add Reg to the set of interfering live regs.
-    if (RegAdded.insert(Reg))
-      LRegs.push_back(Reg);
+    if (RegAdded.insert(*AliasI)) {
+      LRegs.push_back(*AliasI);
+    }
   }
 }
 
@@ -1368,6 +1396,21 @@ struct queue_sort : public std::binary_function<SUnit*, SUnit*, bool> {
   bool isReady(SUnit* SU, unsigned CurCycle) const { return true; }
 };
 
+#ifndef NDEBUG
+template<class SF>
+struct reverse_sort : public queue_sort {
+  SF &SortFunc;
+  reverse_sort(SF &sf) : SortFunc(sf) {}
+  reverse_sort(const reverse_sort &RHS) : SortFunc(RHS.SortFunc) {}
+
+  bool operator()(SUnit* left, SUnit* right) const {
+    // reverse left/right rather than simply !SortFunc(left, right)
+    // to expose different paths in the comparison logic.
+    return SortFunc(right, left);
+  }
+};
+#endif // NDEBUG
+
 /// bu_ls_rr_sort - Priority function for bottom up register pressure
 // reduction scheduler.
 struct bu_ls_rr_sort : public queue_sort {
@@ -1568,20 +1611,33 @@ protected:
 };
 
 template<class SF>
-class RegReductionPriorityQueue : public RegReductionPQBase {
-  static SUnit *popFromQueue(std::vector<SUnit*> &Q, SF &Picker) {
-    std::vector<SUnit *>::iterator Best = Q.begin();
-    for (std::vector<SUnit *>::iterator I = llvm::next(Q.begin()),
-           E = Q.end(); I != E; ++I)
-      if (Picker(*Best, *I))
-        Best = I;
-    SUnit *V = *Best;
-    if (Best != prior(Q.end()))
-      std::swap(*Best, Q.back());
-    Q.pop_back();
-    return V;
-  }
+static SUnit *popFromQueueImpl(std::vector<SUnit*> &Q, SF &Picker) {
+  std::vector<SUnit *>::iterator Best = Q.begin();
+  for (std::vector<SUnit *>::iterator I = llvm::next(Q.begin()),
+         E = Q.end(); I != E; ++I)
+    if (Picker(*Best, *I))
+      Best = I;
+  SUnit *V = *Best;
+  if (Best != prior(Q.end()))
+    std::swap(*Best, Q.back());
+  Q.pop_back();
+  return V;
+}
 
+template<class SF>
+SUnit *popFromQueue(std::vector<SUnit*> &Q, SF &Picker, ScheduleDAG *DAG) {
+#ifndef NDEBUG
+  if (DAG->StressSched) {
+    reverse_sort<SF> RPicker(Picker);
+    return popFromQueueImpl(Q, RPicker);
+  }
+#endif
+  (void)DAG;
+  return popFromQueueImpl(Q, Picker);
+}
+
+template<class SF>
+class RegReductionPriorityQueue : public RegReductionPQBase {
   SF Picker;
 
 public:
@@ -1602,7 +1658,7 @@ public:
   SUnit *pop() {
     if (Queue.empty()) return NULL;
 
-    SUnit *V = popFromQueue(Queue, Picker);
+    SUnit *V = popFromQueue(Queue, Picker, scheduleDAG);
     V->NodeQueueId = 0;
     return V;
   }
@@ -1612,7 +1668,7 @@ public:
     std::vector<SUnit*> DumpQueue = Queue;
     SF DumpPicker = Picker;
     while (!DumpQueue.empty()) {
-      SUnit *SU = popFromQueue(DumpQueue, DumpPicker);
+      SUnit *SU = popFromQueue(DumpQueue, DumpPicker, scheduleDAG);
       if (isBottomUp())
         dbgs() << "Height " << SU->getHeight() << ": ";
       else
@@ -1777,9 +1833,9 @@ bool RegReductionPQBase::HighRegPressure(const SUnit *SU) const {
     }
     for (ScheduleDAGSDNodes::RegDefIter RegDefPos(PredSU, scheduleDAG);
          RegDefPos.IsValid(); RegDefPos.Advance()) {
-      EVT VT = RegDefPos.GetValue();
-      unsigned RCId = TLI->getRepRegClassFor(VT)->getID();
-      unsigned Cost = TLI->getRepRegClassCostFor(VT);
+      unsigned RCId, Cost;
+      GetCostForDef(RegDefPos, TLI, TII, TRI, RCId, Cost);
+
       if ((RegPressure[RCId] + Cost) >= RegLimit[RCId])
         return true;
     }
@@ -1890,9 +1946,10 @@ void RegReductionPQBase::ScheduledNode(SUnit *SU) {
          RegDefPos.IsValid(); RegDefPos.Advance(), --SkipRegDefs) {
       if (SkipRegDefs)
         continue;
-      EVT VT = RegDefPos.GetValue();
-      unsigned RCId = TLI->getRepRegClassFor(VT)->getID();
-      RegPressure[RCId] += TLI->getRepRegClassCostFor(VT);
+
+      unsigned RCId, Cost;
+      GetCostForDef(RegDefPos, TLI, TII, TRI, RCId, Cost);
+      RegPressure[RCId] += Cost;
       break;
     }
   }
@@ -1905,16 +1962,16 @@ void RegReductionPQBase::ScheduledNode(SUnit *SU) {
        RegDefPos.IsValid(); RegDefPos.Advance(), --SkipRegDefs) {
     if (SkipRegDefs > 0)
       continue;
-    EVT VT = RegDefPos.GetValue();
-    unsigned RCId = TLI->getRepRegClassFor(VT)->getID();
-    if (RegPressure[RCId] < TLI->getRepRegClassCostFor(VT)) {
+    unsigned RCId, Cost;
+    GetCostForDef(RegDefPos, TLI, TII, TRI, RCId, Cost);
+    if (RegPressure[RCId] < Cost) {
       // Register pressure tracking is imprecise. This can happen. But we try
       // hard not to let it happen because it likely results in poor scheduling.
       DEBUG(dbgs() << "  SU(" << SU->NodeNum << ") has too many regdefs\n");
       RegPressure[RCId] = 0;
     }
     else {
-      RegPressure[RCId] -= TLI->getRepRegClassCostFor(VT);
+      RegPressure[RCId] -= Cost;
     }
   }
   dumpRegPressure();

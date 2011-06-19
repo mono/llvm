@@ -45,31 +45,199 @@ bool llvm::InlineFunction(InvokeInst *II, InlineFunctionInfo &IFI) {
   return InlineFunction(CallSite(II), IFI);
 }
 
-/// [LIBUNWIND] Find the (possibly absent) call to @llvm.eh.selector in
-/// the given landing pad.
-static EHSelectorInst *findSelectorForLandingPad(BasicBlock *lpad) {
-  // The llvm.eh.exception call is required to be in the landing pad.
-  for (BasicBlock::iterator i = lpad->begin(), e = lpad->end(); i != e; i++) {
+/// [LIBUNWIND] Look for an llvm.eh.exception call in the given block.
+static EHExceptionInst *findExceptionInBlock(BasicBlock *bb) {
+  for (BasicBlock::iterator i = bb->begin(), e = bb->end(); i != e; i++) {
     EHExceptionInst *exn = dyn_cast<EHExceptionInst>(i);
-    if (!exn) continue;
-
-    EHSelectorInst *selector = 0;
-    for (Instruction::use_iterator
-           ui = exn->use_begin(), ue = exn->use_end(); ui != ue; ++ui) {
-      EHSelectorInst *sel = dyn_cast<EHSelectorInst>(*ui);
-      if (!sel) continue;
-
-      // Immediately accept an eh.selector in the landing pad.
-      if (sel->getParent() == lpad) return sel;
-
-      // Otherwise, use the first selector we see.
-      if (!selector) selector = sel;
-    }
-
-    return selector;
+    if (exn) return exn;
   }
 
   return 0;
+}
+
+/// [LIBUNWIND] Look for the 'best' llvm.eh.selector instruction for
+/// the given llvm.eh.exception call.
+static EHSelectorInst *findSelectorForException(EHExceptionInst *exn) {
+  BasicBlock *exnBlock = exn->getParent();
+
+  EHSelectorInst *outOfBlockSelector = 0;
+  for (Instruction::use_iterator
+         ui = exn->use_begin(), ue = exn->use_end(); ui != ue; ++ui) {
+    EHSelectorInst *sel = dyn_cast<EHSelectorInst>(*ui);
+    if (!sel) continue;
+
+    // Immediately accept an eh.selector in the same block as the
+    // excepton call.
+    if (sel->getParent() == exnBlock) return sel;
+
+    // Otherwise, use the first selector we see.
+    if (!outOfBlockSelector) outOfBlockSelector = sel;
+  }
+
+  return outOfBlockSelector;
+}
+
+/// [LIBUNWIND] Find the (possibly absent) call to @llvm.eh.selector
+/// in the given landing pad.  In principle, llvm.eh.exception is
+/// required to be in the landing pad; in practice, SplitCriticalEdge
+/// can break that invariant, and then inlining can break it further.
+/// There's a real need for a reliable solution here, but until that
+/// happens, we have some fragile workarounds here.
+static EHSelectorInst *findSelectorForLandingPad(BasicBlock *lpad) {
+  // Look for an exception call in the actual landing pad.
+  EHExceptionInst *exn = findExceptionInBlock(lpad);
+  if (exn) return findSelectorForException(exn);
+
+  // Okay, if that failed, look for one in an obvious successor.  If
+  // we find one, we'll fix the IR by moving things back to the
+  // landing pad.
+
+  bool dominates = true; // does the lpad dominate the exn call
+  BasicBlock *nonDominated = 0; // if not, the first non-dominated block
+  BasicBlock *lastDominated = 0; // and the block which branched to it
+
+  BasicBlock *exnBlock = lpad;
+
+  // We need to protect against lpads that lead into infinite loops.
+  SmallPtrSet<BasicBlock*,4> visited;
+  visited.insert(exnBlock);
+
+  do {
+    // We're not going to apply this hack to anything more complicated
+    // than a series of unconditional branches, so if the block
+    // doesn't terminate in an unconditional branch, just fail.  More
+    // complicated cases can arise when, say, sinking a call into a
+    // split unwind edge and then inlining it; but that can do almost
+    // *anything* to the CFG, including leaving the selector
+    // completely unreachable.  The only way to fix that properly is
+    // to (1) prohibit transforms which move the exception or selector
+    // values away from the landing pad, e.g. by producing them with
+    // instructions that are pinned to an edge like a phi, or
+    // producing them with not-really-instructions, and (2) making
+    // transforms which split edges deal with that.
+    BranchInst *branch = dyn_cast<BranchInst>(&exnBlock->back());
+    if (!branch || branch->isConditional()) return 0;
+
+    BasicBlock *successor = branch->getSuccessor(0);
+
+    // Fail if we found an infinite loop.
+    if (!visited.insert(successor)) return 0;
+
+    // If the successor isn't dominated by exnBlock:
+    if (!successor->getSinglePredecessor()) {
+      // We don't want to have to deal with threading the exception
+      // through multiple levels of phi, so give up if we've already
+      // followed a non-dominating edge.
+      if (!dominates) return 0;
+
+      // Otherwise, remember this as a non-dominating edge.
+      dominates = false;
+      nonDominated = successor;
+      lastDominated = exnBlock;
+    }
+
+    exnBlock = successor;
+
+    // Can we stop here?
+    exn = findExceptionInBlock(exnBlock);
+  } while (!exn);
+
+  // Look for a selector call for the exception we found.
+  EHSelectorInst *selector = findSelectorForException(exn);
+  if (!selector) return 0;
+
+  // The easy case is when the landing pad still dominates the
+  // exception call, in which case we can just move both calls back to
+  // the landing pad.
+  if (dominates) {
+    selector->moveBefore(lpad->getFirstNonPHI());
+    exn->moveBefore(selector);
+    return selector;
+  }
+
+  // Otherwise, we have to split at the first non-dominating block.
+  // The CFG looks basically like this:
+  //    lpad:
+  //      phis_0
+  //      insnsAndBranches_1
+  //      br label %nonDominated
+  //    nonDominated:
+  //      phis_2
+  //      insns_3
+  //      %exn = call i8* @llvm.eh.exception()
+  //      insnsAndBranches_4
+  //      %selector = call @llvm.eh.selector(i8* %exn, ...
+  // We need to turn this into:
+  //    lpad:
+  //      phis_0
+  //      %exn0 = call i8* @llvm.eh.exception()
+  //      %selector0 = call @llvm.eh.selector(i8* %exn0, ...
+  //      insnsAndBranches_1
+  //      br label %split // from lastDominated
+  //    nonDominated:
+  //      phis_2 (without edge from lastDominated)
+  //      %exn1 = call i8* @llvm.eh.exception()
+  //      %selector1 = call i8* @llvm.eh.selector(i8* %exn1, ...
+  //      br label %split
+  //    split:
+  //      phis_2 (edge from lastDominated, edge from split)
+  //      %exn = phi ...
+  //      %selector = phi ...
+  //      insns_3
+  //      insnsAndBranches_4
+
+  assert(nonDominated);
+  assert(lastDominated);
+
+  // First, make clones of the intrinsics to go in lpad.
+  EHExceptionInst *lpadExn = cast<EHExceptionInst>(exn->clone());
+  EHSelectorInst *lpadSelector = cast<EHSelectorInst>(selector->clone());
+  lpadSelector->setArgOperand(0, lpadExn);
+  lpadSelector->insertBefore(lpad->getFirstNonPHI());
+  lpadExn->insertBefore(lpadSelector);
+
+  // Split the non-dominated block.
+  BasicBlock *split =
+    nonDominated->splitBasicBlock(nonDominated->getFirstNonPHI(),
+                                  nonDominated->getName() + ".lpad-fix");
+
+  // Redirect the last dominated branch there.
+  cast<BranchInst>(lastDominated->back()).setSuccessor(0, split);
+
+  // Move the existing intrinsics to the end of the old block.
+  selector->moveBefore(&nonDominated->back());
+  exn->moveBefore(selector);
+
+  Instruction *splitIP = &split->front();
+
+  // For all the phis in nonDominated, make a new phi in split to join
+  // that phi with the edge from lastDominated.
+  for (BasicBlock::iterator
+         i = nonDominated->begin(), e = nonDominated->end(); i != e; ++i) {
+    PHINode *phi = dyn_cast<PHINode>(i);
+    if (!phi) break;
+
+    PHINode *splitPhi = PHINode::Create(phi->getType(), 2, phi->getName(),
+                                        splitIP);
+    phi->replaceAllUsesWith(splitPhi);
+    splitPhi->addIncoming(phi, nonDominated);
+    splitPhi->addIncoming(phi->removeIncomingValue(lastDominated),
+                          lastDominated);
+  }
+
+  // Make new phis for the exception and selector.
+  PHINode *exnPhi = PHINode::Create(exn->getType(), 2, "", splitIP);
+  exn->replaceAllUsesWith(exnPhi);
+  selector->setArgOperand(0, exn); // except for this use
+  exnPhi->addIncoming(exn, nonDominated);
+  exnPhi->addIncoming(lpadExn, lastDominated);
+
+  PHINode *selectorPhi = PHINode::Create(selector->getType(), 2, "", splitIP);
+  selector->replaceAllUsesWith(selectorPhi);
+  selectorPhi->addIncoming(selector, nonDominated);
+  selectorPhi->addIncoming(lpadSelector, lastDominated);
+
+  return lpadSelector;
 }
 
 namespace {
@@ -132,18 +300,6 @@ namespace {
   };
 }
 
-/// Replace all the instruction uses of a value with a different value.
-/// This has the advantage of not screwing up the CallGraph.
-static void replaceAllInsnUsesWith(Instruction *insn, Value *replacement) {
-  for (Value::use_iterator i = insn->use_begin(), e = insn->use_end();
-       i != e; ) {
-    Use &use = i.getUse();
-    ++i;
-    if (isa<Instruction>(use.getUser()))
-      use.set(replacement);
-  }
-}
-
 /// Get or create a target for the branch out of rewritten calls to
 /// llvm.eh.resume.
 BasicBlock *InvokeInliningInfo::getInnerUnwindDest() {
@@ -196,14 +352,14 @@ BasicBlock *InvokeInliningInfo::getInnerUnwindDest() {
   // Create a phi for the exception value...
   InnerExceptionPHI = PHINode::Create(exn->getType(), phiCapacity,
                                       "exn.lpad-body", insertPoint);
-  replaceAllInsnUsesWith(exn, InnerExceptionPHI);
+  exn->replaceAllUsesWith(InnerExceptionPHI);
   selector->setArgOperand(0, exn); // restore this use
   InnerExceptionPHI->addIncoming(exn, OuterUnwindDest);
 
   // ...and the selector.
   InnerSelectorPHI = PHINode::Create(selector->getType(), phiCapacity,
                                      "selector.lpad-body", insertPoint);
-  replaceAllInsnUsesWith(selector, InnerSelectorPHI);
+  selector->replaceAllUsesWith(InnerSelectorPHI);
   InnerSelectorPHI->addIncoming(selector, OuterUnwindDest);
 
   // All done.
@@ -293,11 +449,10 @@ static bool HandleCallsInBlockInlinedThroughInvoke(BasicBlock *BB,
       for (unsigned i = 2, e = Outer->getNumArgOperands(); i != e; ++i)
         NewSelector.push_back(Outer->getArgOperand(i));
 
-      CallInst *NewInner = CallInst::Create(Inner->getCalledValue(),
-                                            NewSelector.begin(),
-                                            NewSelector.end(),
-                                            "",
-                                            Inner);
+      CallInst *NewInner =
+        IRBuilder<>(Inner).CreateCall(Inner->getCalledValue(),
+                                      NewSelector.begin(),
+                                      NewSelector.end());
       // No need to copy attributes, calling convention, etc.
       NewInner->takeName(Inner);
       Inner->replaceAllUsesWith(NewInner);
@@ -547,15 +702,7 @@ static Value *HandleByValArgument(Value *Arg, Instruction *TheCall,
     ConstantInt::get(Type::getInt32Ty(Context), 1),
     ConstantInt::getFalse(Context) // isVolatile
   };
-  CallInst *TheMemCpy =
-    CallInst::Create(MemCpyFn, CallArgs, CallArgs+5, "", TheCall);
-  
-  // If we have a call graph, update it.
-  if (CallGraph *CG = IFI.CG) {
-    CallGraphNode *MemCpyCGN = CG->getOrInsertFunction(MemCpyFn);
-    CallGraphNode *CallerNode = (*CG)[Caller];
-    CallerNode->addCalledFunction(TheMemCpy, MemCpyCGN);
-  }
+  IRBuilder<>(TheCall).CreateCall(MemCpyFn, CallArgs, CallArgs+5);
   
   // Uses of the argument in the function should use our new alloca
   // instead.
@@ -586,11 +733,11 @@ static bool hasLifetimeMarkers(AllocaInst *AI) {
   if (AI->getType() == Int8PtrTy)
     return isUsedByLifetimeMarker(AI);
 
-  // Do a scan to find all the bitcasts to i8*.
+  // Do a scan to find all the casts to i8*.
   for (Value::use_iterator I = AI->use_begin(), E = AI->use_end(); I != E;
        ++I) {
     if (I->getType() != Int8PtrTy) continue;
-    if (!isa<BitCastInst>(*I)) continue;
+    if (I->stripPointerCasts() != AI) continue;
     if (isUsedByLifetimeMarker(*I))
       return true;
   }
@@ -746,18 +893,6 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI) {
   // Leave lifetime markers for the static alloca's, scoping them to the
   // function we just inlined.
   if (!IFI.StaticAllocas.empty()) {
-    // Also preserve the call graph, if applicable.
-    CallGraphNode *StartCGN = 0, *EndCGN = 0, *CallerNode = 0;
-    if (CallGraph *CG = IFI.CG) {
-      Function *Start = Intrinsic::getDeclaration(Caller->getParent(),
-                                                  Intrinsic::lifetime_start);
-      Function *End = Intrinsic::getDeclaration(Caller->getParent(),
-                                                Intrinsic::lifetime_end);
-      StartCGN = CG->getOrInsertFunction(Start);
-      EndCGN = CG->getOrInsertFunction(End);
-      CallerNode = (*CG)[Caller];
-    }
-
     IRBuilder<> builder(FirstNewBlock->begin());
     for (unsigned ai = 0, ae = IFI.StaticAllocas.size(); ai != ae; ++ai) {
       AllocaInst *AI = IFI.StaticAllocas[ai];
@@ -767,12 +902,10 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI) {
       if (hasLifetimeMarkers(AI))
         continue;
 
-      CallInst *StartCall = builder.CreateLifetimeStart(AI);
-      if (IFI.CG) CallerNode->addCalledFunction(StartCall, StartCGN);
+      builder.CreateLifetimeStart(AI);
       for (unsigned ri = 0, re = Returns.size(); ri != re; ++ri) {
         IRBuilder<> builder(Returns[ri]);
-        CallInst *EndCall = builder.CreateLifetimeEnd(AI);
-        if (IFI.CG) CallerNode->addCalledFunction(EndCall, EndCGN);
+        builder.CreateLifetimeEnd(AI);
       }
     }
   }
@@ -785,25 +918,14 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI) {
     Function *StackSave = Intrinsic::getDeclaration(M, Intrinsic::stacksave);
     Function *StackRestore=Intrinsic::getDeclaration(M,Intrinsic::stackrestore);
 
-    // If we are preserving the callgraph, add edges to the stacksave/restore
-    // functions for the calls we insert.
-    CallGraphNode *StackSaveCGN = 0, *StackRestoreCGN = 0, *CallerNode = 0;
-    if (CallGraph *CG = IFI.CG) {
-      StackSaveCGN    = CG->getOrInsertFunction(StackSave);
-      StackRestoreCGN = CG->getOrInsertFunction(StackRestore);
-      CallerNode = (*CG)[Caller];
-    }
-
     // Insert the llvm.stacksave.
-    CallInst *SavedPtr = CallInst::Create(StackSave, "savedstack",
-                                          FirstNewBlock->begin());
-    if (IFI.CG) CallerNode->addCalledFunction(SavedPtr, StackSaveCGN);
+    CallInst *SavedPtr = IRBuilder<>(FirstNewBlock, FirstNewBlock->begin())
+      .CreateCall(StackSave, "savedstack");
 
     // Insert a call to llvm.stackrestore before any return instructions in the
     // inlined function.
     for (unsigned i = 0, e = Returns.size(); i != e; ++i) {
-      CallInst *CI = CallInst::Create(StackRestore, SavedPtr, "", Returns[i]);
-      if (IFI.CG) CallerNode->addCalledFunction(CI, StackRestoreCGN);
+      IRBuilder<>(Returns[i]).CreateCall(StackRestore, SavedPtr);
     }
 
     // Count the number of StackRestore calls we insert.
@@ -815,8 +937,7 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI) {
       for (Function::iterator BB = FirstNewBlock, E = Caller->end();
            BB != E; ++BB)
         if (UnwindInst *UI = dyn_cast<UnwindInst>(BB->getTerminator())) {
-          CallInst *CI = CallInst::Create(StackRestore, SavedPtr, "", UI);
-          if (IFI.CG) CallerNode->addCalledFunction(CI, StackRestoreCGN);
+          IRBuilder<>(UI).CreateCall(StackRestore, SavedPtr);
           ++NumStackRestores;
         }
     }

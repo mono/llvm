@@ -111,6 +111,8 @@ private:
   bool X86VisitIntrinsicCall(const IntrinsicInst &I);
   bool X86SelectCall(const Instruction *I);
 
+  bool DoSelectCall(const Instruction *I, const char *MemIntName);
+
   const X86InstrInfo *getInstrInfo() const {
     return getTargetMachine()->getInstrInfo();
   }
@@ -401,7 +403,7 @@ bool X86FastISel::X86SelectAddress(const Value *V, X86AddressMode &AM) {
         Disp += SL->getElementOffset(cast<ConstantInt>(Op)->getZExtValue());
         continue;
       }
-      
+
       // A array/variable index is always of the form i*S where S is the
       // constant scale size.  See if we can push the scale into immediates.
       uint64_t S = TD.getTypeAllocSize(GTI.getIndexedType());
@@ -469,7 +471,7 @@ bool X86FastISel::X86SelectAddress(const Value *V, X86AddressMode &AM) {
     if (const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GV))
       if (GVar->isThreadLocal())
         return false;
-    
+
     // RIP-relative addresses can't have additional register operands, so if
     // we've already folded stuff into the addressing mode, just force the
     // global value into its own register, which we can use as the basereg.
@@ -704,7 +706,8 @@ bool X86FastISel::X86SelectRet(const Instruction *I) {
 
     // Analyze operands of the call, assigning locations to each operand.
     SmallVector<CCValAssign, 16> ValLocs;
-    CCState CCInfo(CC, F.isVarArg(), TM, ValLocs, I->getContext());
+    CCState CCInfo(CC, F.isVarArg(), *FuncInfo.MF, TM, ValLocs,
+		   I->getContext());
     CCInfo.AnalyzeReturn(Outs, RetCC_X86);
 
     const Value *RV = Ret->getOperand(0);
@@ -936,7 +939,7 @@ bool X86FastISel::X86SelectCmp(const Instruction *I) {
 
 bool X86FastISel::X86SelectZExt(const Instruction *I) {
   // Handle zero-extension from i1 to i8, which is common.
-  if (!I->getOperand(0)->getType()->isIntegerTy(1)) 
+  if (!I->getOperand(0)->getType()->isIntegerTy(1))
     return false;
 
   EVT DstVT = TLI.getValueType(I->getType());
@@ -1062,13 +1065,13 @@ bool X86FastISel::X86SelectBranch(const Instruction *I) {
         if (OpReg == 0) return false;
         BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(TestOpc))
           .addReg(OpReg).addImm(1);
-        
+
         unsigned JmpOpc = X86::JNE_4;
         if (FuncInfo.MBB->isLayoutSuccessor(TrueMBB)) {
           std::swap(TrueMBB, FalseMBB);
           JmpOpc = X86::JE_4;
         }
-        
+
         BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(JmpOpc))
           .addMBB(TrueMBB);
         FastEmitBranch(FalseMBB, DL);
@@ -1332,20 +1335,44 @@ bool X86FastISel::X86VisitIntrinsicCall(const IntrinsicInst &I) {
   case Intrinsic::memcpy: {
     const MemCpyInst &MCI = cast<MemCpyInst>(I);
     // Don't handle volatile or variable length memcpys.
-    if (MCI.isVolatile() || !isa<ConstantInt>(MCI.getLength()))
+    if (MCI.isVolatile())
       return false;
 
-    uint64_t Len = cast<ConstantInt>(MCI.getLength())->getZExtValue();
-    
-    // Get the address of the dest and source addresses.
-    X86AddressMode DestAM, SrcAM;
-    if (!X86SelectAddress(MCI.getRawDest(), DestAM) ||
-        !X86SelectAddress(MCI.getRawSource(), SrcAM))
+    if (isa<ConstantInt>(MCI.getLength())) {
+      // Small memcpy's are common enough that we want to do them
+      // without a call if possible.
+      uint64_t Len = cast<ConstantInt>(MCI.getLength())->getZExtValue();
+      if (IsMemcpySmall(Len)) {
+        X86AddressMode DestAM, SrcAM;
+        if (!X86SelectAddress(MCI.getRawDest(), DestAM) ||
+            !X86SelectAddress(MCI.getRawSource(), SrcAM))
+          return false;
+        TryEmitSmallMemcpy(DestAM, SrcAM, Len);
+        return true;
+      }
+    }
+
+    unsigned SizeWidth = Subtarget->is64Bit() ? 64 : 32;
+    if (!MCI.getLength()->getType()->isIntegerTy(SizeWidth))
       return false;
 
-    return TryEmitSmallMemcpy(DestAM, SrcAM, Len);
+    if (MCI.getSourceAddressSpace() > 255 || MCI.getDestAddressSpace() > 255)
+      return false;
+
+    return DoSelectCall(&I, "memcpy");
   }
-      
+  case Intrinsic::memset: {
+    const MemSetInst &MSI = cast<MemSetInst>(I);
+
+    unsigned SizeWidth = Subtarget->is64Bit() ? 64 : 32;
+    if (!MSI.getLength()->getType()->isIntegerTy(SizeWidth))
+      return false;
+
+    if (MSI.getDestAddressSpace() > 255)
+      return false;
+
+    return DoSelectCall(&I, "memset");
+  }
   case Intrinsic::stackprotector: {
     // Emit code inline code to store the stack guard onto the stack.
     EVT PtrTy = TLI.getPointerTy();
@@ -1379,7 +1406,7 @@ bool X86FastISel::X86VisitIntrinsicCall(const IntrinsicInst &I) {
   case Intrinsic::sadd_with_overflow:
   case Intrinsic::uadd_with_overflow: {
     // FIXME: Should fold immediates.
-    
+
     // Replace "add with overflow" intrinsics with an "add" instruction followed
     // by a seto/setc instruction.
     const Function *Callee = I.getCalledFunction();
@@ -1436,6 +1463,14 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
   if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(CI))
     return X86VisitIntrinsicCall(*II);
 
+  return DoSelectCall(I, 0);
+}
+
+// Select either a call, or an llvm.memcpy/memmove/memset intrinsic
+bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
+  const CallInst *CI = cast<CallInst>(I);
+  const Value *Callee = CI->getCalledValue();
+
   // Handle only C and fastcc calling conventions for now.
   ImmutableCallSite CS(CI);
   CallingConv::ID CC = CS.getCallingConv();
@@ -1467,7 +1502,8 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
   GetReturnInfo(I->getType(), CS.getAttributes().getRetAttributes(),
                 Outs, TLI, &Offsets);
   bool CanLowerReturn = TLI.CanLowerReturn(CS.getCallingConv(),
-                        FTy->isVarArg(), Outs, FTy->getContext());
+					   *FuncInfo.MF, FTy->isVarArg(),
+					   Outs, FTy->getContext());
   if (!CanLowerReturn)
     return false;
 
@@ -1496,6 +1532,10 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
   ArgFlags.reserve(CS.arg_size());
   for (ImmutableCallSite::arg_iterator i = CS.arg_begin(), e = CS.arg_end();
        i != e; ++i) {
+    // If we're lowering a mem intrinsic instead of a regular call, skip the
+    // last two arguments, which should not passed to the underlying functions.
+    if (MemIntName && e-i <= 2)
+      break;
     Value *ArgVal = *i;
     ISD::ArgFlagsTy Flags;
     unsigned AttrInd = i - CS.arg_begin() + 1;
@@ -1535,9 +1575,9 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
           ArgVal = ConstantExpr::getZExt(CI,Type::getInt32Ty(CI->getContext()));
       }
     }
-    
+
     unsigned ArgReg;
-    
+
     // Passing bools around ends up doing a trunc to i1 and passing it.
     // Codegen this as an argument + "and 1".
     if (ArgVal->getType()->isIntegerTy(1) && isa<TruncInst>(ArgVal) &&
@@ -1546,10 +1586,10 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
       ArgVal = cast<TruncInst>(ArgVal)->getOperand(0);
       ArgReg = getRegForValue(ArgVal);
       if (ArgReg == 0) return false;
-      
+
       MVT ArgVT;
       if (!isTypeLegal(ArgVal->getType(), ArgVT)) return false;
-      
+
       ArgReg = FastEmit_ri(ArgVT, ArgVT, ISD::AND, ArgReg,
                            ArgVal->hasOneUse(), 1);
     } else {
@@ -1575,7 +1615,8 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
 
   // Analyze operands of the call, assigning locations to each operand.
   SmallVector<CCValAssign, 16> ArgLocs;
-  CCState CCInfo(CC, isVarArg, TM, ArgLocs, I->getParent()->getContext());
+  CCState CCInfo(CC, isVarArg, *FuncInfo.MF, TM, ArgLocs,
+		 I->getParent()->getContext());
 
   // Allocate shadow area for Win64
   if (Subtarget->isTargetWin64())
@@ -1741,8 +1782,11 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
     }
 
 
-    MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(CallOpc))
-      .addGlobalAddress(GV, 0, OpFlags);
+    MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(CallOpc));
+    if (MemIntName)
+      MIB.addExternalSymbol(MemIntName, OpFlags);
+    else
+      MIB.addGlobalAddress(GV, 0, OpFlags);
   }
 
   // Add an implicit use GOT pointer in EBX.
@@ -1790,7 +1834,8 @@ bool X86FastISel::X86SelectCall(const Instruction *I) {
   // Now handle call return values.
   SmallVector<unsigned, 4> UsedRegs;
   SmallVector<CCValAssign, 16> RVLocs;
-  CCState CCRetInfo(CC, false, TM, RVLocs, I->getParent()->getContext());
+  CCState CCRetInfo(CC, false, *FuncInfo.MF, TM, RVLocs,
+		    I->getParent()->getContext());
   unsigned ResultReg = FuncInfo.CreateRegs(I->getType());
   CCRetInfo.AnalyzeCallResult(Ins, RetCC_X86);
   for (unsigned i = 0; i != RVLocs.size(); ++i) {
@@ -1946,7 +1991,7 @@ unsigned X86FastISel::TargetMaterializeConstant(const Constant *C) {
       if (AM.BaseType == X86AddressMode::RegBase &&
           AM.IndexReg == 0 && AM.Disp == 0 && AM.GV == 0)
         return AM.Base.Reg;
-      
+
       Opc = TLI.getPointerTy() == MVT::i32 ? X86::LEA32r : X86::LEA64r;
       unsigned ResultReg = createResultReg(RC);
       addFullAddress(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,

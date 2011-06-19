@@ -79,12 +79,12 @@ static const char PARAM_PREFIX[] = "__param_";
 static const char *getRegisterTypeName(unsigned RegNo) {
 #define TEST_REGCLS(cls, clsstr)                \
   if (PTX::cls ## RegisterClass->contains(RegNo)) return # clsstr;
-  TEST_REGCLS(Preds, pred);
-  TEST_REGCLS(RRegu16, u16);
-  TEST_REGCLS(RRegu32, u32);
-  TEST_REGCLS(RRegu64, u64);
-  TEST_REGCLS(RRegf32, f32);
-  TEST_REGCLS(RRegf64, f64);
+  TEST_REGCLS(RegPred, pred);
+  TEST_REGCLS(RegI16, b16);
+  TEST_REGCLS(RegI32, b32);
+  TEST_REGCLS(RegI64, b64);
+  TEST_REGCLS(RegF32, b32);
+  TEST_REGCLS(RegF64, b64);
 #undef TEST_REGCLS
 
   llvm_unreachable("Not in any register class!");
@@ -311,7 +311,7 @@ void PTXAsmPrinter::EmitVariableDeclaration(const GlobalVariable *gv) {
     decl += ".b8 ";
     decl += gvsym->getName();
     decl += "[";
-    
+
     if (elementTy->isArrayTy())
     {
       assert(elementTy->isArrayTy() && "Only pointers to arrays are supported");
@@ -320,7 +320,7 @@ void PTXAsmPrinter::EmitVariableDeclaration(const GlobalVariable *gv) {
       elementTy = arrayTy->getElementType();
 
       unsigned numElements = arrayTy->getNumElements();
-      
+
       while (elementTy->isArrayTy()) {
 
         arrayTy = dyn_cast<const ArrayType>(elementTy);
@@ -336,14 +336,14 @@ void PTXAsmPrinter::EmitVariableDeclaration(const GlobalVariable *gv) {
       // Compute the size of the array, in bytes.
       uint64_t arraySize = (elementTy->getPrimitiveSizeInBits() >> 3)
                         * numElements;
-  
+
       decl += utostr(arraySize);
     }
-    
+
     decl += "]";
-    
+
     // handle string constants (assume ConstantArray means string)
-    
+
     if (gv->hasInitializer())
     {
       Constant *C = gv->getInitializer();  
@@ -354,10 +354,11 @@ void PTXAsmPrinter::EmitVariableDeclaration(const GlobalVariable *gv) {
         for (unsigned i = 0, e = C->getNumOperands(); i != e; ++i)
         {
           if (i > 0)   decl += ",";
-      
-          decl += "0x" + utohexstr(cast<ConstantInt>(CA->getOperand(i))->getZExtValue());
+
+          decl += "0x" +
+                utohexstr(cast<ConstantInt>(CA->getOperand(i))->getZExtValue());
         }
-      
+
         decl += "}";
       }
     }
@@ -393,17 +394,23 @@ void PTXAsmPrinter::EmitFunctionDeclaration() {
 
   const PTXMachineFunctionInfo *MFI = MF->getInfo<PTXMachineFunctionInfo>();
   const bool isKernel = MFI->isKernel();
-  unsigned reg;
 
   std::string decl = isKernel ? ".entry" : ".func";
 
-  // Print return register
-  reg = MFI->retReg();
-  if (!isKernel && reg != PTX::NoRegister) {
-    decl += " (.reg ."; // FIXME: could it return in .param space?
-    decl += getRegisterTypeName(reg);
-    decl += " ";
-    decl += getRegisterName(reg);
+  if (!isKernel) {
+    decl += " (";
+
+    for (PTXMachineFunctionInfo::ret_iterator
+         i = MFI->retRegBegin(), e = MFI->retRegEnd(), b = i;
+         i != e; ++i) {
+      if (i != b) {
+        decl += ", ";
+      }
+      decl += ".reg .";
+      decl += getRegisterTypeName(*i);
+      decl += " ";
+      decl += getRegisterName(*i);
+    }
     decl += ")";
   }
 
@@ -411,40 +418,66 @@ void PTXAsmPrinter::EmitFunctionDeclaration() {
   decl += " ";
   decl += CurrentFnSym->getName().str();
 
-  // Print parameter list
-  if (!MFI->argRegEmpty()) {
-    decl += " (";
-    if (isKernel) {
-      unsigned cnt = 0;
-      for(PTXMachineFunctionInfo::reg_iterator
-          i = MFI->argRegBegin(), e = MFI->argRegEnd(), b = i;
-          i != e; ++i) {
-        reg = *i;
-        assert(reg != PTX::NoRegister && "Not a valid register!");
-        if (i != b)
-          decl += ", ";
-        decl += ".param .";
-        decl += getRegisterTypeName(reg);
-        decl += " ";
-        decl += PARAM_PREFIX;
-        decl += utostr(++cnt);
-      }
-    } else {
-      for (PTXMachineFunctionInfo::reg_iterator
-           i = MFI->argRegBegin(), e = MFI->argRegEnd(), b = i;
-           i != e; ++i) {
-        reg = *i;
-        assert(reg != PTX::NoRegister && "Not a valid register!");
-        if (i != b)
-          decl += ", ";
-        decl += ".reg .";
-        decl += getRegisterTypeName(reg);
-        decl += " ";
-        decl += getRegisterName(reg);
-      }
+  decl += " (";
+
+  unsigned cnt = 0;
+
+  // Print parameters
+  for (PTXMachineFunctionInfo::reg_iterator
+       i = MFI->argRegBegin(), e = MFI->argRegEnd(), b = i;
+       i != e; ++i) {
+    if (i != b) {
+      decl += ", ";
     }
-    decl += ")";
+    if (isKernel) {
+      decl += ".param .b";
+      decl += utostr(*i);
+      decl += " ";
+      decl += PARAM_PREFIX;
+      decl += utostr(++cnt);
+    } else {
+      decl += ".reg .";
+      decl += getRegisterTypeName(*i);
+      decl += " ";
+      decl += getRegisterName(*i);
+    }
   }
+  decl += ")";
+
+  // // Print parameter list
+  // if (!MFI->argRegEmpty()) {
+  //   decl += " (";
+  //   if (isKernel) {
+  //     unsigned cnt = 0;
+  //     for(PTXMachineFunctionInfo::reg_iterator
+  //         i = MFI->argRegBegin(), e = MFI->argRegEnd(), b = i;
+  //         i != e; ++i) {
+  //       reg = *i;
+  //       assert(reg != PTX::NoRegister && "Not a valid register!");
+  //       if (i != b)
+  //         decl += ", ";
+  //       decl += ".param .";
+  //       decl += getRegisterTypeName(reg);
+  //       decl += " ";
+  //       decl += PARAM_PREFIX;
+  //       decl += utostr(++cnt);
+  //     }
+  //   } else {
+  //     for (PTXMachineFunctionInfo::reg_iterator
+  //          i = MFI->argRegBegin(), e = MFI->argRegEnd(), b = i;
+  //          i != e; ++i) {
+  //       reg = *i;
+  //       assert(reg != PTX::NoRegister && "Not a valid register!");
+  //       if (i != b)
+  //         decl += ", ";
+  //       decl += ".reg .";
+  //       decl += getRegisterTypeName(reg);
+  //       decl += " ";
+  //       decl += getRegisterName(reg);
+  //     }
+  //   }
+  //   decl += ")";
+  // }
 
   OutStreamer.EmitRawText(Twine(decl));
 }

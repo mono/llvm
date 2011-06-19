@@ -1084,7 +1084,7 @@ multiclass T2I_exta_rrot_DO<bits<3> opcod, string opc> {
      let Inst{7} = 1;
      let Inst{5-4} = 0b00; // rotate
    }
-  def rr_rot : T2ThreeReg<(outs rGPR:$Rd), (ins rGPR:$Rn, rGPR:$Rm, i32imm:$rot),
+  def rr_rot :T2ThreeReg<(outs rGPR:$Rd), (ins rGPR:$Rn, rGPR:$Rm, i32imm:$rot),
                   IIC_iEXTAsr, opc, "\t$Rd, $Rn, $Rm, ror $rot", []> {
      let Inst{31-27} = 0b11111;
      let Inst{26-23} = 0b0100;
@@ -1788,8 +1788,10 @@ defm t2ADC  : T2I_adde_sube_irs<0b1010, "adc",
                           BinOpFrag<(adde_dead_carry node:$LHS, node:$RHS)>, 1>;
 defm t2SBC  : T2I_adde_sube_irs<0b1011, "sbc",
                           BinOpFrag<(sube_dead_carry node:$LHS, node:$RHS)>>;
-defm t2ADCS : T2I_adde_sube_s_irs<BinOpFrag<(adde_live_carry node:$LHS, node:$RHS)>, 1>;
-defm t2SBCS : T2I_adde_sube_s_irs<BinOpFrag<(sube_live_carry node:$LHS, node:$RHS)>>;
+defm t2ADCS : T2I_adde_sube_s_irs<BinOpFrag<(adde_live_carry node:$LHS,
+                                                             node:$RHS)>, 1>;
+defm t2SBCS : T2I_adde_sube_s_irs<BinOpFrag<(sube_live_carry node:$LHS,
+                                                             node:$RHS)>>;
 
 // RSB
 defm t2RSB  : T2I_rbin_irs  <0b1110, "rsb",
@@ -2005,10 +2007,10 @@ def t2USAT: T2SatI<
   let Inst{15} = 0;
 }
 
-def t2USAT16: T2SatI<
-                    (outs rGPR:$dst), (ins i32imm:$sat_imm, rGPR:$Rn), NoItinerary,
-                   "usat16", "\t$dst, $sat_imm, $Rn",
-                   [/* For disassembly only; pattern left blank */]> {
+def t2USAT16: T2SatI<(outs rGPR:$dst), (ins i32imm:$sat_imm, rGPR:$Rn),
+                     NoItinerary,
+                     "usat16", "\t$dst, $sat_imm, $Rn",
+                     [/* For disassembly only; pattern left blank */]> {
   let Inst{31-27} = 0b11110;
   let Inst{25-22} = 0b1110;
   let Inst{20} = 0;
@@ -2591,6 +2593,12 @@ def t2REV16 : T2I_misc<0b01, 0b01, (outs rGPR:$Rd), (ins rGPR:$Rm), IIC_iUNAr,
                             (or (and (srl rGPR:$Rm, (i32 8)), 0xFF0000),
                                (and (shl rGPR:$Rm, (i32 8)), 0xFF000000)))))]>;
 
+def : T2Pat<(or (or (or (and (srl rGPR:$Rm, (i32 8)), 0xFF0000),
+                        (and (shl rGPR:$Rm, (i32 8)), 0xFF000000)),
+                    (and (srl rGPR:$Rm, (i32 8)), 0xFF)),
+                (and (shl rGPR:$Rm, (i32 8)), 0xFF00)),
+            (t2REV16 rGPR:$Rm)>;
+
 def t2REVSH : T2I_misc<0b01, 0b11, (outs rGPR:$Rd), (ins rGPR:$Rm), IIC_iUNAr,
                        "revsh", ".w\t$Rd, $Rm",
                  [(set rGPR:$Rd,
@@ -2600,6 +2608,10 @@ def t2REVSH : T2I_misc<0b01, 0b11, (outs rGPR:$Rd), (ins rGPR:$Rm), IIC_iUNAr,
 
 def : T2Pat<(sext_inreg (or (srl (and rGPR:$Rm, 0xFF00), (i32 8)),
                             (shl rGPR:$Rm, (i32 8))), i16),
+            (t2REVSH rGPR:$Rm)>;
+
+def : T2Pat<(or (sra (shl rGPR:$Rm, (i32 24)), (i32 16)),
+                   (and (srl rGPR:$Rm, (i32 8)), 0xFF)),
             (t2REVSH rGPR:$Rm)>;
 
 def : T2Pat<(sra (bswap rGPR:$Rm), (i32 16)), (t2REVSH rGPR:$Rm)>;
@@ -2861,16 +2873,15 @@ class T2I_strex<bits<2> opcod, dag oops, dag iops, AddrMode am, SizeFlagVal sz,
 }
 
 let mayLoad = 1 in {
-def t2LDREXB : T2I_ldrex<0b00, (outs rGPR:$Rt), (ins t2addrmode_reg:$addr), AddrModeNone,
-                         Size4Bytes, NoItinerary, "ldrexb", "\t$Rt, $addr",
-                         "", []>;
-def t2LDREXH : T2I_ldrex<0b01, (outs rGPR:$Rt), (ins t2addrmode_reg:$addr), AddrModeNone,
-                         Size4Bytes, NoItinerary, "ldrexh", "\t$Rt, $addr",
-                         "", []>;
-def t2LDREX  : Thumb2I<(outs rGPR:$Rt), (ins t2addrmode_reg:$addr), AddrModeNone,
-                       Size4Bytes, NoItinerary,
-                       "ldrex", "\t$Rt, $addr", "",
-                      []> {
+def t2LDREXB : T2I_ldrex<0b00, (outs rGPR:$Rt), (ins t2addrmode_reg:$addr),
+                         AddrModeNone, Size4Bytes, NoItinerary,
+                         "ldrexb", "\t$Rt, $addr", "", []>;
+def t2LDREXH : T2I_ldrex<0b01, (outs rGPR:$Rt), (ins t2addrmode_reg:$addr),
+                         AddrModeNone, Size4Bytes, NoItinerary,
+                         "ldrexh", "\t$Rt, $addr", "", []>;
+def t2LDREX  : Thumb2I<(outs rGPR:$Rt), (ins t2addrmode_reg:$addr),
+                       AddrModeNone, Size4Bytes, NoItinerary,
+                       "ldrex", "\t$Rt, $addr", "", []> {
   let Inst{31-27} = 0b11101;
   let Inst{26-20} = 0b0000101;
   let Inst{11-8} = 0b1111;
@@ -2893,12 +2904,14 @@ def t2LDREXD : T2I_ldrex<0b11, (outs rGPR:$Rt, rGPR:$Rt2),
 }
 
 let mayStore = 1, Constraints = "@earlyclobber $Rd" in {
-def t2STREXB : T2I_strex<0b00, (outs rGPR:$Rd), (ins rGPR:$Rt, t2addrmode_reg:$addr),
-                  AddrModeNone, Size4Bytes, NoItinerary,
-                  "strexb", "\t$Rd, $Rt, $addr", "", []>;
-def t2STREXH : T2I_strex<0b01, (outs rGPR:$Rd), (ins rGPR:$Rt, t2addrmode_reg:$addr),
-                  AddrModeNone, Size4Bytes, NoItinerary,
-                  "strexh", "\t$Rd, $Rt, $addr", "", []>;
+def t2STREXB : T2I_strex<0b00, (outs rGPR:$Rd),
+                         (ins rGPR:$Rt, t2addrmode_reg:$addr),
+                         AddrModeNone, Size4Bytes, NoItinerary,
+                         "strexb", "\t$Rd, $Rt, $addr", "", []>;
+def t2STREXH : T2I_strex<0b01, (outs rGPR:$Rd),
+                         (ins rGPR:$Rt, t2addrmode_reg:$addr),
+                         AddrModeNone, Size4Bytes, NoItinerary,
+                         "strexh", "\t$Rd, $Rt, $addr", "", []>;
 def t2STREX  : Thumb2I<(outs rGPR:$Rd), (ins rGPR:$Rt, t2addrmode_reg:$addr),
                   AddrModeNone, Size4Bytes, NoItinerary,
                   "strex", "\t$Rd, $Rt, $addr", "",
@@ -2969,7 +2982,7 @@ let isCall = 1,
 //   all of the callee-saved resgisters, which is exactly what we want.
 //   $val is a scratch register for our use.
 let Defs =
-  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7,  R8,  R9,  R10, R11, R12, LR,
+  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7,  R8,  R9,  R10, R11, R12, LR, CPSR,
     QQQQ0, QQQQ1, QQQQ2, QQQQ3 ],
   hasSideEffects = 1, isBarrier = 1, isCodeGenOnly = 1 in {
   def t2Int_eh_sjlj_setjmp : Thumb2XI<(outs), (ins tGPR:$src, tGPR:$val),
@@ -2979,7 +2992,7 @@ let Defs =
 }
 
 let Defs =
-  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7,  R8,  R9,  R10, R11, R12, LR ],
+  [ R0,  R1,  R2,  R3,  R4,  R5,  R6,  R7,  R8,  R9,  R10, R11, R12, LR, CPSR ],
   hasSideEffects = 1, isBarrier = 1, isCodeGenOnly = 1 in {
   def t2Int_eh_sjlj_setjmp_nofp : Thumb2XI<(outs), (ins tGPR:$src, tGPR:$val),
                                AddrModeNone, SizeSpecial, NoItinerary, "", "",

@@ -84,8 +84,8 @@ public:
   static char ID;
 
   /// Construct a PBQP register allocator.
-  RegAllocPBQP(std::auto_ptr<PBQPBuilder> b)
-      : MachineFunctionPass(ID), builder(b) {
+  RegAllocPBQP(std::auto_ptr<PBQPBuilder> b, char *cPassID=0)
+      : MachineFunctionPass(ID), builder(b), customPassID(cPassID) {
     initializeSlotIndexesPass(*PassRegistry::getPassRegistry());
     initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
     initializeRegisterCoalescerAnalysisGroup(*PassRegistry::getPassRegistry());
@@ -121,6 +121,8 @@ private:
 
 
   std::auto_ptr<PBQPBuilder> builder;
+
+  char *customPassID;
 
   MachineFunction *mf;
   const TargetMachine *tm;
@@ -222,10 +224,9 @@ std::auto_ptr<PBQPRAProblem> PBQPBuilder::build(MachineFunction *mf,
     // Compute an initial allowed set for the current vreg.
     typedef std::vector<unsigned> VRAllowed;
     VRAllowed vrAllowed;
-    for (TargetRegisterClass::iterator aoItr = trc->allocation_order_begin(*mf),
-                                       aoEnd = trc->allocation_order_end(*mf);
-         aoItr != aoEnd; ++aoItr) {
-      unsigned preg = *aoItr;
+    ArrayRef<unsigned> rawOrder = trc->getRawAllocationOrder(*mf);
+    for (unsigned i = 0; i != rawOrder.size(); ++i) {
+      unsigned preg = rawOrder[i];
       if (!reservedRegs.test(preg)) {
         vrAllowed.push_back(preg);
       }
@@ -450,6 +451,8 @@ void RegAllocPBQP::getAnalysisUsage(AnalysisUsage &au) const {
   au.addRequired<LiveIntervals>();
   //au.addRequiredID(SplitCriticalEdgesID);
   au.addRequired<RegisterCoalescer>();
+  if (customPassID)
+    au.addRequiredID(*customPassID);
   au.addRequired<CalculateSpillWeights>();
   au.addRequired<LiveStacks>();
   au.addPreserved<LiveStacks>();
@@ -581,7 +584,7 @@ void RegAllocPBQP::finalizeAlloc() const {
 
     if (physReg == 0) {
       const TargetRegisterClass *liRC = mri->getRegClass(li->reg);
-      physReg = *liRC->allocation_order_begin(*mf);
+      physReg = liRC->getRawAllocationOrder(*mf).front();
     }
 
     vrm->assignVirt2Phys(li->reg, physReg);
@@ -703,8 +706,9 @@ bool RegAllocPBQP::runOnMachineFunction(MachineFunction &MF) {
 }
 
 FunctionPass* llvm::createPBQPRegisterAllocator(
-                                           std::auto_ptr<PBQPBuilder> builder) {
-  return new RegAllocPBQP(builder);
+                                           std::auto_ptr<PBQPBuilder> builder,
+                                           char *customPassID) {
+  return new RegAllocPBQP(builder, customPassID);
 }
 
 FunctionPass* llvm::createDefaultPBQPRegisterAllocator() {

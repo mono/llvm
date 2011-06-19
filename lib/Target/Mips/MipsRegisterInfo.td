@@ -157,27 +157,15 @@ let Namespace = "Mips" in {
 // Register Classes
 //===----------------------------------------------------------------------===//
 
-def CPURegs : RegisterClass<"Mips", [i32], 32,
+def CPURegs : RegisterClass<"Mips", [i32], 32, (add
   // Return Values and Arguments
-  [V0, V1, A0, A1, A2, A3,
+  V0, V1, A0, A1, A2, A3,
   // Not preserved across procedure calls
   T0, T1, T2, T3, T4, T5, T6, T7, T8, T9,
   // Callee save
   S0, S1, S2, S3, S4, S5, S6, S7,
   // Reserved
-  ZERO, AT, K0, K1, GP, SP, FP, RA]>
-{
-  let MethodProtos = [{
-    iterator allocation_order_end(const MachineFunction &MF) const;
-  }];
-  let MethodBodies = [{
-    CPURegsClass::iterator
-    CPURegsClass::allocation_order_end(const MachineFunction &MF) const {
-      // The last 8 registers on the list above are reserved
-      return end()-8;
-    }
-  }];
-}
+  ZERO, AT, K0, K1, GP, SP, FP, RA)>;
 
 // 64bit fp:
 // * FGR64  - 32 64-bit registers
@@ -186,89 +174,25 @@ def CPURegs : RegisterClass<"Mips", [i32], 32,
 // 32bit fp:
 // * FGR32 - 16 32-bit even registers
 // * FGR32 - 32 32-bit registers (single float only mode)
-def FGR32 : RegisterClass<"Mips", [f32], 32,
+def FGR32 : RegisterClass<"Mips", [f32], 32, (sequence "F%u", 0, 31)>;
+
+def AFGR64 : RegisterClass<"Mips", [f64], 64, (add
   // Return Values and Arguments
-  [F0, F1, F2, F3, F12, F13, F14, F15,
-  // Not preserved across procedure calls
-  F4, F5, F6, F7, F8, F9, F10, F11, F16, F17, F18, F19,
-  // Callee save
-  F20, F21, F22, F23, F24, F25, F26, F27, F28, F29, F30,
-  // Reserved
-  F31]>
-{
-  let MethodProtos = [{
-    iterator allocation_order_begin(const MachineFunction &MF) const;
-    iterator allocation_order_end(const MachineFunction &MF) const;
-  }];
-  let MethodBodies = [{
-
-    static const unsigned MIPS_FGR32[] = {
-      Mips::F0,  Mips::F1,  Mips::F2,  Mips::F3,  Mips::F12,  Mips::F13,
-      Mips::F14, Mips::F15, Mips::F4,  Mips::F5,  Mips::F6,   Mips::F7,
-      Mips::F8,  Mips::F9,  Mips::F10, Mips::F11, Mips::F16,  Mips::F17,
-      Mips::F18, Mips::F19, Mips::F20, Mips::F21, Mips::F22,  Mips::F23,
-      Mips::F24, Mips::F25, Mips::F26, Mips::F27, Mips::F28,  Mips::F29,
-      Mips::F30
-    };
-
-    static const unsigned MIPS_SVR4_FGR32[] = {
-      Mips::F0,  Mips::F2,  Mips::F12, Mips::F14, Mips::F4,
-      Mips::F6,  Mips::F8,  Mips::F10, Mips::F16, Mips::F18,
-      Mips::F20, Mips::F22, Mips::F24, Mips::F26, Mips::F28, Mips::F30,
-    };
-
-    FGR32Class::iterator
-    FGR32Class::allocation_order_begin(const MachineFunction &MF) const {
-      const TargetMachine &TM = MF.getTarget();
-      const MipsSubtarget &Subtarget = TM.getSubtarget<MipsSubtarget>();
-
-      if (Subtarget.isMips32() || Subtarget.isSingleFloat())
-        return MIPS_FGR32;
-      else
-        return MIPS_SVR4_FGR32;
-    }
-
-    FGR32Class::iterator
-    FGR32Class::allocation_order_end(const MachineFunction &MF) const {
-      const TargetMachine &TM = MF.getTarget();
-      const MipsSubtarget &Subtarget = TM.getSubtarget<MipsSubtarget>();
-
-      if (Subtarget.isMips32() || Subtarget.isSingleFloat())
-        return MIPS_FGR32 + (sizeof(MIPS_FGR32) / sizeof(unsigned));
-      else
-        return MIPS_SVR4_FGR32 + (sizeof(MIPS_SVR4_FGR32) / sizeof(unsigned));
-    }
-  }];
-}
-
-def AFGR64 : RegisterClass<"Mips", [f64], 64,
-  // Return Values and Arguments
-  [D0, D1, D6, D7,
+  D0, D1, D6, D7,
   // Not preserved across procedure calls
   D2, D3, D4, D5, D8, D9,
   // Callee save
   D10, D11, D12, D13, D14,
   // Reserved
-  D15]>
-{
+  D15)> {
   let SubRegClasses = [(FGR32 sub_fpeven, sub_fpodd)];
-  let MethodProtos = [{
-    iterator allocation_order_end(const MachineFunction &MF) const;
-  }];
-  let MethodBodies = [{
-    AFGR64Class::iterator
-    AFGR64Class::allocation_order_end(const MachineFunction &MF) const {
-      // The last register on the list above is reserved
-      return end()-1;
-    }
-  }];
 }
 
 // Condition Register for floating point operations
-def CCR  : RegisterClass<"Mips", [i32], 32, [FCR31]>;
+def CCR  : RegisterClass<"Mips", [i32], 32, (add FCR31)>;
 
 // Hi/Lo Registers
-def HILO : RegisterClass<"Mips", [i32], 32, [HI, LO]>;
+def HILO : RegisterClass<"Mips", [i32], 32, (add HI, LO)>;
 
 // Hardware registers
-def HWRegs : RegisterClass<"Mips", [i32], 32, [HWR29]>;
+def HWRegs : RegisterClass<"Mips", [i32], 32, (add HWR29)>;
