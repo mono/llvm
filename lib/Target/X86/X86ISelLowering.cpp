@@ -998,6 +998,21 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setOperationAction(ISD::SELECT,            MVT::v4i64, Custom);
     setOperationAction(ISD::SELECT,            MVT::v8f32, Custom);
 
+    setOperationAction(ISD::ADD,               MVT::v4i64, Custom);
+    setOperationAction(ISD::ADD,               MVT::v8i32, Custom);
+    setOperationAction(ISD::ADD,               MVT::v16i16, Custom);
+    setOperationAction(ISD::ADD,               MVT::v32i8, Custom);
+
+    setOperationAction(ISD::SUB,               MVT::v4i64, Custom);
+    setOperationAction(ISD::SUB,               MVT::v8i32, Custom);
+    setOperationAction(ISD::SUB,               MVT::v16i16, Custom);
+    setOperationAction(ISD::SUB,               MVT::v32i8, Custom);
+
+    setOperationAction(ISD::MUL,               MVT::v4i64, Custom);
+    setOperationAction(ISD::MUL,               MVT::v8i32, Custom);
+    setOperationAction(ISD::MUL,               MVT::v16i16, Custom);
+    // Don't lower v32i8 because there is no 128-bit byte mul
+
     // Custom lower several nodes for 256-bit types.
     for (unsigned i = (unsigned)MVT::FIRST_VECTOR_VALUETYPE;
                   i <= (unsigned)MVT::LAST_VECTOR_VALUETYPE; ++i) {
@@ -4199,20 +4214,21 @@ static SDValue getLegalSplat(SelectionDAG &DAG, SDValue V, int EltNo) {
   assert((VT.getSizeInBits() == 128 || VT.getSizeInBits() == 256)
          && "Vector size not supported");
 
-  bool Is128 = VT.getSizeInBits() == 128;
-  EVT NVT = Is128 ? MVT::v4f32 : MVT::v8f32;
-  V = DAG.getNode(ISD::BITCAST, dl, NVT, V);
-
-  if (Is128) {
+  if (VT.getSizeInBits() == 128) {
+    V = DAG.getNode(ISD::BITCAST, dl, MVT::v4f32, V);
     int SplatMask[4] = { EltNo, EltNo, EltNo, EltNo };
-    V = DAG.getVectorShuffle(NVT, dl, V, DAG.getUNDEF(NVT), &SplatMask[0]);
+    V = DAG.getVectorShuffle(MVT::v4f32, dl, V, DAG.getUNDEF(MVT::v4f32),
+                             &SplatMask[0]);
   } else {
-    // The second half of indicies refer to the higher part, which is a
-    // duplication of the lower one. This makes this shuffle a perfect match
-    // for the VPERM instruction.
+    // To use VPERMILPS to splat scalars, the second half of indicies must
+    // refer to the higher part, which is a duplication of the lower one,
+    // because VPERMILPS can only handle in-lane permutations.
     int SplatMask[8] = { EltNo, EltNo, EltNo, EltNo,
                          EltNo+4, EltNo+4, EltNo+4, EltNo+4 };
-    V = DAG.getVectorShuffle(NVT, dl, V, DAG.getUNDEF(NVT), &SplatMask[0]);
+
+    V = DAG.getNode(ISD::BITCAST, dl, MVT::v8f32, V);
+    V = DAG.getVectorShuffle(MVT::v8f32, dl, V, DAG.getUNDEF(MVT::v8f32),
+                             &SplatMask[0]);
   }
 
   return DAG.getNode(ISD::BITCAST, dl, VT, V);
@@ -4228,6 +4244,9 @@ static SDValue PromoteSplat(ShuffleVectorSDNode *SV, SelectionDAG &DAG) {
   int NumElems = SrcVT.getVectorNumElements();
   unsigned Size = SrcVT.getSizeInBits();
 
+  assert(((Size == 128 && NumElems > 4) || Size == 256) &&
+          "Unknown how to promote splat for type");
+
   // Extract the 128-bit part containing the splat element and update
   // the splat element index when it refers to the higher register.
   if (Size == 256) {
@@ -4240,16 +4259,14 @@ static SDValue PromoteSplat(ShuffleVectorSDNode *SV, SelectionDAG &DAG) {
   // All i16 and i8 vector types can't be used directly by a generic shuffle
   // instruction because the target has no such instruction. Generate shuffles
   // which repeat i16 and i8 several times until they fit in i32, and then can
-  // be manipulated by target suported shuffles. After the insertion of the
-  // necessary shuffles, the result is bitcasted back to v4f32 or v8f32.
+  // be manipulated by target suported shuffles.
   EVT EltVT = SrcVT.getVectorElementType();
-  if (NumElems > 4 && (EltVT == MVT::i8 || EltVT == MVT::i16))
+  if (EltVT == MVT::i8 || EltVT == MVT::i16)
     V1 = PromoteSplati8i16(V1, DAG, EltNo);
 
   // Recreate the 256-bit vector and place the same 128-bit vector
   // into the low and high part. This is necessary because we want
-  // to use VPERM to shuffle the v8f32 vector, and VPERM only shuffles
-  // inside each separate v4f32 lane.
+  // to use VPERM* to shuffle the vectors
   if (Size == 256) {
     SDValue InsV = Insert128BitVector(DAG.getUNDEF(SrcVT), V1,
                          DAG.getConstant(0, MVT::i32), DAG, dl);
@@ -6222,6 +6239,7 @@ SDValue NormalizeVectorShuffle(SDValue Op, SelectionDAG &DAG,
   // Handle splat operations
   if (SVOp->isSplat()) {
     unsigned NumElem = VT.getVectorNumElements();
+    int Size = VT.getSizeInBits();
     // Special case, this is the only place now where it's allowed to return
     // a vector_shuffle operation without using a target specific node, because
     // *hopefully* it will be optimized away by the dag combiner. FIXME: should
@@ -6234,7 +6252,8 @@ SDValue NormalizeVectorShuffle(SDValue Op, SelectionDAG &DAG,
       return DAG.getNode(X86ISD::VBROADCAST, dl, VT, V1);
 
     // Handle splats by matching through known shuffle masks
-    if (VT.is128BitVector() && NumElem <= 4)
+    if ((Size == 128 && NumElem <= 4) ||
+        (Size == 256 && NumElem < 8))
       return SDValue();
 
     // All remaning splats are promoted to target supported vector shuffles.
@@ -9429,8 +9448,58 @@ SDValue X86TargetLowering::LowerCTTZ(SDValue Op, SelectionDAG &DAG) const {
   return Op;
 }
 
-SDValue X86TargetLowering::LowerMUL_V2I64(SDValue Op, SelectionDAG &DAG) const {
+// Lower256IntArith - Break a 256-bit integer operation into two new 128-bit
+// ones, and then concatenate the result back.
+static SDValue Lower256IntArith(SDValue Op, SelectionDAG &DAG) {
   EVT VT = Op.getValueType();
+
+  assert(VT.getSizeInBits() == 256 && VT.isInteger() &&
+         "Unsupported value type for operation");
+
+  int NumElems = VT.getVectorNumElements();
+  DebugLoc dl = Op.getDebugLoc();
+  SDValue Idx0 = DAG.getConstant(0, MVT::i32);
+  SDValue Idx1 = DAG.getConstant(NumElems/2, MVT::i32);
+
+  // Extract the LHS vectors
+  SDValue LHS = Op.getOperand(0);
+  SDValue LHS1 = Extract128BitVector(LHS, Idx0, DAG, dl);
+  SDValue LHS2 = Extract128BitVector(LHS, Idx1, DAG, dl);
+
+  // Extract the RHS vectors
+  SDValue RHS = Op.getOperand(1);
+  SDValue RHS1 = Extract128BitVector(RHS, Idx0, DAG, dl);
+  SDValue RHS2 = Extract128BitVector(RHS, Idx1, DAG, dl);
+
+  MVT EltVT = VT.getVectorElementType().getSimpleVT();
+  EVT NewVT = MVT::getVectorVT(EltVT, NumElems/2);
+
+  return DAG.getNode(ISD::CONCAT_VECTORS, dl, VT,
+                     DAG.getNode(Op.getOpcode(), dl, NewVT, LHS1, RHS1),
+                     DAG.getNode(Op.getOpcode(), dl, NewVT, LHS2, RHS2));
+}
+
+SDValue X86TargetLowering::LowerADD(SDValue Op, SelectionDAG &DAG) const {
+  assert(Op.getValueType().getSizeInBits() == 256 &&
+         Op.getValueType().isInteger() &&
+         "Only handle AVX 256-bit vector integer operation");
+  return Lower256IntArith(Op, DAG);
+}
+
+SDValue X86TargetLowering::LowerSUB(SDValue Op, SelectionDAG &DAG) const {
+  assert(Op.getValueType().getSizeInBits() == 256 &&
+         Op.getValueType().isInteger() &&
+         "Only handle AVX 256-bit vector integer operation");
+  return Lower256IntArith(Op, DAG);
+}
+
+SDValue X86TargetLowering::LowerMUL(SDValue Op, SelectionDAG &DAG) const {
+  EVT VT = Op.getValueType();
+
+  // Decompose 256-bit ops into smaller 128-bit ops.
+  if (VT.getSizeInBits() == 256)
+    return Lower256IntArith(Op, DAG);
+
   assert(VT == MVT::v2i64 && "Only know how to lower V2I64 multiply");
   DebugLoc dl = Op.getDebugLoc();
 
@@ -10020,7 +10089,7 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::FLT_ROUNDS_:        return LowerFLT_ROUNDS_(Op, DAG);
   case ISD::CTLZ:               return LowerCTLZ(Op, DAG);
   case ISD::CTTZ:               return LowerCTTZ(Op, DAG);
-  case ISD::MUL:                return LowerMUL_V2I64(Op, DAG);
+  case ISD::MUL:                return LowerMUL(Op, DAG);
   case ISD::SRA:
   case ISD::SRL:
   case ISD::SHL:                return LowerShift(Op, DAG);
@@ -10036,6 +10105,8 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::ADDE:
   case ISD::SUBC:
   case ISD::SUBE:               return LowerADDC_ADDE_SUBC_SUBE(Op, DAG);
+  case ISD::ADD:                return LowerADD(Op, DAG);
+  case ISD::SUB:                return LowerSUB(Op, DAG);
   }
 }
 
