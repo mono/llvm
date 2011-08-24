@@ -9,6 +9,7 @@
 
 #include "DisassemblerEmitter.h"
 #include "CodeGenTarget.h"
+#include "Error.h"
 #include "Record.h"
 #include "X86DisassemblerTables.h"
 #include "X86RecognizableInstr.h"
@@ -127,12 +128,15 @@ void DisassemblerEmitter::run(raw_ostream &OS) {
     return;
   }
 
-  // Fixed-instruction-length targets use a common disassembler.
-  // ARM use its own implementation for now.
-  if (Target.getName() == "ARM") {
-    ARMDecoderEmitter(Records).run(OS);
+  // ARM and Thumb have a CHECK() macro to deal with DecodeStatuses.
+  if (Target.getName() == "ARM" ||
+      Target.getName() == "Thumb") {
+    FixedLenDecoderEmitter(Records,
+                           "CHECK(S, ", ");",
+                           "S", "Fail",
+                           "DecodeStatus S = Success;\n(void)S;").run(OS);
     return;
-  }  
+  }
 
   FixedLenDecoderEmitter(Records).run(OS);
 }

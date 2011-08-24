@@ -182,8 +182,10 @@ def QQQQ3 : ARMReg<3, "qqqq3", [QQ6, QQ7]>;
 
 // Current Program Status Register.
 def CPSR    : ARMReg<0, "cpsr">;
-def FPSCR   : ARMReg<1, "fpscr">;
-def ITSTATE : ARMReg<2, "itstate">;
+def APSR    : ARMReg<1, "apsr">;
+def SPSR    : ARMReg<2, "spsr">;
+def FPSCR   : ARMReg<3, "fpscr">;
+def ITSTATE : ARMReg<4, "itstate">;
 
 // Special Registers - only available in privileged mode.
 def FPSID   : ARMReg<0, "fpsid">;
@@ -213,6 +215,16 @@ def GPR : RegisterClass<"ARM", [i32], 32, (add (sequence "R%u", 0, 12),
   }];
 }
 
+// GPRs without the PC.  Some ARM instructions do not allow the PC in
+// certain operand slots, particularly as the destination.  Primarily
+// useful for disassembly.
+def GPRnopc : RegisterClass<"ARM", [i32], 32, (sub GPR, PC)> {
+  let AltOrders = [(add LR, GPRnopc), (trunc GPRnopc, 8)];
+  let AltOrderSelect = [{
+      return 1 + MF.getTarget().getSubtarget<ARMSubtarget>().isThumb1Only();
+  }];
+}
+
 // restricted GPR register class. Many Thumb2 instructions allow the full
 // register range for operands, but have undefined behaviours when PC
 // or SP (R13 or R15) are used. The ARM ISA refers to these operands
@@ -227,6 +239,9 @@ def rGPR : RegisterClass<"ARM", [i32], 32, (sub GPR, SP, PC)> {
 // Thumb registers are R0-R7 normally. Some instructions can still use
 // the general GPR register class above (MOV, e.g.)
 def tGPR : RegisterClass<"ARM", [i32], 32, (trunc GPR, 8)>;
+
+// The high registers in thumb mode, R8-R15.
+def hGPR : RegisterClass<"ARM", [i32], 32, (sub GPR, tGPR)>;
 
 // For tail calls, we can't use callee-saved registers, as they are restored
 // to the saved value before the tail call, which would clobber a call address.

@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/CommandLine.h"
@@ -32,6 +33,13 @@ using namespace llvm;
 
 // FIXME: completely move here.
 extern cl::opt<bool> ForceStackAlign;
+
+// FIXME: Remove once linker support is available. The feature exists only on
+// Darwin at the moment.
+static cl::opt<bool>
+GenerateCompactUnwind("gen-compact-unwind",
+                      cl::desc("Generate compact unwind encoding"),
+                      cl::Hidden);
 
 bool X86FrameLowering::hasReservedCallFrame(const MachineFunction &MF) const {
   return !MF.getFrameInfo()->hasVarSizedObjects();
@@ -90,12 +98,12 @@ static unsigned findDeadCallerSavedReg(MachineBasicBlock &MBB,
     return 0;
 
   static const unsigned CallerSavedRegs32Bit[] = {
-    X86::EAX, X86::EDX, X86::ECX
+    X86::EAX, X86::EDX, X86::ECX, 0
   };
 
   static const unsigned CallerSavedRegs64Bit[] = {
     X86::RAX, X86::RDX, X86::RCX, X86::RSI, X86::RDI,
-    X86::R8,  X86::R9,  X86::R10, X86::R11
+    X86::R8,  X86::R9,  X86::R10, X86::R11, 0
   };
 
   unsigned Opc = MBBI->getOpcode();
@@ -282,8 +290,8 @@ static bool isEAXLiveIn(MachineFunction &MF) {
 }
 
 void X86FrameLowering::emitCalleeSavedFrameMoves(MachineFunction &MF,
-                                             MCSymbol *Label,
-                                             unsigned FramePtr) const {
+                                                 MCSymbol *Label,
+                                                 unsigned FramePtr) const {
   MachineFrameInfo *MFI = MF.getFrameInfo();
   MachineModuleInfo &MMI = MF.getMMI();
 
@@ -345,6 +353,247 @@ void X86FrameLowering::emitCalleeSavedFrameMoves(MachineFunction &MF,
   }
 }
 
+/// getCompactUnwindRegNum - Get the compact unwind number for a given
+/// register. The number corresponds to the enum lists in
+/// compact_unwind_encoding.h.
+static int getCompactUnwindRegNum(const unsigned *CURegs, unsigned Reg) {
+  int Idx = 1;
+  for (; *CURegs; ++CURegs, ++Idx)
+    if (*CURegs == Reg)
+      return Idx;
+
+  return -1;
+}
+
+/// encodeCompactUnwindRegistersWithoutFrame - Create the permutation encoding
+/// used with frameless stacks. It is passed the number of registers to be saved
+/// and an array of the registers saved.
+static uint32_t encodeCompactUnwindRegistersWithoutFrame(unsigned SavedRegs[6],
+                                                         unsigned RegCount,
+                                                         bool Is64Bit) {
+  // The saved registers are numbered from 1 to 6. In order to encode the order
+  // in which they were saved, we re-number them according to their place in the
+  // register order. The re-numbering is relative to the last re-numbered
+  // register. E.g., if we have registers {6, 2, 4, 5} saved in that order:
+  //
+  //    Orig  Re-Num
+  //    ----  ------
+  //     6       6
+  //     2       2
+  //     4       3
+  //     5       3
+  //
+  static const unsigned CU32BitRegs[] = {
+    X86::EBX, X86::ECX, X86::EDX, X86::EDI, X86::ESI, X86::EBP, 0
+  };
+  static const unsigned CU64BitRegs[] = {
+    X86::RBX, X86::R12, X86::R13, X86::R14, X86::R15, X86::RBP, 0
+  };
+  const unsigned *CURegs = (Is64Bit ? CU64BitRegs : CU32BitRegs);
+
+  uint32_t RenumRegs[6];
+  for (unsigned i = 6 - RegCount; i < 6; ++i) {
+    int CUReg = getCompactUnwindRegNum(CURegs, SavedRegs[i]);
+    if (CUReg == -1) return ~0U;
+    SavedRegs[i] = CUReg;
+
+    unsigned Countless = 0;
+    for (unsigned j = 6 - RegCount; j < i; ++j)
+      if (SavedRegs[j] < SavedRegs[i])
+        ++Countless;
+
+    RenumRegs[i] = SavedRegs[i] - Countless - 1;
+  }
+
+  // Take the renumbered values and encode them into a 10-bit number.
+  uint32_t permutationEncoding = 0;
+  switch (RegCount) {
+  case 6:
+    permutationEncoding |= 120 * RenumRegs[0] + 24 * RenumRegs[1]
+                           + 6 * RenumRegs[2] +  2 * RenumRegs[3]
+                           +     RenumRegs[4];
+    break;
+  case 5:
+    permutationEncoding |= 120 * RenumRegs[1] + 24 * RenumRegs[2]
+                           + 6 * RenumRegs[3] +  2 * RenumRegs[4]
+                           +     RenumRegs[5];
+    break;
+  case 4:
+    permutationEncoding |=  60 * RenumRegs[2] + 12 * RenumRegs[3]
+                           + 3 * RenumRegs[4] +      RenumRegs[5];
+    break;
+  case 3:
+    permutationEncoding |=  20 * RenumRegs[3] +  4 * RenumRegs[4]
+                           +     RenumRegs[5];
+    break;
+  case 2:
+    permutationEncoding |=   5 * RenumRegs[4] +      RenumRegs[5];
+    break;
+  case 1:
+    permutationEncoding |=       RenumRegs[5];
+    break;
+  }
+
+  assert((permutationEncoding & 0x3FF) == permutationEncoding &&
+         "Invalid compact register encoding!");
+  return permutationEncoding;
+}
+
+/// encodeCompactUnwindRegistersWithFrame - Return the registers encoded for a
+/// compact encoding with a frame pointer.
+static uint32_t encodeCompactUnwindRegistersWithFrame(unsigned SavedRegs[6],
+                                                      bool Is64Bit) {
+  static const unsigned CU32BitRegs[] = {
+    X86::EBX, X86::ECX, X86::EDX, X86::EDI, X86::ESI, X86::EBP, 0
+  };
+  static const unsigned CU64BitRegs[] = {
+    X86::RBX, X86::R12, X86::R13, X86::R14, X86::R15, X86::RBP, 0
+  };
+  const unsigned *CURegs = (Is64Bit ? CU64BitRegs : CU32BitRegs);
+
+  // Encode the registers in the order they were saved, 3-bits per register. The
+  // registers are numbered from 1 to 6.
+  uint32_t RegEnc = 0;
+  for (int I = 5; I >= 0; --I) {
+    unsigned Reg = SavedRegs[I];
+    if (Reg == 0) break;
+    int CURegNum = getCompactUnwindRegNum(CURegs, Reg);
+    if (CURegNum == -1)
+      return ~0U;
+    RegEnc |= (CURegNum & 0x7) << (5 - I);
+  }
+
+  assert((RegEnc & 0x7FFF) == RegEnc && "Invalid compact register encoding!");
+  return RegEnc;
+}
+
+uint32_t X86FrameLowering::getCompactUnwindEncoding(MachineFunction &MF) const {
+  const X86RegisterInfo *RegInfo = TM.getRegisterInfo();
+  unsigned FramePtr = RegInfo->getFrameRegister(MF);
+  unsigned StackPtr = RegInfo->getStackRegister();
+
+  X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
+  int TailCallReturnAddrDelta = X86FI->getTCReturnAddrDelta();
+
+  bool Is64Bit = STI.is64Bit();
+  bool HasFP = hasFP(MF);
+
+  unsigned SavedRegs[6] = { 0, 0, 0, 0, 0, 0 };
+  int SavedRegIdx = 6;
+
+  unsigned OffsetSize = (Is64Bit ? 8 : 4);
+
+  unsigned PushInstr = (Is64Bit ? X86::PUSH64r : X86::PUSH32r);
+  unsigned PushInstrSize = 1;
+  unsigned MoveInstr = (Is64Bit ? X86::MOV64rr : X86::MOV32rr);
+  unsigned MoveInstrSize = (Is64Bit ? 3 : 2);
+  unsigned SubtractInstr = getSUBriOpcode(Is64Bit, -TailCallReturnAddrDelta);
+  unsigned SubtractInstrIdx = (Is64Bit ? 3 : 2);
+
+  unsigned StackDivide = (Is64Bit ? 8 : 4);
+
+  unsigned InstrOffset = 0;
+  unsigned CFAOffset = 0;
+  unsigned StackAdjust = 0;
+
+  MachineBasicBlock &MBB = MF.front(); // Prologue is in entry BB.
+  bool ExpectEnd = false;
+  for (MachineBasicBlock::iterator
+         MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE; ++MBBI) {
+    MachineInstr &MI = *MBBI;
+    unsigned Opc = MI.getOpcode();
+    if (Opc == X86::PROLOG_LABEL) continue;
+    if (!MI.getFlag(MachineInstr::FrameSetup)) break;
+
+    // We don't exect any more prolog instructions.
+    if (ExpectEnd) return 0;
+
+    if (Opc == PushInstr) {
+      // If there are too many saved registers, we cannot use compact encoding.
+      if (--SavedRegIdx < 0) return 0;
+
+      SavedRegs[SavedRegIdx] = MI.getOperand(0).getReg();
+      CFAOffset += OffsetSize;
+      InstrOffset += PushInstrSize;
+    } else if (Opc == MoveInstr) {
+      unsigned SrcReg = MI.getOperand(1).getReg();
+      unsigned DstReg = MI.getOperand(0).getReg();
+
+      if (DstReg != FramePtr || SrcReg != StackPtr)
+        return 0;
+
+      CFAOffset = 0;
+      memset(SavedRegs, 0, sizeof(SavedRegs));
+      InstrOffset += MoveInstrSize;
+    } else if (Opc == SubtractInstr) {
+      if (StackAdjust)
+        // We all ready have a stack pointer adjustment.
+        return 0;
+
+      if (!MI.getOperand(0).isReg() ||
+          MI.getOperand(0).getReg() != MI.getOperand(1).getReg() ||
+          MI.getOperand(0).getReg() != StackPtr || !MI.getOperand(2).isImm())
+        // We need this to be a stack adjustment pointer. Something like:
+        //
+        //   %RSP<def> = SUB64ri8 %RSP, 48
+        return 0;
+
+      StackAdjust = MI.getOperand(2).getImm() / StackDivide;
+      SubtractInstrIdx += InstrOffset;
+      ExpectEnd = true;
+    }
+  }
+
+  // Encode that we are using EBP/RBP as the frame pointer.
+  uint32_t CompactUnwindEncoding = 0;
+  CFAOffset /= StackDivide;
+  if (HasFP) {
+    if ((CFAOffset & 0xFF) != CFAOffset)
+      // Offset was too big for compact encoding.
+      return 0;
+
+    // Get the encoding of the saved registers when we have a frame pointer.
+    uint32_t RegEnc = encodeCompactUnwindRegistersWithFrame(SavedRegs, Is64Bit);
+    if (RegEnc == ~0U)
+      return 0;
+
+    CompactUnwindEncoding |= 0x01000000;
+    CompactUnwindEncoding |= (CFAOffset & 0xFF) << 16;
+    CompactUnwindEncoding |= RegEnc & 0x7FFF;
+  } else {
+    unsigned FullOffset = CFAOffset + StackAdjust;
+    if ((FullOffset & 0xFF) == FullOffset) {
+      // Frameless stack.
+      CompactUnwindEncoding |= 0x02000000;
+      CompactUnwindEncoding |= (FullOffset & 0xFF) << 16;
+    } else {
+      if ((CFAOffset & 0x7) != CFAOffset)
+        // The extra stack adjustments are too big for us to handle.
+        return 0;
+
+      // Frameless stack with an offset too large for us to encode compactly.
+      CompactUnwindEncoding |= 0x03000000;
+
+      // Encode the offset to the nnnnnn value in the 'subl $nnnnnn, ESP'
+      // instruction.
+      CompactUnwindEncoding |= (SubtractInstrIdx & 0xFF) << 16;
+
+      // Encode any extra stack stack changes (done via push instructions).
+      CompactUnwindEncoding |= (CFAOffset & 0x7) << 13;
+    }
+
+    // Get the encoding of the saved registers when we don't have a frame
+    // pointer.
+    uint32_t RegEnc = encodeCompactUnwindRegistersWithoutFrame(SavedRegs,
+                                                               6 - SavedRegIdx,
+                                                               Is64Bit);
+    if (RegEnc == ~0U) return 0;
+    CompactUnwindEncoding |= RegEnc & 0x3FF;
+  }
+
+  return CompactUnwindEncoding;
+}
+
 /// emitPrologue - Push callee-saved registers onto the stack, which
 /// automatically adjust the stack pointer. Adjust the stack pointer to allocate
 /// space for local variables. Also emit labels used by the exception handler to
@@ -369,7 +618,6 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
   unsigned SlotSize = RegInfo->getSlotSize();
   unsigned FramePtr = RegInfo->getFrameRegister(MF);
   unsigned StackPtr = RegInfo->getStackRegister();
-
   DebugLoc DL;
 
   // If we're forcing a stack realignment we can't rely on just the frame
@@ -458,7 +706,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
     if (needsFrameMoves) {
       // Mark the place where EBP/RBP was saved.
       MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-      BuildMI(MBB, MBBI, DL, TII.get(X86::PROLOG_LABEL)).addSym(FrameLabel);
+      BuildMI(MBB, MBBI, DL, TII.get(X86::PROLOG_LABEL))
+        .addSym(FrameLabel);
 
       // Define the current CFA rule to use the provided offset.
       if (StackSize) {
@@ -477,7 +726,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
       Moves.push_back(MachineMove(FrameLabel, FPDst, FPSrc));
     }
 
-    // Update EBP with the new base value...
+    // Update EBP with the new base value.
     BuildMI(MBB, MBBI, DL,
             TII.get(Is64Bit ? X86::MOV64rr : X86::MOV32rr), FramePtr)
         .addReg(StackPtr)
@@ -486,7 +735,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
     if (needsFrameMoves) {
       // Mark effective beginning of when frame pointer becomes valid.
       MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-      BuildMI(MBB, MBBI, DL, TII.get(X86::PROLOG_LABEL)).addSym(FrameLabel);
+      BuildMI(MBB, MBBI, DL, TII.get(X86::PROLOG_LABEL))
+        .addSym(FrameLabel);
 
       // Define the current CFA to use the EBP/RBP register.
       MachineLocation FPDst(FramePtr);
@@ -503,8 +753,10 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
     if (RegInfo->needsStackRealignment(MF)) {
       MachineInstr *MI =
         BuildMI(MBB, MBBI, DL,
-                TII.get(Is64Bit ? X86::AND64ri32 : X86::AND32ri),
-                StackPtr).addReg(StackPtr).addImm(-MaxAlign);
+                TII.get(Is64Bit ? X86::AND64ri32 : X86::AND32ri), StackPtr)
+        .addReg(StackPtr)
+        .addImm(-MaxAlign)
+        .setMIFlag(MachineInstr::FrameSetup);
 
       // The EFLAGS implicit def is dead.
       MI->getOperand(3).setIsDead();
@@ -521,6 +773,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
          (MBBI->getOpcode() == X86::PUSH32r ||
           MBBI->getOpcode() == X86::PUSH64r)) {
     PushedRegs = true;
+    MBBI->setFlag(MachineInstr::FrameSetup);
     ++MBBI;
 
     if (!HasFP && needsFrameMoves) {
@@ -529,8 +782,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
       BuildMI(MBB, MBBI, DL, TII.get(X86::PROLOG_LABEL)).addSym(Label);
 
       // Define the current CFA rule to use the provided offset.
-      unsigned Ptr = StackSize ?
-        MachineLocation::VirtualFP : StackPtr;
+      unsigned Ptr = StackSize ? MachineLocation::VirtualFP : StackPtr;
       MachineLocation SPDst(Ptr);
       MachineLocation SPSrc(Ptr, StackOffset);
       Moves.push_back(MachineMove(Label, SPDst, SPSrc));
@@ -585,26 +837,30 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
 
       // Save EAX
       BuildMI(MBB, MBBI, DL, TII.get(X86::PUSH32r))
-        .addReg(X86::EAX, RegState::Kill);
+        .addReg(X86::EAX, RegState::Kill)
+        .setMIFlag(MachineInstr::FrameSetup);
     }
 
     if (Is64Bit) {
       // Handle the 64-bit Windows ABI case where we need to call __chkstk.
       // Function prologue is responsible for adjusting the stack pointer.
       BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri), X86::RAX)
-        .addImm(NumBytes);
+        .addImm(NumBytes)
+        .setMIFlag(MachineInstr::FrameSetup);
     } else {
       // Allocate NumBytes-4 bytes on stack in case of isEAXAlive.
       // We'll also use 4 already allocated bytes for EAX.
       BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
-        .addImm(isEAXAlive ? NumBytes - 4 : NumBytes);
+        .addImm(isEAXAlive ? NumBytes - 4 : NumBytes)
+        .setMIFlag(MachineInstr::FrameSetup);
     }
 
     BuildMI(MBB, MBBI, DL,
             TII.get(Is64Bit ? X86::W64ALLOCA : X86::CALLpcrel32))
       .addExternalSymbol(StackProbeSymbol)
       .addReg(StackPtr,    RegState::Define | RegState::Implicit)
-      .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
+      .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit)
+      .setMIFlag(MachineInstr::FrameSetup);
 
     // MSVC x64's __chkstk needs to adjust %rsp.
     // FIXME: %rax preserves the offset and should be available.
@@ -617,6 +873,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
         MachineInstr *MI = addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm),
                                                 X86::EAX),
                                         StackPtr, false, NumBytes - 4);
+        MI->setFlag(MachineInstr::FrameSetup);
         MBB.insert(MBBI, MI);
     }
   } else if (NumBytes)
@@ -626,7 +883,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
   if (( (!HasFP && NumBytes) || PushedRegs) && needsFrameMoves) {
     // Mark end of stack pointer adjustment.
     MCSymbol *Label = MMI.getContext().CreateTempSymbol();
-    BuildMI(MBB, MBBI, DL, TII.get(X86::PROLOG_LABEL)).addSym(Label);
+    BuildMI(MBB, MBBI, DL, TII.get(X86::PROLOG_LABEL))
+      .addSym(Label);
 
     if (!HasFP && NumBytes) {
       // Define the current CFA rule to use the provided offset.
@@ -646,6 +904,11 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
     if (PushedRegs)
       emitCalleeSavedFrameMoves(MF, Label, HasFP ? FramePtr : StackPtr);
   }
+
+  // Darwin 10.7 and greater has support for compact unwind encoding.
+  if (GenerateCompactUnwind &&
+      STI.isTargetDarwin() && !STI.getTargetTriple().isMacOSXVersionLT(10, 6))
+    MMI.setCompactUnwindEncoding(getCompactUnwindEncoding(MF));
 }
 
 void X86FrameLowering::emitEpilogue(MachineFunction &MF,
@@ -841,23 +1104,6 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
     delta += mergeSPUpdates(MBB, MBBI, StackPtr, true);
     emitSPUpdate(MBB, MBBI, StackPtr, delta, Is64Bit, TII, *RegInfo);
   }
-}
-
-void
-X86FrameLowering::getInitialFrameState(std::vector<MachineMove> &Moves) const {
-  // Calculate amount of bytes used for return address storing
-  int stackGrowth = (STI.is64Bit() ? -8 : -4);
-  const X86RegisterInfo *RI = TM.getRegisterInfo();
-
-  // Initial state of the frame pointer is esp+stackGrowth.
-  MachineLocation Dst(MachineLocation::VirtualFP);
-  MachineLocation Src(RI->getStackRegister(), stackGrowth);
-  Moves.push_back(MachineMove(0, Dst, Src));
-
-  // Add return address to move list
-  MachineLocation CSDst(RI->getStackRegister(), stackGrowth);
-  MachineLocation CSSrc(RI->getRARegister());
-  Moves.push_back(MachineMove(0, CSDst, CSSrc));
 }
 
 int X86FrameLowering::getFrameIndexOffset(const MachineFunction &MF, int FI) const {

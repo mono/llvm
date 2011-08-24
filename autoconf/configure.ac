@@ -297,6 +297,10 @@ AC_CACHE_CHECK([type of operating system we're going to target],
     llvm_cv_target_os_type="MingW" ;;
   *-*-haiku*)
     llvm_cv_target_os_type="Haiku" ;;
+  *-*-rtems*)
+    llvm_cv_target_os_type="RTEMS" ;;
+  *-*-nacl*)
+    llvm_cv_target_os_type="NativeClient" ;;
   *-unknown-eabi*)
     llvm_cv_target_os_type="Freestanding" ;;
   *)
@@ -482,7 +486,7 @@ else
     x86_64)      AC_SUBST(TARGET_HAS_JIT,1) ;;
     Alpha)       AC_SUBST(TARGET_HAS_JIT,0) ;;
     ARM)         AC_SUBST(TARGET_HAS_JIT,1) ;;
-    Mips)        AC_SUBST(TARGET_HAS_JIT,0) ;;
+    Mips)        AC_SUBST(TARGET_HAS_JIT,1) ;;
     XCore)       AC_SUBST(TARGET_HAS_JIT,0) ;;
     MSP430)      AC_SUBST(TARGET_HAS_JIT,0) ;;
     SystemZ)     AC_SUBST(TARGET_HAS_JIT,0) ;;
@@ -656,6 +660,7 @@ for a_target in $TARGETS_TO_BUILD; do
       [LLVM architecture name for the native architecture, if available])
     LLVM_NATIVE_TARGET="LLVMInitialize${LLVM_NATIVE_ARCH}Target"
     LLVM_NATIVE_TARGETINFO="LLVMInitialize${LLVM_NATIVE_ARCH}TargetInfo"
+    LLVM_NATIVE_TARGETMC="LLVMInitialize${LLVM_NATIVE_ARCH}TargetMC"
     LLVM_NATIVE_ASMPRINTER="LLVMInitialize${LLVM_NATIVE_ARCH}AsmPrinter"
     if test -f ${srcdir}/lib/Target/${LLVM_NATIVE_ARCH}/AsmParser/Makefile ; then
       LLVM_NATIVE_ASMPARSER="LLVMInitialize${LLVM_NATIVE_ARCH}AsmParser"
@@ -664,6 +669,8 @@ for a_target in $TARGETS_TO_BUILD; do
       [LLVM name for the native Target init function, if available])
     AC_DEFINE_UNQUOTED(LLVM_NATIVE_TARGETINFO, $LLVM_NATIVE_TARGETINFO,
       [LLVM name for the native TargetInfo init function, if available])
+    AC_DEFINE_UNQUOTED(LLVM_NATIVE_TARGETMC, $LLVM_NATIVE_TARGETMC,
+      [LLVM name for the native target MC init function, if available])
     AC_DEFINE_UNQUOTED(LLVM_NATIVE_ASMPRINTER, $LLVM_NATIVE_ASMPRINTER,
       [LLVM name for the native AsmPrinter init function, if available])
     if test -f ${srcdir}/lib/Target/${LLVM_NATIVE_ARCH}/AsmParser/Makefile ; then
@@ -933,6 +940,14 @@ if test "x$WITH_BINUTILS_INCDIR" != xdefault ; then
      AC_MSG_ERROR([Invalid path to directory containing plugin-api.h.]);
   fi
 fi
+
+dnl Specify the URL where bug reports should be submitted.
+AC_ARG_WITH(bug-report-url,
+  AS_HELP_STRING([--with-bug-report-url],
+    [Specify the URL where bug reports should be submitted (default=http://llvm.org/bugs/)]),,
+    withval="http://llvm.org/bugs/")
+AC_DEFINE_UNQUOTED(BUG_REPORT_URL,"$withval",
+                   [Bug report URL.])
 
 dnl --enable-libffi : check whether the user wants to turn off libffi:
 AC_ARG_ENABLE(libffi,AS_HELP_STRING(

@@ -13,22 +13,21 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MCFunction.h"
 #include "llvm/Object/ObjectFile.h"
-// This config must be included before llvm-config.h.
-#include "llvm/Config/config.h"
-#include "../../lib/MC/MCDisassembler/EDDisassembler.h"
-#include "../../lib/MC/MCDisassembler/EDInst.h"
-#include "../../lib/MC/MCDisassembler/EDOperand.h"
-#include "../../lib/MC/MCDisassembler/EDToken.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCDisassembler.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCInstrInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -38,12 +37,9 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/system_error.h"
-#include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegistry.h"
 #include "llvm/Target/TargetSelect.h"
 #include <algorithm>
-#include <cctype>
-#include <cerrno>
 #include <cstring>
 using namespace llvm;
 using namespace object;
@@ -60,6 +56,10 @@ namespace {
   Disassembled("d", cl::desc("Alias for --disassemble"),
                cl::aliasopt(Disassemble));
 
+  cl::opt<bool>
+  CFG("cfg", cl::desc("Create a CFG for every symbol in the object file and"
+                      "write it to a graphviz file"));
+
   cl::opt<std::string>
   TripleName("triple", cl::desc("Target triple to disassemble for, "
                                 "see -version for available targets"));
@@ -69,6 +69,14 @@ namespace {
                             "see -version for available targets"));
 
   StringRef ToolName;
+
+  bool error(error_code ec) {
+    if (!ec) return false;
+
+    outs() << ToolName << ": error reading file: " << ec.message() << ".\n";
+    outs().flush();
+    return true;
+  }
 }
 
 static const Target *GetTarget(const ObjectFile *Obj = NULL) {
@@ -107,7 +115,7 @@ public:
   uint64_t getExtent() const { return Bytes.size(); }
 
   int readByte(uint64_t Addr, uint8_t *Byte) const {
-    if (Addr > getExtent())
+    if (Addr >= getExtent())
       return -1;
     *Byte = Bytes[Addr];
     return 0;
@@ -156,20 +164,52 @@ static void DisassembleInput(const StringRef &Filename) {
     // GetTarget prints out stuff.
     return;
   }
+  const MCInstrInfo *InstrInfo = TheTarget->createMCInstrInfo();
+  OwningPtr<MCInstrAnalysis>
+    InstrAnalysis(TheTarget->createMCInstrAnalysis(InstrInfo));
 
   outs() << '\n';
   outs() << Filename
-         << ":\tfile format " << Obj->getFileFormatName() << "\n\n\n";
+         << ":\tfile format " << Obj->getFileFormatName() << "\n\n";
 
+  error_code ec;
   for (ObjectFile::section_iterator i = Obj->begin_sections(),
                                     e = Obj->end_sections();
-                                    i != e; ++i) {
-    if (!i->isText())
-      continue;
-    outs() << "Disassembly of section " << i->getName() << ":\n\n";
+                                    i != e; i.increment(ec)) {
+    if (error(ec)) break;
+    bool text;
+    if (error(i->isText(text))) break;
+    if (!text) continue;
+
+    // Make a list of all the symbols in this section.
+    std::vector<std::pair<uint64_t, StringRef> > Symbols;
+    for (ObjectFile::symbol_iterator si = Obj->begin_symbols(),
+                                     se = Obj->end_symbols();
+                                     si != se; si.increment(ec)) {
+      bool contains;
+      if (!error(i->containsSymbol(*si, contains)) && contains) {
+        uint64_t Address;
+        if (error(si->getAddress(Address))) break;
+        StringRef Name;
+        if (error(si->getName(Name))) break;
+        Symbols.push_back(std::make_pair(Address, Name));
+      }
+    }
+
+    // Sort the symbols by address, just in case they didn't come in that way.
+    array_pod_sort(Symbols.begin(), Symbols.end());
+
+    StringRef name;
+    if (error(i->getName(name))) break;
+    outs() << "Disassembly of section " << name << ':';
+
+    // If the section has no symbols just insert a dummy one and disassemble
+    // the whole section.
+    if (Symbols.empty())
+      Symbols.push_back(std::make_pair(0, name));
 
     // Set up disassembler.
-    OwningPtr<const MCAsmInfo> AsmInfo(TheTarget->createAsmInfo(TripleName));
+    OwningPtr<const MCAsmInfo> AsmInfo(TheTarget->createMCAsmInfo(TripleName));
 
     if (!AsmInfo) {
       errs() << "error: no assembly info for target " << TripleName << "\n";
@@ -182,49 +222,145 @@ static void DisassembleInput(const StringRef &Filename) {
       return;
     }
 
-    // FIXME: We shouldn't need to do this (and link in codegen).
-    //        When we split this out, we should do it in a way that makes
-    //        it straightforward to switch subtargets on the fly (.e.g,
-    //        the .cpu and .code16 directives).
-    std::string FeaturesStr;
-    OwningPtr<TargetMachine> TM(TheTarget->createTargetMachine(TripleName,
-                                                               FeaturesStr));
-    if (!TM) {
-      errs() << "error: could not create target for triple " << TripleName << "\n";
-      return;
-    }
-
     int AsmPrinterVariant = AsmInfo->getAssemblerDialect();
     OwningPtr<MCInstPrinter> IP(TheTarget->createMCInstPrinter(
-                                  *TM, AsmPrinterVariant, *AsmInfo));
+                                  AsmPrinterVariant, *AsmInfo));
     if (!IP) {
       errs() << "error: no instruction printer for target " << TripleName << '\n';
       return;
     }
 
-    StringRef Bytes = i->getContents();
+    StringRef Bytes;
+    if (error(i->getContents(Bytes))) break;
     StringRefMemoryObject memoryObject(Bytes);
     uint64_t Size;
     uint64_t Index;
+    uint64_t SectSize;
+    if (error(i->getSize(SectSize))) break;
 
-    for (Index = 0; Index < Bytes.size(); Index += Size) {
-      MCInst Inst;
+    // Disassemble symbol by symbol.
+    for (unsigned si = 0, se = Symbols.size(); si != se; ++si) {
+      uint64_t Start = Symbols[si].first;
+      uint64_t End = si == se-1 ? SectSize : Symbols[si + 1].first - 1;
+      outs() << '\n' << Symbols[si].second << ":\n";
 
-#     ifndef NDEBUG
-      raw_ostream &DebugOut = DebugFlag ? dbgs() : nulls();
-#     else
-      raw_ostream &DebugOut = nulls();
-#     endif
+#ifndef NDEBUG
+        raw_ostream &DebugOut = DebugFlag ? dbgs() : nulls();
+#else
+        raw_ostream &DebugOut = nulls();
+#endif
 
-      if (DisAsm->getInstruction(Inst, Size, memoryObject, Index, DebugOut)) {
-        outs() << format("%8x:\t", i->getAddress() + Index);
-        DumpBytes(StringRef(Bytes.data() + Index, Size));
-        IP->printInst(&Inst, outs());
-        outs() << "\n";
+      if (!CFG) {
+        for (Index = Start; Index < End; Index += Size) {
+          MCInst Inst;
+          if (DisAsm->getInstruction(Inst, Size, memoryObject, Index,
+                                     DebugOut)) {
+            uint64_t addr;
+            if (error(i->getAddress(addr))) break;
+            outs() << format("%8x:\t", addr + Index);
+            DumpBytes(StringRef(Bytes.data() + Index, Size));
+            IP->printInst(&Inst, outs());
+            outs() << "\n";
+          } else {
+            errs() << ToolName << ": warning: invalid instruction encoding\n";
+            if (Size == 0)
+              Size = 1; // skip illegible bytes
+          }
+        }
+
       } else {
-        errs() << ToolName << ": warning: invalid instruction encoding\n";
-        if (Size == 0)
-          Size = 1; // skip illegible bytes
+        // Create CFG and use it for disassembly.
+        MCFunction f =
+          MCFunction::createFunctionFromMC(Symbols[si].second, DisAsm.get(),
+                                           memoryObject, Start, End,
+                                           InstrAnalysis.get(), DebugOut);
+
+        for (MCFunction::iterator fi = f.begin(), fe = f.end(); fi != fe; ++fi){
+          bool hasPreds = false;
+          // Only print blocks that have predecessors.
+          // FIXME: Slow.
+          for (MCFunction::iterator pi = f.begin(), pe = f.end(); pi != pe;
+              ++pi)
+            if (pi->second.contains(&fi->second)) {
+              hasPreds = true;
+              break;
+            }
+
+          // Data block.
+          if (!hasPreds && fi != f.begin()) {
+            uint64_t End = llvm::next(fi) == fe ? SectSize :
+                                                  llvm::next(fi)->first;
+            uint64_t addr;
+            if (error(i->getAddress(addr))) break;
+            outs() << "# " << End-fi->first << " bytes of data:\n";
+            for (unsigned pos = fi->first; pos != End; ++pos) {
+              outs() << format("%8x:\t", addr + pos);
+              DumpBytes(StringRef(Bytes.data() + pos, 1));
+              outs() << format("\t.byte 0x%02x\n", (uint8_t)Bytes[pos]);
+            }
+            continue;
+          }
+
+          if (fi->second.contains(&fi->second))
+            outs() << "# Loop begin:\n";
+
+          for (unsigned ii = 0, ie = fi->second.getInsts().size(); ii != ie;
+               ++ii) {
+            uint64_t addr;
+            if (error(i->getAddress(addr))) break;
+            const MCDecodedInst &Inst = fi->second.getInsts()[ii];
+            outs() << format("%8x:\t", addr + Inst.Address);
+            DumpBytes(StringRef(Bytes.data() + Inst.Address, Inst.Size));
+            // Simple loops.
+            if (fi->second.contains(&fi->second))
+              outs() << '\t';
+            IP->printInst(&Inst.Inst, outs());
+            outs() << '\n';
+          }
+        }
+
+        // Start a new dot file.
+        std::string Error;
+        raw_fd_ostream Out((f.getName().str() + ".dot").c_str(), Error);
+        if (!Error.empty()) {
+          errs() << ToolName << ": warning: " << Error << '\n';
+          continue;
+        }
+
+        Out << "digraph " << f.getName() << " {\n";
+        Out << "graph [ rankdir = \"LR\" ];\n";
+        for (MCFunction::iterator i = f.begin(), e = f.end(); i != e; ++i) {
+          bool hasPreds = false;
+          // Only print blocks that have predecessors.
+          // FIXME: Slow.
+          for (MCFunction::iterator pi = f.begin(), pe = f.end(); pi != pe;
+               ++pi)
+            if (pi->second.contains(&i->second)) {
+              hasPreds = true;
+              break;
+            }
+
+          if (!hasPreds && i != f.begin())
+            continue;
+
+          Out << '"' << (uintptr_t)&i->second << "\" [ label=\"<a>";
+          // Print instructions.
+          for (unsigned ii = 0, ie = i->second.getInsts().size(); ii != ie;
+               ++ii) {
+            // Escape special chars and print the instruction in mnemonic form.
+            std::string Str;
+            raw_string_ostream OS(Str);
+            IP->printInst(&i->second.getInsts()[ii].Inst, OS);
+            Out << DOT::EscapeString(OS.str()) << '|';
+          }
+          Out << "<o>\" shape=\"record\" ];\n";
+
+          // Add edges.
+          for (MCBasicBlock::succ_iterator si = i->second.succ_begin(),
+              se = i->second.succ_end(); si != se; ++si)
+            Out << (uintptr_t)&i->second << ":o -> " << (uintptr_t)*si <<":a\n";
+        }
+        Out << "}\n";
       }
     }
   }
@@ -238,9 +374,7 @@ int main(int argc, char **argv) {
 
   // Initialize targets and assembly printers/parsers.
   llvm::InitializeAllTargetInfos();
-  // FIXME: We shouldn't need to initialize the Target(Machine)s.
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllAsmPrinters();
+  llvm::InitializeAllTargetMCs();
   llvm::InitializeAllAsmParsers();
   llvm::InitializeAllDisassemblers();
 

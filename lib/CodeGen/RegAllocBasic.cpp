@@ -34,7 +34,6 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
-#include "llvm/CodeGen/RegisterCoalescer.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
@@ -141,7 +140,7 @@ RABasic::RABasic(): MachineFunctionPass(ID) {
   initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
   initializeSlotIndexesPass(*PassRegistry::getPassRegistry());
   initializeStrongPHIEliminationPass(*PassRegistry::getPassRegistry());
-  initializeRegisterCoalescerAnalysisGroup(*PassRegistry::getPassRegistry());
+  initializeRegisterCoalescerPass(*PassRegistry::getPassRegistry());
   initializeCalculateSpillWeightsPass(*PassRegistry::getPassRegistry());
   initializeLiveStacksPass(*PassRegistry::getPassRegistry());
   initializeMachineDominatorTreePass(*PassRegistry::getPassRegistry());
@@ -160,7 +159,7 @@ void RABasic::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addPreserved<LiveDebugVariables>();
   if (StrongPHIElim)
     AU.addRequiredID(StrongPHIEliminationID);
-  AU.addRequiredTransitive<RegisterCoalescer>();
+  AU.addRequiredTransitiveID(RegisterCoalescerPassID);
   AU.addRequired<CalculateSpillWeights>();
   AU.addRequired<LiveStacks>();
   AU.addPreserved<LiveStacks>();
@@ -324,19 +323,21 @@ void RegAllocBase::allocatePhysRegs() {
 
     if (AvailablePhysReg == ~0u) {
       // selectOrSplit failed to find a register!
-      std::string msg;
-      raw_string_ostream Msg(msg);
-      Msg << "Ran out of registers during register allocation!"
-             "\nCannot allocate: " << *VirtReg;
+      const char *Msg = "ran out of registers during register allocation";
+      // Probably caused by an inline asm.
+      MachineInstr *MI;
       for (MachineRegisterInfo::reg_iterator I = MRI->reg_begin(VirtReg->reg);
-      MachineInstr *MI = I.skipInstruction();) {
-        if (!MI->isInlineAsm())
-          continue;
-        Msg << "\nPlease check your inline asm statement for "
-          "invalid constraints:\n";
-        MI->print(Msg, &VRM->getMachineFunction().getTarget());
-      }
-      report_fatal_error(Msg.str());
+           (MI = I.skipInstruction());)
+        if (MI->isInlineAsm())
+          break;
+      if (MI)
+        MI->emitError(Msg);
+      else
+        report_fatal_error(Msg);
+      // Keep going after reporting the error.
+      VRM->assignVirt2Phys(VirtReg->reg,
+                 RegClassInfo.getOrder(MRI->getRegClass(VirtReg->reg)).front());
+      continue;
     }
 
     if (AvailablePhysReg)
@@ -437,6 +438,7 @@ void RegAllocBase::addMBBLiveIns(MachineFunction *MF) {
     LiveIntervalUnion &LiveUnion = PhysReg2LiveUnion[PhysReg];
     if (LiveUnion.empty())
       continue;
+    DEBUG(dbgs() << PrintReg(PhysReg, TRI) << " live-in:");
     MachineFunction::iterator MBB = llvm::next(MF->begin());
     MachineFunction::iterator MFE = MF->end();
     SlotIndex Start, Stop;
@@ -447,6 +449,8 @@ void RegAllocBase::addMBBLiveIns(MachineFunction *MF) {
       if (SI.start() <= Start) {
         if (!MBB->isLiveIn(PhysReg))
           MBB->addLiveIn(PhysReg);
+        DEBUG(dbgs() << "\tBB#" << MBB->getNumber() << ':'
+                     << PrintReg(SI.value()->reg, TRI));
       } else if (SI.start() > Stop)
         MBB = Indexes->getMBBFromIndex(SI.start().getPrevIndex());
       if (++MBB == MFE)
@@ -454,6 +458,7 @@ void RegAllocBase::addMBBLiveIns(MachineFunction *MF) {
       tie(Start, Stop) = Indexes->getMBBRange(MBB);
       SI.advanceTo(Start);
     }
+    DEBUG(dbgs() << '\n');
   }
 }
 
@@ -493,8 +498,9 @@ unsigned RABasic::selectOrSplit(LiveInterval &VirtReg,
       // Found an available register.
       return PhysReg;
     }
+    Queries[interfReg].collectInterferingVRegs(1);
     LiveInterval *interferingVirtReg =
-      Queries[interfReg].firstInterference().liveUnionPos().value();
+      Queries[interfReg].interferingVRegs().front();
 
     // The current VirtReg must either be spillable, or one of its interferences
     // must have less spill weight.

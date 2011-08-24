@@ -15,12 +15,14 @@
 #include "PTXISelLowering.h"
 #include "PTXMachineFunctionInfo.h"
 #include "PTXRegisterInfo.h"
+#include "PTXSubtarget.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -46,38 +48,59 @@ PTXTargetLowering::PTXTargetLowering(TargetMachine &TM)
   addRegisterClass(MVT::f64, PTX::RegF64RegisterClass);
 
   setBooleanContents(ZeroOrOneBooleanContent);
-
-  setOperationAction(ISD::EXCEPTIONADDR, MVT::i32, Expand);
-
-  setOperationAction(ISD::ConstantFP, MVT::f32, Legal);
-  setOperationAction(ISD::ConstantFP, MVT::f64, Legal);
-
-  // Turn i16 (z)extload into load + (z)extend
+  setMinFunctionAlignment(2);
+  
+  ////////////////////////////////////
+  /////////// Expansion //////////////
+  ////////////////////////////////////
+  
+  // (any/zero/sign) extload => load + (any/zero/sign) extend
+  
   setLoadExtAction(ISD::EXTLOAD, MVT::i16, Expand);
   setLoadExtAction(ISD::ZEXTLOAD, MVT::i16, Expand);
-
-  // Turn f32 extload into load + fextend
-  setLoadExtAction(ISD::EXTLOAD, MVT::f32, Expand);
-
-  // Turn f64 truncstore into trunc + store.
-  setTruncStoreAction(MVT::f64, MVT::f32, Expand);
-
-  // Customize translation of memory addresses
-  setOperationAction(ISD::GlobalAddress, MVT::i32, Custom);
-  setOperationAction(ISD::GlobalAddress, MVT::i64, Custom);
-
-  // Expand BR_CC into BRCOND
+  setLoadExtAction(ISD::SEXTLOAD, MVT::i16, Expand);
+  
+  // f32 extload => load + fextend
+  
+  setLoadExtAction(ISD::EXTLOAD, MVT::f32, Expand);  
+  
+  // f64 truncstore => trunc + store
+  
+  setTruncStoreAction(MVT::f64, MVT::f32, Expand); 
+  
+  // sign_extend_inreg => sign_extend
+  
+  setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i1, Expand);
+  
+  // br_cc => brcond
+  
   setOperationAction(ISD::BR_CC, MVT::Other, Expand);
 
-  // Expand SELECT_CC into SETCC
+  // select_cc => setcc
+  
   setOperationAction(ISD::SELECT_CC, MVT::Other, Expand);
   setOperationAction(ISD::SELECT_CC, MVT::f32, Expand);
   setOperationAction(ISD::SELECT_CC, MVT::f64, Expand);
-
-  // need to lower SETCC of RegPred into bitwise logic
+  
+  ////////////////////////////////////
+  //////////// Legal /////////////////
+  ////////////////////////////////////
+  
+  setOperationAction(ISD::ConstantFP, MVT::f32, Legal);
+  setOperationAction(ISD::ConstantFP, MVT::f64, Legal);
+  
+  ////////////////////////////////////
+  //////////// Custom ////////////////
+  ////////////////////////////////////
+  
+  // customise setcc to use bitwise logic if possible
+  
   setOperationAction(ISD::SETCC, MVT::i1, Custom);
 
-  setMinFunctionAlignment(2);
+  // customize translation of memory addresses
+  
+  setOperationAction(ISD::GlobalAddress, MVT::i32, Custom);
+  setOperationAction(ISD::GlobalAddress, MVT::i64, Custom);
 
   // Compute derived properties from the register classes
   computeRegisterProperties();
@@ -104,12 +127,16 @@ const char *PTXTargetLowering::getTargetNodeName(unsigned Opcode) const {
       llvm_unreachable("Unknown opcode");
     case PTXISD::COPY_ADDRESS:
       return "PTXISD::COPY_ADDRESS";
-    case PTXISD::READ_PARAM:
-      return "PTXISD::READ_PARAM";
+    case PTXISD::LOAD_PARAM:
+      return "PTXISD::LOAD_PARAM";
+    case PTXISD::STORE_PARAM:
+      return "PTXISD::STORE_PARAM";
     case PTXISD::EXIT:
       return "PTXISD::EXIT";
     case PTXISD::RET:
       return "PTXISD::RET";
+    case PTXISD::CALL:
+      return "PTXISD::CALL";
   }
 }
 
@@ -160,27 +187,6 @@ LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const {
 //                      Calling Convention Implementation
 //===----------------------------------------------------------------------===//
 
-namespace {
-struct argmap_entry {
-  MVT::SimpleValueType VT;
-  TargetRegisterClass *RC;
-  TargetRegisterClass::iterator loc;
-
-  argmap_entry(MVT::SimpleValueType _VT, TargetRegisterClass *_RC)
-    : VT(_VT), RC(_RC), loc(_RC->begin()) {}
-
-  void reset() { loc = RC->begin(); }
-  bool operator==(MVT::SimpleValueType _VT) const { return VT == _VT; }
-} argmap[] = {
-  argmap_entry(MVT::i1,  PTX::RegPredRegisterClass),
-  argmap_entry(MVT::i16, PTX::RegI16RegisterClass),
-  argmap_entry(MVT::i32, PTX::RegI32RegisterClass),
-  argmap_entry(MVT::i64, PTX::RegI64RegisterClass),
-  argmap_entry(MVT::f32, PTX::RegF32RegisterClass),
-  argmap_entry(MVT::f64, PTX::RegF64RegisterClass)
-};
-}                               // end anonymous namespace
-
 SDValue PTXTargetLowering::
   LowerFormalArguments(SDValue Chain,
                        CallingConv::ID CallConv,
@@ -192,6 +198,7 @@ SDValue PTXTargetLowering::
   if (isVarArg) llvm_unreachable("PTX does not support varargs");
 
   MachineFunction &MF = DAG.getMachineFunction();
+  const PTXSubtarget& ST = getTargetMachine().getSubtarget<PTXSubtarget>();
   PTXMachineFunctionInfo *MFI = MF.getInfo<PTXMachineFunctionInfo>();
 
   switch (CallConv) {
@@ -206,13 +213,17 @@ SDValue PTXTargetLowering::
       break;
   }
 
-  if (MFI->isKernel()) {
-    // For kernel functions, we just need to emit the proper READ_PARAM ISDs
+  // We do one of two things here:
+  // IsKernel || SM >= 2.0  ->  Use param space for arguments
+  // SM < 2.0               ->  Use registers for arguments
+  if (MFI->isKernel() || ST.useParamSpaceForDeviceArgs()) {
+    // We just need to emit the proper LOAD_PARAM ISDs
     for (unsigned i = 0, e = Ins.size(); i != e; ++i) {
 
-      assert(Ins[i].VT != MVT::i1 && "Kernels cannot take pred operands");
+      assert((!MFI->isKernel() || Ins[i].VT != MVT::i1) &&
+             "Kernels cannot take pred operands");
 
-      SDValue ArgValue = DAG.getNode(PTXISD::READ_PARAM, dl, Ins[i].VT, Chain,
+      SDValue ArgValue = DAG.getNode(PTXISD::LOAD_PARAM, dl, Ins[i].VT, Chain,
                                      DAG.getTargetConstant(i, MVT::i32));
       InVals.push_back(ArgValue);
 
@@ -299,16 +310,20 @@ SDValue PTXTargetLowering::
 
   MachineFunction& MF = DAG.getMachineFunction();
   PTXMachineFunctionInfo *MFI = MF.getInfo<PTXMachineFunctionInfo>();
-  SmallVector<CCValAssign, 16> RVLocs;
-  CCState CCInfo(CallConv, isVarArg, DAG.getMachineFunction(),
-                 getTargetMachine(), RVLocs, *DAG.getContext());
 
   SDValue Flag;
+
+  // Even though we could use the .param space for return arguments for
+  // device functions if SM >= 2.0 and the number of return arguments is
+  // only 1, we just always use registers since this makes the codegen
+  // easier.
+  SmallVector<CCValAssign, 16> RVLocs;
+  CCState CCInfo(CallConv, isVarArg, DAG.getMachineFunction(),
+  getTargetMachine(), RVLocs, *DAG.getContext());
 
   CCInfo.AnalyzeReturn(Outs, RetCC_PTX);
 
   for (unsigned i = 0, e = RVLocs.size(); i != e; ++i) {
-
     CCValAssign& VA  = RVLocs[i];
 
     assert(VA.isRegLoc() && "CCValAssign must be RegLoc");
@@ -332,4 +347,50 @@ SDValue PTXTargetLowering::
   else {
     return DAG.getNode(PTXISD::RET, dl, MVT::Other, Chain, Flag);
   }
+}
+
+SDValue
+PTXTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
+                             CallingConv::ID CallConv, bool isVarArg,
+                             bool &isTailCall,
+                             const SmallVectorImpl<ISD::OutputArg> &Outs,
+                             const SmallVectorImpl<SDValue> &OutVals,
+                             const SmallVectorImpl<ISD::InputArg> &Ins,
+                             DebugLoc dl, SelectionDAG &DAG,
+                             SmallVectorImpl<SDValue> &InVals) const {
+
+  MachineFunction& MF = DAG.getMachineFunction();
+  PTXMachineFunctionInfo *MFI = MF.getInfo<PTXMachineFunctionInfo>();
+
+  assert(getTargetMachine().getSubtarget<PTXSubtarget>().callsAreHandled() &&
+         "Calls are not handled for the target device");
+
+  // Is there a more "LLVM"-way to create a variable-length array of values?
+  SDValue* ops = new SDValue[OutVals.size() + 2];
+
+  ops[0] = Chain;
+
+  if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+    const GlobalValue *GV = G->getGlobal();
+    Callee = DAG.getTargetGlobalAddress(GV, dl, getPointerTy());
+    ops[1] = Callee;
+  } else {
+    assert(false && "Function must be a GlobalAddressSDNode");
+  }
+
+  for (unsigned i = 0; i != OutVals.size(); ++i) {
+    unsigned Size = OutVals[i].getValueType().getSizeInBits();
+    SDValue Index = DAG.getTargetConstant(MFI->getNextParam(Size), MVT::i32);
+    Chain = DAG.getNode(PTXISD::STORE_PARAM, dl, MVT::Other, Chain,
+                        Index, OutVals[i]);
+    ops[i+2] = Index;
+  }
+
+  ops[0] = Chain;
+
+  Chain = DAG.getNode(PTXISD::CALL, dl, MVT::Other, ops, OutVals.size()+2);
+
+  delete [] ops;
+
+  return Chain;
 }

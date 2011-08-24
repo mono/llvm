@@ -24,7 +24,6 @@ namespace llvm {
   class MachineFunctionPass;
   class PassInfo;
   class TargetLowering;
-  class RegisterCoalescer;
   class raw_ostream;
 
   /// createUnreachableBlockEliminationPass - The LLVM code generator does not
@@ -73,20 +72,16 @@ namespace llvm {
   ///  This pass is still in development
   extern char &StrongPHIEliminationID;
 
-  extern char &PreAllocSplittingID;
-
   /// LiveStacks pass. An analysis keeping track of the liveness of stack slots.
   extern char &LiveStacksID;
-
-  /// SimpleRegisterCoalescing pass.  Aggressively coalesces every register
-  /// copy it can.
-  ///
-  extern char &SimpleRegisterCoalescingID;
 
   /// TwoAddressInstruction pass - This pass reduces two-address instructions to
   /// use two operands. This destroys SSA information but it is desired by
   /// register allocators.
   extern char &TwoAddressInstructionPassID;
+
+  /// RegisteCoalescer pass - This pass merges live ranges to eliminate copies.
+  extern char &RegisterCoalescerPassID;
 
   /// SpillPlacement analysis. Suggest optimal placement of spill code between
   /// basic blocks.
@@ -131,11 +126,6 @@ namespace llvm {
   /// Quadratic Prograaming (PBQP) based register allocator.
   ///
   FunctionPass *createDefaultPBQPRegisterAllocator();
-
-  /// SimpleRegisterCoalescing Pass - Coalesce all copies possible.  Can run
-  /// independently of the register allocator.
-  ///
-  RegisterCoalescer *createSimpleRegisterCoalescer();
 
   /// PrologEpilogCodeInserter Pass - This pass inserts prolog and epilog code,
   /// and eliminates abstract frame references.

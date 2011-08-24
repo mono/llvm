@@ -298,10 +298,16 @@ void LiveRangeEdit::eliminateDeadDefs(SmallVectorImpl<MachineInstr*> &Dead,
     if (NumComp <= 1)
       continue;
     ++NumFracRanges;
+    bool IsOriginal = VRM.getOriginal(LI->reg) == LI->reg;
     DEBUG(dbgs() << NumComp << " components: " << *LI << '\n');
     SmallVector<LiveInterval*, 8> Dups(1, LI);
     for (unsigned i = 1; i != NumComp; ++i) {
       Dups.push_back(&createFrom(LI->reg, LIS, VRM));
+      // If LI is an original interval that hasn't been split yet, make the new
+      // intervals their own originals instead of referring to LI. The original
+      // interval must contain all the split products, and LI doesn't.
+      if (IsOriginal)
+        VRM.setIsSplitFromReg(Dups.back()->reg, 0);
       if (delegate_)
         delegate_->LRE_DidCloneVirtReg(Dups.back()->reg, LI->reg);
     }
@@ -313,9 +319,12 @@ void LiveRangeEdit::calculateRegClassAndHint(MachineFunction &MF,
                                              LiveIntervals &LIS,
                                              const MachineLoopInfo &Loops) {
   VirtRegAuxInfo VRAI(MF, LIS, Loops);
+  MachineRegisterInfo &MRI = MF.getRegInfo();
   for (iterator I = begin(), E = end(); I != E; ++I) {
     LiveInterval &LI = **I;
-    VRAI.CalculateRegClass(LI.reg);
+    if (MRI.recomputeRegClass(LI.reg, MF.getTarget()))
+      DEBUG(dbgs() << "Inflated " << PrintReg(LI.reg) << " to "
+                   << MRI.getRegClass(LI.reg)->getName() << '\n');
     VRAI.CalculateWeightAndHint(LI);
   }
 }

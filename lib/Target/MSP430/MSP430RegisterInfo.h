@@ -15,7 +15,9 @@
 #define LLVM_TARGET_MSP430REGISTERINFO_H
 
 #include "llvm/Target/TargetRegisterInfo.h"
-#include "MSP430GenRegisterInfo.h.inc"
+
+#define GET_REGINFO_HEADER
+#include "MSP430GenRegisterInfo.inc"
 
 namespace llvm {
 
@@ -56,12 +58,7 @@ public:
   void processFunctionBeforeFrameFinalized(MachineFunction &MF) const;
 
   // Debug information queries.
-  unsigned getRARegister() const;
   unsigned getFrameRegister(const MachineFunction &MF) const;
-
-  //! Get DWARF debugging register number
-  int getDwarfRegNum(unsigned RegNum, bool isEH) const;
-  int getLLVMRegNum(unsigned RegNum, bool isEH) const;
 };
 
 } // end namespace llvm

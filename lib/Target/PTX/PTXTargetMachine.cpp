@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTX.h"
-#include "PTXMCAsmInfo.h"
 #include "PTXTargetMachine.h"
 #include "llvm/PassManager.h"
 #include "llvm/Target/TargetRegistry.h"
@@ -26,7 +25,7 @@ namespace llvm {
                                    bool useCFI,
                                    MCInstPrinter *InstPrint,
                                    MCCodeEmitter *CE,
-                                   TargetAsmBackend *TAB,
+                                   MCAsmBackend *MAB,
                                    bool ShowInst);
 }
 
@@ -34,9 +33,6 @@ extern "C" void LLVMInitializePTXTarget() {
 
   RegisterTargetMachine<PTX32TargetMachine> X(ThePTX32Target);
   RegisterTargetMachine<PTX64TargetMachine> Y(ThePTX64Target);
-
-  RegisterAsmInfo<PTXMCAsmInfo> Z(ThePTX32Target);
-  RegisterAsmInfo<PTXMCAsmInfo> W(ThePTX64Target);
 
   TargetRegistry::RegisterAsmStreamer(ThePTX32Target, createPTXAsmStreamer);
   TargetRegistry::RegisterAsmStreamer(ThePTX64Target, createPTXAsmStreamer);
@@ -51,27 +47,27 @@ namespace {
 
 // DataLayout and FrameLowering are filled with dummy data
 PTXTargetMachine::PTXTargetMachine(const Target &T,
-                                   const std::string &TT,
-                                   const std::string &FS,
+                                   StringRef TT, StringRef CPU, StringRef FS,
+                                   Reloc::Model RM, CodeModel::Model CM,
                                    bool is64Bit)
-  : LLVMTargetMachine(T, TT),
+  : LLVMTargetMachine(T, TT, CPU, FS, RM, CM),
     DataLayout(is64Bit ? DataLayout64 : DataLayout32),
-    Subtarget(TT, FS, is64Bit),
+    Subtarget(TT, CPU, FS, is64Bit),
     FrameLowering(Subtarget),
     InstrInfo(*this),
     TLInfo(*this) {
 }
 
-PTX32TargetMachine::PTX32TargetMachine(const Target &T,
-                                       const std::string& TT,
-                                       const std::string& FS)
-  : PTXTargetMachine(T, TT, FS, false) {
+PTX32TargetMachine::PTX32TargetMachine(const Target &T, StringRef TT,
+                                       StringRef CPU, StringRef FS,
+                                       Reloc::Model RM, CodeModel::Model CM)
+  : PTXTargetMachine(T, TT, CPU, FS, RM, CM, false) {
 }
 
-PTX64TargetMachine::PTX64TargetMachine(const Target &T,
-                                       const std::string& TT,
-                                       const std::string& FS)
-  : PTXTargetMachine(T, TT, FS, true) {
+PTX64TargetMachine::PTX64TargetMachine(const Target &T, StringRef TT,
+                                       StringRef CPU, StringRef FS,
+                                       Reloc::Model RM, CodeModel::Model CM)
+  : PTXTargetMachine(T, TT, CPU, FS, RM, CM, true) {
 }
 
 bool PTXTargetMachine::addInstSelector(PassManagerBase &PM,

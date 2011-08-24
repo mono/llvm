@@ -354,9 +354,9 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
       const MachineBasicBlock *MBB = I;
       for (MachineBasicBlock::const_iterator
              II = MBB->begin(), IE = MBB->end(); II != IE; ++II) {
-        const TargetInstrDesc &TID = TM.getInstrInfo()->get(II->getOpcode());
+        const MCInstrDesc &MCID = TM.getInstrInfo()->get(II->getOpcode());
 
-        if ((TID.isCall() && !TID.isReturn()) ||
+        if ((MCID.isCall() && !MCID.isReturn()) ||
             II->isStackAligningInlineAsm()) {
           MFI->setHasCalls(true);
           goto done;
@@ -463,6 +463,7 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
     GroupName = "Instruction Selection and Scheduling";
   std::string BlockName;
   int BlockNumber = -1;
+  (void)BlockNumber;
 #ifdef NDEBUG
   if (ViewDAGCombine1 || ViewLegalizeTypesDAGs || ViewLegalizeDAGs ||
       ViewDAGCombine2 || ViewDAGCombineLT || ViewISelDAGs || ViewSchedDAGs ||
@@ -681,7 +682,7 @@ void SelectionDAGISel::PrepareEHLandingPad() {
   // landing pad can thus be detected via the MachineModuleInfo.
   MCSymbol *Label = MF->getMMI().addLandingPad(FuncInfo->MBB);
 
-  const TargetInstrDesc &II = TM.getInstrInfo()->get(TargetOpcode::EH_LABEL);
+  const MCInstrDesc &II = TM.getInstrInfo()->get(TargetOpcode::EH_LABEL);
   BuildMI(*FuncInfo->MBB, FuncInfo->InsertPt, SDB->getCurDebugLoc(), II)
     .addSym(Label);
 
@@ -753,6 +754,11 @@ bool SelectionDAGISel::TryToFoldFastISelLoad(const LoadInst *LI,
     
     TheUser = TheUser->use_back();
   }
+  
+  // If we didn't find the fold instruction, then we failed to collapse the
+  // sequence.
+  if (TheUser != FoldInst)
+    return false;
   
   // Don't try to fold volatile loads.  Target has to deal with alignment
   // constraints.
@@ -2611,9 +2617,9 @@ SelectCodeCommon(SDNode *NodeToMatch, const unsigned char *MatcherTable,
       if (EmitNodeInfo & OPFL_MemRefs) {
         // Only attach load or store memory operands if the generated
         // instruction may load or store.
-        const TargetInstrDesc &TID = TM.getInstrInfo()->get(TargetOpc);
-        bool mayLoad = TID.mayLoad();
-        bool mayStore = TID.mayStore();
+        const MCInstrDesc &MCID = TM.getInstrInfo()->get(TargetOpc);
+        bool mayLoad = MCID.mayLoad();
+        bool mayStore = MCID.mayStore();
 
         unsigned NumMemRefs = 0;
         for (SmallVector<MachineMemOperand*, 2>::const_iterator I =

@@ -205,6 +205,9 @@ def SDTMemBarrier : SDTypeProfile<0, 5, [   // memory barier
   SDTCisSameAs<0,1>,  SDTCisSameAs<0,2>,  SDTCisSameAs<0,3>, SDTCisSameAs<0,4>,
   SDTCisInt<0>
 ]>;
+def SDTAtomicFence : SDTypeProfile<0, 2, [
+  SDTCisSameAs<0,1>, SDTCisPtrTy<0>
+]>;
 def SDTAtomic3 : SDTypeProfile<1, 3, [
   SDTCisSameAs<0,2>,  SDTCisSameAs<0,3>, SDTCisInt<0>, SDTCisPtrTy<1>
 ]>;
@@ -353,6 +356,7 @@ def fsub       : SDNode<"ISD::FSUB"       , SDTFPBinOp>;
 def fmul       : SDNode<"ISD::FMUL"       , SDTFPBinOp, [SDNPCommutative]>;
 def fdiv       : SDNode<"ISD::FDIV"       , SDTFPBinOp>;
 def frem       : SDNode<"ISD::FREM"       , SDTFPBinOp>;
+def fma        : SDNode<"ISD::FMA"        , SDTFPTernaryOp>;
 def fabs       : SDNode<"ISD::FABS"       , SDTFPUnaryOp>;
 def fgetsign   : SDNode<"ISD::FGETSIGN"   , SDTFPToIntOp>;
 def fneg       : SDNode<"ISD::FNEG"       , SDTFPUnaryOp>;
@@ -395,6 +399,9 @@ def prefetch   : SDNode<"ISD::PREFETCH"   , SDTPrefetch,
 
 def membarrier : SDNode<"ISD::MEMBARRIER" , SDTMemBarrier,
                         [SDNPHasChain, SDNPSideEffect]>;
+
+def atomic_fence : SDNode<"ISD::ATOMIC_FENCE" , SDTAtomicFence,
+                          [SDNPHasChain, SDNPSideEffect]>;
 
 def atomic_cmp_swap : SDNode<"ISD::ATOMIC_CMP_SWAP" , SDTAtomic3,
                     [SDNPHasChain, SDNPMayStore, SDNPMayLoad, SDNPMemOperand]>;

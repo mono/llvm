@@ -43,18 +43,21 @@ class Constant : public User {
   Constant(const Constant &);           // Do not implement
   
 protected:
-  Constant(const Type *ty, ValueTy vty, Use *Ops, unsigned NumOps)
+  Constant(Type *ty, ValueTy vty, Use *Ops, unsigned NumOps)
     : User(ty, vty, Ops, NumOps) {}
 
   void destroyConstantImpl();
 public:
   /// isNullValue - Return true if this is the value that would be returned by
   /// getNullValue.
-  virtual bool isNullValue() const = 0;
+  bool isNullValue() const;
+  /// isAllOnesValue - Return true if this is the value that would be returned by
+  /// getAllOnesValue.
+  bool isAllOnesValue() const;
 
   /// isNegativeZeroValue - Return true if the value is what would be returned 
   /// by getZeroValueForNegation.
-  virtual bool isNegativeZeroValue() const { return isNullValue(); }
+  bool isNegativeZeroValue() const;
 
   /// canTrap - Return true if evaluation of this constant could trap.  This is
   /// true for things like constant expressions that could divide by zero.
@@ -128,16 +131,16 @@ public:
     assert(0 && "Constants that do not have operands cannot be using 'From'!");
   }
   
-  static Constant *getNullValue(const Type* Ty);
+  static Constant *getNullValue(Type* Ty);
   
   /// @returns the value for an integer constant of the given type that has all
   /// its bits set to true.
   /// @brief Get the all ones value
-  static Constant *getAllOnesValue(const Type* Ty);
+  static Constant *getAllOnesValue(Type* Ty);
 
   /// getIntegerValue - Return the value for an integer or pointer constant,
   /// or a vector thereof, with the given scalar value.
-  static Constant *getIntegerValue(const Type* Ty, const APInt &V);
+  static Constant *getIntegerValue(Type* Ty, const APInt &V);
   
   /// removeDeadConstantUsers - If there are any dead constant users dangling
   /// off of this constant, remove them.  This method is useful for clients

@@ -12,22 +12,26 @@
 //===----------------------------------------------------------------------===//
 
 #include "PPCInstrInfo.h"
+#include "PPC.h"
 #include "PPCInstrBuilder.h"
 #include "PPCMachineFunctionInfo.h"
-#include "PPCPredicates.h"
-#include "PPCGenInstrInfo.inc"
 #include "PPCTargetMachine.h"
 #include "PPCHazardRecognizers.h"
-#include "llvm/ADT/STLExtras.h"
+#include "MCTargetDesc/PPCPredicates.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/Target/TargetRegistry.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/ADT/STLExtras.h"
+
+#define GET_INSTRINFO_CTOR
+#include "PPCGenInstrInfo.inc"
 
 namespace llvm {
 extern cl::opt<bool> EnablePPC32RS;  // FIXME (64-bit): See PPCRegisterInfo.cpp.
@@ -37,8 +41,8 @@ extern cl::opt<bool> EnablePPC64RS;  // FIXME (64-bit): See PPCRegisterInfo.cpp.
 using namespace llvm;
 
 PPCInstrInfo::PPCInstrInfo(PPCTargetMachine &tm)
-  : TargetInstrInfoImpl(PPCInsts, array_lengthof(PPCInsts)), TM(tm),
-    RI(*TM.getSubtargetImpl(), *this) {}
+  : PPCGenInstrInfo(PPC::ADJCALLSTACKDOWN, PPC::ADJCALLSTACKUP),
+    TM(tm), RI(*TM.getSubtargetImpl(), *this) {}
 
 /// CreateTargetHazardRecognizer - Return the hazard recognizer to use for
 /// this target when scheduling the DAG.
@@ -120,7 +124,7 @@ PPCInstrInfo::commuteInstruction(MachineInstr *MI, bool NewMI) const {
   // destination register as well.
   if (Reg0 == Reg1) {
     // Must be two address instruction!
-    assert(MI->getDesc().getOperandConstraint(0, TOI::TIED_TO) &&
+    assert(MI->getDesc().getOperandConstraint(0, MCOI::TIED_TO) &&
            "Expecting a two-address instruction!");
     Reg2IsKill = false;
     ChangeReg0 = true;
@@ -315,12 +319,12 @@ void PPCInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   else
     llvm_unreachable("Impossible reg-to-reg copy");
 
-  const TargetInstrDesc &TID = get(Opc);
-  if (TID.getNumOperands() == 3)
-    BuildMI(MBB, I, DL, TID, DestReg)
+  const MCInstrDesc &MCID = get(Opc);
+  if (MCID.getNumOperands() == 3)
+    BuildMI(MBB, I, DL, MCID, DestReg)
       .addReg(SrcReg).addReg(SrcReg, getKillRegState(KillSrc));
   else
-    BuildMI(MBB, I, DL, TID, DestReg).addReg(SrcReg, getKillRegState(KillSrc));
+    BuildMI(MBB, I, DL, MCID, DestReg).addReg(SrcReg, getKillRegState(KillSrc));
 }
 
 bool
@@ -398,7 +402,7 @@ PPCInstrInfo::StoreRegToStackSlot(MachineFunction &MF,
       // If the saved register wasn't CR0, shift the bits left so that they are
       // in CR0's slot.
       if (SrcReg != PPC::CR0) {
-        unsigned ShiftBits = PPCRegisterInfo::getRegisterNumbering(SrcReg)*4;
+        unsigned ShiftBits = getPPCRegisterNumbering(SrcReg)*4;
         // rlwinm scratch, scratch, ShiftBits, 0, 31.
         NewMIs.push_back(BuildMI(MF, DL, get(PPC::RLWINM), ScratchReg)
                        .addReg(ScratchReg).addImm(ShiftBits)
@@ -533,7 +537,7 @@ PPCInstrInfo::LoadRegFromStackSlot(MachineFunction &MF, DebugLoc DL,
     // If the reloaded register isn't CR0, shift the bits right so that they are
     // in the right CR's slot.
     if (DestReg != PPC::CR0) {
-      unsigned ShiftBits = PPCRegisterInfo::getRegisterNumbering(DestReg)*4;
+      unsigned ShiftBits = getPPCRegisterNumbering(DestReg)*4;
       // rlwinm r11, r11, 32-ShiftBits, 0, 31.
       NewMIs.push_back(BuildMI(MF, DL, get(PPC::RLWINM), ScratchReg)
                     .addReg(ScratchReg).addImm(32-ShiftBits).addImm(0)

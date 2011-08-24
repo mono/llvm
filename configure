@@ -1471,6 +1471,8 @@ Optional Packages:
                           64 bit multilib directory.
   --with-binutils-include Specify path to binutils/include/ containing
                           plugin-api.h file for gold plugin.
+  --with-bug-report-url   Specify the URL where bug reports should be
+                          submitted (default=http://llvm.org/bugs/)
   --with-tclinclude       directory where tcl headers are
   --with-llvmcc=<name>    Choose the LLVM capable compiler to use (llvm-gcc,
                           clang, or none; default=check)
@@ -2337,6 +2339,10 @@ else
     llvm_cv_target_os_type="MingW" ;;
   *-*-haiku*)
     llvm_cv_target_os_type="Haiku" ;;
+  *-*-rtems*)
+    llvm_cv_target_os_type="RTEMS" ;;
+  *-*-nacl*)
+    llvm_cv_target_os_type="NativeClient" ;;
   *-unknown-eabi*)
     llvm_cv_target_os_type="Freestanding" ;;
   *)
@@ -4861,7 +4867,7 @@ else
  ;;
     ARM)         TARGET_HAS_JIT=1
  ;;
-    Mips)        TARGET_HAS_JIT=0
+    Mips)        TARGET_HAS_JIT=1
  ;;
     XCore)       TARGET_HAS_JIT=0
  ;;
@@ -5118,6 +5124,7 @@ _ACEOF
 
     LLVM_NATIVE_TARGET="LLVMInitialize${LLVM_NATIVE_ARCH}Target"
     LLVM_NATIVE_TARGETINFO="LLVMInitialize${LLVM_NATIVE_ARCH}TargetInfo"
+    LLVM_NATIVE_TARGETMC="LLVMInitialize${LLVM_NATIVE_ARCH}TargetMC"
     LLVM_NATIVE_ASMPRINTER="LLVMInitialize${LLVM_NATIVE_ARCH}AsmPrinter"
     if test -f ${srcdir}/lib/Target/${LLVM_NATIVE_ARCH}/AsmParser/Makefile ; then
       LLVM_NATIVE_ASMPARSER="LLVMInitialize${LLVM_NATIVE_ARCH}AsmParser"
@@ -5130,6 +5137,11 @@ _ACEOF
 
 cat >>confdefs.h <<_ACEOF
 #define LLVM_NATIVE_TARGETINFO $LLVM_NATIVE_TARGETINFO
+_ACEOF
+
+
+cat >>confdefs.h <<_ACEOF
+#define LLVM_NATIVE_TARGETMC $LLVM_NATIVE_TARGETMC
 _ACEOF
 
 
@@ -5511,6 +5523,20 @@ echo "$as_me: error: Invalid path to directory containing plugin-api.h." >&2;}
    { (exit 1); exit 1; }; };
   fi
 fi
+
+
+# Check whether --with-bug-report-url was given.
+if test "${with_bug_report_url+set}" = set; then
+  withval=$with_bug_report_url;
+else
+  withval="http://llvm.org/bugs/"
+fi
+
+
+cat >>confdefs.h <<_ACEOF
+#define BUG_REPORT_URL "$withval"
+_ACEOF
+
 
 # Check whether --enable-libffi was given.
 if test "${enable_libffi+set}" = set; then
@@ -11588,7 +11614,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<EOF
-#line 11591 "configure"
+#line 11617 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H

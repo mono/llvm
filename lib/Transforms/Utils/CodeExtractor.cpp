@@ -50,7 +50,7 @@ namespace {
     DominatorTree* DT;
     bool AggregateArgs;
     unsigned NumExitBlocks;
-    const Type *RetTy;
+    Type *RetTy;
   public:
     CodeExtractor(DominatorTree* dt = 0, bool AggArgs = false)
       : DT(dt), AggregateArgs(AggArgs||AggregateArgsOpt), NumExitBlocks(~0U) {}
@@ -258,7 +258,7 @@ Function *CodeExtractor::constructFunction(const Values &inputs,
   default: RetTy = Type::getInt16Ty(header->getContext()); break;
   }
 
-  std::vector<const Type*> paramTy;
+  std::vector<Type*> paramTy;
 
   // Add the types of the input values to the function's argument list
   for (Values::const_iterator i = inputs.begin(),
@@ -279,7 +279,7 @@ Function *CodeExtractor::constructFunction(const Values &inputs,
   }
 
   DEBUG(dbgs() << "Function type: " << *RetTy << " f(");
-  for (std::vector<const Type*>::iterator i = paramTy.begin(),
+  for (std::vector<Type*>::iterator i = paramTy.begin(),
          e = paramTy.end(); i != e; ++i)
     DEBUG(dbgs() << **i << ", ");
   DEBUG(dbgs() << ")\n");
@@ -290,7 +290,7 @@ Function *CodeExtractor::constructFunction(const Values &inputs,
     paramTy.clear();
     paramTy.push_back(StructPtr);
   }
-  const FunctionType *funcType =
+  FunctionType *funcType =
                   FunctionType::get(RetTy, paramTy, false);
 
   // Create the new function
@@ -317,8 +317,7 @@ Function *CodeExtractor::constructFunction(const Values &inputs,
       Idx[1] = ConstantInt::get(Type::getInt32Ty(header->getContext()), i);
       TerminatorInst *TI = newFunction->begin()->getTerminator();
       GetElementPtrInst *GEP = 
-        GetElementPtrInst::Create(AI, Idx, Idx+2, 
-                                  "gep_" + inputs[i]->getName(), TI);
+        GetElementPtrInst::Create(AI, Idx, "gep_" + inputs[i]->getName(), TI);
       RewriteVal = new LoadInst(GEP, "loadgep_" + inputs[i]->getName(), TI);
     } else
       RewriteVal = AI++;
@@ -403,7 +402,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
 
   AllocaInst *Struct = 0;
   if (AggregateArgs && (inputs.size() + outputs.size() > 0)) {
-    std::vector<const Type*> ArgTypes;
+    std::vector<Type*> ArgTypes;
     for (Values::iterator v = StructValues.begin(),
            ve = StructValues.end(); v != ve; ++v)
       ArgTypes.push_back((*v)->getType());
@@ -420,7 +419,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
       Idx[0] = Constant::getNullValue(Type::getInt32Ty(Context));
       Idx[1] = ConstantInt::get(Type::getInt32Ty(Context), i);
       GetElementPtrInst *GEP =
-        GetElementPtrInst::Create(Struct, Idx, Idx + 2,
+        GetElementPtrInst::Create(Struct, Idx,
                                   "gep_" + StructValues[i]->getName());
       codeReplacer->getInstList().push_back(GEP);
       StoreInst *SI = new StoreInst(StructValues[i], GEP);
@@ -429,7 +428,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
   }
 
   // Emit the call to the function
-  CallInst *call = CallInst::Create(newFunction, params.begin(), params.end(),
+  CallInst *call = CallInst::Create(newFunction, params,
                                     NumExitBlocks > 1 ? "targetBlock" : "");
   codeReplacer->getInstList().push_back(call);
 
@@ -446,7 +445,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
       Idx[0] = Constant::getNullValue(Type::getInt32Ty(Context));
       Idx[1] = ConstantInt::get(Type::getInt32Ty(Context), FirstOut + i);
       GetElementPtrInst *GEP
-        = GetElementPtrInst::Create(Struct, Idx, Idx + 2,
+        = GetElementPtrInst::Create(Struct, Idx,
                                     "gep_reload_" + outputs[i]->getName());
       codeReplacer->getInstList().push_back(GEP);
       Output = GEP;
@@ -561,7 +560,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
                 Idx[1] = ConstantInt::get(Type::getInt32Ty(Context),
                                           FirstOut+out);
                 GetElementPtrInst *GEP =
-                  GetElementPtrInst::Create(OAI, Idx, Idx + 2,
+                  GetElementPtrInst::Create(OAI, Idx,
                                             "gep_" + outputs[out]->getName(),
                                             NTRet);
                 new StoreInst(outputs[out], GEP, NTRet);
@@ -580,7 +579,7 @@ emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
   }
 
   // Now that we've done the deed, simplify the switch instruction.
-  const Type *OldFnRetTy = TheSwitch->getParent()->getParent()->getReturnType();
+  Type *OldFnRetTy = TheSwitch->getParent()->getParent()->getReturnType();
   switch (NumExitBlocks) {
   case 0:
     // There are no successors (the block containing the switch itself), which

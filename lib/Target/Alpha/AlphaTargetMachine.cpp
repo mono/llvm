@@ -11,7 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "Alpha.h"
-#include "AlphaMCAsmInfo.h"
 #include "AlphaTargetMachine.h"
 #include "llvm/PassManager.h"
 #include "llvm/Support/FormattedStream.h"
@@ -21,20 +20,18 @@ using namespace llvm;
 extern "C" void LLVMInitializeAlphaTarget() { 
   // Register the target.
   RegisterTargetMachine<AlphaTargetMachine> X(TheAlphaTarget);
-  RegisterAsmInfo<AlphaMCAsmInfo> Y(TheAlphaTarget);
 }
 
-AlphaTargetMachine::AlphaTargetMachine(const Target &T, const std::string &TT,
-                                       const std::string &FS)
-  : LLVMTargetMachine(T, TT),
+AlphaTargetMachine::AlphaTargetMachine(const Target &T, StringRef TT,
+                                       StringRef CPU, StringRef FS,
+                                       Reloc::Model RM, CodeModel::Model CM)
+  : LLVMTargetMachine(T, TT, CPU, FS, RM, CM),
     DataLayout("e-f128:128:128-n64"),
     FrameLowering(Subtarget),
-    Subtarget(TT, FS),
+    Subtarget(TT, CPU, FS),
     TLInfo(*this),
     TSInfo(*this) {
-  setRelocationModel(Reloc::PIC_);
 }
-
 
 //===----------------------------------------------------------------------===//
 // Pass Pipeline Configuration

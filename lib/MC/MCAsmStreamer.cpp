@@ -15,8 +15,12 @@
 #include "llvm/MC/MCFixupKindInfo.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
+#include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/MC/MCAsmBackend.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
@@ -25,9 +29,6 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Target/TargetAsmBackend.h"
-#include "llvm/Target/TargetAsmInfo.h"
-#include "llvm/Target/TargetLoweringObjectFile.h"
 #include <cctype>
 using namespace llvm;
 
@@ -40,7 +41,7 @@ protected:
 private:
   OwningPtr<MCInstPrinter> InstPrinter;
   OwningPtr<MCCodeEmitter> Emitter;
-  OwningPtr<TargetAsmBackend> AsmBackend;
+  OwningPtr<MCAsmBackend> AsmBackend;
 
   SmallString<128> CommentToEmit;
   raw_svector_ostream CommentStream;
@@ -63,7 +64,7 @@ public:
   MCAsmStreamer(MCContext &Context, formatted_raw_ostream &os,
                 bool isVerboseAsm, bool useLoc, bool useCFI,
                 MCInstPrinter *printer, MCCodeEmitter *emitter,
-                TargetAsmBackend *asmbackend,
+                MCAsmBackend *asmbackend,
                 bool showInst)
     : MCStreamer(Context), OS(os), MAI(Context.getAsmInfo()),
       InstPrinter(printer), Emitter(emitter), AsmBackend(asmbackend),
@@ -137,7 +138,8 @@ public:
   virtual void EmitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol);
   virtual void EmitDwarfAdvanceLineAddr(int64_t LineDelta,
                                         const MCSymbol *LastLabel,
-                                        const MCSymbol *Label);
+                                        const MCSymbol *Label,
+                                        unsigned PointerSize);
   virtual void EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
                                          const MCSymbol *Label);
 
@@ -333,8 +335,9 @@ void MCAsmStreamer::EmitAssemblerFlag(MCAssemblerFlag Flag) {
   default: assert(0 && "Invalid flag!");
   case MCAF_SyntaxUnified:         OS << "\t.syntax unified"; break;
   case MCAF_SubsectionsViaSymbols: OS << ".subsections_via_symbols"; break;
-  case MCAF_Code16:                OS << "\t.code\t16"; break;
-  case MCAF_Code32:                OS << "\t.code\t32"; break;
+  case MCAF_Code16:                OS << '\t'<< MAI.getCode16Directive(); break;
+  case MCAF_Code32:                OS << '\t'<< MAI.getCode32Directive(); break;
+  case MCAF_Code64:                OS << '\t'<< MAI.getCode64Directive(); break;
   }
   EmitEOL();
 }
@@ -364,9 +367,9 @@ void MCAsmStreamer::EmitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol) {
 
 void MCAsmStreamer::EmitDwarfAdvanceLineAddr(int64_t LineDelta,
                                              const MCSymbol *LastLabel,
-                                             const MCSymbol *Label) {
-  EmitDwarfSetLineAddr(LineDelta, Label,
-                       getContext().getTargetAsmInfo().getPointerSize());
+                                             const MCSymbol *Label,
+                                             unsigned PointerSize) {
+  EmitDwarfSetLineAddr(LineDelta, Label, PointerSize);
 }
 
 void MCAsmStreamer::EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
@@ -603,7 +606,7 @@ void MCAsmStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
     int64_t IntValue;
     if (!Value->EvaluateAsAbsolute(IntValue))
       report_fatal_error("Don't know how to emit this value.");
-    if (getContext().getTargetAsmInfo().isLittleEndian()) {
+    if (getContext().getAsmInfo().isLittleEndian()) {
       EmitIntValue((uint32_t)(IntValue >> 0 ), 4, AddrSpace);
       EmitIntValue((uint32_t)(IntValue >> 32), 4, AddrSpace);
     } else {
@@ -825,9 +828,9 @@ void MCAsmStreamer::EmitCFIEndProc() {
 }
 
 void MCAsmStreamer::EmitRegisterName(int64_t Register) {
-  if (InstPrinter) {
-    const TargetAsmInfo &asmInfo = getContext().getTargetAsmInfo();
-    unsigned LLVMRegister = asmInfo.getLLVMRegNum(Register, true);
+  if (InstPrinter && !MAI.useDwarfRegNumForCFI()) {
+    const MCRegisterInfo &MRI = getContext().getRegisterInfo();
+    unsigned LLVMRegister = MRI.getLLVMRegNum(Register, true);
     InstPrinter->printRegName(OS, LLVMRegister);
   } else {
     OS << Register;
@@ -993,6 +996,19 @@ void MCAsmStreamer::EmitWin64EHHandler(const MCSymbol *Sym, bool Unwind,
   EmitEOL();
 }
 
+static const MCSection *getWin64EHTableSection(StringRef suffix,
+                                               MCContext &context) {
+  // FIXME: This doesn't belong in MCObjectFileInfo. However,
+  /// this duplicate code in MCWin64EH.cpp.
+  if (suffix == "")
+    return context.getObjectFileInfo()->getXDataSection();
+  return context.getCOFFSection((".xdata"+suffix).str(),
+                                COFF::IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                COFF::IMAGE_SCN_MEM_READ |
+                                COFF::IMAGE_SCN_MEM_WRITE,
+                                SectionKind::getDataRel());
+}
+
 void MCAsmStreamer::EmitWin64EHHandlerData() {
   MCStreamer::EmitWin64EHHandlerData();
 
@@ -1002,8 +1018,7 @@ void MCAsmStreamer::EmitWin64EHHandlerData() {
   // data block is visible.
   MCWin64EHUnwindInfo *CurFrame = getCurrentW64UnwindInfo();
   StringRef suffix=MCWin64EHUnwindEmitter::GetSectionSuffix(CurFrame->Function);
-  const MCSection *xdataSect =
-    getContext().getTargetAsmInfo().getWin64EHTableSection(suffix);
+  const MCSection *xdataSect = getWin64EHTableSection(suffix, getContext());
   if (xdataSect)
     SwitchSectionNoChange(xdataSect);
 
@@ -1088,7 +1103,7 @@ void MCAsmStreamer::AddEncodingComment(const MCInst &Inst) {
     }
   }
 
-  // FIXME: Node the fixup comments for Thumb2 are completely bogus since the
+  // FIXME: Note the fixup comments for Thumb2 are completely bogus since the
   // high order halfword of a 32-bit Thumb2 instruction is emitted first.
   OS << "encoding: [";
   for (unsigned i = 0, e = Code.size(); i != e; ++i) {
@@ -1123,7 +1138,7 @@ void MCAsmStreamer::AddEncodingComment(const MCInst &Inst) {
         unsigned Bit = (Code[i] >> j) & 1;
 
         unsigned FixupBit;
-        if (getContext().getTargetAsmInfo().isLittleEndian())
+        if (getContext().getAsmInfo().isLittleEndian())
           FixupBit = i * 8 + j;
         else
           FixupBit = i * 8 + (7-j);
@@ -1244,391 +1259,12 @@ void MCAsmStreamer::Finish() {
   if (!UseCFI)
     EmitFrames(false);
 }
-
-//===----------------------------------------------------------------------===//
-/// MCLSDADecoderAsmStreamer - This is identical to the MCAsmStreamer, but
-/// outputs a description of the LSDA in a human readable format.
-///
-namespace {
-
-class MCLSDADecoderAsmStreamer : public MCAsmStreamer {
-  const MCSymbol *PersonalitySymbol;
-  const MCSymbol *LSDASymbol;
-  bool InLSDA;
-  bool ReadingULEB128;
-
-  uint64_t BytesRead;
-  uint64_t ActionTableBytes;
-  uint64_t LSDASize;
-
-  SmallVector<char, 2> ULEB128Value;
-  std::vector<int64_t> LSDAEncoding;
-  std::vector<const MCExpr*> Assignments;
-
-  /// GetULEB128Value - A helper function to convert the value in the
-  /// ULEB128Value vector into a uint64_t.
-  uint64_t GetULEB128Value(SmallVectorImpl<char> &ULEB128Value) {
-    uint64_t Val = 0;
-    for (unsigned i = 0, e = ULEB128Value.size(); i != e; ++i)
-      Val |= (ULEB128Value[i] & 0x7F) << (7 * i);
-    return Val;
-  }
-
-  /// ResetState - Reset the state variables.
-  void ResetState() {
-    PersonalitySymbol = 0;
-    LSDASymbol = 0;
-    LSDASize = 0;
-    BytesRead = 0;
-    ActionTableBytes = 0;
-    InLSDA = false;
-    ReadingULEB128 = false;
-    ULEB128Value.clear();
-    LSDAEncoding.clear();
-    Assignments.clear();
-  }
-
-  void EmitEHTableDescription();
-
-  const char *DecodeDWARFEncoding(unsigned Encoding) {
-    switch (Encoding) {
-    case dwarf::DW_EH_PE_absptr: return "absptr";
-    case dwarf::DW_EH_PE_omit:   return "omit";
-    case dwarf::DW_EH_PE_pcrel:  return "pcrel";
-    case dwarf::DW_EH_PE_udata4: return "udata4";
-    case dwarf::DW_EH_PE_udata8: return "udata8";
-    case dwarf::DW_EH_PE_sdata4: return "sdata4";
-    case dwarf::DW_EH_PE_sdata8: return "sdata8";
-    case dwarf::DW_EH_PE_pcrel|dwarf::DW_EH_PE_udata4: return "pcrel udata4";
-    case dwarf::DW_EH_PE_pcrel|dwarf::DW_EH_PE_sdata4: return "pcrel sdata4";
-    case dwarf::DW_EH_PE_pcrel|dwarf::DW_EH_PE_udata8: return "pcrel udata8";
-    case dwarf::DW_EH_PE_pcrel|dwarf::DW_EH_PE_sdata8: return "pcrel sdata8";
-    case dwarf::DW_EH_PE_indirect|dwarf::DW_EH_PE_pcrel|dwarf::DW_EH_PE_udata4:
-      return "indirect pcrel udata4";
-    case dwarf::DW_EH_PE_indirect|dwarf::DW_EH_PE_pcrel|dwarf::DW_EH_PE_sdata4:
-      return "indirect pcrel sdata4";
-    case dwarf::DW_EH_PE_indirect|dwarf::DW_EH_PE_pcrel|dwarf::DW_EH_PE_udata8:
-      return "indirect pcrel udata8";
-    case dwarf::DW_EH_PE_indirect|dwarf::DW_EH_PE_pcrel|dwarf::DW_EH_PE_sdata8:
-      return "indirect pcrel sdata8";
-    }
-  
-    return "<unknown encoding>";
-  }
-public:
-  MCLSDADecoderAsmStreamer(MCContext &Context, formatted_raw_ostream &os,
-                           bool isVerboseAsm, bool useLoc, bool useCFI,
-                           MCInstPrinter *printer, MCCodeEmitter *emitter,
-                           TargetAsmBackend *asmbackend,
-                           bool showInst)
-    : MCAsmStreamer(Context, os, isVerboseAsm, useLoc, useCFI,
-                    printer, emitter, asmbackend, showInst) {
-    ResetState();
-  }
-  ~MCLSDADecoderAsmStreamer() {}
-
-  virtual void Finish() {
-    ResetState();
-    MCAsmStreamer::Finish();
-  }
-
-  virtual void EmitLabel(MCSymbol *Symbol) {
-    if (Symbol == LSDASymbol)
-      InLSDA = true;
-    MCAsmStreamer::EmitLabel(Symbol);
-  }
-  virtual void EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
-    if (InLSDA)
-      Assignments.push_back(Value);
-    MCAsmStreamer::EmitAssignment(Symbol, Value);
-  }
-  virtual void EmitBytes(StringRef Data, unsigned AddrSpace);
-  virtual void EmitIntValue(uint64_t Value, unsigned Size,
-                            unsigned AddrSpace = 0);
-  virtual void EmitValueImpl(const MCExpr *Value, unsigned Size,
-                             unsigned AddrSpace);
-  virtual void EmitFill(uint64_t NumBytes, uint8_t FillValue,
-                        unsigned AddrSpace);
-  virtual void EmitCFIPersonality(const MCSymbol *Sym, unsigned Encoding) {
-    PersonalitySymbol = Sym;
-    MCAsmStreamer::EmitCFIPersonality(Sym, Encoding);
-  }
-  virtual void EmitCFILsda(const MCSymbol *Sym, unsigned Encoding) {
-    LSDASymbol = Sym;
-    MCAsmStreamer::EmitCFILsda(Sym, Encoding);
-  }
-};
-
-} // end anonymous namespace
-
-void MCLSDADecoderAsmStreamer::EmitBytes(StringRef Data, unsigned AddrSpace) {
-  if (InLSDA && Data.size() == 1) {
-    LSDAEncoding.push_back((unsigned)(unsigned char)Data[0]);
-    ++BytesRead;
-
-    if (LSDAEncoding.size() == 4)
-      // The fourth value tells us where the bottom of the type table is.
-      LSDASize = BytesRead + LSDAEncoding[3];
-    else if (LSDAEncoding.size() == 6)
-      // The sixth value tells us where the start of the action table is.
-      ActionTableBytes = BytesRead;
-  }
-
-  MCAsmStreamer::EmitBytes(Data, AddrSpace);
-}
-
-void MCLSDADecoderAsmStreamer::EmitIntValue(uint64_t Value, unsigned Size,
-                                            unsigned AddrSpace) {
-  if (!InLSDA)
-    return MCAsmStreamer::EmitIntValue(Value, Size, AddrSpace);
-
-  BytesRead += Size;
-
-  // We place the LSDA into the LSDAEncoding vector for later analysis. If we
-  // have a ULEB128, we read that in separate iterations through here and then
-  // get its value.
-  if (!ReadingULEB128) {
-    LSDAEncoding.push_back(Value);
-    int EncodingSize = LSDAEncoding.size();
-
-    if (EncodingSize == 1 || EncodingSize == 3) {
-      // The LPStart and TType encodings.
-      if (Value != dwarf::DW_EH_PE_omit) {
-        // The encoding is next and is a ULEB128 value.
-        ReadingULEB128 = true;
-        ULEB128Value.clear();
-      } else {
-        // The encoding was omitted. Put a 0 here as a placeholder.
-        LSDAEncoding.push_back(0);
-      }
-    } else if (EncodingSize == 5) {
-      // The next value is a ULEB128 value that tells us how long the call site
-      // table is -- where the start of the action tab
-      ReadingULEB128 = true;
-      ULEB128Value.clear();
-    }
-
-    InLSDA = (LSDASize == 0 || BytesRead < LSDASize);
-  } else {
-    // We're reading a ULEB128. Make it so!
-    ULEB128Value.push_back(Value);
-
-    if ((Value & 0x80) == 0) {
-      uint64_t Val = GetULEB128Value(ULEB128Value);
-      LSDAEncoding.push_back(Val);
-      ULEB128Value.clear();
-      ReadingULEB128 = false;
-
-      if (LSDAEncoding.size() == 4)
-        // The fourth value tells us where the bottom of the type table is.
-        LSDASize = BytesRead + LSDAEncoding[3];
-      else if (LSDAEncoding.size() == 6)
-        // The sixth value tells us where the start of the action table is.
-        ActionTableBytes = BytesRead;
-    }
-  }
-
-  MCAsmStreamer::EmitValueImpl(MCConstantExpr::Create(Value, getContext()),
-                               Size, AddrSpace);
-
-  if (LSDASize != 0 && !InLSDA)
-    EmitEHTableDescription();
-}
-
-void MCLSDADecoderAsmStreamer::EmitValueImpl(const MCExpr *Value,
-                                             unsigned Size,
-                                             unsigned AddrSpace) {
-  if (InLSDA && LSDASize != 0) {
-    assert(BytesRead + Size <= LSDASize  && "EH table too small!");
-
-    if (BytesRead > uint64_t(LSDAEncoding[5]) + ActionTableBytes)
-      // Insert the type values.
-      Assignments.push_back(Value);
-
-    LSDAEncoding.push_back(Assignments.size());
-    BytesRead += Size;
-    InLSDA = (LSDASize == 0 || BytesRead < LSDASize);
-  }
-
-  MCAsmStreamer::EmitValueImpl(Value, Size, AddrSpace);
-
-  if (LSDASize != 0 && !InLSDA)
-    EmitEHTableDescription();
-}
-
-void MCLSDADecoderAsmStreamer::EmitFill(uint64_t NumBytes, uint8_t FillValue,
-                                        unsigned AddrSpace) {
-  if (InLSDA && ReadingULEB128) {
-    for (uint64_t I = NumBytes; I != 0; --I)
-      ULEB128Value.push_back(FillValue);
-
-    BytesRead += NumBytes;
-
-    if ((FillValue & 0x80) == 0) {
-      uint64_t Val = GetULEB128Value(ULEB128Value);
-      LSDAEncoding.push_back(Val);
-      ULEB128Value.clear();
-      ReadingULEB128 = false;
-
-      if (LSDAEncoding.size() == 4)
-        // The fourth value tells us where the bottom of the type table is.
-        LSDASize = BytesRead + LSDAEncoding[3];
-      else if (LSDAEncoding.size() == 6)
-        // The sixth value tells us where the start of the action table is.
-        ActionTableBytes = BytesRead;
-    }
-  }
-
-  MCAsmStreamer::EmitFill(NumBytes, FillValue, AddrSpace);
-}
-
-/// EmitEHTableDescription - Emit a human readable version of the LSDA.
-void MCLSDADecoderAsmStreamer::EmitEHTableDescription() {
-  assert(LSDAEncoding.size() > 6 && "Invalid LSDA!");
-
-  // Emit header information.
-  StringRef C = MAI.getCommentString();
-#define CMT OS << C << ' '
-  CMT << "Exception Handling Table: " << LSDASymbol->getName() << "\n";
-  CMT << " @LPStart Encoding: " << DecodeDWARFEncoding(LSDAEncoding[0]) << "\n";
-  if (LSDAEncoding[1])
-    CMT << "@LPStart: 0x" << LSDAEncoding[1] << "\n";
-  CMT << "   @TType Encoding: " << DecodeDWARFEncoding(LSDAEncoding[2]) << "\n";
-  CMT << "       @TType Base: " << LSDAEncoding[3] << " bytes\n";
-  CMT << "@CallSite Encoding: " << DecodeDWARFEncoding(LSDAEncoding[4]) << "\n";
-  CMT << "@Action Table Size: " << LSDAEncoding[5] << " bytes\n\n";
-
-  bool isSjLjEH = (MAI.getExceptionHandlingType() == ExceptionHandling::SjLj);
-
-  int64_t CallSiteTableSize = LSDAEncoding[5];
-  unsigned CallSiteEntrySize;
-  if (!isSjLjEH)
-    CallSiteEntrySize = 4 + // Region start.
-                        4 + // Region end.
-                        4 + // Landing pad.
-                        1;  // TType index.
-  else
-    CallSiteEntrySize = 1 + // Call index.
-                        1;  // TType index.
-
-  unsigned NumEntries = CallSiteTableSize / CallSiteEntrySize;
-  assert(CallSiteTableSize % CallSiteEntrySize == 0 &&
-         "The action table size is not a multiple of what it should be!");
-  unsigned TTypeIdx = 5 +              // Action table size index.
-     (isSjLjEH ? 2 : 4) * NumEntries + // Action table entries.
-                      1;               // Just because.
-
-  // Emit the action table.
-  unsigned Action = 1;
-  for (unsigned I = 6; I < TTypeIdx; ) {
-    CMT << "Action " << Action++ << ":\n";
-
-    // The beginning of the throwing region.
-    uint64_t Idx = LSDAEncoding[I++];
-
-    if (!isSjLjEH) {
-      CMT << "  A throw between "
-          << *cast<MCBinaryExpr>(Assignments[Idx - 1])->getLHS() << " and ";
-
-      // The end of the throwing region.
-      Idx = LSDAEncoding[I++];
-      OS << *cast<MCBinaryExpr>(Assignments[Idx - 1])->getLHS();
-
-      // The landing pad.
-      Idx = LSDAEncoding[I++];
-      if (Idx) {
-        OS << " jumps to "
-           << *cast<MCBinaryExpr>(Assignments[Idx - 1])->getLHS()
-           << " on an exception.\n";
-      } else {
-        OS << " does not have a landing pad.\n";
-        ++I;
-        continue;
-      }
-    } else {
-      CMT << "  A throw from call " << Idx << "\n";
-    }
-
-    // The index into the action table.
-    Idx = LSDAEncoding[I++];
-    if (!Idx) {
-      CMT << "    :cleanup:\n";
-      continue;
-    }
-
-    // A semi-graphical representation of what the different indexes are in the
-    // loop below.
-    //
-    //    Idx    - Index into the action table.
-    //    Action - Index into the type table from the type table base.
-    //    Next   - Offset from Idx to the next action type.
-    //
-    //                               Idx---.
-    //                                     |
-    //                                     v
-    //            [call site table] _1 _2 _3
-    // TTypeIdx--> .........................
-    //            [action 1] _1 _2
-    //            [action 2] _1 _2
-    //              ...
-    //            [action n] _1 _2
-    //            [type m]      ^
-    //              ...         |
-    //            [type 1]      `---Next
-    //
-
-    int Action = LSDAEncoding[TTypeIdx + Idx - 1];
-    if ((Action & 0x40) != 0)
-      // Ignore exception specifications.
-      continue;
-
-    // Emit the types that are caught by this exception.
-    CMT << "    For type(s): ";
-    for (;;) {
-      if ((Action & 0x40) != 0)
-        // Ignore exception specifications.
-        break;
-
-      if (uint64_t Ty = LSDAEncoding[LSDAEncoding.size() - Action]) {
-        OS << " " << *Assignments[Ty - 1];
-
-        // Types can be chained together. Typically, it's a negative offset from
-        // the current type to a different one in the type table.
-        int Next = LSDAEncoding[TTypeIdx + Idx];
-        if (Next == 0)
-          break;
-        if ((Next & 0x40) != 0)
-          Next = (int)(signed char)(Next | 0x80);
-        Idx += Next + 1;
-        Action = LSDAEncoding[TTypeIdx + Idx - 1];
-        continue;
-      } else {
-        OS << " :catchall:";
-      }
-      break;
-    }
-
-    OS << "\n";
-  }
-
-  OS << "\n";
-  ResetState();
-}
-
 MCStreamer *llvm::createAsmStreamer(MCContext &Context,
                                     formatted_raw_ostream &OS,
                                     bool isVerboseAsm, bool useLoc,
                                     bool useCFI, MCInstPrinter *IP,
-                                    MCCodeEmitter *CE, TargetAsmBackend *TAB,
+                                    MCCodeEmitter *CE, MCAsmBackend *MAB,
                                     bool ShowInst) {
-  ExceptionHandling::ExceptionsType ET =
-    Context.getAsmInfo().getExceptionHandlingType();
-
-  if (useCFI && isVerboseAsm &&
-      (ET == ExceptionHandling::SjLj || ET == ExceptionHandling::DwarfCFI))
-    return new MCLSDADecoderAsmStreamer(Context, OS, isVerboseAsm, useLoc,
-                                        useCFI, IP, CE, TAB, ShowInst);
-
   return new MCAsmStreamer(Context, OS, isVerboseAsm, useLoc, useCFI,
-                           IP, CE, TAB, ShowInst);
+                           IP, CE, MAB, ShowInst);
 }

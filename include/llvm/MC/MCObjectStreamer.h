@@ -19,7 +19,7 @@ class MCSectionData;
 class MCExpr;
 class MCFragment;
 class MCDataFragment;
-class TargetAsmBackend;
+class MCAsmBackend;
 class raw_ostream;
 
 /// \brief Streaming object file generation interface.
@@ -36,9 +36,9 @@ class MCObjectStreamer : public MCStreamer {
   virtual void EmitInstToData(const MCInst &Inst) = 0;
 
 protected:
-  MCObjectStreamer(MCContext &Context, TargetAsmBackend &TAB,
+  MCObjectStreamer(MCContext &Context, MCAsmBackend &TAB,
                    raw_ostream &_OS, MCCodeEmitter *_Emitter);
-  MCObjectStreamer(MCContext &Context, TargetAsmBackend &TAB,
+  MCObjectStreamer(MCContext &Context, MCAsmBackend &TAB,
                    raw_ostream &_OS, MCCodeEmitter *_Emitter,
                    MCAssembler *_Assembler);
   ~MCObjectStreamer();
@@ -73,7 +73,8 @@ public:
   virtual void EmitValueToOffset(const MCExpr *Offset, unsigned char Value);
   virtual void EmitDwarfAdvanceLineAddr(int64_t LineDelta,
                                         const MCSymbol *LastLabel,
-                                        const MCSymbol *Label);
+                                        const MCSymbol *Label,
+                                        unsigned PointerSize);
   virtual void EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
                                          const MCSymbol *Label);
   virtual void Finish();

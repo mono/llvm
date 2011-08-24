@@ -219,7 +219,7 @@ struct Formula {
   void InitialMatch(const SCEV *S, Loop *L, ScalarEvolution &SE);
 
   unsigned getNumRegs() const;
-  const Type *getType() const;
+  Type *getType() const;
 
   void DeleteBaseReg(const SCEV *&S);
 
@@ -319,7 +319,7 @@ unsigned Formula::getNumRegs() const {
 
 /// getType - Return the type of this formula, if it has one, or null
 /// otherwise. This type is meaningless except for the bit size.
-const Type *Formula::getType() const {
+Type *Formula::getType() const {
   return !BaseRegs.empty() ? BaseRegs.front()->getType() :
          ScaledReg ? ScaledReg->getType() :
          AM.BaseGV ? AM.BaseGV->getType() :
@@ -397,7 +397,7 @@ void Formula::dump() const {
 /// isAddRecSExtable - Return true if the given addrec can be sign-extended
 /// without changing its value.
 static bool isAddRecSExtable(const SCEVAddRecExpr *AR, ScalarEvolution &SE) {
-  const Type *WideTy =
+  Type *WideTy =
     IntegerType::get(SE.getContext(), SE.getTypeSizeInBits(AR->getType()) + 1);
   return isa<SCEVAddRecExpr>(SE.getSignExtendExpr(AR, WideTy));
 }
@@ -405,7 +405,7 @@ static bool isAddRecSExtable(const SCEVAddRecExpr *AR, ScalarEvolution &SE) {
 /// isAddSExtable - Return true if the given add can be sign-extended
 /// without changing its value.
 static bool isAddSExtable(const SCEVAddExpr *A, ScalarEvolution &SE) {
-  const Type *WideTy =
+  Type *WideTy =
     IntegerType::get(SE.getContext(), SE.getTypeSizeInBits(A->getType()) + 1);
   return isa<SCEVAddExpr>(SE.getSignExtendExpr(A, WideTy));
 }
@@ -413,7 +413,7 @@ static bool isAddSExtable(const SCEVAddExpr *A, ScalarEvolution &SE) {
 /// isMulSExtable - Return true if the given mul can be sign-extended
 /// without changing its value.
 static bool isMulSExtable(const SCEVMulExpr *M, ScalarEvolution &SE) {
-  const Type *WideTy =
+  Type *WideTy =
     IntegerType::get(SE.getContext(),
                      SE.getTypeSizeInBits(M->getType()) * M->getNumOperands());
   return isa<SCEVMulExpr>(SE.getSignExtendExpr(M, WideTy));
@@ -594,8 +594,8 @@ static bool isAddressUse(Instruction *Inst, Value *OperandVal) {
 }
 
 /// getAccessType - Return the type of the memory being accessed.
-static const Type *getAccessType(const Instruction *Inst) {
-  const Type *AccessTy = Inst->getType();
+static Type *getAccessType(const Instruction *Inst) {
+  Type *AccessTy = Inst->getType();
   if (const StoreInst *SI = dyn_cast<StoreInst>(Inst))
     AccessTy = SI->getOperand(0)->getType();
   else if (const IntrinsicInst *II = dyn_cast<IntrinsicInst>(Inst)) {
@@ -614,7 +614,7 @@ static const Type *getAccessType(const Instruction *Inst) {
 
   // All pointers have the same requirements, so canonicalize them to an
   // arbitrary pointer type to minimize variation.
-  if (const PointerType *PTy = dyn_cast<PointerType>(AccessTy))
+  if (PointerType *PTy = dyn_cast<PointerType>(AccessTy))
     AccessTy = PointerType::get(IntegerType::get(PTy->getContext(), 1),
                                 PTy->getAddressSpace());
 
@@ -980,7 +980,7 @@ public:
   };
 
   KindType Kind;
-  const Type *AccessTy;
+  Type *AccessTy;
 
   SmallVector<int64_t, 8> Offsets;
   int64_t MinOffset;
@@ -995,7 +995,7 @@ public:
   /// this LSRUse. FindUseWithSimilarFormula can't consider uses with different
   /// max fixup widths to be equivalent, because the narrower one may be relying
   /// on the implicit truncation to truncate away bogus bits.
-  const Type *WidestFixupType;
+  Type *WidestFixupType;
 
   /// Formulae - A list of ways to build a value that can satisfy this user.
   /// After the list is populated, one of these is selected heuristically and
@@ -1005,7 +1005,7 @@ public:
   /// Regs - The set of register candidates used by all formulae in this LSRUse.
   SmallPtrSet<const SCEV *, 4> Regs;
 
-  LSRUse(KindType K, const Type *T) : Kind(K), AccessTy(T),
+  LSRUse(KindType K, Type *T) : Kind(K), AccessTy(T),
                                       MinOffset(INT64_MAX),
                                       MaxOffset(INT64_MIN),
                                       AllFixupsOutsideLoop(true),
@@ -1127,7 +1127,7 @@ void LSRUse::dump() const {
 /// be completely folded into the user instruction at isel time. This includes
 /// address-mode folding and special icmp tricks.
 static bool isLegalUse(const TargetLowering::AddrMode &AM,
-                       LSRUse::KindType Kind, const Type *AccessTy,
+                       LSRUse::KindType Kind, Type *AccessTy,
                        const TargetLowering *TLI) {
   switch (Kind) {
   case LSRUse::Address:
@@ -1176,7 +1176,7 @@ static bool isLegalUse(const TargetLowering::AddrMode &AM,
 
 static bool isLegalUse(TargetLowering::AddrMode AM,
                        int64_t MinOffset, int64_t MaxOffset,
-                       LSRUse::KindType Kind, const Type *AccessTy,
+                       LSRUse::KindType Kind, Type *AccessTy,
                        const TargetLowering *TLI) {
   // Check for overflow.
   if (((int64_t)((uint64_t)AM.BaseOffs + MinOffset) > AM.BaseOffs) !=
@@ -1198,7 +1198,7 @@ static bool isLegalUse(TargetLowering::AddrMode AM,
 static bool isAlwaysFoldable(int64_t BaseOffs,
                              GlobalValue *BaseGV,
                              bool HasBaseReg,
-                             LSRUse::KindType Kind, const Type *AccessTy,
+                             LSRUse::KindType Kind, Type *AccessTy,
                              const TargetLowering *TLI) {
   // Fast-path: zero is always foldable.
   if (BaseOffs == 0 && !BaseGV) return true;
@@ -1224,7 +1224,7 @@ static bool isAlwaysFoldable(int64_t BaseOffs,
 static bool isAlwaysFoldable(const SCEV *S,
                              int64_t MinOffset, int64_t MaxOffset,
                              bool HasBaseReg,
-                             LSRUse::KindType Kind, const Type *AccessTy,
+                             LSRUse::KindType Kind, Type *AccessTy,
                              const TargetLowering *TLI,
                              ScalarEvolution &SE) {
   // Fast-path: zero is always foldable.
@@ -1299,7 +1299,7 @@ class LSRInstance {
   SmallSetVector<int64_t, 8> Factors;
 
   /// Types - Interesting use types, to facilitate truncation reuse.
-  SmallSetVector<const Type *, 4> Types;
+  SmallSetVector<Type *, 4> Types;
 
   /// Fixups - The list of operands which are to be replaced.
   SmallVector<LSRFixup, 16> Fixups;
@@ -1330,11 +1330,11 @@ class LSRInstance {
   UseMapTy UseMap;
 
   bool reconcileNewOffset(LSRUse &LU, int64_t NewOffset, bool HasBaseReg,
-                          LSRUse::KindType Kind, const Type *AccessTy);
+                          LSRUse::KindType Kind, Type *AccessTy);
 
   std::pair<size_t, int64_t> getUse(const SCEV *&Expr,
                                     LSRUse::KindType Kind,
-                                    const Type *AccessTy);
+                                    Type *AccessTy);
 
   void DeleteUse(LSRUse &LU, size_t LUIdx);
 
@@ -1426,7 +1426,8 @@ void LSRInstance::OptimizeShadowIV() {
     IVUsers::const_iterator CandidateUI = UI;
     ++UI;
     Instruction *ShadowUse = CandidateUI->getUser();
-    const Type *DestTy = NULL;
+    Type *DestTy = NULL;
+    bool IsSigned = false;
 
     /* If shadow use is a int->float cast then insert a second IV
        to eliminate this cast.
@@ -1440,10 +1441,14 @@ void LSRInstance::OptimizeShadowIV() {
          for (unsigned i = 0; i < n; ++i, ++d)
            foo(d);
     */
-    if (UIToFPInst *UCast = dyn_cast<UIToFPInst>(CandidateUI->getUser()))
+    if (UIToFPInst *UCast = dyn_cast<UIToFPInst>(CandidateUI->getUser())) {
+      IsSigned = false;
       DestTy = UCast->getDestTy();
-    else if (SIToFPInst *SCast = dyn_cast<SIToFPInst>(CandidateUI->getUser()))
+    }
+    else if (SIToFPInst *SCast = dyn_cast<SIToFPInst>(CandidateUI->getUser())) {
+      IsSigned = true;
       DestTy = SCast->getDestTy();
+    }
     if (!DestTy) continue;
 
     if (TLI) {
@@ -1457,7 +1462,7 @@ void LSRInstance::OptimizeShadowIV() {
     if (!PH) continue;
     if (PH->getNumIncomingValues() != 2) continue;
 
-    const Type *SrcTy = PH->getType();
+    Type *SrcTy = PH->getType();
     int Mantissa = DestTy->getFPMantissaWidth();
     if (Mantissa == -1) continue;
     if ((int)SE.getTypeSizeInBits(SrcTy) > Mantissa)
@@ -1474,7 +1479,9 @@ void LSRInstance::OptimizeShadowIV() {
 
     ConstantInt *Init = dyn_cast<ConstantInt>(PH->getIncomingValue(Entry));
     if (!Init) continue;
-    Constant *NewInit = ConstantFP::get(DestTy, Init->getZExtValue());
+    Constant *NewInit = ConstantFP::get(DestTy, IsSigned ?
+                                        (double)Init->getSExtValue() :
+                                        (double)Init->getZExtValue());
 
     BinaryOperator *Incr =
       dyn_cast<BinaryOperator>(PH->getIncomingValue(Latch));
@@ -1776,7 +1783,7 @@ LSRInstance::OptimizeLoopTermCond() {
             if (!TLI)
               goto decline_post_inc;
             // Check for possible scaled-address reuse.
-            const Type *AccessTy = getAccessType(UI->getUser());
+            Type *AccessTy = getAccessType(UI->getUser());
             TargetLowering::AddrMode AM;
             AM.Scale = C->getSExtValue();
             if (TLI->isLegalAddressingMode(AM, AccessTy))
@@ -1804,8 +1811,7 @@ LSRInstance::OptimizeLoopTermCond() {
         ExitingBlock->getInstList().insert(TermBr, Cond);
 
         // Clone the IVUse, as the old use still exists!
-        CondUse = &IU.AddUser(Cond, CondUse->getOperandValToReplace(),
-                              CondUse->getPhi());
+        CondUse = &IU.AddUser(Cond, CondUse->getOperandValToReplace());
         TermBr->replaceUsesOfWith(OldCond, Cond);
       }
     }
@@ -1841,10 +1847,10 @@ LSRInstance::OptimizeLoopTermCond() {
 /// return true.
 bool
 LSRInstance::reconcileNewOffset(LSRUse &LU, int64_t NewOffset, bool HasBaseReg,
-                                LSRUse::KindType Kind, const Type *AccessTy) {
+                                LSRUse::KindType Kind, Type *AccessTy) {
   int64_t NewMinOffset = LU.MinOffset;
   int64_t NewMaxOffset = LU.MaxOffset;
-  const Type *NewAccessTy = AccessTy;
+  Type *NewAccessTy = AccessTy;
 
   // Check for a mismatched kind. It's tempting to collapse mismatched kinds to
   // something conservative, however this can pessimize in the case that one of
@@ -1883,7 +1889,7 @@ LSRInstance::reconcileNewOffset(LSRUse &LU, int64_t NewOffset, bool HasBaseReg,
 /// Either reuse an existing use or create a new one, as needed.
 std::pair<size_t, int64_t>
 LSRInstance::getUse(const SCEV *&Expr,
-                    LSRUse::KindType Kind, const Type *AccessTy) {
+                    LSRUse::KindType Kind, Type *AccessTy) {
   const SCEV *Copy = Expr;
   int64_t Offset = ExtractImmediate(Expr, SE);
 
@@ -2045,7 +2051,7 @@ void LSRInstance::CollectFixupsAndInitialFormulae() {
     LF.PostIncLoops = UI->getPostIncLoops();
 
     LSRUse::KindType Kind = LSRUse::Basic;
-    const Type *AccessTy = 0;
+    Type *AccessTy = 0;
     if (isAddressUse(LF.UserInst, LF.OperandValToReplace)) {
       Kind = LSRUse::Address;
       AccessTy = getAccessType(LF.UserInst);
@@ -2465,7 +2471,7 @@ void LSRInstance::GenerateICmpZeroScales(LSRUse &LU, unsigned LUIdx,
   if (LU.Kind != LSRUse::ICmpZero) return;
 
   // Determine the integer type for the base formula.
-  const Type *IntTy = Base.getType();
+  Type *IntTy = Base.getType();
   if (!IntTy) return;
   if (SE.getTypeSizeInBits(IntTy) > 64) return;
 
@@ -2539,7 +2545,7 @@ void LSRInstance::GenerateICmpZeroScales(LSRUse &LU, unsigned LUIdx,
 /// scaled-offset address modes, for example.
 void LSRInstance::GenerateScales(LSRUse &LU, unsigned LUIdx, Formula Base) {
   // Determine the integer type for the base formula.
-  const Type *IntTy = Base.getType();
+  Type *IntTy = Base.getType();
   if (!IntTy) return;
 
   // If this Formula already has a scaled register, we can't add another one.
@@ -2599,13 +2605,13 @@ void LSRInstance::GenerateTruncates(LSRUse &LU, unsigned LUIdx, Formula Base) {
   if (Base.AM.BaseGV) return;
 
   // Determine the integer type for the base formula.
-  const Type *DstTy = Base.getType();
+  Type *DstTy = Base.getType();
   if (!DstTy) return;
   DstTy = SE.getEffectiveSCEVType(DstTy);
 
-  for (SmallSetVector<const Type *, 4>::const_iterator
+  for (SmallSetVector<Type *, 4>::const_iterator
        I = Types.begin(), E = Types.end(); I != E; ++I) {
-    const Type *SrcTy = *I;
+    Type *SrcTy = *I;
     if (SrcTy != DstTy && TLI->isTruncateFree(SrcTy, DstTy)) {
       Formula F = Base;
 
@@ -2742,7 +2748,7 @@ void LSRInstance::GenerateCrossUseConstantOffsets() {
     int64_t Imm = WI.Imm;
     const SCEV *OrigReg = WI.OrigReg;
 
-    const Type *IntTy = SE.getEffectiveSCEVType(OrigReg->getType());
+    Type *IntTy = SE.getEffectiveSCEVType(OrigReg->getType());
     const SCEV *NegImmS = SE.getSCEV(ConstantInt::get(IntTy, -(uint64_t)Imm));
     unsigned BitWidth = SE.getTypeSizeInBits(IntTy);
 
@@ -2768,7 +2774,7 @@ void LSRInstance::GenerateCrossUseConstantOffsets() {
         // value to the immediate would produce a value closer to zero than the
         // immediate itself, then the formula isn't worthwhile.
         if (const SCEVConstant *C = dyn_cast<SCEVConstant>(NewF.ScaledReg))
-          if (C->getValue()->getValue().isNegative() !=
+          if (C->getValue()->isNegative() !=
                 (NewF.AM.BaseOffs < 0) &&
               (C->getValue()->getValue().abs() * APInt(BitWidth, F.AM.Scale))
                 .ule(abs64(NewF.AM.BaseOffs)))
@@ -3441,9 +3447,9 @@ Value *LSRInstance::Expand(const LSRFixup &LF,
   Rewriter.setPostInc(LF.PostIncLoops);
 
   // This is the type that the user actually needs.
-  const Type *OpTy = LF.OperandValToReplace->getType();
+  Type *OpTy = LF.OperandValToReplace->getType();
   // This will be the type that we'll initially expand to.
-  const Type *Ty = F.getType();
+  Type *Ty = F.getType();
   if (!Ty)
     // No type known; just expand directly to the ultimate type.
     Ty = OpTy;
@@ -3451,7 +3457,7 @@ Value *LSRInstance::Expand(const LSRFixup &LF,
     // Expand directly to the ultimate type if it's the right size.
     Ty = OpTy;
   // This is the type to do integer arithmetic in.
-  const Type *IntTy = SE.getEffectiveSCEVType(Ty);
+  Type *IntTy = SE.getEffectiveSCEVType(Ty);
 
   // Build up a list of operands to add together to form the full base.
   SmallVector<const SCEV *, 8> Ops;
@@ -3638,7 +3644,7 @@ void LSRInstance::RewriteForPHI(PHINode *PN,
         Value *FullV = Expand(LF, F, BB->getTerminator(), Rewriter, DeadInsts);
 
         // If this is reuse-by-noop-cast, insert the noop cast.
-        const Type *OpTy = LF.OperandValToReplace->getType();
+        Type *OpTy = LF.OperandValToReplace->getType();
         if (FullV->getType() != OpTy)
           FullV =
             CastInst::Create(CastInst::getCastOpcode(FullV, false,
@@ -3668,7 +3674,7 @@ void LSRInstance::Rewrite(const LSRFixup &LF,
     Value *FullV = Expand(LF, F, LF.UserInst, Rewriter, DeadInsts);
 
     // If this is reuse-by-noop-cast, insert the noop cast.
-    const Type *OpTy = LF.OperandValToReplace->getType();
+    Type *OpTy = LF.OperandValToReplace->getType();
     if (FullV->getType() != OpTy) {
       Instruction *Cast =
         CastInst::Create(CastInst::getCastOpcode(FullV, false, OpTy, false),
@@ -3699,7 +3705,7 @@ LSRInstance::ImplementSolution(const SmallVectorImpl<const Formula *> &Solution,
   // we can remove them after we are done working.
   SmallVector<WeakVH, 16> DeadInsts;
 
-  SCEVExpander Rewriter(SE);
+  SCEVExpander Rewriter(SE, "lsr");
   Rewriter.disableCanonicalMode();
   Rewriter.setIVIncInsertPos(L, IVIncInsertPos);
 
@@ -3740,6 +3746,9 @@ LSRInstance::LSRInstance(const TargetLowering *tli, Loop *l, Pass *P)
   // First, perform some low-level loop optimizations.
   OptimizeShadowIV();
   OptimizeLoopTermCond();
+
+  // If loop preparation eliminates all interesting IV users, bail.
+  if (IU.empty()) return;
 
   // Start collecting data and preparing for the solver.
   CollectInterestingTypesAndFactors();
@@ -3794,7 +3803,7 @@ void LSRInstance::print_factors_and_types(raw_ostream &OS) const {
     OS << '*' << *I;
   }
 
-  for (SmallSetVector<const Type *, 4>::const_iterator
+  for (SmallSetVector<Type *, 4>::const_iterator
        I = Types.begin(), E = Types.end(); I != E; ++I) {
     if (!First) OS << ", ";
     First = false;

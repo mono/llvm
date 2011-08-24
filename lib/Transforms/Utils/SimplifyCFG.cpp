@@ -322,7 +322,7 @@ static ConstantInt *GetConstantInt(Value *V, const TargetData *TD) {
 
   // This is some kind of pointer constant. Turn it into a pointer-sized
   // ConstantInt if possible.
-  const IntegerType *PtrTy = TD->getIntPtrType(V->getContext());
+  IntegerType *PtrTy = TD->getIntPtrType(V->getContext());
 
   // Null pointer means 0, see SelectionDAGBuilder::getValue(const Value*).
   if (isa<ConstantPointerNull>(V))
@@ -2211,8 +2211,7 @@ bool SimplifyCFGOpt::SimplifyUnwind(UnwindInst *UI, IRBuilder<> &Builder) {
       SmallVector<Value*,8> Args(II->op_begin(), II->op_end()-3);
       Builder.SetInsertPoint(BI);
       CallInst *CI = Builder.CreateCall(II->getCalledValue(),
-                                        Args.begin(), Args.end(),
-                                        II->getName());
+                                        Args, II->getName());
       CI->setCallingConv(II->getCallingConv());
       CI->setAttributes(II->getAttributes());
       // If the invoke produced a value, the Call now does instead.
@@ -2245,18 +2244,34 @@ bool SimplifyCFGOpt::SimplifyUnreachable(UnreachableInst *UI) {
   while (UI != BB->begin()) {
     BasicBlock::iterator BBI = UI;
     --BBI;
-    // Do not delete instructions that can have side effects, like calls
-    // (which may never return) and volatile loads and stores.
+    // Do not delete instructions that can have side effects which might cause
+    // the unreachable to not be reachable; specifically, calls and volatile
+    // operations may have this effect.
     if (isa<CallInst>(BBI) && !isa<DbgInfoIntrinsic>(BBI)) break;
-    
-    if (StoreInst *SI = dyn_cast<StoreInst>(BBI))
-      if (SI->isVolatile())
+
+    if (BBI->mayHaveSideEffects()) {
+      if (StoreInst *SI = dyn_cast<StoreInst>(BBI)) {
+        if (SI->isVolatile())
+          break;
+      } else if (LoadInst *LI = dyn_cast<LoadInst>(BBI)) {
+        if (LI->isVolatile())
+          break;
+      } else if (AtomicRMWInst *RMWI = dyn_cast<AtomicRMWInst>(BBI)) {
+        if (RMWI->isVolatile())
+          break;
+      } else if (AtomicCmpXchgInst *CXI = dyn_cast<AtomicCmpXchgInst>(BBI)) {
+        if (CXI->isVolatile())
+          break;
+      } else if (!isa<FenceInst>(BBI) && !isa<VAArgInst>(BBI) &&
+                 !isa<LandingPadInst>(BBI)) {
         break;
-    
-    if (LoadInst *LI = dyn_cast<LoadInst>(BBI))
-      if (LI->isVolatile())
-        break;
-    
+      }
+      // Note that deleting LandingPad's here is in fact okay, although it
+      // involves a bit of subtle reasoning. If this inst is a LandingPad,
+      // all the predecessors of this block will be the unwind edges of Invokes,
+      // and we can therefore guarantee this block will be erased.
+    }
+
     // Delete this instruction (any uses are guaranteed to be dead)
     if (!BBI->use_empty())
       BBI->replaceAllUsesWith(UndefValue::get(BBI->getType()));
@@ -2355,8 +2370,7 @@ bool SimplifyCFGOpt::SimplifyUnreachable(UnreachableInst *UI) {
         SmallVector<Value*, 8> Args(II->op_begin(), II->op_end()-3);
         Builder.SetInsertPoint(BI);
         CallInst *CI = Builder.CreateCall(II->getCalledValue(),
-                                          Args.begin(), Args.end(),
-                                          II->getName());
+                                          Args, II->getName());
         CI->setCallingConv(II->getCallingConv());
         CI->setAttributes(II->getAttributes());
         // If the invoke produced a value, the call does now instead.
@@ -2604,7 +2618,7 @@ bool SimplifyCFGOpt::SimplifyUncondBranch(BranchInst *BI, IRBuilder<> &Builder){
   BasicBlock *BB = BI->getParent();
   
   // If the Terminator is the only non-phi instruction, simplify the block.
-  BasicBlock::iterator I = BB->getFirstNonPHIOrDbg();
+  BasicBlock::iterator I = BB->getFirstNonPHIOrDbgOrLifetime();
   if (I->isTerminator() && BB != &BB->getParent()->getEntryBlock() &&
       TryToSimplifyUncondBranchFromEmptyBlock(BB))
     return true;

@@ -16,7 +16,7 @@
 #include "llvm/Instructions.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Analysis/DIBuilder.h"
+#include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Support/AlignOf.h"
 #include "llvm/Support/Allocator.h"
@@ -44,7 +44,7 @@ SSAUpdater::~SSAUpdater() {
 
 /// Initialize - Reset this object to get ready for a new set of SSA
 /// updates with type 'Ty'.  PHI nodes get a name based on 'Name'.
-void SSAUpdater::Initialize(const Type *Ty, StringRef Name) {
+void SSAUpdater::Initialize(Type *Ty, StringRef Name) {
   if (AV == 0)
     AV = new AvailableValsTy();
   else
@@ -358,8 +358,7 @@ Value *SSAUpdater::GetValueAtEndOfBlockInternal(BasicBlock *BB) {
 
 LoadAndStorePromoter::
 LoadAndStorePromoter(const SmallVectorImpl<Instruction*> &Insts,
-                     SSAUpdater &S, DbgDeclareInst *DD, DIBuilder *DB,
-                     StringRef BaseName) : SSA(S), DDI(DD), DIB(DB) {
+                     SSAUpdater &S, StringRef BaseName) : SSA(S) {
   if (Insts.empty()) return;
   
   Value *SomeVal;
@@ -380,8 +379,7 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
   // First step: bucket up uses of the alloca by the block they occur in.
   // This is important because we have to handle multiple defs/uses in a block
   // ourselves: SSAUpdater is purely for cross-block references.
-  // FIXME: Want a TinyVector<Instruction*> since there is often 0/1 element.
-  DenseMap<BasicBlock*, std::vector<Instruction*> > UsesByBlock;
+  DenseMap<BasicBlock*, TinyPtrVector<Instruction*> > UsesByBlock;
   
   for (unsigned i = 0, e = Insts.size(); i != e; ++i) {
     Instruction *User = Insts[i];
@@ -397,7 +395,7 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
   for (unsigned i = 0, e = Insts.size(); i != e; ++i) {
     Instruction *User = Insts[i];
     BasicBlock *BB = User->getParent();
-    std::vector<Instruction*> &BlockUses = UsesByBlock[BB];
+    TinyPtrVector<Instruction*> &BlockUses = UsesByBlock[BB];
     
     // If this block has already been processed, ignore this repeat use.
     if (BlockUses.empty()) continue;
@@ -407,8 +405,7 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
     if (BlockUses.size() == 1) {
       // If it is a store, it is a trivial def of the value in the block.
       if (StoreInst *SI = dyn_cast<StoreInst>(User)) {
-        if (DDI)
-          ConvertDebugDeclareToDebugValue(DDI, SI, *DIB);
+        updateDebugInfo(SI);
         SSA.AddAvailableValue(BB, SI->getOperand(0));
       } else 
         // Otherwise it is a load, queue it to rewrite as a live-in load.
@@ -462,9 +459,7 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
       if (StoreInst *SI = dyn_cast<StoreInst>(II)) {
         // If this is a store to an unrelated pointer, ignore it.
         if (!isInstInList(SI, Insts)) continue;
-
-        if (DDI)
-          ConvertDebugDeclareToDebugValue(DDI, SI, *DIB);
+        updateDebugInfo(SI);
 
         // Remember that this is the active value in the block.
         StoredValue = SI->getOperand(0);
@@ -522,7 +517,4 @@ run(const SmallVectorImpl<Instruction*> &Insts) const {
     instructionDeleted(User);
     User->eraseFromParent();
   }
-
-  if (DDI)
-    DDI->eraseFromParent();
 }

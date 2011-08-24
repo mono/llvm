@@ -44,3 +44,12 @@ macro(tablegen ofn)
   set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/${ofn} 
     PROPERTIES GENERATED 1)
 endmacro(tablegen)
+
+function(add_public_tablegen_target target)
+  # Creates a target for publicly exporting tablegen dependencies.
+  if( TABLEGEN_OUTPUT )
+    add_custom_target(${target}
+      DEPENDS ${TABLEGEN_OUTPUT})
+    add_dependencies(${target} ${LLVM_COMMON_DEPENDS})
+  endif( TABLEGEN_OUTPUT )
+endfunction()

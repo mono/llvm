@@ -44,9 +44,9 @@ class BitcodeReaderValueList {
   /// number that holds the resolved value.
   typedef std::vector<std::pair<Constant*, unsigned> > ResolveConstantsTy;
   ResolveConstantsTy ResolveConstants;
-  LLVMContext& Context;
+  LLVMContext &Context;
 public:
-  BitcodeReaderValueList(LLVMContext& C) : Context(C) {}
+  BitcodeReaderValueList(LLVMContext &C) : Context(C) {}
   ~BitcodeReaderValueList() {
     assert(ResolveConstants.empty() && "Constants not resolved?");
   }
@@ -76,8 +76,8 @@ public:
     ValuePtrs.resize(N);
   }
   
-  Constant *getConstantFwdRef(unsigned Idx, const Type *Ty);
-  Value *getValueFwdRef(unsigned Idx, const Type *Ty);
+  Constant *getConstantFwdRef(unsigned Idx, Type *Ty);
+  Value *getValueFwdRef(unsigned Idx, Type *Ty);
   
   void AssignValue(Value *V, unsigned Idx);
   
@@ -131,7 +131,7 @@ class BitcodeReader : public GVMaterializer {
   
   const char *ErrorString;
   
-  std::vector<PATypeHolder> TypeList;
+  std::vector<Type*> TypeList;
   BitcodeReaderValueList ValueList;
   BitcodeReaderMDValueList MDValueList;
   SmallVector<Instruction *, 64> InstructionList;
@@ -210,12 +210,12 @@ public:
   /// @returns true if an error occurred.
   bool ParseTriple(std::string &Triple);
 private:
-  const Type *getTypeByID(unsigned ID, bool isTypeTable = false);
-  Value *getFnValueByID(unsigned ID, const Type *Ty) {
-    if (Ty == Type::getMetadataTy(Context))
+  Type *getTypeByID(unsigned ID);
+  Type *getTypeByIDOrNull(unsigned ID);
+  Value *getFnValueByID(unsigned ID, Type *Ty) {
+    if (Ty && Ty->isMetadataTy())
       return MDValueList.getValueFwdRef(ID);
-    else
-      return ValueList.getValueFwdRef(ID, Ty);
+    return ValueList.getValueFwdRef(ID, Ty);
   }
   BasicBlock *getBasicBlock(unsigned ID) const {
     if (ID >= FunctionBBs.size()) return 0; // Invalid ID
@@ -248,7 +248,7 @@ private:
     return ResVal == 0;
   }
   bool getValue(SmallVector<uint64_t, 64> &Record, unsigned &Slot,
-                const Type *Ty, Value *&ResVal) {
+                Type *Ty, Value *&ResVal) {
     if (Slot == Record.size()) return true;
     unsigned ValNo = (unsigned)Record[Slot++];
     ResVal = getFnValueByID(ValNo, Ty);
@@ -259,7 +259,10 @@ private:
   bool ParseModule();
   bool ParseAttributeBlock();
   bool ParseTypeTable();
-  bool ParseTypeSymbolTable();
+  bool ParseOldTypeTable();         // FIXME: Remove in LLVM 3.1
+  bool ParseTypeTableBody();
+
+  bool ParseOldTypeSymbolTable();   // FIXME: Remove in LLVM 3.1
   bool ParseValueSymbolTable();
   bool ParseConstants();
   bool RememberAndSkipFunctionBody();

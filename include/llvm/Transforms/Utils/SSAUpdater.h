@@ -39,7 +39,7 @@ private:
   void *AV;
 
   /// ProtoType holds the type of the values being rewritten.
-  const Type *ProtoType;
+  Type *ProtoType;
 
   // PHI nodes are given a name based on ProtoName.
   std::string ProtoName;
@@ -56,7 +56,7 @@ public:
 
   /// Initialize - Reset this object to get ready for a new set of SSA
   /// updates with type 'Ty'.  PHI nodes get a name based on 'Name'.
-  void Initialize(const Type *Ty, StringRef Name);
+  void Initialize(Type *Ty, StringRef Name);
 
   /// AddAvailableValue - Indicate that a rewritten value is available at the
   /// end of the specified block with the specified value.
@@ -122,12 +122,9 @@ private:
 class LoadAndStorePromoter {
 protected:
   SSAUpdater &SSA;
-  DbgDeclareInst *DDI;
-  DIBuilder *DIB;
 public:
   LoadAndStorePromoter(const SmallVectorImpl<Instruction*> &Insts,
-                       SSAUpdater &S, DbgDeclareInst *DDI, DIBuilder *DIB,
-                       StringRef Name = StringRef());
+                       SSAUpdater &S, StringRef Name = StringRef());
   virtual ~LoadAndStorePromoter() {}
   
   /// run - This does the promotion.  Insts is a list of loads and stores to
@@ -161,6 +158,10 @@ public:
   virtual void instructionDeleted(Instruction *I) const {
   }
 
+  /// updateDebugInfo - This is called to update debug info associated with the
+  /// instruction.
+  virtual void updateDebugInfo(Instruction *I) const {
+  }
 };
 
 } // End llvm namespace

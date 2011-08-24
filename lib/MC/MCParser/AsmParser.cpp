@@ -18,21 +18,22 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCParser/AsmCond.h"
 #include "llvm/MC/MCParser/AsmLexer.h"
 #include "llvm/MC/MCParser/MCAsmParser.h"
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/MC/MCDwarf.h"
+#include "llvm/MC/MCTargetAsmParser.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetAsmInfo.h"
-#include "llvm/Target/TargetAsmParser.h"
 #include <cctype>
 #include <vector>
 using namespace llvm;
@@ -115,7 +116,7 @@ private:
   unsigned HadError : 1;
 
 public:
-  AsmParser(const Target &T, SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
+  AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
             const MCAsmInfo &MAI);
   ~AsmParser();
 
@@ -337,7 +338,7 @@ extern MCAsmParserExtension *createCOFFAsmParser();
 
 enum { DEFAULT_ADDRSPACE = 0 };
 
-AsmParser::AsmParser(const Target &T, SourceMgr &_SM, MCContext &_Ctx,
+AsmParser::AsmParser(SourceMgr &_SM, MCContext &_Ctx,
                      MCStreamer &_Out, const MCAsmInfo &_MAI)
   : Lexer(_MAI), Ctx(_Ctx), Out(_Out), MAI(_MAI), SrcMgr(_SM),
     GenericParser(new GenericAsmParser), PlatformParser(0),
@@ -739,9 +740,12 @@ AsmParser::ApplyModifierToExpr(const MCExpr *E,
 
 /// ParseExpression - Parse an expression and return it.
 ///
-///  expr ::= expr +,- expr          -> lowest.
-///  expr ::= expr |,^,&,! expr      -> middle.
-///  expr ::= expr *,/,%,<<,>> expr  -> highest.
+///  expr ::= expr &&,|| expr               -> lowest.
+///  expr ::= expr |,^,&,! expr
+///  expr ::= expr ==,!=,<>,<,<=,>,>= expr
+///  expr ::= expr <<,>> expr
+///  expr ::= expr +,- expr
+///  expr ::= expr *,/,% expr               -> highest.
 ///  expr ::= primaryexpr
 ///
 bool AsmParser::ParseExpression(const MCExpr *&Res, SMLoc &EndLoc) {
@@ -808,7 +812,7 @@ static unsigned getBinOpPrecedence(AsmToken::TokenKind K,
   default:
     return 0;    // not a binop.
 
-    // Lowest Precedence: &&, ||, @
+    // Lowest Precedence: &&, ||
   case AsmToken::AmpAmp:
     Kind = MCBinaryExpr::LAnd;
     return 1;
@@ -851,30 +855,32 @@ static unsigned getBinOpPrecedence(AsmToken::TokenKind K,
     Kind = MCBinaryExpr::GTE;
     return 3;
 
+    // Intermediate Precedence: <<, >>
+  case AsmToken::LessLess:
+    Kind = MCBinaryExpr::Shl;
+    return 4;
+  case AsmToken::GreaterGreater:
+    Kind = MCBinaryExpr::Shr;
+    return 4;
+
     // High Intermediate Precedence: +, -
   case AsmToken::Plus:
     Kind = MCBinaryExpr::Add;
-    return 4;
+    return 5;
   case AsmToken::Minus:
     Kind = MCBinaryExpr::Sub;
-    return 4;
+    return 5;
 
-    // Highest Precedence: *, /, %, <<, >>
+    // Highest Precedence: *, /, %
   case AsmToken::Star:
     Kind = MCBinaryExpr::Mul;
-    return 5;
+    return 6;
   case AsmToken::Slash:
     Kind = MCBinaryExpr::Div;
-    return 5;
+    return 6;
   case AsmToken::Percent:
     Kind = MCBinaryExpr::Mod;
-    return 5;
-  case AsmToken::LessLess:
-    Kind = MCBinaryExpr::Shl;
-    return 5;
-  case AsmToken::GreaterGreater:
-    Kind = MCBinaryExpr::Shr;
-    return 5;
+    return 6;
   }
 }
 
@@ -1116,15 +1122,8 @@ bool AsmParser::ParseStatement() {
 
     if (IDVal == ".globl" || IDVal == ".global")
       return ParseDirectiveSymbolAttribute(MCSA_Global);
-    // ELF only? Should it be here?
-    if (IDVal == ".local")
-      return ParseDirectiveSymbolAttribute(MCSA_Local);
-    if (IDVal == ".hidden")
-      return ParseDirectiveSymbolAttribute(MCSA_Hidden);
     if (IDVal == ".indirect_symbol")
       return ParseDirectiveSymbolAttribute(MCSA_IndirectSymbol);
-    if (IDVal == ".internal")
-      return ParseDirectiveSymbolAttribute(MCSA_Internal);
     if (IDVal == ".lazy_reference")
       return ParseDirectiveSymbolAttribute(MCSA_LazyReference);
     if (IDVal == ".no_dead_strip")
@@ -1133,12 +1132,8 @@ bool AsmParser::ParseStatement() {
       return ParseDirectiveSymbolAttribute(MCSA_SymbolResolver);
     if (IDVal == ".private_extern")
       return ParseDirectiveSymbolAttribute(MCSA_PrivateExtern);
-    if (IDVal == ".protected")
-      return ParseDirectiveSymbolAttribute(MCSA_Protected);
     if (IDVal == ".reference")
       return ParseDirectiveSymbolAttribute(MCSA_Reference);
-    if (IDVal == ".weak")
-      return ParseDirectiveSymbolAttribute(MCSA_Weak);
     if (IDVal == ".weak_definition")
       return ParseDirectiveSymbolAttribute(MCSA_WeakDefinition);
     if (IDVal == ".weak_reference")
@@ -1156,7 +1151,7 @@ bool AsmParser::ParseStatement() {
     if (IDVal == ".include")
       return ParseDirectiveInclude();
 
-    if (IDVal == ".code16" || IDVal == ".code32" || IDVal == ".code64")
+    if (IDVal == ".code16")
       return TokError(Twine(IDVal) + " not supported yet");
 
     // Look up the handler in the handler table.
@@ -1193,7 +1188,7 @@ bool AsmParser::ParseStatement() {
     for (unsigned i = 0; i != ParsedOperands.size(); ++i) {
       if (i != 0)
         OS << ", ";
-      ParsedOperands[i]->dump(OS);
+      ParsedOperands[i]->print(OS);
     }
     OS << "]";
 
@@ -1612,13 +1607,18 @@ bool AsmParser::ParseDirectiveValue(unsigned Size) {
 
     for (;;) {
       const MCExpr *Value;
+      SMLoc ExprLoc = getLexer().getLoc();
       if (ParseExpression(Value))
         return true;
 
       // Special case constant expressions to match code generator.
-      if (const MCConstantExpr *MCE = dyn_cast<MCConstantExpr>(Value))
-        getStreamer().EmitIntValue(MCE->getValue(), Size, DEFAULT_ADDRSPACE);
-      else
+      if (const MCConstantExpr *MCE = dyn_cast<MCConstantExpr>(Value)) {
+        assert(Size <= 8 && "Invalid size");
+        uint64_t IntValue = MCE->getValue();
+        if (!isUIntN(8 * Size, IntValue) && !isIntN(8 * Size, IntValue))
+          return Error(ExprLoc, "literal value out of range for directive");
+        getStreamer().EmitIntValue(IntValue, Size, DEFAULT_ADDRSPACE);
+      } else
         getStreamer().EmitValue(Value, Size, DEFAULT_ADDRSPACE);
 
       if (getLexer().is(AsmToken::EndOfStatement))
@@ -2410,7 +2410,7 @@ bool GenericAsmParser::ParseRegisterOrRegisterNumber(int64_t &Register,
     if (getParser().getTargetParser().ParseRegister(RegNo, DirectiveLoc,
       DirectiveLoc))
       return true;
-    Register = getContext().getTargetAsmInfo().getDwarfRegNum(RegNo, true);
+    Register = getContext().getRegisterInfo().getDwarfRegNum(RegNo, true);
   } else
     return getParser().ParseAbsoluteExpression(Register);
 
@@ -2718,8 +2718,8 @@ bool GenericAsmParser::ParseDirectiveLEB128(StringRef DirName, SMLoc) {
 
 
 /// \brief Create an MCAsmParser instance.
-MCAsmParser *llvm::createMCAsmParser(const Target &T, SourceMgr &SM,
+MCAsmParser *llvm::createMCAsmParser(SourceMgr &SM,
                                      MCContext &C, MCStreamer &Out,
                                      const MCAsmInfo &MAI) {
-  return new AsmParser(T, SM, C, Out, MAI);
+  return new AsmParser(SM, C, Out, MAI);
 }

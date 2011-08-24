@@ -15,10 +15,10 @@
 
 #define DEBUG_TYPE "arm-cp-islands"
 #include "ARM.h"
-#include "ARMAddressingModes.h"
 #include "ARMMachineFunctionInfo.h"
 #include "ARMInstrInfo.h"
 #include "Thumb2InstrInfo.h"
+#include "MCTargetDesc/ARMAddressingModes.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
@@ -1431,6 +1431,8 @@ ARMConstantIslands::FixUpUnconditionalBr(MachineFunction &MF, ImmBranch &Br) {
   // Use BL to implement far jump.
   Br.MaxDisp = (1 << 21) * 2;
   MI->setDesc(TII->get(ARM::tBfar));
+  MI->addOperand(MachineOperand::CreateImm((int64_t)ARMCC::AL));
+  MI->addOperand(MachineOperand::CreateReg(0, false));
   BBSizes[MBB->getNumber()] += 2;
   AdjustBBOffsetsAfter(MBB, 2);
   HasFarJump = true;
@@ -1539,7 +1541,10 @@ bool ARMConstantIslands::UndoLRSpillRestore() {
     if (MI->getOpcode() == ARM::tPOP_RET &&
         MI->getOperand(2).getReg() == ARM::PC &&
         MI->getNumExplicitOperands() == 3) {
-      BuildMI(MI->getParent(), MI->getDebugLoc(), TII->get(ARM::tBX_RET));
+      // Create the new insn and copy the predicate from the old.
+      BuildMI(MI->getParent(), MI->getDebugLoc(), TII->get(ARM::tBX_RET))
+        .addOperand(MI->getOperand(0))
+        .addOperand(MI->getOperand(1));
       MI->eraseFromParent();
       MadeChange = true;
     }
@@ -1693,9 +1698,9 @@ bool ARMConstantIslands::OptimizeThumb2JumpTables(MachineFunction &MF) {
   const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
   for (unsigned i = 0, e = T2JumpTables.size(); i != e; ++i) {
     MachineInstr *MI = T2JumpTables[i];
-    const TargetInstrDesc &TID = MI->getDesc();
-    unsigned NumOps = TID.getNumOperands();
-    unsigned JTOpIdx = NumOps - (TID.isPredicable() ? 3 : 2);
+    const MCInstrDesc &MCID = MI->getDesc();
+    unsigned NumOps = MCID.getNumOperands();
+    unsigned JTOpIdx = NumOps - (MCID.isPredicable() ? 3 : 2);
     MachineOperand JTOP = MI->getOperand(JTOpIdx);
     unsigned JTI = JTOP.getIndex();
     assert(JTI < JT.size());
@@ -1819,9 +1824,9 @@ bool ARMConstantIslands::ReorderThumb2JumpTables(MachineFunction &MF) {
   const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
   for (unsigned i = 0, e = T2JumpTables.size(); i != e; ++i) {
     MachineInstr *MI = T2JumpTables[i];
-    const TargetInstrDesc &TID = MI->getDesc();
-    unsigned NumOps = TID.getNumOperands();
-    unsigned JTOpIdx = NumOps - (TID.isPredicable() ? 3 : 2);
+    const MCInstrDesc &MCID = MI->getDesc();
+    unsigned NumOps = MCID.getNumOperands();
+    unsigned JTOpIdx = NumOps - (MCID.isPredicable() ? 3 : 2);
     MachineOperand JTOP = MI->getOperand(JTOpIdx);
     unsigned JTI = JTOP.getIndex();
     assert(JTI < JT.size());

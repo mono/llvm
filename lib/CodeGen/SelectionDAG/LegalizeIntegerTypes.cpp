@@ -155,7 +155,8 @@ SDValue DAGTypeLegalizer::PromoteIntRes_Atomic1(AtomicSDNode *N) {
   SDValue Res = DAG.getAtomic(N->getOpcode(), N->getDebugLoc(),
                               N->getMemoryVT(),
                               N->getChain(), N->getBasePtr(),
-                              Op2, N->getMemOperand());
+                              Op2, N->getMemOperand(), N->getOrdering(),
+                              N->getSynchScope());
   // Legalized the chain result - switch anything that used the old chain to
   // use the new one.
   ReplaceValueWith(SDValue(N, 1), Res.getValue(1));
@@ -167,7 +168,8 @@ SDValue DAGTypeLegalizer::PromoteIntRes_Atomic2(AtomicSDNode *N) {
   SDValue Op3 = GetPromotedInteger(N->getOperand(3));
   SDValue Res = DAG.getAtomic(N->getOpcode(), N->getDebugLoc(),
                               N->getMemoryVT(), N->getChain(), N->getBasePtr(),
-                              Op2, Op3, N->getMemOperand());
+                              Op2, Op3, N->getMemOperand(), N->getOrdering(),
+                              N->getSynchScope());
   // Legalized the chain result - switch anything that used the old chain to
   // use the new one.
   ReplaceValueWith(SDValue(N, 1), Res.getValue(1));
@@ -520,20 +522,44 @@ SDValue DAGTypeLegalizer::PromoteIntRes_SRL(SDNode *N) {
 SDValue DAGTypeLegalizer::PromoteIntRes_TRUNCATE(SDNode *N) {
   EVT NVT = TLI.getTypeToTransformTo(*DAG.getContext(), N->getValueType(0));
   SDValue Res;
+  SDValue InOp = N->getOperand(0);
+  DebugLoc dl = N->getDebugLoc();
 
-  switch (getTypeAction(N->getOperand(0).getValueType())) {
+  switch (getTypeAction(InOp.getValueType())) {
   default: llvm_unreachable("Unknown type action!");
   case TargetLowering::TypeLegal:
   case TargetLowering::TypeExpandInteger:
-    Res = N->getOperand(0);
+    Res = InOp;
     break;
   case TargetLowering::TypePromoteInteger:
-    Res = GetPromotedInteger(N->getOperand(0));
+    Res = GetPromotedInteger(InOp);
     break;
+  case TargetLowering::TypeSplitVector:
+    EVT InVT = InOp.getValueType();
+    assert(InVT.isVector() && "Cannot split scalar types");
+    unsigned NumElts = InVT.getVectorNumElements();
+    assert(NumElts == NVT.getVectorNumElements() &&
+           "Dst and Src must have the same number of elements");
+    EVT EltVT = InVT.getScalarType();
+    assert(isPowerOf2_32(NumElts) &&
+           "Promoted vector type must be a power of two");
+
+    EVT HalfVT = EVT::getVectorVT(*DAG.getContext(), EltVT, NumElts/2);
+    EVT HalfNVT = EVT::getVectorVT(*DAG.getContext(), NVT.getScalarType(),
+                                   NumElts/2);
+
+    SDValue EOp1 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, HalfVT, InOp,
+                               DAG.getIntPtrConstant(0));
+    SDValue EOp2 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, HalfVT, InOp,
+                               DAG.getIntPtrConstant(NumElts/2));
+    EOp1 = DAG.getNode(ISD::TRUNCATE, dl, HalfNVT, EOp1);
+    EOp2 = DAG.getNode(ISD::TRUNCATE, dl, HalfNVT, EOp2);
+
+    return DAG.getNode(ISD::CONCAT_VECTORS, dl, NVT, EOp1, EOp2);
   }
 
   // Truncate to NVT instead of VT
-  return DAG.getNode(ISD::TRUNCATE, N->getDebugLoc(), NVT, Res);
+  return DAG.getNode(ISD::TRUNCATE, dl, NVT, Res);
 }
 
 SDValue DAGTypeLegalizer::PromoteIntRes_UADDSUBO(SDNode *N, unsigned ResNo) {
@@ -2152,9 +2178,9 @@ void DAGTypeLegalizer::ExpandIntRes_UADDSUBO(SDNode *N,
 void DAGTypeLegalizer::ExpandIntRes_XMULO(SDNode *N,
                                           SDValue &Lo, SDValue &Hi) {
   EVT VT = N->getValueType(0);
-  const Type *RetTy = VT.getTypeForEVT(*DAG.getContext());
+  Type *RetTy = VT.getTypeForEVT(*DAG.getContext());
   EVT PtrVT = TLI.getPointerTy();
-  const Type *PtrTy = PtrVT.getTypeForEVT(*DAG.getContext());
+  Type *PtrTy = PtrVT.getTypeForEVT(*DAG.getContext());
   DebugLoc dl = N->getDebugLoc();
 
   // A divide for UMULO should be faster than a function call.
@@ -2198,7 +2224,7 @@ void DAGTypeLegalizer::ExpandIntRes_XMULO(SDNode *N,
   TargetLowering::ArgListEntry Entry;
   for (unsigned i = 0, e = N->getNumOperands(); i != e; ++i) {
     EVT ArgVT = N->getOperand(i).getValueType();
-    const Type *ArgTy = ArgVT.getTypeForEVT(*DAG.getContext());
+    Type *ArgTy = ArgVT.getTypeForEVT(*DAG.getContext());
     Entry.Node = N->getOperand(i);
     Entry.Ty = ArgTy;
     Entry.isSExt = true;
@@ -2751,7 +2777,6 @@ SDValue DAGTypeLegalizer::PromoteIntRes_EXTRACT_SUBVECTOR(SDNode *N) {
 
 
 SDValue DAGTypeLegalizer::PromoteIntRes_VECTOR_SHUFFLE(SDNode *N) {
-
   ShuffleVectorSDNode *SV = cast<ShuffleVectorSDNode>(N);
   EVT VT = N->getValueType(0);
   DebugLoc dl = N->getDebugLoc();
@@ -2814,14 +2839,12 @@ SDValue DAGTypeLegalizer::PromoteIntRes_INSERT_VECTOR_ELT(SDNode *N) {
   EVT NOutVTElem = NOutVT.getVectorElementType();
 
   DebugLoc dl = N->getDebugLoc();
-
-  SDValue ConvertedVector = DAG.getNode(ISD::ANY_EXTEND, dl, NOutVT,
-                                        N->getOperand(0));
+  SDValue V0 = GetPromotedInteger(N->getOperand(0));
 
   SDValue ConvElem = DAG.getNode(ISD::ANY_EXTEND, dl,
     NOutVTElem, N->getOperand(1));
-  return DAG.getNode(ISD::INSERT_VECTOR_ELT, dl,NOutVT,
-    ConvertedVector, ConvElem, N->getOperand(2));
+  return DAG.getNode(ISD::INSERT_VECTOR_ELT, dl, NOutVT,
+    V0, ConvElem, N->getOperand(2));
 }
 
 SDValue DAGTypeLegalizer::PromoteIntOp_EXTRACT_VECTOR_ELT(SDNode *N) {
@@ -2836,15 +2859,16 @@ SDValue DAGTypeLegalizer::PromoteIntOp_EXTRACT_VECTOR_ELT(SDNode *N) {
 }
 
 SDValue DAGTypeLegalizer::PromoteIntOp_CONCAT_VECTORS(SDNode *N) {
-
   DebugLoc dl = N->getDebugLoc();
+  unsigned NumElems = N->getNumOperands();
 
   EVT RetSclrTy = N->getValueType(0).getVectorElementType();
 
   SmallVector<SDValue, 8> NewOps;
+  NewOps.reserve(NumElems);
 
   // For each incoming vector
-  for (unsigned VecIdx = 0, E = N->getNumOperands(); VecIdx!= E; ++VecIdx) {
+  for (unsigned VecIdx = 0; VecIdx != NumElems; ++VecIdx) {
     SDValue Incoming = GetPromotedInteger(N->getOperand(VecIdx));
     EVT SclrTy = Incoming->getValueType(0).getVectorElementType();
     unsigned NumElem = Incoming->getValueType(0).getVectorNumElements();

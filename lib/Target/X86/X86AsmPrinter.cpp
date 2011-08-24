@@ -708,22 +708,8 @@ void X86AsmPrinter::PrintDebugValueComment(const MachineInstr *MI,
 // Target Registry Stuff
 //===----------------------------------------------------------------------===//
 
-static MCInstPrinter *createX86MCInstPrinter(const Target &T,
-                                             TargetMachine &TM,
-                                             unsigned SyntaxVariant,
-                                             const MCAsmInfo &MAI) {
-  if (SyntaxVariant == 0)
-    return new X86ATTInstPrinter(TM, MAI);
-  if (SyntaxVariant == 1)
-    return new X86IntelInstPrinter(TM, MAI);
-  return 0;
-}
-
 // Force static initialization.
 extern "C" void LLVMInitializeX86AsmPrinter() {
   RegisterAsmPrinter<X86AsmPrinter> X(TheX86_32Target);
   RegisterAsmPrinter<X86AsmPrinter> Y(TheX86_64Target);
-
-  TargetRegistry::RegisterMCInstPrinter(TheX86_32Target,createX86MCInstPrinter);
-  TargetRegistry::RegisterMCInstPrinter(TheX86_64Target,createX86MCInstPrinter);
 }

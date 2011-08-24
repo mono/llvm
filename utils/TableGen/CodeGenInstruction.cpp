@@ -13,6 +13,7 @@
 
 #include "CodeGenInstruction.h"
 #include "CodeGenTarget.h"
+#include "Error.h"
 #include "Record.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
@@ -66,10 +67,14 @@ CGIOperandList::CGIOperandList(Record *R) : TheDef(R) {
     Record *Rec = Arg->getDef();
     std::string PrintMethod = "printOperand";
     std::string EncoderMethod;
+    std::string OperandType = "OPERAND_UNKNOWN";
     unsigned NumOps = 1;
     DagInit *MIOpInfo = 0;
-    if (Rec->isSubClassOf("Operand")) {
+    if (Rec->isSubClassOf("RegisterOperand")) {
       PrintMethod = Rec->getValueAsString("PrintMethod");
+    } else if (Rec->isSubClassOf("Operand")) {
+      PrintMethod = Rec->getValueAsString("PrintMethod");
+      OperandType = Rec->getValueAsString("OperandType");
       // If there is an explicit encoder method, use it.
       EncoderMethod = Rec->getValueAsString("EncoderMethod");
       MIOpInfo = Rec->getValueAsDag("MIOperandInfo");
@@ -93,8 +98,9 @@ CGIOperandList::CGIOperandList(Record *R) : TheDef(R) {
     } else if (Rec->getName() == "variable_ops") {
       isVariadic = true;
       continue;
-    } else if (!Rec->isSubClassOf("RegisterClass") &&
-               !Rec->isSubClassOf("PointerLikeRegClass") &&
+    } else if (Rec->isSubClassOf("RegisterClass")) {
+      OperandType = "OPERAND_REGISTER";
+    } else if (!Rec->isSubClassOf("PointerLikeRegClass") &&
                Rec->getName() != "unknown")
       throw "Unknown operand class '" + Rec->getName() +
       "' in '" + R->getName() + "' instruction!";
@@ -108,7 +114,8 @@ CGIOperandList::CGIOperandList(Record *R) : TheDef(R) {
       " has the same name as a previous operand!";
 
     OperandList.push_back(OperandInfo(Rec, ArgName, PrintMethod, EncoderMethod,
-                                      MIOperandNo, NumOps, MIOpInfo));
+                                      OperandType, MIOperandNo, NumOps,
+                                      MIOpInfo));
     MIOperandNo += NumOps;
   }
 
@@ -260,8 +267,9 @@ static void ParseConstraints(const std::string &CStr, CGIOperandList &Ops) {
 
 void CGIOperandList::ProcessDisableEncoding(std::string DisableEncoding) {
   while (1) {
-    std::string OpName;
-    tie(OpName, DisableEncoding) = getToken(DisableEncoding, " ,\t");
+    std::pair<StringRef, StringRef> P = getToken(DisableEncoding, " ,\t");
+    std::string OpName = P.first;
+    DisableEncoding = P.second;
     if (OpName.empty()) break;
 
     // Figure out which operand this is.
@@ -308,6 +316,8 @@ CodeGenInstruction::CodeGenInstruction(Record *R) : TheDef(R), Operands(R) {
   isAsCheapAsAMove = R->getValueAsBit("isAsCheapAsAMove");
   hasExtraSrcRegAllocReq = R->getValueAsBit("hasExtraSrcRegAllocReq");
   hasExtraDefRegAllocReq = R->getValueAsBit("hasExtraDefRegAllocReq");
+  isCodeGenOnly = R->getValueAsBit("isCodeGenOnly");
+  isPseudo = R->getValueAsBit("isPseudo");
   ImplicitDefs = R->getValueAsListOfDefs("Defs");
   ImplicitUses = R->getValueAsListOfDefs("Uses");
 
@@ -414,13 +424,23 @@ bool CodeGenInstAlias::tryAliasOpMatch(DagInit *Result, unsigned AliasOpNo,
 
   // Handle explicit registers.
   if (ADI && ADI->getDef()->isSubClassOf("Register")) {
+    if (InstOpRec->isSubClassOf("OptionalDefOperand")) {
+      DagInit *DI = InstOpRec->getValueAsDag("MIOperandInfo");
+      // The operand info should only have a single (register) entry. We
+      // want the register class of it.
+      InstOpRec = dynamic_cast<DefInit*>(DI->getArg(0))->getDef();
+    }
+
+    if (InstOpRec->isSubClassOf("RegisterOperand"))
+      InstOpRec = InstOpRec->getValueAsDef("RegClass");
+
     if (!InstOpRec->isSubClassOf("RegisterClass"))
       return false;
 
     if (!T.getRegisterClass(InstOpRec)
         .contains(T.getRegBank().getReg(ADI->getDef())))
-      throw TGError(Loc, "fixed register " +ADI->getDef()->getName()
-                    + " is not a member of the " + InstOpRec->getName() +
+      throw TGError(Loc, "fixed register " + ADI->getDef()->getName() +
+                    " is not a member of the " + InstOpRec->getName() +
                     " register class!");
 
     if (!Result->getArgName(AliasOpNo).empty())

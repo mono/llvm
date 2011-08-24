@@ -232,7 +232,7 @@ namespace ISD {
     SMULO, UMULO,
 
     // Simple binary floating point operators.
-    FADD, FSUB, FMUL, FDIV, FREM,
+    FADD, FSUB, FMUL, FMA, FDIV, FREM,
 
     // FCOPYSIGN(X, Y) - Return the value of X with the sign of Y.  NOTE: This
     // DAG node does not require that X and Y have the same type, just that they
@@ -591,6 +591,11 @@ namespace ISD {
     // operand specifying if the barrier applies to device and uncached memory
     // and produces an output chain.
     MEMBARRIER,
+
+    // OUTCHAIN = ATOMIC_FENCE(INCHAIN, ordering, scope)
+    // This corresponds to the fence instruction. It takes an input chain, and
+    // two integer constants: an AtomicOrdering and a SynchronizationScope.
+    ATOMIC_FENCE,
 
     // Val, OUTCHAIN = ATOMIC_CMP_SWAP(INCHAIN, ptr, cmp, swap)
     // this corresponds to the atomic.lcs intrinsic.

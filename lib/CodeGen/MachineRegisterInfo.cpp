@@ -14,13 +14,13 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/Target/TargetInstrInfo.h"
-#include "llvm/Support/CommandLine.h"
+#include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
-MachineRegisterInfo::MachineRegisterInfo(const TargetRegisterInfo &TRI) {
+MachineRegisterInfo::MachineRegisterInfo(const TargetRegisterInfo &TRI)
+  : IsSSA(true) {
   VRegInfo.reserve(256);
   RegAllocHints.reserve(256);
-  RegClass2VRegMap = new std::vector<unsigned>[TRI.getNumRegClasses()];
   UsedPhysRegs.resize(TRI.getNumRegs());
   
   // Create the physreg use/def lists.
@@ -38,25 +38,13 @@ MachineRegisterInfo::~MachineRegisterInfo() {
            "PhysRegUseDefLists has entries after all instructions are deleted");
 #endif
   delete [] PhysRegUseDefLists;
-  delete [] RegClass2VRegMap;
 }
 
 /// setRegClass - Set the register class of the specified virtual register.
 ///
 void
 MachineRegisterInfo::setRegClass(unsigned Reg, const TargetRegisterClass *RC) {
-  const TargetRegisterClass *OldRC = VRegInfo[Reg].first;
   VRegInfo[Reg].first = RC;
-
-  // Remove from old register class's vregs list. This may be slow but
-  // fortunately this operation is rarely needed.
-  std::vector<unsigned> &VRegs = RegClass2VRegMap[OldRC->getID()];
-  std::vector<unsigned>::iterator I =
-    std::find(VRegs.begin(), VRegs.end(), Reg);
-  VRegs.erase(I);
-
-  // Add to new register class's vregs list.
-  RegClass2VRegMap[RC->getID()].push_back(Reg);
 }
 
 const TargetRegisterClass *
@@ -71,6 +59,37 @@ MachineRegisterInfo::constrainRegClass(unsigned Reg,
   if (NewRC != OldRC)
     setRegClass(Reg, NewRC);
   return NewRC;
+}
+
+bool
+MachineRegisterInfo::recomputeRegClass(unsigned Reg, const TargetMachine &TM) {
+  const TargetInstrInfo *TII = TM.getInstrInfo();
+  const TargetRegisterInfo *TRI = TM.getRegisterInfo();
+  const TargetRegisterClass *OldRC = getRegClass(Reg);
+  const TargetRegisterClass *NewRC = TRI->getLargestLegalSuperClass(OldRC);
+
+  // Stop early if there is no room to grow.
+  if (NewRC == OldRC)
+    return false;
+
+  // Accumulate constraints from all uses.
+  for (reg_nodbg_iterator I = reg_nodbg_begin(Reg), E = reg_nodbg_end(); I != E;
+       ++I) {
+    // TRI doesn't have accurate enough information to model this yet.
+    if (I.getOperand().getSubReg())
+      return false;
+    // Inline asm instuctions don't remember their constraints.
+    if (I->isInlineAsm())
+      return false;
+    const TargetRegisterClass *OpRC =
+      TII->getRegClass(I->getDesc(), I.getOperandNo(), TRI);
+    if (OpRC)
+      NewRC = getCommonSubClass(NewRC, OpRC);
+    if (!NewRC || NewRC == OldRC)
+      return false;
+  }
+  setRegClass(Reg, NewRC);
+  return true;
 }
 
 /// createVirtualRegister - Create and return a new virtual register in the
@@ -95,7 +114,6 @@ MachineRegisterInfo::createVirtualRegister(const TargetRegisterClass *RegClass){
   if (ArrayBase && &VRegInfo[FirstVirtReg] != ArrayBase)
     // The vector reallocated, handle this now.
     HandleVRegListReallocation();
-  RegClass2VRegMap[RegClass->getID()].push_back(Reg);
   return Reg;
 }
 

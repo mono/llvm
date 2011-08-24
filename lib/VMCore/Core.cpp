@@ -19,7 +19,6 @@
 #include "llvm/GlobalVariable.h"
 #include "llvm/GlobalAlias.h"
 #include "llvm/LLVMContext.h"
-#include "llvm/TypeSymbolTable.h"
 #include "llvm/InlineAsm.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/PassManager.h"
@@ -111,27 +110,6 @@ void LLVMSetTarget(LLVMModuleRef M, const char *Triple) {
   unwrap(M)->setTargetTriple(Triple);
 }
 
-/*--.. Type names ..........................................................--*/
-LLVMBool LLVMAddTypeName(LLVMModuleRef M, const char *Name, LLVMTypeRef Ty) {
-  return unwrap(M)->addTypeName(Name, unwrap(Ty));
-}
-
-void LLVMDeleteTypeName(LLVMModuleRef M, const char *Name) {
-  TypeSymbolTable &TST = unwrap(M)->getTypeSymbolTable();
-
-  TypeSymbolTable::iterator I = TST.find(Name);
-  if (I != TST.end())
-    TST.remove(I);
-}
-
-LLVMTypeRef LLVMGetTypeByName(LLVMModuleRef M, const char *Name) {
-  return wrap(unwrap(M)->getTypeByName(Name));
-}
-
-const char *LLVMGetTypeName(LLVMModuleRef M, LLVMTypeRef Ty) {
-  return unwrap(M)->getTypeName(unwrap(Ty)).c_str();
-}
-
 void LLVMDumpModule(LLVMModuleRef M) {
   unwrap(M)->dump();
 }
@@ -182,8 +160,6 @@ LLVMTypeKind LLVMGetTypeKind(LLVMTypeRef Ty) {
     return LLVMArrayTypeKind;
   case Type::PointerTyID:
     return LLVMPointerTypeKind;
-  case Type::OpaqueTyID:
-    return LLVMOpaqueTypeKind;
   case Type::VectorTyID:
     return LLVMVectorTypeKind;
   case Type::X86_MMXTyID:
@@ -284,10 +260,7 @@ LLVMTypeRef LLVMX86MMXType(void) {
 LLVMTypeRef LLVMFunctionType(LLVMTypeRef ReturnType,
                              LLVMTypeRef *ParamTypes, unsigned ParamCount,
                              LLVMBool IsVarArg) {
-  std::vector<const Type*> Tys;
-  for (LLVMTypeRef *I = ParamTypes, *E = ParamTypes + ParamCount; I != E; ++I)
-    Tys.push_back(unwrap(*I));
-  
+  ArrayRef<Type*> Tys(unwrap(ParamTypes), ParamCount);
   return wrap(FunctionType::get(unwrap(ReturnType), Tys, IsVarArg != 0));
 }
 
@@ -314,11 +287,7 @@ void LLVMGetParamTypes(LLVMTypeRef FunctionTy, LLVMTypeRef *Dest) {
 
 LLVMTypeRef LLVMStructTypeInContext(LLVMContextRef C, LLVMTypeRef *ElementTypes,
                            unsigned ElementCount, LLVMBool Packed) {
-  std::vector<const Type*> Tys;
-  for (LLVMTypeRef *I = ElementTypes,
-                   *E = ElementTypes + ElementCount; I != E; ++I)
-    Tys.push_back(unwrap(*I));
-  
+  ArrayRef<Type*> Tys(unwrap(ElementTypes), ElementCount);
   return wrap(StructType::get(*unwrap(C), Tys, Packed != 0));
 }
 
@@ -328,6 +297,16 @@ LLVMTypeRef LLVMStructType(LLVMTypeRef *ElementTypes,
                                  ElementCount, Packed);
 }
 
+LLVMTypeRef LLVMStructCreateNamed(LLVMContextRef C, const char *Name)
+{
+  return wrap(StructType::create(*unwrap(C), Name));
+}
+
+void LLVMStructSetBody(LLVMTypeRef StructTy, LLVMTypeRef *ElementTypes,
+                       unsigned ElementCount, LLVMBool Packed) {
+  ArrayRef<Type*> Tys(unwrap(ElementTypes), ElementCount);
+  unwrap<StructType>(StructTy)->setBody(Tys, Packed != 0);
+}
 
 unsigned LLVMCountStructElementTypes(LLVMTypeRef StructTy) {
   return unwrap<StructType>(StructTy)->getNumElements();
@@ -342,6 +321,14 @@ void LLVMGetStructElementTypes(LLVMTypeRef StructTy, LLVMTypeRef *Dest) {
 
 LLVMBool LLVMIsPackedStruct(LLVMTypeRef StructTy) {
   return unwrap<StructType>(StructTy)->isPacked();
+}
+
+LLVMBool LLVMIsOpaqueStruct(LLVMTypeRef StructTy) {
+  return unwrap<StructType>(StructTy)->isOpaque();
+}
+
+LLVMTypeRef LLVMGetTypeByName(LLVMModuleRef M, const char *Name) {
+  return wrap(unwrap(M)->getTypeByName(Name));
 }
 
 /*--.. Operations on array, pointer, and vector types (sequence types) .....--*/
@@ -382,9 +369,6 @@ LLVMTypeRef LLVMVoidTypeInContext(LLVMContextRef C)  {
 LLVMTypeRef LLVMLabelTypeInContext(LLVMContextRef C) {
   return wrap(Type::getLabelTy(*unwrap(C)));
 }
-LLVMTypeRef LLVMOpaqueTypeInContext(LLVMContextRef C) {
-  return wrap(OpaqueType::get(*unwrap(C)));
-}
 
 LLVMTypeRef LLVMVoidType(void)  {
   return LLVMVoidTypeInContext(LLVMGetGlobalContext());
@@ -392,28 +376,6 @@ LLVMTypeRef LLVMVoidType(void)  {
 LLVMTypeRef LLVMLabelType(void) {
   return LLVMLabelTypeInContext(LLVMGetGlobalContext());
 }
-LLVMTypeRef LLVMOpaqueType(void) {
-  return LLVMOpaqueTypeInContext(LLVMGetGlobalContext());
-}
-
-/*--.. Operations on type handles ..........................................--*/
-
-LLVMTypeHandleRef LLVMCreateTypeHandle(LLVMTypeRef PotentiallyAbstractTy) {
-  return wrap(new PATypeHolder(unwrap(PotentiallyAbstractTy)));
-}
-
-void LLVMDisposeTypeHandle(LLVMTypeHandleRef TypeHandle) {
-  delete unwrap(TypeHandle);
-}
-
-LLVMTypeRef LLVMResolveTypeHandle(LLVMTypeHandleRef TypeHandle) {
-  return wrap(unwrap(TypeHandle)->get());
-}
-
-void LLVMRefineType(LLVMTypeRef AbstractTy, LLVMTypeRef ConcreteTy) {
-  unwrap<DerivedType>(AbstractTy)->refineAbstractTypeTo(unwrap(ConcreteTy));
-}
-
 
 /*===-- Operations on values ----------------------------------------------===*/
 
@@ -544,7 +506,7 @@ LLVMValueRef LLVMMDString(const char *Str, unsigned SLen) {
 LLVMValueRef LLVMMDNodeInContext(LLVMContextRef C, LLVMValueRef *Vals,
                                  unsigned Count) {
   return wrap(MDNode::get(*unwrap(C),
-                          ArrayRef<Value*>(unwrap<Value>(Vals, Count), Count)));
+                          makeArrayRef(unwrap<Value>(Vals, Count), Count)));
 }
 
 LLVMValueRef LLVMMDNode(LLVMValueRef *Vals, unsigned Count) {
@@ -563,7 +525,8 @@ LLVMValueRef LLVMConstIntOfArbitraryPrecision(LLVMTypeRef IntTy,
                                               const uint64_t Words[]) {
     IntegerType *Ty = unwrap<IntegerType>(IntTy);
     return wrap(ConstantInt::get(Ty->getContext(),
-                                 APInt(Ty->getBitWidth(), NumWords, Words)));
+                                 APInt(Ty->getBitWidth(),
+                                       makeArrayRef(Words, NumWords))));
 }
 
 LLVMValueRef LLVMConstIntOfString(LLVMTypeRef IntTy, const char Str[],
@@ -612,9 +575,9 @@ LLVMValueRef LLVMConstStringInContext(LLVMContextRef C, const char *Str,
 LLVMValueRef LLVMConstStructInContext(LLVMContextRef C, 
                                       LLVMValueRef *ConstantVals,
                                       unsigned Count, LLVMBool Packed) {
-  return wrap(ConstantStruct::get(*unwrap(C),
-                                  unwrap<Constant>(ConstantVals, Count),
-                                  Count, Packed != 0));
+  Constant **Elements = unwrap<Constant>(ConstantVals, Count);
+  return wrap(ConstantStruct::getAnon(*unwrap(C), makeArrayRef(Elements, Count),
+                                      Packed != 0));
 }
 
 LLVMValueRef LLVMConstString(const char *Str, unsigned Length,
@@ -624,17 +587,26 @@ LLVMValueRef LLVMConstString(const char *Str, unsigned Length,
 }
 LLVMValueRef LLVMConstArray(LLVMTypeRef ElementTy,
                             LLVMValueRef *ConstantVals, unsigned Length) {
-  return wrap(ConstantArray::get(ArrayType::get(unwrap(ElementTy), Length),
-                                 unwrap<Constant>(ConstantVals, Length),
-                                 Length));
+  ArrayRef<Constant*> V(unwrap<Constant>(ConstantVals, Length), Length);
+  return wrap(ConstantArray::get(ArrayType::get(unwrap(ElementTy), Length), V));
 }
 LLVMValueRef LLVMConstStruct(LLVMValueRef *ConstantVals, unsigned Count,
                              LLVMBool Packed) {
   return LLVMConstStructInContext(LLVMGetGlobalContext(), ConstantVals, Count,
                                   Packed);
 }
+
+LLVMValueRef LLVMConstNamedStruct(LLVMTypeRef StructTy,
+                                  LLVMValueRef *ConstantVals,
+                                  unsigned Count) {
+  Constant **Elements = unwrap<Constant>(ConstantVals, Count);
+  StructType *Ty = cast<StructType>(unwrap(StructTy));
+
+  return wrap(ConstantStruct::get(Ty, makeArrayRef(Elements, Count)));
+}
+
 LLVMValueRef LLVMConstVector(LLVMValueRef *ScalarConstantVals, unsigned Size) {
-  return wrap(ConstantVector::get(ArrayRef<Constant*>(
+  return wrap(ConstantVector::get(makeArrayRef(
                             unwrap<Constant>(ScalarConstantVals, Size), Size)));
 }
 /*--.. Constant expressions ................................................--*/
@@ -820,18 +792,19 @@ LLVMValueRef LLVMConstAShr(LLVMValueRef LHSConstant, LLVMValueRef RHSConstant) {
 
 LLVMValueRef LLVMConstGEP(LLVMValueRef ConstantVal,
                           LLVMValueRef *ConstantIndices, unsigned NumIndices) {
+  ArrayRef<Constant *> IdxList(unwrap<Constant>(ConstantIndices, NumIndices),
+                               NumIndices);
   return wrap(ConstantExpr::getGetElementPtr(unwrap<Constant>(ConstantVal),
-                                             unwrap<Constant>(ConstantIndices, 
-                                                              NumIndices),
-                                             NumIndices));
+                                             IdxList));
 }
 
 LLVMValueRef LLVMConstInBoundsGEP(LLVMValueRef ConstantVal,
                                   LLVMValueRef *ConstantIndices,
                                   unsigned NumIndices) {
   Constant* Val = unwrap<Constant>(ConstantVal);
-  Constant** Idxs = unwrap<Constant>(ConstantIndices, NumIndices);
-  return wrap(ConstantExpr::getInBoundsGetElementPtr(Val, Idxs, NumIndices));
+  ArrayRef<Constant *> IdxList(unwrap<Constant>(ConstantIndices, NumIndices),
+                               NumIndices);
+  return wrap(ConstantExpr::getInBoundsGetElementPtr(Val, IdxList));
 }
 
 LLVMValueRef LLVMConstTrunc(LLVMValueRef ConstantVal, LLVMTypeRef ToType) {
@@ -962,7 +935,7 @@ LLVMValueRef LLVMConstShuffleVector(LLVMValueRef VectorAConstant,
 LLVMValueRef LLVMConstExtractValue(LLVMValueRef AggConstant, unsigned *IdxList,
                                    unsigned NumIdx) {
   return wrap(ConstantExpr::getExtractValue(unwrap<Constant>(AggConstant),
-                                            IdxList, NumIdx));
+                                            makeArrayRef(IdxList, NumIdx)));
 }
 
 LLVMValueRef LLVMConstInsertValue(LLVMValueRef AggConstant,
@@ -970,7 +943,7 @@ LLVMValueRef LLVMConstInsertValue(LLVMValueRef AggConstant,
                                   unsigned *IdxList, unsigned NumIdx) {
   return wrap(ConstantExpr::getInsertValue(unwrap<Constant>(AggConstant),
                                          unwrap<Constant>(ElementValueConstant),
-                                           IdxList, NumIdx));
+                                           makeArrayRef(IdxList, NumIdx)));
 }
 
 LLVMValueRef LLVMConstInlineAsm(LLVMTypeRef Ty, const char *AsmString,
@@ -1706,12 +1679,20 @@ LLVMValueRef LLVMBuildInvoke(LLVMBuilderRef B, LLVMValueRef Fn,
                              LLVMBasicBlockRef Then, LLVMBasicBlockRef Catch,
                              const char *Name) {
   return wrap(unwrap(B)->CreateInvoke(unwrap(Fn), unwrap(Then), unwrap(Catch),
-                                      unwrap(Args), unwrap(Args) + NumArgs,
+                                      makeArrayRef(unwrap(Args), NumArgs),
                                       Name));
 }
 
-LLVMValueRef LLVMBuildUnwind(LLVMBuilderRef B) {
-  return wrap(unwrap(B)->CreateUnwind());
+LLVMValueRef LLVMBuildLandingPad(LLVMBuilderRef B, LLVMTypeRef Ty,
+                                 LLVMValueRef PersFn, unsigned NumClauses,
+                                 const char *Name) {
+  return wrap(unwrap(B)->CreateLandingPad(unwrap(Ty),
+                                          cast<Function>(unwrap(PersFn)),
+                                          NumClauses, Name));
+}
+
+LLVMValueRef LLVMBuildResume(LLVMBuilderRef B, LLVMValueRef Exn) {
+  return wrap(unwrap(B)->CreateResume(unwrap(Exn)));
 }
 
 LLVMValueRef LLVMBuildUnreachable(LLVMBuilderRef B) {
@@ -1725,6 +1706,15 @@ void LLVMAddCase(LLVMValueRef Switch, LLVMValueRef OnVal,
 
 void LLVMAddDestination(LLVMValueRef IndirectBr, LLVMBasicBlockRef Dest) {
   unwrap<IndirectBrInst>(IndirectBr)->addDestination(unwrap(Dest));
+}
+
+void LLVMAddClause(LLVMValueRef LandingPad, LLVMValueRef ClauseVal) {
+  unwrap<LandingPadInst>(LandingPad)->
+    addClause(cast<Constant>(unwrap(ClauseVal)));
+}
+
+void LLVMSetCleanup(LLVMValueRef LandingPad, LLVMBool Val) {
+  unwrap<LandingPadInst>(LandingPad)->setCleanup(Val);
 }
 
 /*--.. Arithmetic ..........................................................--*/
@@ -1887,7 +1877,7 @@ LLVMValueRef LLVMBuildNot(LLVMBuilderRef B, LLVMValueRef V, const char *Name) {
 
 LLVMValueRef LLVMBuildMalloc(LLVMBuilderRef B, LLVMTypeRef Ty,
                              const char *Name) {
-  const Type* ITy = Type::getInt32Ty(unwrap(B)->GetInsertBlock()->getContext());
+  Type* ITy = Type::getInt32Ty(unwrap(B)->GetInsertBlock()->getContext());
   Constant* AllocSize = ConstantExpr::getSizeOf(unwrap(Ty));
   AllocSize = ConstantExpr::getTruncOrBitCast(AllocSize, ITy);
   Instruction* Malloc = CallInst::CreateMalloc(unwrap(B)->GetInsertBlock(), 
@@ -1898,7 +1888,7 @@ LLVMValueRef LLVMBuildMalloc(LLVMBuilderRef B, LLVMTypeRef Ty,
 
 LLVMValueRef LLVMBuildArrayMalloc(LLVMBuilderRef B, LLVMTypeRef Ty,
                                   LLVMValueRef Val, const char *Name) {
-  const Type* ITy = Type::getInt32Ty(unwrap(B)->GetInsertBlock()->getContext());
+  Type* ITy = Type::getInt32Ty(unwrap(B)->GetInsertBlock()->getContext());
   Constant* AllocSize = ConstantExpr::getSizeOf(unwrap(Ty));
   AllocSize = ConstantExpr::getTruncOrBitCast(AllocSize, ITy);
   Instruction* Malloc = CallInst::CreateMalloc(unwrap(B)->GetInsertBlock(), 
@@ -1936,15 +1926,15 @@ LLVMValueRef LLVMBuildStore(LLVMBuilderRef B, LLVMValueRef Val,
 LLVMValueRef LLVMBuildGEP(LLVMBuilderRef B, LLVMValueRef Pointer,
                           LLVMValueRef *Indices, unsigned NumIndices,
                           const char *Name) {
-  return wrap(unwrap(B)->CreateGEP(unwrap(Pointer), unwrap(Indices),
-                                   unwrap(Indices) + NumIndices, Name));
+  ArrayRef<Value *> IdxList(unwrap(Indices), NumIndices);
+  return wrap(unwrap(B)->CreateGEP(unwrap(Pointer), IdxList, Name));
 }
 
 LLVMValueRef LLVMBuildInBoundsGEP(LLVMBuilderRef B, LLVMValueRef Pointer,
                                   LLVMValueRef *Indices, unsigned NumIndices,
                                   const char *Name) {
-  return wrap(unwrap(B)->CreateInBoundsGEP(unwrap(Pointer), unwrap(Indices),
-                                           unwrap(Indices) + NumIndices, Name));
+  ArrayRef<Value *> IdxList(unwrap(Indices), NumIndices);
+  return wrap(unwrap(B)->CreateInBoundsGEP(unwrap(Pointer), IdxList, Name));
 }
 
 LLVMValueRef LLVMBuildStructGEP(LLVMBuilderRef B, LLVMValueRef Pointer,
@@ -2089,8 +2079,9 @@ LLVMValueRef LLVMBuildPhi(LLVMBuilderRef B, LLVMTypeRef Ty, const char *Name) {
 LLVMValueRef LLVMBuildCall(LLVMBuilderRef B, LLVMValueRef Fn,
                            LLVMValueRef *Args, unsigned NumArgs,
                            const char *Name) {
-  return wrap(unwrap(B)->CreateCall(unwrap(Fn), unwrap(Args),
-                                    unwrap(Args) + NumArgs, Name));
+  return wrap(unwrap(B)->CreateCall(unwrap(Fn),
+                                    makeArrayRef(unwrap(Args), NumArgs),
+                                    Name));
 }
 
 LLVMValueRef LLVMBuildSelect(LLVMBuilderRef B, LLVMValueRef If,

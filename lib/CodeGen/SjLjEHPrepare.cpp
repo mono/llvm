@@ -21,13 +21,14 @@
 #include "llvm/LLVMContext.h"
 #include "llvm/Module.h"
 #include "llvm/Pass.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/Passes.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Statistic.h"
 #include <set>
 using namespace llvm;
 
@@ -37,10 +38,8 @@ STATISTIC(NumSpilled, "Number of registers live across unwind edges");
 
 namespace {
   class SjLjEHPass : public FunctionPass {
-
     const TargetLowering *TLI;
-
-    const Type *FunctionContextTy;
+    Type *FunctionContextTy;
     Constant *RegisterFn;
     Constant *UnregisterFn;
     Constant *BuiltinSetjmpFn;
@@ -53,8 +52,8 @@ namespace {
     Constant *ExceptionFn;
     Constant *CallSiteFn;
     Constant *DispatchSetupFn;
-
     Value *CallSite;
+    DenseMap<InvokeInst*, BasicBlock*> LPadSuccMap;
   public:
     static char ID; // Pass identification, replacement for typeid
     explicit SjLjEHPass(const TargetLowering *tli = NULL)
@@ -62,7 +61,7 @@ namespace {
     bool doInitialization(Module &M);
     bool runOnFunction(Function &F);
 
-    virtual void getAnalysisUsage(AnalysisUsage &AU) const { }
+    virtual void getAnalysisUsage(AnalysisUsage &AU) const {}
     const char *getPassName() const {
       return "SJLJ Exception Handling preparation";
     }
@@ -87,9 +86,8 @@ FunctionPass *llvm::createSjLjEHPass(const TargetLowering *TLI) {
 bool SjLjEHPass::doInitialization(Module &M) {
   // Build the function context structure.
   // builtin_setjmp uses a five word jbuf
-  const Type *VoidPtrTy =
-          Type::getInt8PtrTy(M.getContext());
-  const Type *Int32Ty = Type::getInt32Ty(M.getContext());
+  Type *VoidPtrTy = Type::getInt8PtrTy(M.getContext());
+  Type *Int32Ty = Type::getInt32Ty(M.getContext());
   FunctionContextTy =
     StructType::get(VoidPtrTy,                        // __prev
                     Int32Ty,                          // call_site
@@ -162,7 +160,12 @@ void SjLjEHPass::markInvokeCallSite(InvokeInst *II, int InvokeNo,
   CallInst::Create(CallSiteFn, CallSiteNoC, "", II);
 
   // Add a switch case to our unwind block.
-  CatchSwitch->addCase(SwitchValC, II->getUnwindDest());
+  if (BasicBlock *SuccBB = LPadSuccMap[II]) {
+    CatchSwitch->addCase(SwitchValC, SuccBB);
+  } else {
+    CatchSwitch->addCase(SwitchValC, II->getUnwindDest());
+  }
+
   // We still want this to look like an invoke so we emit the LSDA properly,
   // so we don't transform the invoke into a call here.
 }
@@ -188,10 +191,20 @@ splitLiveRangesAcrossInvokes(SmallVector<InvokeInst*,16> &Invokes) {
   for (unsigned i = 0, e = Invokes.size(); i != e; ++i) {
     InvokeInst *II = Invokes[i];
     SplitCriticalEdge(II, 0, this);
-    SplitCriticalEdge(II, 1, this);
+
+    // FIXME: New EH - This if-condition will be always true in the new scheme.
+    if (II->getUnwindDest()->isLandingPad()) {
+      SmallVector<BasicBlock*, 2> NewBBs;
+      SplitLandingPadPredecessors(II->getUnwindDest(), II->getParent(),
+                                  ".1", ".2", this, NewBBs);
+      LPadSuccMap[II] = *succ_begin(NewBBs[0]);
+    } else {
+      SplitCriticalEdge(II, 1, this);
+    }
+
     assert(!isa<PHINode>(II->getNormalDest()) &&
            !isa<PHINode>(II->getUnwindDest()) &&
-           "critical edge splitting left single entry phi nodes?");
+           "Critical edge splitting left single entry phi nodes?");
   }
 
   Function *F = Invokes.back()->getParent()->getParent();
@@ -205,7 +218,7 @@ splitLiveRangesAcrossInvokes(SmallVector<InvokeInst*,16> &Invokes) {
     ++AfterAllocaInsertPt;
   for (Function::arg_iterator AI = F->arg_begin(), E = F->arg_end();
        AI != E; ++AI) {
-    const Type *Ty = AI->getType();
+    Type *Ty = AI->getType();
     // Aggregate types can't be cast, but are legal argument types, so we have
     // to handle them differently. We use an extract/insert pair as a
     // lightweight method to achieve the same goal.
@@ -300,6 +313,44 @@ splitLiveRangesAcrossInvokes(SmallVector<InvokeInst*,16> &Invokes) {
     }
 }
 
+/// CreateLandingPadLoad - Load the exception handling values and insert them
+/// into a structure.
+static Instruction *CreateLandingPadLoad(Function &F, Value *ExnAddr,
+                                         Value *SelAddr,
+                                         BasicBlock::iterator InsertPt) {
+  Value *Exn = new LoadInst(ExnAddr, "exn", false,
+                            InsertPt);
+  Type *Ty = Type::getInt8PtrTy(F.getContext());
+  Exn = CastInst::Create(Instruction::IntToPtr, Exn, Ty, "", InsertPt);
+  Value *Sel = new LoadInst(SelAddr, "sel", false, InsertPt);
+
+  Ty = StructType::get(Exn->getType(), Sel->getType(), NULL);
+  InsertValueInst *LPadVal = InsertValueInst::Create(llvm::UndefValue::get(Ty),
+                                                     Exn, 0,
+                                                     "lpad.val", InsertPt);
+  return InsertValueInst::Create(LPadVal, Sel, 1, "lpad.val", InsertPt);
+}
+
+/// ReplaceLandingPadVal - Replace the landingpad instruction's value with a
+/// load from the stored values (via CreateLandingPadLoad). This looks through
+/// PHI nodes, and removes them if they are dead.
+static void ReplaceLandingPadVal(Function &F, Instruction *Inst, Value *ExnAddr,
+                                 Value *SelAddr) {
+  if (Inst->use_empty()) return;
+
+  while (!Inst->use_empty()) {
+    Instruction *I = cast<Instruction>(Inst->use_back());
+
+    if (PHINode *PN = dyn_cast<PHINode>(I)) {
+      ReplaceLandingPadVal(F, PN, ExnAddr, SelAddr);
+      if (PN->use_empty()) PN->eraseFromParent();
+      continue;
+    }
+
+    Inst->replaceAllUsesWith(CreateLandingPadLoad(F, ExnAddr, SelAddr, I));
+  }
+}
+
 bool SjLjEHPass::insertSjLjEHSupport(Function &F) {
   SmallVector<ReturnInst*,16> Returns;
   SmallVector<UnwindInst*,16> Unwinds;
@@ -354,6 +405,10 @@ bool SjLjEHPass::insertSjLjEHSupport(Function &F) {
         }
       } else if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
         JmpbufUpdatePoints.push_back(AI);
+      } else if (InvokeInst *II = dyn_cast<InvokeInst>(I)) {
+        // FIXME: This will be always non-NULL in the new EH.
+        if (LandingPadInst *LPI = II->getUnwindDest()->getLandingPadInst())
+          if (!PersonalityFn) PersonalityFn = LPI->getPersonalityFn();
       }
     }
   }
@@ -372,6 +427,16 @@ bool SjLjEHPass::insertSjLjEHSupport(Function &F) {
   // invoke's.
   splitLiveRangesAcrossInvokes(Invokes);
 
+
+  SmallVector<LandingPadInst*, 16> LandingPads;
+  for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB) {
+    if (InvokeInst *II = dyn_cast<InvokeInst>(BB->getTerminator()))
+      // FIXME: This will be always non-NULL in the new EH.
+      if (LandingPadInst *LPI = II->getUnwindDest()->getLandingPadInst())
+        LandingPads.push_back(LPI);
+  }
+
+
   BasicBlock *EntryBB = F.begin();
   // Create an alloca for the incoming jump buffer ptr and the new jump buffer
   // that needs to be restored on all exits from the function.  This is an
@@ -382,27 +447,25 @@ bool SjLjEHPass::insertSjLjEHSupport(Function &F) {
                    "fcn_context", F.begin()->begin());
 
   Value *Idxs[2];
-  const Type *Int32Ty = Type::getInt32Ty(F.getContext());
+  Type *Int32Ty = Type::getInt32Ty(F.getContext());
   Value *Zero = ConstantInt::get(Int32Ty, 0);
   // We need to also keep around a reference to the call_site field
   Idxs[0] = Zero;
   Idxs[1] = ConstantInt::get(Int32Ty, 1);
-  CallSite = GetElementPtrInst::Create(FunctionContext, Idxs, Idxs+2,
-                                       "call_site",
+  CallSite = GetElementPtrInst::Create(FunctionContext, Idxs, "call_site",
                                        EntryBB->getTerminator());
 
   // The exception selector comes back in context->data[1]
   Idxs[1] = ConstantInt::get(Int32Ty, 2);
-  Value *FCData = GetElementPtrInst::Create(FunctionContext, Idxs, Idxs+2,
-                                            "fc_data",
+  Value *FCData = GetElementPtrInst::Create(FunctionContext, Idxs, "fc_data",
                                             EntryBB->getTerminator());
   Idxs[1] = ConstantInt::get(Int32Ty, 1);
-  Value *SelectorAddr = GetElementPtrInst::Create(FCData, Idxs, Idxs+2,
+  Value *SelectorAddr = GetElementPtrInst::Create(FCData, Idxs,
                                                   "exc_selector_gep",
                                                   EntryBB->getTerminator());
   // The exception value comes back in context->data[0]
   Idxs[1] = Zero;
-  Value *ExceptionAddr = GetElementPtrInst::Create(FCData, Idxs, Idxs+2,
+  Value *ExceptionAddr = GetElementPtrInst::Create(FCData, Idxs,
                                                    "exception_gep",
                                                    EntryBB->getTerminator());
 
@@ -424,12 +487,15 @@ bool SjLjEHPass::insertSjLjEHSupport(Function &F) {
     // instruction hasn't already been removed.
     if (!I->getParent()) continue;
     Value *Val = new LoadInst(ExceptionAddr, "exception", true, I);
-    const Type *Ty = Type::getInt8PtrTy(F.getContext());
+    Type *Ty = Type::getInt8PtrTy(F.getContext());
     Val = CastInst::Create(Instruction::IntToPtr, Val, Ty, "", I);
 
     I->replaceAllUsesWith(Val);
     I->eraseFromParent();
   }
+
+  for (unsigned i = 0, e = LandingPads.size(); i != e; ++i)
+    ReplaceLandingPadVal(F, LandingPads[i], ExceptionAddr, SelectorAddr);
 
   // The entry block changes to have the eh.sjlj.setjmp, with a conditional
   // branch to a dispatch block for non-zero returns. If we return normally,
@@ -467,8 +533,7 @@ bool SjLjEHPass::insertSjLjEHSupport(Function &F) {
   Idxs[0] = Zero;
   Idxs[1] = ConstantInt::get(Int32Ty, 4);
   Value *LSDAFieldPtr =
-    GetElementPtrInst::Create(FunctionContext, Idxs, Idxs+2,
-                              "lsda_gep",
+    GetElementPtrInst::Create(FunctionContext, Idxs, "lsda_gep",
                               EntryBB->getTerminator());
   Value *LSDA = CallInst::Create(LSDAAddrFn, "lsda_addr",
                                  EntryBB->getTerminator());
@@ -476,8 +541,7 @@ bool SjLjEHPass::insertSjLjEHSupport(Function &F) {
 
   Idxs[1] = ConstantInt::get(Int32Ty, 3);
   Value *PersonalityFieldPtr =
-    GetElementPtrInst::Create(FunctionContext, Idxs, Idxs+2,
-                              "lsda_gep",
+    GetElementPtrInst::Create(FunctionContext, Idxs, "lsda_gep",
                               EntryBB->getTerminator());
   new StoreInst(PersonalityFn, PersonalityFieldPtr, true,
                 EntryBB->getTerminator());
@@ -485,12 +549,11 @@ bool SjLjEHPass::insertSjLjEHSupport(Function &F) {
   // Save the frame pointer.
   Idxs[1] = ConstantInt::get(Int32Ty, 5);
   Value *JBufPtr
-    = GetElementPtrInst::Create(FunctionContext, Idxs, Idxs+2,
-                                "jbuf_gep",
+    = GetElementPtrInst::Create(FunctionContext, Idxs, "jbuf_gep",
                                 EntryBB->getTerminator());
   Idxs[1] = ConstantInt::get(Int32Ty, 0);
   Value *FramePtr =
-    GetElementPtrInst::Create(JBufPtr, Idxs, Idxs+2, "jbuf_fp_gep",
+    GetElementPtrInst::Create(JBufPtr, Idxs, "jbuf_fp_gep",
                               EntryBB->getTerminator());
 
   Value *Val = CallInst::Create(FrameAddrFn,
@@ -502,7 +565,7 @@ bool SjLjEHPass::insertSjLjEHSupport(Function &F) {
   // Save the stack pointer.
   Idxs[1] = ConstantInt::get(Int32Ty, 2);
   Value *StackPtr =
-    GetElementPtrInst::Create(JBufPtr, Idxs, Idxs+2, "jbuf_sp_gep",
+    GetElementPtrInst::Create(JBufPtr, Idxs, "jbuf_sp_gep",
                               EntryBB->getTerminator());
 
   Val = CallInst::Create(StackAddrFn, "sp", EntryBB->getTerminator());

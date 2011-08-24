@@ -159,10 +159,10 @@ void MachineFunction::RenumberBlocks(MachineBasicBlock *MBB) {
 /// of `new MachineInstr'.
 ///
 MachineInstr *
-MachineFunction::CreateMachineInstr(const TargetInstrDesc &TID,
+MachineFunction::CreateMachineInstr(const MCInstrDesc &MCID,
                                     DebugLoc DL, bool NoImp) {
   return new (InstructionRecycler.Allocate<MachineInstr>(Allocator))
-    MachineInstr(TID, DL, NoImp);
+    MachineInstr(MCID, DL, NoImp);
 }
 
 /// CloneMachineInstr - Create a new MachineInstr which is a copy of the
@@ -626,7 +626,7 @@ void MachineJumpTableInfo::dump() const { print(dbgs()); }
 //  MachineConstantPool implementation
 //===----------------------------------------------------------------------===//
 
-const Type *MachineConstantPoolEntry::getType() const {
+Type *MachineConstantPoolEntry::getType() const {
   if (isMachineConstantPoolEntry())
     return Val.MachineCPVal->getType();
   return Val.ConstVal->getType();

@@ -1224,7 +1224,7 @@ Instruction *InstCombiner::visitAnd(BinaryOperator &I) {
   // fold (and (cast A), (cast B)) -> (cast (and A, B))
   if (CastInst *Op0C = dyn_cast<CastInst>(Op0))
     if (CastInst *Op1C = dyn_cast<CastInst>(Op1)) {
-      const Type *SrcTy = Op0C->getOperand(0)->getType();
+      Type *SrcTy = Op0C->getOperand(0)->getType();
       if (Op0C->getOpcode() == Op1C->getOpcode() && // same cast kind ?
           SrcTy == Op1C->getOperand(0)->getType() &&
           SrcTy->isIntOrIntVectorTy()) {
@@ -1400,7 +1400,7 @@ static bool CollectBSwapParts(Value *V, int OverallLeftShift, uint32_t ByteMask,
 /// MatchBSwap - Given an OR instruction, check to see if this is a bswap idiom.
 /// If so, insert the new bswap intrinsic and return it.
 Instruction *InstCombiner::MatchBSwap(BinaryOperator &I) {
-  const IntegerType *ITy = dyn_cast<IntegerType>(I.getType());
+  IntegerType *ITy = dyn_cast<IntegerType>(I.getType());
   if (!ITy || ITy->getBitWidth() % 16 || 
       // ByteMask only allows up to 32-byte values.
       ITy->getBitWidth() > 32*8) 
@@ -1424,9 +1424,8 @@ Instruction *InstCombiner::MatchBSwap(BinaryOperator &I) {
   for (unsigned i = 1, e = ByteValues.size(); i != e; ++i)
     if (ByteValues[i] != V)
       return 0;
-  const Type *Tys[] = { ITy };
   Module *M = I.getParent()->getParent()->getParent();
-  Function *F = Intrinsic::getDeclaration(M, Intrinsic::bswap, Tys, 1);
+  Function *F = Intrinsic::getDeclaration(M, Intrinsic::bswap, ITy);
   return CallInst::Create(F, V);
 }
 
@@ -2009,7 +2008,7 @@ Instruction *InstCombiner::visitOr(BinaryOperator &I) {
   if (CastInst *Op0C = dyn_cast<CastInst>(Op0)) {
     CastInst *Op1C = dyn_cast<CastInst>(Op1);
     if (Op1C && Op0C->getOpcode() == Op1C->getOpcode()) {// same cast kind ?
-      const Type *SrcTy = Op0C->getOperand(0)->getType();
+      Type *SrcTy = Op0C->getOperand(0)->getType();
       if (SrcTy == Op1C->getOperand(0)->getType() &&
           SrcTy->isIntOrIntVectorTy()) {
         Value *Op0COp = Op0C->getOperand(0), *Op1COp = Op1C->getOperand(0);
@@ -2289,7 +2288,7 @@ Instruction *InstCombiner::visitXor(BinaryOperator &I) {
   if (CastInst *Op0C = dyn_cast<CastInst>(Op0)) {
     if (CastInst *Op1C = dyn_cast<CastInst>(Op1))
       if (Op0C->getOpcode() == Op1C->getOpcode()) { // same cast kind?
-        const Type *SrcTy = Op0C->getOperand(0)->getType();
+        Type *SrcTy = Op0C->getOperand(0)->getType();
         if (SrcTy == Op1C->getOperand(0)->getType() && SrcTy->isIntegerTy() &&
             // Only do this if the casts both really cause code to be generated.
             ShouldOptimizeCast(Op0C->getOpcode(), Op0C->getOperand(0), 

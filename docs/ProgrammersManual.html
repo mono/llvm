@@ -59,6 +59,7 @@ option</a></li>
       <li><a href="#dss_arrayref">llvm/ADT/ArrayRef.h</a></li>
       <li><a href="#dss_fixedarrays">Fixed Size Arrays</a></li>
       <li><a href="#dss_heaparrays">Heap Allocated Arrays</a></li>
+      <li><a href="#dss_tinyptrvector">"llvm/ADT/TinyPtrVector.h"</a></li>
       <li><a href="#dss_smallvector">"llvm/ADT/SmallVector.h"</a></li>
       <li><a href="#dss_vector">&lt;vector&gt;</a></li>
       <li><a href="#dss_deque">&lt;deque&gt;</a></li>
@@ -66,6 +67,13 @@ option</a></li>
       <li><a href="#dss_ilist">llvm/ADT/ilist.h</a></li>
       <li><a href="#dss_packedvector">llvm/ADT/PackedVector.h</a></li>
       <li><a href="#dss_other">Other Sequential Container Options</a></li>
+    </ul></li>
+    <li><a href="#ds_string">String-like containers</a>
+    <ul>
+      <li><a href="#dss_stringref">llvm/ADT/StringRef.h</a></li>
+      <li><a href="#dss_twine">llvm/ADT/Twine.h</a></li>
+      <li><a href="#dss_smallstring">llvm/ADT/SmallString.h</a></li>
+      <li><a href="#dss_stdstring">std::string</a></li>
     </ul></li>
     <li><a href="#ds_set">Set-Like Containers (std::set, SmallSet, SetVector, etc)</a>
     <ul>
@@ -91,10 +99,6 @@ option</a></li>
       <li><a href="#dss_inteqclasses">"llvm/ADT/IntEqClasses.h"</a></li>
       <li><a href="#dss_othermap">Other Map-Like Container Options</a></li>
     </ul></li>
-    <li><a href="#ds_string">String-like containers</a>
-    <!--<ul>
-       todo
-    </ul>--></li>
     <li><a href="#ds_bit">BitVector-like containers</a>
     <ul>
       <li><a href="#dss_bitvector">A dense bitvector</a></li>
@@ -160,15 +164,8 @@ with another <tt>Value</tt></a> </li>
 
   <li><a href="#advanced">Advanced Topics</a>
   <ul>
-  <li><a href="#TypeResolve">LLVM Type Resolution</a>
-  <ul>
-    <li><a href="#BuildRecType">Basic Recursive Type Construction</a></li>
-    <li><a href="#refineAbstractTypeTo">The <tt>refineAbstractTypeTo</tt> method</a></li>
-    <li><a href="#PATypeHolder">The PATypeHolder Class</a></li>
-    <li><a href="#AbstractTypeUser">The AbstractTypeUser Class</a></li>
-  </ul></li>
 
-  <li><a href="#SymbolTable">The <tt>ValueSymbolTable</tt> and <tt>TypeSymbolTable</tt> classes</a></li>
+  <li><a href="#SymbolTable">The <tt>ValueSymbolTable</tt> class</a></li>
   <li><a href="#UserLayout">The <tt>User</tt> and owned <tt>Use</tt> classes' memory layout</a></li>
   </ul></li>
 
@@ -882,6 +879,9 @@ elements (but could contain many), for example, it's much better to use
 .  Doing so avoids (relatively) expensive malloc/free calls, which dwarf the
 cost of adding the elements to the container. </p>
 
+</div>
+  
+  
 <!-- ======================================================================= -->
 <h3>
   <a name="ds_sequential">Sequential Containers (std::vector, std::list, etc)</a>
@@ -890,7 +890,7 @@ cost of adding the elements to the container. </p>
 <div>
 There are a variety of sequential containers available for you, based on your
 needs.  Pick the first in this section that will do what you want.
-
+  
 <!-- _______________________________________________________________________ -->
 <h4>
   <a name="dss_arrayref">llvm/ADT/ArrayRef.h</a>
@@ -933,6 +933,22 @@ destructors will be run for every element in the array (re-sizable vectors only
 construct those elements actually used).</p>
 </div>
 
+<!-- _______________________________________________________________________ -->
+<h4>
+  <a name="dss_tinyptrvector">"llvm/ADT/TinyPtrVector.h"</a>
+</h4>
+
+
+<div>
+<p><tt>TinyPtrVector&lt;Type&gt;</tt> is a highly specialized collection class
+that is optimized to avoid allocation in the case when a vector has zero or one
+elements.  It has two major restrictions: 1) it can only hold values of pointer
+type, and 2) it cannot hold a null pointer.</p>
+  
+<p>Since this container is highly specialized, it is rarely used.</p>
+  
+</div>
+    
 <!-- _______________________________________________________________________ -->
 <h4>
   <a name="dss_smallvector">"llvm/ADT/SmallVector.h"</a>
@@ -1197,9 +1213,187 @@ std::priority_queue, std::stack, etc.  These provide simplified access to an
 underlying container but don't affect the cost of the container itself.</p>
 
 </div>
-
 </div>
 
+<!-- ======================================================================= -->
+<h3>
+  <a name="ds_string">String-like containers</a>
+</h3>
+
+<div>
+
+<p>
+There are a variety of ways to pass around and use strings in C and C++, and
+LLVM adds a few new options to choose from.  Pick the first option on this list
+that will do what you need, they are ordered according to their relative cost.
+</p>
+<p>
+Note that is is generally preferred to <em>not</em> pass strings around as 
+"<tt>const char*</tt>"'s.  These have a number of problems, including the fact
+that they cannot represent embedded nul ("\0") characters, and do not have a
+length available efficiently.  The general replacement for '<tt>const 
+char*</tt>' is StringRef.
+</p>
+  
+<p>For more information on choosing string containers for APIs, please see
+<a href="#string_apis">Passing strings</a>.</p>
+  
+  
+<!-- _______________________________________________________________________ -->
+<h4>
+  <a name="dss_stringref">llvm/ADT/StringRef.h</a>
+</h4>
+
+<div>
+<p>
+The StringRef class is a simple value class that contains a pointer to a
+character and a length, and is quite related to the <a 
+href="#dss_arrayref">ArrayRef</a> class (but specialized for arrays of
+characters).  Because StringRef carries a length with it, it safely handles
+strings with embedded nul characters in it, getting the length does not require
+a strlen call, and it even has very convenient APIs for slicing and dicing the
+character range that it represents.
+</p>
+  
+<p>
+StringRef is ideal for passing simple strings around that are known to be live,
+either because they are C string literals, std::string, a C array, or a
+SmallVector.  Each of these cases has an efficient implicit conversion to
+StringRef, which doesn't result in a dynamic strlen being executed.
+</p>
+  
+<p>StringRef has a few major limitations which make more powerful string
+containers useful:</p>
+  
+<ol>
+<li>You cannot directly convert a StringRef to a 'const char*' because there is
+no way to add a trailing nul (unlike the .c_str() method on various stronger
+classes).</li>
+
+  
+<li>StringRef doesn't own or keep alive the underlying string bytes.
+As such it can easily lead to dangling pointers, and is not suitable for
+embedding in datastructures in most cases (instead, use an std::string or
+something like that).</li>
+  
+<li>For the same reason, StringRef cannot be used as the return value of a
+method if the method "computes" the result string.  Instead, use
+std::string.</li>
+    
+<li>StringRef's do not allow you to mutate the pointed-to string bytes and it
+doesn't allow you to insert or remove bytes from the range.  For editing 
+operations like this, it interoperates with the <a 
+href="#dss_twine">Twine</a> class.</li>
+</ol>
+  
+<p>Because of its strengths and limitations, it is very common for a function to
+take a StringRef and for a method on an object to return a StringRef that
+points into some string that it owns.</p>
+  
+</div>
+  
+<!-- _______________________________________________________________________ -->
+<h4>
+  <a name="dss_twine">llvm/ADT/Twine.h</a>
+</h4>
+
+<div>
+  <p>
+  The Twine class is used as an intermediary datatype for APIs that want to take
+  a string that can be constructed inline with a series of concatenations.
+  Twine works by forming recursive instances of the Twine datatype (a simple
+  value object) on the stack as temporary objects, linking them together into a
+  tree which is then linearized when the Twine is consumed.  Twine is only safe
+  to use as the argument to a function, and should always be a const reference,
+  e.g.:
+  </p>
+  
+  <pre>
+    void foo(const Twine &amp;T);
+    ...
+    StringRef X = ...
+    unsigned i = ...
+    foo(X + "." + Twine(i));
+  </pre>
+  
+  <p>This example forms a string like "blarg.42" by concatenating the values
+  together, and does not form intermediate strings containing "blarg" or
+  "blarg.".
+  </p>
+  
+  <p>Because Twine is constructed with temporary objects on the stack, and
+  because these instances are destroyed at the end of the current statement,
+  it is an inherently dangerous API.  For example, this simple variant contains
+  undefined behavior and will probably crash:</p>
+  
+  <pre>
+    void foo(const Twine &amp;T);
+    ...
+    StringRef X = ...
+    unsigned i = ...
+    const Twine &amp;Tmp = X + "." + Twine(i);
+    foo(Tmp);
+  </pre>
+
+  <p>... because the temporaries are destroyed before the call.  That said,
+  Twine's are much more efficient than intermediate std::string temporaries, and
+  they work really well with StringRef.  Just be aware of their limitations.</p>
+  
+</div>
+
+  
+<!-- _______________________________________________________________________ -->
+<h4>
+  <a name="dss_smallstring">llvm/ADT/SmallString.h</a>
+</h4>
+
+<div>
+  
+<p>SmallString is a subclass of <a href="#dss_smallvector">SmallVector</a> that
+adds some convenience APIs like += that takes StringRef's.  SmallString avoids
+allocating memory in the case when the preallocated space is enough to hold its
+data, and it calls back to general heap allocation when required.  Since it owns
+its data, it is very safe to use and supports full mutation of the string.</p>
+  
+<p>Like SmallVector's, the big downside to SmallString is their sizeof.  While
+they are optimized for small strings, they themselves are not particularly
+small.  This means that they work great for temporary scratch buffers on the
+stack, but should not generally be put into the heap: it is very rare to 
+see a SmallString as the member of a frequently-allocated heap data structure
+or returned by-value.
+</p>
+
+</div>
+  
+<!-- _______________________________________________________________________ -->
+<h4>
+  <a name="dss_stdstring">std::string</a>
+</h4>
+
+<div>
+  
+  <p>The standard C++ std::string class is a very general class that (like
+  SmallString) owns its underlying data.  sizeof(std::string) is very reasonable
+  so it can be embedded into heap data structures and returned by-value.
+  On the other hand, std::string is highly inefficient for inline editing (e.g.
+  concatenating a bunch of stuff together) and because it is provided by the
+  standard library, its performance characteristics depend a lot of the host
+  standard library (e.g. libc++ and MSVC provide a highly optimized string
+  class, GCC contains a really slow implementation).
+  </p>
+
+  <p>The major disadvantage of std::string is that almost every operation that
+  makes them larger can allocate memory, which is slow.  As such, it is better
+  to use SmallVector or Twine as a scratch buffer, but then use std::string to
+  persist the result.</p>
+
+  
+</div>
+  
+<!-- end of strings -->
+</div>
+
+  
 <!-- ======================================================================= -->
 <h3>
   <a name="ds_set">Set-Like Containers (std::set, SmallSet, SetVector, etc)</a>
@@ -1638,20 +1832,6 @@ all the drawbacks of std::map.  A sorted vector or some other approach is almost
 always better.</p>
 
 </div>
-
-</div>
-
-<!-- ======================================================================= -->
-<h3>
-  <a name="ds_string">String-like containers</a>
-</h3>
-
-<div>
-
-<p>
-TODO: const char* vs stringref vs smallstring vs std::string.  Describe twine,
-xref to #string_apis.
-</p>
 
 </div>
 
@@ -2645,173 +2825,10 @@ do not need to be aware of.  These API's tend manage the inner workings of the
 LLVM system, and only need to be accessed in unusual circumstances.
 </p>
 
+  
 <!-- ======================================================================= -->
 <h3>
-  <a name="TypeResolve">LLVM Type Resolution</a>
-</h3>
-
-<div>
-
-<p>
-The LLVM type system has a very simple goal: allow clients to compare types for
-structural equality with a simple pointer comparison (aka a shallow compare).
-This goal makes clients much simpler and faster, and is used throughout the LLVM
-system.
-</p>
-
-<p>
-Unfortunately achieving this goal is not a simple matter.  In particular,
-recursive types and late resolution of opaque types makes the situation very
-difficult to handle.  Fortunately, for the most part, our implementation makes
-most clients able to be completely unaware of the nasty internal details.  The
-primary case where clients are exposed to the inner workings of it are when
-building a recursive type.  In addition to this case, the LLVM bitcode reader,
-assembly parser, and linker also have to be aware of the inner workings of this
-system.
-</p>
-
-<p>
-For our purposes below, we need three concepts.  First, an "Opaque Type" is 
-exactly as defined in the <a href="LangRef.html#t_opaque">language 
-reference</a>.  Second an "Abstract Type" is any type which includes an 
-opaque type as part of its type graph (for example "<tt>{ opaque, i32 }</tt>").
-Third, a concrete type is a type that is not an abstract type (e.g. "<tt>{ i32, 
-float }</tt>").
-</p>
-
-<!-- ______________________________________________________________________ -->
-<h4>
-  <a name="BuildRecType">Basic Recursive Type Construction</a>
-</h4>
-
-<div>
-
-<p>
-Because the most common question is "how do I build a recursive type with LLVM",
-we answer it now and explain it as we go.  Here we include enough to cause this
-to be emitted to an output .ll file:
-</p>
-
-<div class="doc_code">
-<pre>
-%mylist = type { %mylist*, i32 }
-</pre>
-</div>
-
-<p>
-To build this, use the following LLVM APIs:
-</p>
-
-<div class="doc_code">
-<pre>
-// <i>Create the initial outer struct</i>
-<a href="#PATypeHolder">PATypeHolder</a> StructTy = OpaqueType::get();
-std::vector&lt;const Type*&gt; Elts;
-Elts.push_back(PointerType::getUnqual(StructTy));
-Elts.push_back(Type::Int32Ty);
-StructType *NewSTy = StructType::get(Elts);
-
-// <i>At this point, NewSTy = "{ opaque*, i32 }". Tell VMCore that</i>
-// <i>the struct and the opaque type are actually the same.</i>
-cast&lt;OpaqueType&gt;(StructTy.get())-&gt;<a href="#refineAbstractTypeTo">refineAbstractTypeTo</a>(NewSTy);
-
-// <i>NewSTy is potentially invalidated, but StructTy (a <a href="#PATypeHolder">PATypeHolder</a>) is</i>
-// <i>kept up-to-date</i>
-NewSTy = cast&lt;StructType&gt;(StructTy.get());
-
-// <i>Add a name for the type to the module symbol table (optional)</i>
-MyModule-&gt;addTypeName("mylist", NewSTy);
-</pre>
-</div>
-
-<p>
-This code shows the basic approach used to build recursive types: build a
-non-recursive type using 'opaque', then use type unification to close the cycle.
-The type unification step is performed by the <tt><a
-href="#refineAbstractTypeTo">refineAbstractTypeTo</a></tt> method, which is
-described next.  After that, we describe the <a
-href="#PATypeHolder">PATypeHolder class</a>.
-</p>
-
-</div>
-
-<!-- ______________________________________________________________________ -->
-<h4>
-  <a name="refineAbstractTypeTo">The <tt>refineAbstractTypeTo</tt> method</a>
-</h4>
-
-<div>
-<p>
-The <tt>refineAbstractTypeTo</tt> method starts the type unification process.
-While this method is actually a member of the DerivedType class, it is most
-often used on OpaqueType instances.  Type unification is actually a recursive
-process.  After unification, types can become structurally isomorphic to
-existing types, and all duplicates are deleted (to preserve pointer equality).
-</p>
-
-<p>
-In the example above, the OpaqueType object is definitely deleted.
-Additionally, if there is an "{ \2*, i32}" type already created in the system,
-the pointer and struct type created are <b>also</b> deleted.  Obviously whenever
-a type is deleted, any "Type*" pointers in the program are invalidated.  As
-such, it is safest to avoid having <i>any</i> "Type*" pointers to abstract types
-live across a call to <tt>refineAbstractTypeTo</tt> (note that non-abstract
-types can never move or be deleted).  To deal with this, the <a
-href="#PATypeHolder">PATypeHolder</a> class is used to maintain a stable
-reference to a possibly refined type, and the <a
-href="#AbstractTypeUser">AbstractTypeUser</a> class is used to update more
-complex datastructures.
-</p>
-
-</div>
-
-<!-- ______________________________________________________________________ -->
-<h4>
-  <a name="PATypeHolder">The PATypeHolder Class</a>
-</h4>
-
-<div>
-<p>
-PATypeHolder is a form of a "smart pointer" for Type objects.  When VMCore
-happily goes about nuking types that become isomorphic to existing types, it
-automatically updates all PATypeHolder objects to point to the new type.  In the
-example above, this allows the code to maintain a pointer to the resultant
-resolved recursive type, even though the Type*'s are potentially invalidated.
-</p>
-
-<p>
-PATypeHolder is an extremely light-weight object that uses a lazy union-find
-implementation to update pointers.  For example the pointer from a Value to its
-Type is maintained by PATypeHolder objects.
-</p>
-
-</div>
-
-<!-- ______________________________________________________________________ -->
-<h4>
-  <a name="AbstractTypeUser">The AbstractTypeUser Class</a>
-</h4>
-
-<div>
-
-<p>
-Some data structures need more to perform more complex updates when types get
-resolved.  To support this, a class can derive from the AbstractTypeUser class.
-This class
-allows it to get callbacks when certain types are resolved.  To register to get
-callbacks for a particular type, the DerivedType::{add/remove}AbstractTypeUser
-methods can be called on a type.  Note that these methods only work for <i>
-  abstract</i> types.  Concrete types (those that do not include any opaque 
-objects) can never be refined.
-</p>
-</div>
-
-</div>
-
-<!-- ======================================================================= -->
-<h3>
-  <a name="SymbolTable">The <tt>ValueSymbolTable</tt> and
-   <tt>TypeSymbolTable</tt> classes</a>
+  <a name="SymbolTable">The <tt>ValueSymbolTable</tt> class</a>
 </h3>
 
 <div>
@@ -2820,9 +2837,7 @@ ValueSymbolTable</a></tt> class provides a symbol table that the <a
 href="#Function"><tt>Function</tt></a> and <a href="#Module">
 <tt>Module</tt></a> classes use for naming value definitions. The symbol table
 can provide a name for any <a href="#Value"><tt>Value</tt></a>. 
-The <tt><a href="http://llvm.org/doxygen/classllvm_1_1TypeSymbolTable.html">
-TypeSymbolTable</a></tt> class is used by the <tt>Module</tt> class to store
-names for types.</p>
+</p>
 
 <p>Note that the <tt>SymbolTable</tt> class should not be directly accessed 
 by most clients.  It should only be used when iteration over the symbol table 
@@ -2832,13 +2847,12 @@ all LLVM
 an empty name) do not exist in the symbol table.
 </p>
 
-<p>These symbol tables support iteration over the values/types in the symbol
+<p>Symbol tables support iteration over the values in the symbol
 table with <tt>begin/end/iterator</tt> and supports querying to see if a
 specific name is in the symbol table (with <tt>lookup</tt>).  The
 <tt>ValueSymbolTable</tt> class exposes no public mutator methods, instead,
 simply call <tt>setName</tt> on a value, which will autoinsert it into the
-appropriate symbol table.  For types, use the Module::addTypeName method to
-insert entries into the symbol table.</p>
+appropriate symbol table.</p>
 
 </div>
 
@@ -3128,9 +3142,6 @@ the <tt>lib/VMCore</tt> directory.</p>
   <li><tt>bool isFloatingPointTy()</tt>: Return true if this is one of the five
   floating point types.</li>
 
-  <li><tt>bool isAbstract()</tt>: Return true if the type is abstract (contains
-  an OpaqueType anywhere in its definition).</li>
-
   <li><tt>bool isSized()</tt>: Return true if the type has known size. Things
   that don't have a size are abstract types, labels and void.</li>
 
@@ -3155,7 +3166,7 @@ the <tt>lib/VMCore</tt> directory.</p>
   </ul>
   </dd>
   <dt><tt>SequentialType</tt></dt>
-  <dd>This is subclassed by ArrayType and PointerType
+  <dd>This is subclassed by ArrayType, PointerType and VectorType.
     <ul>
       <li><tt>const Type * getElementType() const</tt>: Returns the type of each
       of the elements in the sequential type. </li>
@@ -3192,14 +3203,6 @@ the <tt>lib/VMCore</tt> directory.</p>
       number of formal parameters.</li>
     </ul>
   </dd>
-  <dt><tt>OpaqueType</tt></dt>
-  <dd>Sublcass of DerivedType for abstract types. This class 
-  defines no content and is used as a placeholder for some other type. Note 
-  that OpaqueType is used (temporarily) during type resolution for forward 
-  references of types. Once the referenced type is resolved, the OpaqueType 
-  is replaced with the actual type. OpaqueType can also be used for data 
-  abstraction. At link time opaque types can be resolved to actual types 
-  of the same name.</dd>
 </dl>
 </div>
 

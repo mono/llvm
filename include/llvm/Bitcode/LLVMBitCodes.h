@@ -29,13 +29,23 @@ namespace bitc {
 
     // Module sub-block id's.
     PARAMATTR_BLOCK_ID,
-    TYPE_BLOCK_ID,
+    
+    /// TYPE_BLOCK_ID_OLD - This is the type descriptor block in LLVM 2.9 and
+    /// earlier, replaced with TYPE_BLOCK_ID2.  FIXME: Remove in LLVM 3.1.
+    TYPE_BLOCK_ID_OLD,
+    
     CONSTANTS_BLOCK_ID,
     FUNCTION_BLOCK_ID,
-    TYPE_SYMTAB_BLOCK_ID,
+    
+    /// TYPE_SYMTAB_BLOCK_ID_OLD - This type descriptor is from LLVM 2.9 and
+    /// earlier bitcode files.  FIXME: Remove in LLVM 3.1
+    TYPE_SYMTAB_BLOCK_ID_OLD,
+    
     VALUE_SYMTAB_BLOCK_ID,
     METADATA_BLOCK_ID,
-    METADATA_ATTACHMENT_ID
+    METADATA_ATTACHMENT_ID,
+    
+    TYPE_BLOCK_ID_NEW
   };
 
 
@@ -72,31 +82,38 @@ namespace bitc {
 
   /// TYPE blocks have codes for each type primitive they use.
   enum TypeCodes {
-    TYPE_CODE_NUMENTRY =  1,   // NUMENTRY: [numentries]
+    TYPE_CODE_NUMENTRY =  1,    // NUMENTRY: [numentries]
 
     // Type Codes
-    TYPE_CODE_VOID     =  2,   // VOID
-    TYPE_CODE_FLOAT    =  3,   // FLOAT
-    TYPE_CODE_DOUBLE   =  4,   // DOUBLE
-    TYPE_CODE_LABEL    =  5,   // LABEL
-    TYPE_CODE_OPAQUE   =  6,   // OPAQUE
-    TYPE_CODE_INTEGER  =  7,   // INTEGER: [width]
-    TYPE_CODE_POINTER  =  8,   // POINTER: [pointee type]
-    TYPE_CODE_FUNCTION =  9,   // FUNCTION: [vararg, retty, paramty x N]
-    TYPE_CODE_STRUCT   = 10,   // STRUCT: [ispacked, eltty x N]
-    TYPE_CODE_ARRAY    = 11,   // ARRAY: [numelts, eltty]
-    TYPE_CODE_VECTOR   = 12,   // VECTOR: [numelts, eltty]
+    TYPE_CODE_VOID     =  2,    // VOID
+    TYPE_CODE_FLOAT    =  3,    // FLOAT
+    TYPE_CODE_DOUBLE   =  4,    // DOUBLE
+    TYPE_CODE_LABEL    =  5,    // LABEL
+    TYPE_CODE_OPAQUE   =  6,    // OPAQUE
+    TYPE_CODE_INTEGER  =  7,    // INTEGER: [width]
+    TYPE_CODE_POINTER  =  8,    // POINTER: [pointee type]
+    TYPE_CODE_FUNCTION =  9,    // FUNCTION: [vararg, retty, paramty x N]
+    
+    // FIXME: This is the encoding used for structs in LLVM 2.9 and earlier.
+    // REMOVE this in LLVM 3.1
+    TYPE_CODE_STRUCT_OLD = 10,  // STRUCT: [ispacked, eltty x N]
+    TYPE_CODE_ARRAY    = 11,    // ARRAY: [numelts, eltty]
+    TYPE_CODE_VECTOR   = 12,    // VECTOR: [numelts, eltty]
 
     // These are not with the other floating point types because they're
     // a late addition, and putting them in the right place breaks
     // binary compatibility.
-    TYPE_CODE_X86_FP80 = 13,   // X86 LONG DOUBLE
-    TYPE_CODE_FP128    = 14,   // LONG DOUBLE (112 bit mantissa)
-    TYPE_CODE_PPC_FP128= 15,   // PPC LONG DOUBLE (2 doubles)
+    TYPE_CODE_X86_FP80 = 13,    // X86 LONG DOUBLE
+    TYPE_CODE_FP128    = 14,    // LONG DOUBLE (112 bit mantissa)
+    TYPE_CODE_PPC_FP128= 15,    // PPC LONG DOUBLE (2 doubles)
 
-    TYPE_CODE_METADATA = 16,   // METADATA
+    TYPE_CODE_METADATA = 16,    // METADATA
 
-    TYPE_CODE_X86_MMX = 17     // X86 MMX
+    TYPE_CODE_X86_MMX = 17,     // X86 MMX
+    
+    TYPE_CODE_STRUCT_ANON = 18, // STRUCT_ANON: [ispacked, eltty x N]
+    TYPE_CODE_STRUCT_NAME = 19, // STRUCT_NAME: [strchr x N]
+    TYPE_CODE_STRUCT_NAMED = 20 // STRUCT_NAMED: [ispacked, eltty x N]
   };
 
   // The type symbol table only has one code (TST_ENTRY_CODE).
@@ -188,6 +205,23 @@ namespace bitc {
     BINOP_XOR  = 12
   };
 
+  /// These are values used in the bitcode files to encode AtomicRMW operations.
+  /// The values of these enums have no fixed relation to the LLVM IR enum
+  /// values.  Changing these will break compatibility with old files.
+  enum RMWOperations {
+    RMW_XCHG = 0,
+    RMW_ADD = 1,
+    RMW_SUB = 2,
+    RMW_AND = 3,
+    RMW_NAND = 4,
+    RMW_OR = 5,
+    RMW_XOR = 6,
+    RMW_MAX = 7,
+    RMW_MIN = 8,
+    RMW_UMAX = 9,
+    RMW_UMIN = 10
+  };
+
   /// OverflowingBinaryOperatorOptionalFlags - Flags for serializing
   /// OverflowingBinaryOperator's SubclassOptionalData contents.
   enum OverflowingBinaryOperatorOptionalFlags {
@@ -199,6 +233,23 @@ namespace bitc {
   /// PossiblyExactOperator's SubclassOptionalData contents.
   enum PossiblyExactOperatorOptionalFlags {
     PEO_EXACT = 0
+  };
+
+  /// Encoded AtomicOrdering values.
+  enum AtomicOrderingCodes {
+    ORDERING_NOTATOMIC = 0,
+    ORDERING_UNORDERED = 1,
+    ORDERING_MONOTONIC = 2,
+    ORDERING_ACQUIRE = 3,
+    ORDERING_RELEASE = 4,
+    ORDERING_ACQREL = 5,
+    ORDERING_SEQCST = 6
+  };
+
+  /// Encoded SynchronizationScope values.
+  enum AtomicSynchScopeCodes {
+    SYNCHSCOPE_SINGLETHREAD = 0,
+    SYNCHSCOPE_CROSSTHREAD = 1
   };
 
   // The function body block (FUNCTION_BLOCK_ID) describes function bodies.  It
@@ -249,7 +300,19 @@ namespace bitc {
 
     FUNC_CODE_INST_CALL        = 34, // CALL:       [attr, fnty, fnid, args...]
 
-    FUNC_CODE_DEBUG_LOC        = 35  // DEBUG_LOC:  [Line,Col,ScopeVal, IAVal]
+    FUNC_CODE_DEBUG_LOC        = 35, // DEBUG_LOC:  [Line,Col,ScopeVal, IAVal]
+    FUNC_CODE_INST_FENCE       = 36, // FENCE: [ordering, synchscope]
+    FUNC_CODE_INST_CMPXCHG     = 37, // CMPXCHG: [ptrty,ptr,cmp,new, align, vol,
+                                     //           ordering, synchscope]
+    FUNC_CODE_INST_ATOMICRMW   = 38, // ATOMICRMW: [ptrty,ptr,val, operation,
+                                     //             align, vol,
+                                     //             ordering, synchscope]
+    FUNC_CODE_INST_RESUME      = 39, // RESUME:     [opval]
+    FUNC_CODE_INST_LANDINGPAD  = 40, // LANDINGPAD: [ty,val,val,num,id0,val0...]
+    FUNC_CODE_INST_LOADATOMIC  = 41, // LOAD: [opty, op, align, vol,
+                                     //        ordering, synchscope]
+    FUNC_CODE_INST_STOREATOMIC = 42  // STORE: [ptrty,ptr,val, align, vol
+                                     //         ordering, synchscope]
   };
 } // End bitc namespace
 } // End llvm namespace

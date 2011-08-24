@@ -15,6 +15,7 @@
 
 #include "X86.h"
 #include "X86InstrBuilder.h"
+#include "X86ISelLowering.h"
 #include "X86RegisterInfo.h"
 #include "X86Subtarget.h"
 #include "X86TargetMachine.h"
@@ -58,8 +59,8 @@ public:
   explicit X86FastISel(FunctionLoweringInfo &funcInfo) : FastISel(funcInfo) {
     Subtarget = &TM.getSubtarget<X86Subtarget>();
     StackPtr = Subtarget->is64Bit() ? X86::RSP : X86::ESP;
-    X86ScalarSSEf64 = Subtarget->hasSSE2();
-    X86ScalarSSEf32 = Subtarget->hasSSE1();
+    X86ScalarSSEf64 = Subtarget->hasSSE2() || Subtarget->hasAVX();
+    X86ScalarSSEf32 = Subtarget->hasSSE1() || Subtarget->hasAVX();
   }
 
   virtual bool TargetSelectInstruction(const Instruction *I);
@@ -133,7 +134,7 @@ private:
       (VT == MVT::f32 && X86ScalarSSEf32);   // f32 is when SSE1
   }
 
-  bool isTypeLegal(const Type *Ty, MVT &VT, bool AllowI1 = false);
+  bool isTypeLegal(Type *Ty, MVT &VT, bool AllowI1 = false);
 
   bool IsMemcpySmall(uint64_t Len);
 
@@ -143,7 +144,7 @@ private:
 
 } // end anonymous namespace.
 
-bool X86FastISel::isTypeLegal(const Type *Ty, MVT &VT, bool AllowI1) {
+bool X86FastISel::isTypeLegal(Type *Ty, MVT &VT, bool AllowI1) {
   EVT evt = TLI.getValueType(Ty, /*HandleUnknown=*/true);
   if (evt == MVT::Other || !evt.isSimple())
     // Unhandled type. Halt "fast" selection and bail.
@@ -335,7 +336,7 @@ bool X86FastISel::X86SelectAddress(const Value *V, X86AddressMode &AM) {
     U = C;
   }
 
-  if (const PointerType *Ty = dyn_cast<PointerType>(V->getType()))
+  if (PointerType *Ty = dyn_cast<PointerType>(V->getType()))
     if (Ty->getAddressSpace() > 255)
       // Fast instruction selection doesn't support the special
       // address spaces.
@@ -398,7 +399,7 @@ bool X86FastISel::X86SelectAddress(const Value *V, X86AddressMode &AM) {
     for (User::const_op_iterator i = U->op_begin() + 1, e = U->op_end();
          i != e; ++i, ++GTI) {
       const Value *Op = *i;
-      if (const StructType *STy = dyn_cast<StructType>(*GTI)) {
+      if (StructType *STy = dyn_cast<StructType>(*GTI)) {
         const StructLayout *SL = TD.getStructLayout(STy);
         Disp += SL->getElementOffset(cast<ConstantInt>(Op)->getZExtValue());
         continue;
@@ -1364,6 +1365,9 @@ bool X86FastISel::X86VisitIntrinsicCall(const IntrinsicInst &I) {
   case Intrinsic::memset: {
     const MemSetInst &MSI = cast<MemSetInst>(I);
 
+    if (MSI.isVolatile())
+      return false;
+
     unsigned SizeWidth = Subtarget->is64Bit() ? 64 : 32;
     if (!MSI.getLength()->getType()->isIntegerTy(SizeWidth))
       return false;
@@ -1392,7 +1396,7 @@ bool X86FastISel::X86VisitIntrinsicCall(const IntrinsicInst &I) {
     assert(DI->getAddress() && "Null address should be checked earlier!");
     if (!X86SelectAddress(DI->getAddress(), AM))
       return false;
-    const TargetInstrDesc &II = TII.get(TargetOpcode::DBG_VALUE);
+    const MCInstrDesc &II = TII.get(TargetOpcode::DBG_VALUE);
     // FIXME may need to add RegState::Debug to any registers produced,
     // although ESP/EBP should be the only ones at the moment.
     addFullAddress(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II), AM).
@@ -1410,7 +1414,7 @@ bool X86FastISel::X86VisitIntrinsicCall(const IntrinsicInst &I) {
     // Replace "add with overflow" intrinsics with an "add" instruction followed
     // by a seto/setc instruction.
     const Function *Callee = I.getCalledFunction();
-    const Type *RetTy =
+    Type *RetTy =
       cast<StructType>(Callee->getReturnType())->getTypeAtIndex(unsigned(0));
 
     MVT VT;
@@ -1483,8 +1487,8 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
   if (CC == CallingConv::Fast && GuaranteedTailCallOpt)
     return false;
 
-  const PointerType *PT = cast<PointerType>(CS.getCalledValue()->getType());
-  const FunctionType *FTy = cast<FunctionType>(PT->getElementType());
+  PointerType *PT = cast<PointerType>(CS.getCalledValue()->getType());
+  FunctionType *FTy = cast<FunctionType>(PT->getElementType());
   bool isVarArg = FTy->isVarArg();
 
   // Don't know how to handle Win64 varargs yet.  Nothing special needed for
@@ -1493,7 +1497,8 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
     return false;
 
   // Fast-isel doesn't know about callee-pop yet.
-  if (Subtarget->IsCalleePop(isVarArg, CC))
+  if (X86::isCalleePop(CC, Subtarget->is64Bit(), isVarArg,
+                       GuaranteedTailCallOpt))
     return false;
 
   // Check whether the function can return without sret-demotion.
@@ -1545,8 +1550,8 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
       Flags.setZExt();
 
     if (CS.paramHasAttr(AttrInd, Attribute::ByVal)) {
-      const PointerType *Ty = cast<PointerType>(ArgVal->getType());
-      const Type *ElementTy = Ty->getElementType();
+      PointerType *Ty = cast<PointerType>(ArgVal->getType());
+      Type *ElementTy = Ty->getElementType();
       unsigned FrameSize = TD.getTypeAllocSize(ElementTy);
       unsigned FrameAlign = CS.getParamAlignment(AttrInd);
       if (!FrameAlign)
@@ -1598,7 +1603,7 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
 
     if (ArgReg == 0) return false;
 
-    const Type *ArgTy = ArgVal->getType();
+    Type *ArgTy = ArgVal->getType();
     MVT ArgVT;
     if (!isTypeLegal(ArgTy, ArgVT))
       return false;
@@ -1628,7 +1633,7 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
   unsigned NumBytes = CCInfo.getNextStackOffset();
 
   // Issue CALLSEQ_START
-  unsigned AdjStackDown = TM.getRegisterInfo()->getCallFrameSetupOpcode();
+  unsigned AdjStackDown = TII.getCallFrameSetupOpcode();
   BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(AdjStackDown))
     .addImm(NumBytes);
 
@@ -1801,7 +1806,7 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
     MIB.addReg(RegArgs[i]);
 
   // Issue CALLSEQ_END
-  unsigned AdjStackUp = TM.getRegisterInfo()->getCallFrameDestroyOpcode();
+  unsigned AdjStackUp = TII.getCallFrameDestroyOpcode();
   unsigned NumBytesCallee = 0;
   if (!Subtarget->is64Bit() && CS.paramHasAttr(1, Attribute::StructRet))
     NumBytesCallee = 4;
@@ -1846,15 +1851,18 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
     // stack, but where we prefer to use the value in xmm registers, copy it
     // out as F80 and use a truncate to move it from fp stack reg to xmm reg.
     if ((RVLocs[i].getLocReg() == X86::ST0 ||
-         RVLocs[i].getLocReg() == X86::ST1) &&
-        isScalarFPTypeInSSEReg(RVLocs[0].getValVT())) {
-      CopyVT = MVT::f80;
-      CopyReg = createResultReg(X86::RFP80RegisterClass);
+         RVLocs[i].getLocReg() == X86::ST1)) {
+      if (isScalarFPTypeInSSEReg(RVLocs[i].getValVT())) {
+        CopyVT = MVT::f80;
+        CopyReg = createResultReg(X86::RFP80RegisterClass);
+      }
+      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(X86::FpPOP_RETVAL),
+              CopyReg);
+    } else {
+      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(TargetOpcode::COPY),
+              CopyReg).addReg(RVLocs[i].getLocReg());
+      UsedRegs.push_back(RVLocs[i].getLocReg());
     }
-
-    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(TargetOpcode::COPY),
-            CopyReg).addReg(RVLocs[i].getLocReg());
-    UsedRegs.push_back(RVLocs[i].getLocReg());
 
     if (CopyVT != RVLocs[i].getValVT()) {
       // Round the F80 the right size, which also moves to the appropriate xmm

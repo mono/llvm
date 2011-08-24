@@ -13,7 +13,6 @@
 
 #include "SPU.h"
 #include "SPUFrameLowering.h"
-#include "SPURegisterNames.h"
 #include "SPUInstrBuilder.h"
 #include "SPUInstrInfo.h"
 #include "llvm/Function.h"
@@ -248,14 +247,6 @@ void SPUFrameLowering::emitEpilogue(MachineFunction &MF,
       report_fatal_error("Unhandled frame size: " + Twine(FrameSize));
     }
   }
-}
-
-void SPUFrameLowering::getInitialFrameState(std::vector<MachineMove> &Moves)
-                                                                         const {
-  // Initial state of the frame pointer is R1.
-  MachineLocation Dst(MachineLocation::VirtualFP);
-  MachineLocation Src(SPU::R1, 0);
-  Moves.push_back(MachineMove(0, Dst, Src));
 }
 
 void SPUFrameLowering::processFunctionBeforeCalleeSavedScan(MachineFunction &MF,

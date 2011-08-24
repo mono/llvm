@@ -26,6 +26,10 @@ extern "C" {
 #define LLVM_TARGET(TargetName) void LLVMInitialize##TargetName##Target();
 #include "llvm/Config/Targets.def"
   
+  // Declare all of the target-MC-initialization functions that are available.
+#define LLVM_TARGET(TargetName) void LLVMInitialize##TargetName##TargetMC();
+#include "llvm/Config/Targets.def"
+  
   // Declare all of the available assembly printer initialization functions.
 #define LLVM_ASM_PRINTER(TargetName) void LLVMInitialize##TargetName##AsmPrinter();
 #include "llvm/Config/AsmPrinters.def"
@@ -35,7 +39,8 @@ extern "C" {
 #include "llvm/Config/AsmParsers.def"
 
   // Declare all of the available disassembler initialization functions.
-#define LLVM_DISASSEMBLER(TargetName) void LLVMInitialize##TargetName##Disassembler();
+#define LLVM_DISASSEMBLER(TargetName) \
+  void LLVMInitialize##TargetName##Disassembler();
 #include "llvm/Config/Disassemblers.def"
 }
 
@@ -60,6 +65,16 @@ namespace llvm {
     InitializeAllTargetInfos();
 
 #define LLVM_TARGET(TargetName) LLVMInitialize##TargetName##Target();
+#include "llvm/Config/Targets.def"
+  }
+  
+  /// InitializeAllTargetMCs - The main program should call this function if it
+  /// wants access to all available target MC that LLVM is configured to
+  /// support, to make them available via the TargetRegistry.
+  ///
+  /// It is legal for a client to make multiple calls to this function.
+  inline void InitializeAllTargetMCs() {
+#define LLVM_TARGET(TargetName) LLVMInitialize##TargetName##TargetMC();
 #include "llvm/Config/Targets.def"
   }
   
@@ -103,6 +118,7 @@ namespace llvm {
 #ifdef LLVM_NATIVE_TARGET
     LLVM_NATIVE_TARGETINFO();
     LLVM_NATIVE_TARGET();
+    LLVM_NATIVE_TARGETMC();
     return false;
 #else
     return true;

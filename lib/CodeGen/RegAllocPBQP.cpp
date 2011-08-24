@@ -35,6 +35,7 @@
 #include "Splitter.h"
 #include "VirtRegMap.h"
 #include "VirtRegRewriter.h"
+#include "RegisterCoalescer.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
@@ -46,7 +47,6 @@
 #include "llvm/CodeGen/PBQP/Graph.h"
 #include "llvm/CodeGen/PBQP/Heuristics/Briggs.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
-#include "llvm/CodeGen/RegisterCoalescer.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetInstrInfo.h"
@@ -88,7 +88,7 @@ public:
       : MachineFunctionPass(ID), builder(b), customPassID(cPassID) {
     initializeSlotIndexesPass(*PassRegistry::getPassRegistry());
     initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
-    initializeRegisterCoalescerAnalysisGroup(*PassRegistry::getPassRegistry());
+    initializeRegisterCoalescerPass(*PassRegistry::getPassRegistry());
     initializeCalculateSpillWeightsPass(*PassRegistry::getPassRegistry());
     initializeLiveStacksPass(*PassRegistry::getPassRegistry());
     initializeMachineLoopInfoPass(*PassRegistry::getPassRegistry());
@@ -450,7 +450,7 @@ void RegAllocPBQP::getAnalysisUsage(AnalysisUsage &au) const {
   au.addPreserved<SlotIndexes>();
   au.addRequired<LiveIntervals>();
   //au.addRequiredID(SplitCriticalEdgesID);
-  au.addRequired<RegisterCoalescer>();
+  au.addRequiredID(RegisterCoalescerPassID);
   if (customPassID)
     au.addRequiredID(*customPassID);
   au.addRequired<CalculateSpillWeights>();

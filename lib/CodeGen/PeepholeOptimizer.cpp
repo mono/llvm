@@ -295,7 +295,6 @@ bool PeepholeOptimizer::OptimizeBitcastInstr(MachineInstr *MI,
   if (!DefMI || !DefMI->getDesc().isBitcast())
     return false;
 
-  unsigned SrcDef = 0;
   unsigned SrcSrc = 0;
   NumDefs = DefMI->getDesc().getNumDefs();
   NumSrcs = DefMI->getDesc().getNumOperands() - NumDefs;
@@ -308,13 +307,13 @@ bool PeepholeOptimizer::OptimizeBitcastInstr(MachineInstr *MI,
     unsigned Reg = MO.getReg();
     if (!Reg)
       continue;
-    if (MO.isDef())
-      SrcDef = Reg;
-    else if (SrcSrc)
-      // Multiple sources?
-      return false;
-    else
-      SrcSrc = Reg;
+    if (!MO.isDef()) {
+      if (SrcSrc)
+        // Multiple sources?
+        return false;
+      else
+        SrcSrc = Reg;
+    }
   }
 
   if (MRI->getRegClass(SrcSrc) != MRI->getRegClass(Def))
@@ -353,10 +352,10 @@ bool PeepholeOptimizer::OptimizeCmpInstr(MachineInstr *MI,
 bool PeepholeOptimizer::isMoveImmediate(MachineInstr *MI,
                                         SmallSet<unsigned, 4> &ImmDefRegs,
                                  DenseMap<unsigned, MachineInstr*> &ImmDefMIs) {
-  const TargetInstrDesc &TID = MI->getDesc();
-  if (!TID.isMoveImmediate())
+  const MCInstrDesc &MCID = MI->getDesc();
+  if (!MCID.isMoveImmediate())
     return false;
-  if (TID.getNumDefs() != 1)
+  if (MCID.getNumDefs() != 1)
     return false;
   unsigned Reg = MI->getOperand(0).getReg();
   if (TargetRegisterInfo::isVirtualRegister(Reg)) {
@@ -429,16 +428,16 @@ bool PeepholeOptimizer::runOnMachineFunction(MachineFunction &MF) {
         continue;
       }
 
-      const TargetInstrDesc &TID = MI->getDesc();
+      const MCInstrDesc &MCID = MI->getDesc();
 
-      if (TID.isBitcast()) {
+      if (MCID.isBitcast()) {
         if (OptimizeBitcastInstr(MI, MBB)) {
           // MI is deleted.
           Changed = true;
           MII = First ? I->begin() : llvm::next(PMII);
           continue;
         }        
-      } else if (TID.isCompare()) {
+      } else if (MCID.isCompare()) {
         if (OptimizeCmpInstr(MI, MBB)) {
           // MI is deleted.
           Changed = true;

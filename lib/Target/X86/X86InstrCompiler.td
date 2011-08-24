@@ -532,7 +532,7 @@ def OR32mrLocked  : I<0x09, MRMDestMem, (outs), (ins i32mem:$dst, GR32:$zero),
 let hasSideEffects = 1 in
 def Int_MemBarrier : I<0, Pseudo, (outs), (ins),
                      "#MEMBARRIER",
-                     [(X86MemBarrier)]>, Requires<[HasSSE2]>;
+                     [(X86MemBarrier)]>;
 
 // TODO: Get this to fold the constant into the instruction.
 let hasSideEffects = 1, Defs = [ESP], isCodeGenOnly = 1 in
@@ -630,8 +630,8 @@ def #NAME#64mi8 : RIi8<{ImmOpc8{7}, ImmOpc8{6}, ImmOpc8{5}, ImmOpc8{4},
 defm LOCK_ADD : LOCK_ArithBinOp<0x00, 0x80, 0x83, MRM0m, "add">;
 defm LOCK_SUB : LOCK_ArithBinOp<0x28, 0x80, 0x83, MRM5m, "sub">;
 defm LOCK_OR  : LOCK_ArithBinOp<0x08, 0x80, 0x83, MRM1m, "or">;
-defm LOCK_AND : LOCK_ArithBinOp<0x08, 0x80, 0x83, MRM4m, "and">;
-defm LOCK_XOR : LOCK_ArithBinOp<0x08, 0x80, 0x83, MRM6m, "xor">;
+defm LOCK_AND : LOCK_ArithBinOp<0x20, 0x80, 0x83, MRM4m, "and">;
+defm LOCK_XOR : LOCK_ArithBinOp<0x30, 0x80, 0x83, MRM6m, "xor">;
 
 // Optimized codegen when the non-memory output is not used.
 let Defs = [EFLAGS], mayLoad = 1, mayStore = 1, isCodeGenOnly = 1 in {
@@ -758,6 +758,24 @@ let Uses = [EFLAGS], usesCustomInserter = 1 in {
                     "#CMOV_V2I64 PSEUDO!",
                     [(set VR128:$dst,
                       (v2i64 (X86cmov VR128:$t, VR128:$f, imm:$cond,
+                                          EFLAGS)))]>;
+  def CMOV_V8F32 : I<0, Pseudo,
+                    (outs VR256:$dst), (ins VR256:$t, VR256:$f, i8imm:$cond),
+                    "#CMOV_V8F32 PSEUDO!",
+                    [(set VR256:$dst,
+                      (v8f32 (X86cmov VR256:$t, VR256:$f, imm:$cond,
+                                          EFLAGS)))]>;
+  def CMOV_V4F64 : I<0, Pseudo,
+                    (outs VR256:$dst), (ins VR256:$t, VR256:$f, i8imm:$cond),
+                    "#CMOV_V4F64 PSEUDO!",
+                    [(set VR256:$dst,
+                      (v4f64 (X86cmov VR256:$t, VR256:$f, imm:$cond,
+                                          EFLAGS)))]>;
+  def CMOV_V4I64 : I<0, Pseudo,
+                    (outs VR256:$dst), (ins VR256:$t, VR256:$f, i8imm:$cond),
+                    "#CMOV_V4I64 PSEUDO!",
+                    [(set VR256:$dst,
+                      (v4i64 (X86cmov VR256:$t, VR256:$f, imm:$cond,
                                           EFLAGS)))]>;
 }
 

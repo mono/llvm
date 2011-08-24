@@ -23,6 +23,9 @@
 using namespace llvm;
 
 MCAsmInfo::MCAsmInfo() {
+  PointerSize = 4;
+  IsLittleEndian = true;
+  StackGrowsUp = false;
   HasSubsectionsViaSymbols = false;
   HasMachoZeroFillDirective = false;
   HasMachoTBSSDirective = false;
@@ -39,6 +42,9 @@ MCAsmInfo::MCAsmInfo() {
   LinkerPrivateGlobalPrefix = "";
   InlineAsmStart = "APP";
   InlineAsmEnd = "NO_APP";
+  Code16Directive = ".code16";
+  Code32Directive = ".code32";
+  Code64Directive = ".code64";
   AssemblerDialect = 0;
   AllowQuotesInName = false;
   AllowNameToStartWithDigit = false;
@@ -78,6 +84,7 @@ MCAsmInfo::MCAsmInfo() {
   DwarfRequiresRelocationForSectionOffset = true;
   DwarfSectionOffsetDirective = 0;
   DwarfUsesLabelOffsetForRanges = true;
+  DwarfRegNumForCFI = false;
   HasMicrosoftFastStdCallMangling = false;
 
   AsmTransCBE = 0;

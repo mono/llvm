@@ -79,7 +79,7 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf) {
   for (BasicBlock::const_iterator I = BB->begin(), E = BB->end(); I != E; ++I)
     if (const AllocaInst *AI = dyn_cast<AllocaInst>(I))
       if (const ConstantInt *CUI = dyn_cast<ConstantInt>(AI->getArraySize())) {
-        const Type *Ty = AI->getAllocatedType();
+        Type *Ty = AI->getAllocatedType();
         uint64_t TySize = TLI.getTargetData()->getTypeAllocSize(Ty);
         unsigned Align =
           std::max((unsigned)TLI.getTargetData()->getPrefTypeAlignment(Ty),
@@ -230,7 +230,7 @@ unsigned FunctionLoweringInfo::CreateReg(EVT VT) {
 /// In the case that the given value has struct or array type, this function
 /// will assign registers for each member or element.
 ///
-unsigned FunctionLoweringInfo::CreateRegs(const Type *Ty) {
+unsigned FunctionLoweringInfo::CreateRegs(Type *Ty) {
   SmallVector<EVT, 4> ValueVTs;
   ComputeValueVTs(TLI, Ty, ValueVTs);
 
@@ -274,7 +274,7 @@ FunctionLoweringInfo::GetLiveOutRegInfo(unsigned Reg, unsigned BitWidth) {
 /// ComputePHILiveOutRegInfo - Compute LiveOutInfo for a PHI's destination
 /// register based on the LiveOutInfo of its operands.
 void FunctionLoweringInfo::ComputePHILiveOutRegInfo(const PHINode *PN) {
-  const Type *Ty = PN->getType();
+  Type *Ty = PN->getType();
   if (!Ty->isIntegerTy() || Ty->isVectorTy())
     return;
 
@@ -466,5 +466,36 @@ void llvm::CopyCatchInfo(const BasicBlock *SuccBB, const BasicBlock *LPad,
       SuccBB = Br->getSuccessor(0);
     else
       break;
+  }
+}
+
+/// AddLandingPadInfo - Extract the exception handling information from the
+/// landingpad instruction and add them to the specified machine module info.
+void llvm::AddLandingPadInfo(const LandingPadInst &I, MachineModuleInfo &MMI,
+                             MachineBasicBlock *MBB) {
+  MMI.addPersonality(MBB,
+                     cast<Function>(I.getPersonalityFn()->stripPointerCasts()));
+
+  if (I.isCleanup())
+    MMI.addCleanup(MBB);
+
+  // FIXME: New EH - Add the clauses in reverse order. This isn't 100% correct,
+  //        but we need to do it this way because of how the DWARF EH emitter
+  //        processes the clauses.
+  for (unsigned i = I.getNumClauses(); i != 0; --i) {
+    Value *Val = I.getClause(i - 1);
+    if (I.isCatch(i - 1)) {
+      MMI.addCatchTypeInfo(MBB,
+                           dyn_cast<GlobalVariable>(Val->stripPointerCasts()));
+    } else {
+      // Add filters in a list.
+      Constant *CVal = cast<Constant>(Val);
+      SmallVector<const GlobalVariable*, 4> FilterList;
+      for (User::op_iterator
+             II = CVal->op_begin(), IE = CVal->op_end(); II != IE; ++II)
+        FilterList.push_back(cast<GlobalVariable>((*II)->stripPointerCasts()));
+
+      MMI.addFilterTypeInfo(MBB, FilterList);
+    }
   }
 }

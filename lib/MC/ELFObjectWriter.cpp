@@ -15,6 +15,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -23,13 +24,13 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ELF.h"
-#include "llvm/Target/TargetAsmBackend.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringSwitch.h"
 
-#include "../Target/X86/X86FixupKinds.h"
-#include "../Target/ARM/ARMFixupKinds.h"
+#include "../Target/X86/MCTargetDesc/X86FixupKinds.h"
+#include "../Target/ARM/MCTargetDesc/ARMFixupKinds.h"
+#include "../Target/PowerPC/MCTargetDesc/PPCFixupKinds.h"
 
 #include <vector>
 using namespace llvm;
@@ -447,8 +448,16 @@ void ELFObjectWriter::RecordRelocation(const MCAssembler &Asm,
   uint64_t RelocOffset = Layout.getFragmentOffset(Fragment) +
     Fixup.getOffset();
 
+  adjustFixupOffset(Fixup, RelocOffset);
+
   if (!hasRelocationAddend())
     Addend = 0;
+
+  if (is64Bit())
+    assert(isInt<64>(Addend));
+  else
+    assert(isInt<32>(Addend));
+
   ELFRelocationEntry ERE(RelocOffset, Index, Type, RelocSymbol, Addend);
   Relocations[Fragment->getParent()].push_back(ERE);
 }
@@ -1252,6 +1261,9 @@ MCObjectWriter *llvm::createELFObjectWriter(MCELFObjectTargetWriter *MOTW,
       return new ARMELFObjectWriter(MOTW, OS, IsLittleEndian); break;
     case ELF::EM_MBLAZE:
       return new MBlazeELFObjectWriter(MOTW, OS, IsLittleEndian); break;
+    case ELF::EM_PPC:
+    case ELF::EM_PPC64:
+      return new PPCELFObjectWriter(MOTW, OS, IsLittleEndian); break;
     default: llvm_unreachable("Unsupported architecture"); break;
   }
 }
@@ -1503,6 +1515,76 @@ unsigned ARMELFObjectWriter::GetRelocTypeInner(const MCValue &Target,
   return Type;
 }
 
+//===- PPCELFObjectWriter -------------------------------------------===//
+
+PPCELFObjectWriter::PPCELFObjectWriter(MCELFObjectTargetWriter *MOTW,
+                                             raw_ostream &_OS,
+                                             bool IsLittleEndian)
+  : ELFObjectWriter(MOTW, _OS, IsLittleEndian) {
+}
+
+PPCELFObjectWriter::~PPCELFObjectWriter() {
+}
+
+unsigned PPCELFObjectWriter::GetRelocType(const MCValue &Target,
+                                             const MCFixup &Fixup,
+                                             bool IsPCRel,
+                                             bool IsRelocWithSymbol,
+                                             int64_t Addend) {
+  // determine the type of the relocation
+  unsigned Type;
+  if (IsPCRel) {
+    switch ((unsigned)Fixup.getKind()) {
+    default:
+      llvm_unreachable("Unimplemented");
+    case PPC::fixup_ppc_br24:
+      Type = ELF::R_PPC_REL24;
+      break;
+    case FK_PCRel_4:
+      Type = ELF::R_PPC_REL32;
+      break;
+    }
+  } else {
+    switch ((unsigned)Fixup.getKind()) {
+      default: llvm_unreachable("invalid fixup kind!");
+    case PPC::fixup_ppc_br24:
+      Type = ELF::R_PPC_ADDR24;
+      break;
+    case PPC::fixup_ppc_brcond14:
+      Type = ELF::R_PPC_ADDR14_BRTAKEN; // XXX: or BRNTAKEN?_
+      break;
+    case PPC::fixup_ppc_ha16:
+      Type = ELF::R_PPC_ADDR16_HA;
+      break;
+    case PPC::fixup_ppc_lo16:
+      Type = ELF::R_PPC_ADDR16_LO;
+      break;
+    case PPC::fixup_ppc_lo14:
+      Type = ELF::R_PPC_ADDR14;
+      break;
+    case FK_Data_4:
+      Type = ELF::R_PPC_ADDR32;
+      break;
+    case FK_Data_2:
+      Type = ELF::R_PPC_ADDR16;
+      break;
+    }
+  }
+  return Type;
+}
+
+void
+PPCELFObjectWriter::adjustFixupOffset(const MCFixup &Fixup, uint64_t &RelocOffset) {
+  switch ((unsigned)Fixup.getKind()) {
+    case PPC::fixup_ppc_ha16:
+    case PPC::fixup_ppc_lo16:
+      RelocOffset += 2;
+      break;
+    default:
+      break;
+  }
+}
+
 //===- MBlazeELFObjectWriter -------------------------------------------===//
 
 MBlazeELFObjectWriter::MBlazeELFObjectWriter(MCELFObjectTargetWriter *MOTW,
@@ -1624,7 +1706,6 @@ unsigned X86ELFObjectWriter::GetRelocType(const MCValue &Target,
       default: llvm_unreachable("invalid fixup kind!");
       case FK_Data_8: Type = ELF::R_X86_64_64; break;
       case X86::reloc_signed_4byte:
-        assert(isInt<32>(Target.getConstant()));
         switch (Modifier) {
         default:
           llvm_unreachable("Unimplemented");

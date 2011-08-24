@@ -69,6 +69,7 @@ MBlazeTargetLowering::MBlazeTargetLowering(MBlazeTargetMachine &TM)
 
   // Floating point operations which are not supported
   setOperationAction(ISD::FREM,       MVT::f32, Expand);
+  setOperationAction(ISD::FMA,        MVT::f32, Expand);
   setOperationAction(ISD::UINT_TO_FP, MVT::i8,  Expand);
   setOperationAction(ISD::UINT_TO_FP, MVT::i16, Expand);
   setOperationAction(ISD::UINT_TO_FP, MVT::i32, Expand);
@@ -963,13 +964,13 @@ LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv, bool isVarArg,
     // The last register argument that must be saved is MBlaze::R10
     TargetRegisterClass *RC = MBlaze::GPRRegisterClass;
 
-    unsigned Begin = MBlazeRegisterInfo::getRegisterNumbering(MBlaze::R5);
-    unsigned Start = MBlazeRegisterInfo::getRegisterNumbering(ArgRegEnd+1);
-    unsigned End   = MBlazeRegisterInfo::getRegisterNumbering(MBlaze::R10);
+    unsigned Begin = getMBlazeRegisterNumbering(MBlaze::R5);
+    unsigned Start = getMBlazeRegisterNumbering(ArgRegEnd+1);
+    unsigned End   = getMBlazeRegisterNumbering(MBlaze::R10);
     unsigned StackLoc = Start - Begin + 1;
 
     for (; Start <= End; ++Start, ++StackLoc) {
-      unsigned Reg = MBlazeRegisterInfo::getRegisterFromNumbering(Start);
+      unsigned Reg = getMBlazeRegisterFromNumbering(Start);
       unsigned LiveReg = MF.addLiveIn(Reg, RC);
       SDValue ArgValue = DAG.getCopyFromReg(Chain, dl, LiveReg, MVT::i32);
 
@@ -1095,7 +1096,7 @@ MBlazeTargetLowering::getSingleConstraintMatchWeight(
     // but allow it at the lowest weight.
   if (CallOperandVal == NULL)
     return CW_Default;
-  const Type *type = CallOperandVal->getType();
+  Type *type = CallOperandVal->getType();
   // Look at the constraint type.
   switch (*constraint) {
   default:
@@ -1114,47 +1115,25 @@ MBlazeTargetLowering::getSingleConstraintMatchWeight(
   return weight;
 }
 
-/// getRegClassForInlineAsmConstraint - Given a constraint letter (e.g. "r"),
-/// return a list of registers that can be used to satisfy the constraint.
-/// This should only be used for C_RegisterClass constraints.
+/// Given a register class constraint, like 'r', if this corresponds directly
+/// to an LLVM register class, return a register of 0 and the register class
+/// pointer.
 std::pair<unsigned, const TargetRegisterClass*> MBlazeTargetLowering::
 getRegForInlineAsmConstraint(const std::string &Constraint, EVT VT) const {
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     case 'r':
       return std::make_pair(0U, MBlaze::GPRRegisterClass);
+      // TODO: These can't possibly be right, but match what was in
+      // getRegClassForInlineAsmConstraint.
+    case 'd':
+    case 'y':
     case 'f':
       if (VT == MVT::f32)
         return std::make_pair(0U, MBlaze::GPRRegisterClass);
     }
   }
   return TargetLowering::getRegForInlineAsmConstraint(Constraint, VT);
-}
-
-/// Given a register class constraint, like 'r', if this corresponds directly
-/// to an LLVM register class, return a register of 0 and the register class
-/// pointer.
-std::vector<unsigned> MBlazeTargetLowering::
-getRegClassForInlineAsmConstraint(const std::string &Constraint, EVT VT) const {
-  if (Constraint.size() != 1)
-    return std::vector<unsigned>();
-
-  switch (Constraint[0]) {
-    default : break;
-    case 'r':
-    // GCC MBlaze Constraint Letters
-    case 'd':
-    case 'y':
-    case 'f':
-      return make_vector<unsigned>(
-        MBlaze::R3,  MBlaze::R4,  MBlaze::R5,  MBlaze::R6,
-        MBlaze::R7,  MBlaze::R9,  MBlaze::R10, MBlaze::R11,
-        MBlaze::R12, MBlaze::R19, MBlaze::R20, MBlaze::R21,
-        MBlaze::R22, MBlaze::R23, MBlaze::R24, MBlaze::R25,
-        MBlaze::R26, MBlaze::R27, MBlaze::R28, MBlaze::R29,
-        MBlaze::R30, MBlaze::R31, 0);
-  }
-  return std::vector<unsigned>();
 }
 
 bool MBlazeTargetLowering::

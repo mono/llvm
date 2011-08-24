@@ -13,6 +13,7 @@
 
 #include "InstCombine.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Target/TargetData.h"
@@ -42,13 +43,12 @@ static ConstantInt *ExtractElement(Constant *V, Constant *Idx) {
 static bool HasAddOverflow(ConstantInt *Result,
                            ConstantInt *In1, ConstantInt *In2,
                            bool IsSigned) {
-  if (IsSigned)
-    if (In2->getValue().isNegative())
-      return Result->getValue().sgt(In1->getValue());
-    else
-      return Result->getValue().slt(In1->getValue());
-  else
+  if (!IsSigned)
     return Result->getValue().ult(In1->getValue());
+
+  if (In2->isNegative())
+    return Result->getValue().sgt(In1->getValue());
+  return Result->getValue().slt(In1->getValue());
 }
 
 /// AddWithOverflow - Compute Result = In1+In2, returning true if the result
@@ -57,7 +57,7 @@ static bool AddWithOverflow(Constant *&Result, Constant *In1,
                             Constant *In2, bool IsSigned = false) {
   Result = ConstantExpr::getAdd(In1, In2);
 
-  if (const VectorType *VTy = dyn_cast<VectorType>(In1->getType())) {
+  if (VectorType *VTy = dyn_cast<VectorType>(In1->getType())) {
     for (unsigned i = 0, e = VTy->getNumElements(); i != e; ++i) {
       Constant *Idx = ConstantInt::get(Type::getInt32Ty(In1->getContext()), i);
       if (HasAddOverflow(ExtractElement(Result, Idx),
@@ -77,13 +77,13 @@ static bool AddWithOverflow(Constant *&Result, Constant *In1,
 static bool HasSubOverflow(ConstantInt *Result,
                            ConstantInt *In1, ConstantInt *In2,
                            bool IsSigned) {
-  if (IsSigned)
-    if (In2->getValue().isNegative())
-      return Result->getValue().slt(In1->getValue());
-    else
-      return Result->getValue().sgt(In1->getValue());
-  else
+  if (!IsSigned)
     return Result->getValue().ugt(In1->getValue());
+  
+  if (In2->isNegative())
+    return Result->getValue().slt(In1->getValue());
+
+  return Result->getValue().sgt(In1->getValue());
 }
 
 /// SubWithOverflow - Compute Result = In1-In2, returning true if the result
@@ -92,7 +92,7 @@ static bool SubWithOverflow(Constant *&Result, Constant *In1,
                             Constant *In2, bool IsSigned = false) {
   Result = ConstantExpr::getSub(In1, In2);
 
-  if (const VectorType *VTy = dyn_cast<VectorType>(In1->getType())) {
+  if (VectorType *VTy = dyn_cast<VectorType>(In1->getType())) {
     for (unsigned i = 0, e = VTy->getNumElements(); i != e; ++i) {
       Constant *Idx = ConstantInt::get(Type::getInt32Ty(In1->getContext()), i);
       if (HasSubOverflow(ExtractElement(Result, Idx),
@@ -128,8 +128,7 @@ static bool isSignBitCheck(ICmpInst::Predicate pred, ConstantInt *RHS,
   case ICmpInst::ICMP_UGT:
     // True if LHS u> RHS and RHS == high-bit-mask - 1
     TrueIfSigned = true;
-    return RHS->getValue() ==
-      APInt::getSignedMaxValue(RHS->getType()->getPrimitiveSizeInBits());
+    return RHS->isMaxValue(true);
   case ICmpInst::ICMP_UGE: 
     // True if LHS u>= RHS and RHS == high-bit-mask (2^7, 2^15, 2^31, etc)
     TrueIfSigned = true;
@@ -222,7 +221,7 @@ FoldCmpLoadFromIndexedGlobal(GetElementPtrInst *GEP, GlobalVariable *GV,
   // structs.
   SmallVector<unsigned, 4> LaterIndices;
   
-  const Type *EltTy = cast<ArrayType>(Init->getType())->getElementType();
+  Type *EltTy = cast<ArrayType>(Init->getType())->getElementType();
   for (unsigned i = 3, e = GEP->getNumOperands(); i != e; ++i) {
     ConstantInt *Idx = dyn_cast<ConstantInt>(GEP->getOperand(i));
     if (Idx == 0) return 0;  // Variable index.
@@ -230,9 +229,9 @@ FoldCmpLoadFromIndexedGlobal(GetElementPtrInst *GEP, GlobalVariable *GV,
     uint64_t IdxVal = Idx->getZExtValue();
     if ((unsigned)IdxVal != IdxVal) return 0; // Too large array index.
     
-    if (const StructType *STy = dyn_cast<StructType>(EltTy))
+    if (StructType *STy = dyn_cast<StructType>(EltTy))
       EltTy = STy->getElementType(IdxVal);
-    else if (const ArrayType *ATy = dyn_cast<ArrayType>(EltTy)) {
+    else if (ArrayType *ATy = dyn_cast<ArrayType>(EltTy)) {
       if (IdxVal >= ATy->getNumElements()) return 0;
       EltTy = ATy->getElementType();
     } else {
@@ -278,8 +277,7 @@ FoldCmpLoadFromIndexedGlobal(GetElementPtrInst *GEP, GlobalVariable *GV,
     
     // If this is indexing an array of structures, get the structure element.
     if (!LaterIndices.empty())
-      Elt = ConstantExpr::getExtractValue(Elt, LaterIndices.data(),
-                                          LaterIndices.size());
+      Elt = ConstantExpr::getExtractValue(Elt, LaterIndices);
     
     // If the element is masked, handle it.
     if (AndCst) Elt = ConstantExpr::getAnd(Elt, AndCst);
@@ -444,7 +442,7 @@ FoldCmpLoadFromIndexedGlobal(GetElementPtrInst *GEP, GlobalVariable *GV,
   //   ((magic_cst >> i) & 1) != 0
   if (Init->getNumOperands() <= 32 ||
       (TD && Init->getNumOperands() <= 64 && TD->isLegalInteger(64))) {
-    const Type *Ty;
+    Type *Ty;
     if (Init->getNumOperands() <= 32)
       Ty = Type::getInt32Ty(Init->getContext());
     else
@@ -486,7 +484,7 @@ static Value *EvaluateGEPOffsetExpression(User *GEP, InstCombiner &IC) {
       if (CI->isZero()) continue;
       
       // Handle a struct index, which adds its field offset to the pointer.
-      if (const StructType *STy = dyn_cast<StructType>(*GTI)) {
+      if (StructType *STy = dyn_cast<StructType>(*GTI)) {
         Offset += TD.getStructLayout(STy)->getElementOffset(CI->getZExtValue());
       } else {
         uint64_t Size = TD.getTypeAllocSize(GTI.getIndexedType());
@@ -516,7 +514,7 @@ static Value *EvaluateGEPOffsetExpression(User *GEP, InstCombiner &IC) {
     if (CI->isZero()) continue;
     
     // Handle a struct index, which adds its field offset to the pointer.
-    if (const StructType *STy = dyn_cast<StructType>(*GTI)) {
+    if (StructType *STy = dyn_cast<StructType>(*GTI)) {
       Offset += TD.getStructLayout(STy)->getElementOffset(CI->getZExtValue());
     } else {
       uint64_t Size = TD.getTypeAllocSize(GTI.getIndexedType());
@@ -533,7 +531,7 @@ static Value *EvaluateGEPOffsetExpression(User *GEP, InstCombiner &IC) {
     // we don't need to bother extending: the extension won't affect where the
     // computation crosses zero.
     if (VariableIdx->getType()->getPrimitiveSizeInBits() > IntPtrWidth) {
-      const Type *IntPtrTy = TD.getIntPtrType(VariableIdx->getContext());
+      Type *IntPtrTy = TD.getIntPtrType(VariableIdx->getContext());
       VariableIdx = IC.Builder->CreateTrunc(VariableIdx, IntPtrTy);
     }
     return VariableIdx;
@@ -555,7 +553,7 @@ static Value *EvaluateGEPOffsetExpression(User *GEP, InstCombiner &IC) {
     return 0;
   
   // Okay, we can do this evaluation.  Start by converting the index to intptr.
-  const Type *IntPtrTy = TD.getIntPtrType(VariableIdx->getContext());
+  Type *IntPtrTy = TD.getIntPtrType(VariableIdx->getContext());
   if (VariableIdx->getType() != IntPtrTy)
     VariableIdx = IC.Builder->CreateIntCast(VariableIdx, IntPtrTy,
                                             true /*Signed*/);
@@ -828,7 +826,7 @@ Instruction *InstCombiner::FoldICmpDivCst(ICmpInst &ICI, BinaryOperator *DivI,
         LoOverflow = AddWithOverflow(LoBound, HiBound, DivNeg, true) ? -1 : 0;
       }
     }
-  } else if (DivRHS->getValue().isNegative()) { // Divisor is < 0.
+  } else if (DivRHS->isNegative()) { // Divisor is < 0.
     if (DivI->isExact())
       RangeSize = cast<ConstantInt>(ConstantExpr::getNeg(RangeSize));
     if (CmpRHSV == 0) {       // (X / neg) op 0
@@ -1028,7 +1026,7 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
         
         // If the sign bit of the XorCST is not set, there is no change to
         // the operation, just stop using the Xor.
-        if (!XorCST->getValue().isNegative()) {
+        if (!XorCST->isNegative()) {
           ICI.setOperand(0, CompareVal);
           Worklist.Add(LHSI);
           return &ICI;
@@ -1061,7 +1059,7 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
         }
 
         // (icmp u/s (xor A ~SignBit), C) -> (icmp s/u (xor C ~SignBit), A)
-        if (!ICI.isEquality() && XorCST->getValue().isMaxSignedValue()) {
+        if (!ICI.isEquality() && XorCST->isMaxValue(true)) {
           const APInt &NotSignBit = XorCST->getValue();
           ICmpInst::Predicate Pred = ICI.isSigned()
                                          ? ICI.getUnsignedPredicate()
@@ -1088,7 +1086,7 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
         // Extending a relational comparison when we're checking the sign
         // bit would not work.
         if (ICI.isEquality() ||
-            (AndCST->getValue().isNonNegative() && RHSV.isNonNegative())) {
+            (!AndCST->isNegative() && RHSV.isNonNegative())) {
           Value *NewAnd =
             Builder->CreateAnd(Cast->getOperand(0),
                                ConstantExpr::getZExt(AndCST, Cast->getSrcTy()));
@@ -1101,7 +1099,7 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
       // If the LHS is an AND of a zext, and we have an equality compare, we can
       // shrink the and/compare to the smaller type, eliminating the cast.
       if (ZExtInst *Cast = dyn_cast<ZExtInst>(LHSI->getOperand(0))) {
-        const IntegerType *Ty = cast<IntegerType>(Cast->getSrcTy());
+        IntegerType *Ty = cast<IntegerType>(Cast->getSrcTy());
         // Make sure we don't compare the upper bits, SimplifyDemandedBits
         // should fold the icmp to true/false in that case.
         if (ICI.isEquality() && RHSV.getActiveBits() <= Ty->getBitWidth()) {
@@ -1124,8 +1122,8 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
       
       ConstantInt *ShAmt;
       ShAmt = Shift ? dyn_cast<ConstantInt>(Shift->getOperand(1)) : 0;
-      const Type *Ty = Shift ? Shift->getType() : 0;  // Type of the shift.
-      const Type *AndTy = AndCST->getType();          // Type of the and.
+      Type *Ty = Shift ? Shift->getType() : 0;  // Type of the shift.
+      Type *AndTy = AndCST->getType();          // Type of the and.
       
       // We can fold this as long as we can't shift unknown bits
       // into the mask.  This can only happen with signed shift
@@ -1454,7 +1452,11 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
             return new ICmpInst(isICMP_NE ? ICmpInst::ICMP_EQ :
                                 ICmpInst::ICMP_NE, LHSI,
                                 Constant::getNullValue(RHS->getType()));
-          
+
+          // Don't perform the following transforms if the AND has multiple uses
+          if (!BO->hasOneUse())
+            break;
+
           // Replace (and X, (1 << size(X)-1) != 0) with x s< 0
           if (BOC->getValue().isSignBit()) {
             Value *X = BO->getOperand(0);
@@ -1516,8 +1518,8 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
 Instruction *InstCombiner::visitICmpInstWithCastAndCast(ICmpInst &ICI) {
   const CastInst *LHSCI = cast<CastInst>(ICI.getOperand(0));
   Value *LHSCIOp        = LHSCI->getOperand(0);
-  const Type *SrcTy     = LHSCIOp->getType();
-  const Type *DestTy    = LHSCI->getType();
+  Type *SrcTy     = LHSCIOp->getType();
+  Type *DestTy    = LHSCI->getType();
   Value *RHSCIOp;
 
   // Turn icmp (ptrtoint x), (ptrtoint/c) into a compare of the input if the 
@@ -1679,9 +1681,9 @@ static Instruction *ProcessUGT_ADDCST_ADD(ICmpInst &I, Value *A, Value *B,
   // result and the overflow bit.
   Module *M = I.getParent()->getParent()->getParent();
   
-  const Type *NewType = IntegerType::get(OrigAdd->getContext(), NewWidth);
+  Type *NewType = IntegerType::get(OrigAdd->getContext(), NewWidth);
   Value *F = Intrinsic::getDeclaration(M, Intrinsic::sadd_with_overflow,
-                                       &NewType, 1);
+                                       NewType);
 
   InstCombiner::BuilderTy *Builder = IC.Builder;
   
@@ -1721,8 +1723,8 @@ static Instruction *ProcessUAddIdiom(Instruction &I, Value *OrigAddV,
   Builder->SetInsertPoint(OrigAdd);
 
   Module *M = I.getParent()->getParent()->getParent();
-  const Type *Ty = LHS->getType();
-  Value *F = Intrinsic::getDeclaration(M, Intrinsic::uadd_with_overflow, &Ty,1);
+  Type *Ty = LHS->getType();
+  Value *F = Intrinsic::getDeclaration(M, Intrinsic::uadd_with_overflow, Ty);
   CallInst *Call = Builder->CreateCall2(F, LHS, RHS, "uadd");
   Value *Add = Builder->CreateExtractValue(Call, 0);
 
@@ -1785,7 +1787,7 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
   if (Value *V = SimplifyICmpInst(I.getPredicate(), Op0, Op1, TD))
     return ReplaceInstUsesWith(I, V);
   
-  const Type *Ty = Op0->getType();
+  Type *Ty = Op0->getType();
 
   // icmp's with boolean values can always be turned into bitwise operations
   if (Ty->isIntegerTy(1)) {
@@ -2384,7 +2386,7 @@ Instruction *InstCombiner::visitICmpInst(ICmpInst &I) {
                                 BO1->getOperand(0));
           }
           
-          if (CI->getValue().isMaxSignedValue()) {
+          if (CI->isMaxValue(true)) {
             ICmpInst::Predicate Pred = I.isSigned()
                                            ? I.getUnsignedPredicate()
                                            : I.getSignedPredicate();
@@ -2636,7 +2638,7 @@ Instruction *InstCombiner::FoldFCmp_IntToFP_Cst(FCmpInst &I,
     return ReplaceInstUsesWith(I, ConstantInt::getFalse(I.getContext()));
   }
   
-  const IntegerType *IntTy = cast<IntegerType>(LHSI->getOperand(0)->getType());
+  IntegerType *IntTy = cast<IntegerType>(LHSI->getOperand(0)->getType());
   
   // Now we know that the APFloat is a normal number, zero or inf.
   

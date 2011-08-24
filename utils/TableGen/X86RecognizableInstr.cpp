@@ -229,6 +229,30 @@ RecognizableInstr::RecognizableInstr(DisassemblerTables &tables,
   HasFROperands    = hasFROperands();
   HasVEX_LPrefix   = has256BitOperands() || Rec->getValueAsBit("hasVEX_L");
   
+  // Check for 64-bit inst which does not require REX
+  Is64Bit = false;
+  // FIXME: Is there some better way to check for In64BitMode?
+  std::vector<Record*> Predicates = Rec->getValueAsListOfDefs("Predicates");
+  for (unsigned i = 0, e = Predicates.size(); i != e; ++i) {
+    if (Predicates[i]->getName().find("64Bit") != Name.npos) {
+      Is64Bit = true;
+      break;
+    }
+  }
+  // FIXME: These instructions aren't marked as 64-bit in any way
+  Is64Bit |= Rec->getName() == "JMP64pcrel32" || 
+             Rec->getName() == "MASKMOVDQU64" || 
+             Rec->getName() == "POPFS64" || 
+             Rec->getName() == "POPGS64" || 
+             Rec->getName() == "PUSHFS64" || 
+             Rec->getName() == "PUSHGS64" ||
+             Rec->getName() == "REX64_PREFIX" ||
+             Rec->getName().find("VMREAD64") != Name.npos ||
+             Rec->getName().find("VMWRITE64") != Name.npos ||
+             Rec->getName().find("MOV64") != Name.npos || 
+             Rec->getName().find("PUSH64") != Name.npos ||
+             Rec->getName().find("POP64") != Name.npos;
+
   ShouldBeEmitted  = true;
 }
   
@@ -276,7 +300,7 @@ InstructionContext RecognizableInstr::insnContext() const {
       insnContext = IC_VEX_XS;
     else
       insnContext = IC_VEX;
-  } else if (Name.find("64") != Name.npos || HasREX_WPrefix) {
+  } else if (Is64Bit || HasREX_WPrefix) {
     if (HasREX_WPrefix && HasOpSizePrefix)
       insnContext = IC_64BIT_REXW_OPSIZE;
     else if (HasOpSizePrefix)
@@ -960,6 +984,7 @@ OperandType RecognizableInstr::typeFromString(const std::string &s,
   TYPE("i32mem",              TYPE_Mv)
   TYPE("i32imm",              TYPE_IMMv)
   TYPE("i32i8imm",            TYPE_IMM32)
+  TYPE("u32u8imm",            TYPE_IMM32)
   TYPE("GR32",                TYPE_Rv)
   TYPE("i64mem",              TYPE_Mv)
   TYPE("i64i32imm",           TYPE_IMM64)
@@ -1020,6 +1045,7 @@ OperandEncoding RecognizableInstr::immediateEncodingFromString
     ENCODING("i16imm",        ENCODING_IW)
   }
   ENCODING("i32i8imm",        ENCODING_IB)
+  ENCODING("u32u8imm",        ENCODING_IB)
   ENCODING("SSECC",           ENCODING_IB)
   ENCODING("i16imm",          ENCODING_Iv)
   ENCODING("i16i8imm",        ENCODING_IB)

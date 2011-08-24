@@ -1,23 +1,21 @@
 set(LLVM_TARGET_DEFINITIONS ARM.td)
 
-tablegen(ARMGenRegisterInfo.h.inc -gen-register-desc-header)
-tablegen(ARMGenRegisterNames.inc -gen-register-enums)
-tablegen(ARMGenRegisterInfo.inc -gen-register-desc)
-tablegen(ARMGenInstrNames.inc -gen-instr-enums)
-tablegen(ARMGenInstrInfo.inc -gen-instr-desc)
+tablegen(ARMGenRegisterInfo.inc -gen-register-info)
+tablegen(ARMGenInstrInfo.inc -gen-instr-info)
 tablegen(ARMGenCodeEmitter.inc -gen-emitter)
 tablegen(ARMGenMCCodeEmitter.inc -gen-emitter -mc-emitter)
+tablegen(ARMGenMCPseudoLowering.inc -gen-pseudo-lowering)
 tablegen(ARMGenAsmWriter.inc -gen-asm-writer)
 tablegen(ARMGenAsmMatcher.inc -gen-asm-matcher)
 tablegen(ARMGenDAGISel.inc -gen-dag-isel)
 tablegen(ARMGenFastISel.inc -gen-fast-isel)
 tablegen(ARMGenCallingConv.inc -gen-callingconv)
-tablegen(ARMGenSubtarget.inc -gen-subtarget)
+tablegen(ARMGenSubtargetInfo.inc -gen-subtarget)
 tablegen(ARMGenEDInfo.inc -gen-enhanced-disassembly-info)
-tablegen(ARMGenDecoderTables.inc -gen-arm-decoder)
+tablegen(ARMGenDisassemblerTables.inc -gen-disassembler)
+add_public_tablegen_target(ARMCommonTableGen)
 
 add_llvm_target(ARMCodeGen
-  ARMAsmBackend.cpp
   ARMAsmPrinter.cpp
   ARMBaseInstrInfo.cpp
   ARMBaseRegisterInfo.cpp
@@ -34,10 +32,7 @@ add_llvm_target(ARMCodeGen
   ARMISelLowering.cpp
   ARMInstrInfo.cpp
   ARMJITInfo.cpp
-  ARMMCCodeEmitter.cpp
-  ARMMCExpr.cpp
   ARMLoadStoreOptimizer.cpp
-  ARMMCAsmInfo.cpp
   ARMMCInstLower.cpp
   ARMRegisterInfo.cpp
   ARMSelectionDAGInfo.cpp
@@ -55,6 +50,20 @@ add_llvm_target(ARMCodeGen
   Thumb2SizeReduction.cpp
   )
 
+add_llvm_library_dependencies(LLVMARMCodeGen
+  LLVMARMAsmPrinter
+  LLVMARMDesc
+  LLVMARMInfo
+  LLVMAnalysis
+  LLVMAsmPrinter
+  LLVMCodeGen
+  LLVMCore
+  LLVMMC
+  LLVMSelectionDAG
+  LLVMSupport
+  LLVMTarget
+  )
+
 # workaround for hanging compilation on MSVC10
 if( MSVC_VERSION EQUAL 1600 )
 set_property(
@@ -67,3 +76,4 @@ add_subdirectory(TargetInfo)
 add_subdirectory(AsmParser)
 add_subdirectory(Disassembler)
 add_subdirectory(InstPrinter)
+add_subdirectory(MCTargetDesc)

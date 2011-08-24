@@ -16,10 +16,10 @@
 #ifndef LLVM_TARGET_TARGETREGISTERINFO_H
 #define LLVM_TARGET_TARGETREGISTERINFO_H
 
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/DenseSet.h"
 #include <cassert>
 #include <functional>
 
@@ -27,103 +27,84 @@ namespace llvm {
 
 class BitVector;
 class MachineFunction;
-class MachineMove;
 class RegScavenger;
 template<class T> class SmallVectorImpl;
 class raw_ostream;
-
-/// TargetRegisterDesc - This record contains all of the information known about
-/// a particular register.  The Overlaps field contains a pointer to a zero
-/// terminated array of registers that this register aliases, starting with
-/// itself. This is needed for architectures like X86 which have AL alias AX
-/// alias EAX. The SubRegs field is a zero terminated array of registers that
-/// are sub-registers of the specific register, e.g. AL, AH are sub-registers of
-/// AX. The SuperRegs field is a zero terminated array of registers that are
-/// super-registers of the specific register, e.g. RAX, EAX, are super-registers
-/// of AX.
-///
-struct TargetRegisterDesc {
-  const char     *Name;         // Printable name for the reg (for debugging)
-  const unsigned *Overlaps;     // Overlapping registers, described above
-  const unsigned *SubRegs;      // Sub-register set, described above
-  const unsigned *SuperRegs;    // Super-register set, described above
-  unsigned CostPerUse;          // Extra cost of instructions using register.
-  bool inAllocatableClass;      // Register belongs to an allocatable regclass.
-};
 
 class TargetRegisterClass {
 public:
   typedef const unsigned* iterator;
   typedef const unsigned* const_iterator;
-
   typedef const EVT* vt_iterator;
   typedef const TargetRegisterClass* const * sc_iterator;
 private:
-  unsigned ID;
-  const char *Name;
+  const MCRegisterClass *MC;
   const vt_iterator VTs;
   const sc_iterator SubClasses;
   const sc_iterator SuperClasses;
   const sc_iterator SubRegClasses;
   const sc_iterator SuperRegClasses;
-  const unsigned RegSize, Alignment;    // Size & Alignment of register in bytes
-  const int CopyCost;
-  const bool Allocatable;
-  const iterator RegsBegin, RegsEnd;
-  DenseSet<unsigned> RegSet;
 public:
-  TargetRegisterClass(unsigned id,
-                      const char *name,
-                      const EVT *vts,
+  TargetRegisterClass(const MCRegisterClass *MC, const EVT *vts,
                       const TargetRegisterClass * const *subcs,
                       const TargetRegisterClass * const *supcs,
                       const TargetRegisterClass * const *subregcs,
-                      const TargetRegisterClass * const *superregcs,
-                      unsigned RS, unsigned Al, int CC, bool Allocable,
-                      iterator RB, iterator RE)
-    : ID(id), Name(name), VTs(vts), SubClasses(subcs), SuperClasses(supcs),
-    SubRegClasses(subregcs), SuperRegClasses(superregcs),
-    RegSize(RS), Alignment(Al), CopyCost(CC), Allocatable(Allocable),
-    RegsBegin(RB), RegsEnd(RE) {
-      for (iterator I = RegsBegin, E = RegsEnd; I != E; ++I)
-        RegSet.insert(*I);
-    }
+                      const TargetRegisterClass * const *superregcs)
+    : MC(MC), VTs(vts), SubClasses(subcs), SuperClasses(supcs),
+      SubRegClasses(subregcs), SuperRegClasses(superregcs) {}
+
   virtual ~TargetRegisterClass() {}     // Allow subclasses
 
   /// getID() - Return the register class ID number.
   ///
-  unsigned getID() const { return ID; }
+  unsigned getID() const { return MC->getID(); }
 
   /// getName() - Return the register class name for debugging.
   ///
-  const char *getName() const { return Name; }
+  const char *getName() const { return MC->getName(); }
 
   /// begin/end - Return all of the registers in this class.
   ///
-  iterator       begin() const { return RegsBegin; }
-  iterator         end() const { return RegsEnd; }
+  iterator       begin() const { return MC->begin(); }
+  iterator         end() const { return MC->end(); }
 
   /// getNumRegs - Return the number of registers in this class.
   ///
-  unsigned getNumRegs() const { return (unsigned)(RegsEnd-RegsBegin); }
+  unsigned getNumRegs() const { return MC->getNumRegs(); }
 
   /// getRegister - Return the specified register in the class.
   ///
   unsigned getRegister(unsigned i) const {
-    assert(i < getNumRegs() && "Register number out of range!");
-    return RegsBegin[i];
+    return MC->getRegister(i);
   }
 
   /// contains - Return true if the specified register is included in this
   /// register class.  This does not include virtual registers.
   bool contains(unsigned Reg) const {
-    return RegSet.count(Reg);
+    return MC->contains(Reg);
   }
 
   /// contains - Return true if both registers are in this class.
   bool contains(unsigned Reg1, unsigned Reg2) const {
-    return contains(Reg1) && contains(Reg2);
+    return MC->contains(Reg1, Reg2);
   }
+
+  /// getSize - Return the size of the register in bytes, which is also the size
+  /// of a stack slot allocated to hold a spilled copy of this register.
+  unsigned getSize() const { return MC->getSize(); }
+
+  /// getAlignment - Return the minimum required alignment for a register of
+  /// this class.
+  unsigned getAlignment() const { return MC->getAlignment(); }
+
+  /// getCopyCost - Return the cost of copying a value between two registers in
+  /// this class. A negative number means the register class is very expensive
+  /// to copy e.g. status flag register classes.
+  int getCopyCost() const { return MC->getCopyCost(); }
+
+  /// isAllocatable - Return true if this register class may be used to create
+  /// virtual registers.
+  bool isAllocatable() const { return MC->isAllocatable(); }
 
   /// hasType - return true if this TargetRegisterClass has the ValueType vt.
   ///
@@ -253,27 +234,16 @@ public:
   ///
   virtual
   ArrayRef<unsigned> getRawAllocationOrder(const MachineFunction &MF) const {
-    return ArrayRef<unsigned>(begin(), getNumRegs());
+    return makeArrayRef(begin(), getNumRegs());
   }
-
-  /// getSize - Return the size of the register in bytes, which is also the size
-  /// of a stack slot allocated to hold a spilled copy of this register.
-  unsigned getSize() const { return RegSize; }
-
-  /// getAlignment - Return the minimum required alignment for a register of
-  /// this class.
-  unsigned getAlignment() const { return Alignment; }
-
-  /// getCopyCost - Return the cost of copying a value between two registers in
-  /// this class. A negative number means the register class is very expensive
-  /// to copy e.g. status flag register classes.
-  int getCopyCost() const { return CopyCost; }
-
-  /// isAllocatable - Return true if this register class may be used to create
-  /// virtual registers.
-  bool isAllocatable() const { return Allocatable; }
 };
 
+/// TargetRegisterInfoDesc - Extra information, not in MCRegisterDesc, about
+/// registers. These are used by codegen, not by MC.
+struct TargetRegisterInfoDesc {
+  unsigned CostPerUse;          // Extra cost of instructions using register.
+  bool inAllocatableClass;      // Register belongs to an allocatable regclass.
+};
 
 /// TargetRegisterInfo base class - We assume that the target defines a static
 /// array of TargetRegisterDesc objects that represent all of the machine
@@ -281,25 +251,19 @@ public:
 /// to this array so that we can turn register number into a register
 /// descriptor.
 ///
-class TargetRegisterInfo {
+class TargetRegisterInfo : public MCRegisterInfo {
 public:
   typedef const TargetRegisterClass * const * regclass_iterator;
 private:
-  const TargetRegisterDesc *Desc;             // Pointer to the descriptor array
+  const TargetRegisterInfoDesc *InfoDesc;     // Extra desc array for codegen
   const char *const *SubRegIndexNames;        // Names of subreg indexes.
-  unsigned NumRegs;                           // Number of entries in the array
-
   regclass_iterator RegClassBegin, RegClassEnd;   // List of regclasses
 
-  int CallFrameSetupOpcode, CallFrameDestroyOpcode;
-
 protected:
-  TargetRegisterInfo(const TargetRegisterDesc *D, unsigned NR,
+  TargetRegisterInfo(const TargetRegisterInfoDesc *ID,
                      regclass_iterator RegClassBegin,
                      regclass_iterator RegClassEnd,
-                     const char *const *subregindexnames,
-                     int CallFrameSetupOpcode = -1,
-                     int CallFrameDestroyOpcode = -1);
+                     const char *const *subregindexnames);
   virtual ~TargetRegisterInfo();
 public:
 
@@ -379,71 +343,16 @@ public:
   BitVector getAllocatableSet(const MachineFunction &MF,
                               const TargetRegisterClass *RC = NULL) const;
 
-  const TargetRegisterDesc &operator[](unsigned RegNo) const {
-    assert(RegNo < NumRegs &&
-           "Attempting to access record for invalid register number!");
-    return Desc[RegNo];
-  }
-
-  /// Provide a get method, equivalent to [], but more useful if we have a
-  /// pointer to this object.
-  ///
-  const TargetRegisterDesc &get(unsigned RegNo) const {
-    return operator[](RegNo);
-  }
-
-  /// getAliasSet - Return the set of registers aliased by the specified
-  /// register, or a null list of there are none.  The list returned is zero
-  /// terminated.
-  ///
-  const unsigned *getAliasSet(unsigned RegNo) const {
-    // The Overlaps set always begins with Reg itself.
-    return get(RegNo).Overlaps + 1;
-  }
-
-  /// getOverlaps - Return a list of registers that overlap Reg, including
-  /// itself. This is the same as the alias set except Reg is included in the
-  /// list.
-  /// These are exactly the registers in { x | regsOverlap(x, Reg) }.
-  ///
-  const unsigned *getOverlaps(unsigned RegNo) const {
-    return get(RegNo).Overlaps;
-  }
-
-  /// getSubRegisters - Return the list of registers that are sub-registers of
-  /// the specified register, or a null list of there are none. The list
-  /// returned is zero terminated and sorted according to super-sub register
-  /// relations. e.g. X86::RAX's sub-register list is EAX, AX, AL, AH.
-  ///
-  const unsigned *getSubRegisters(unsigned RegNo) const {
-    return get(RegNo).SubRegs;
-  }
-
-  /// getSuperRegisters - Return the list of registers that are super-registers
-  /// of the specified register, or a null list of there are none. The list
-  /// returned is zero terminated and sorted according to super-sub register
-  /// relations. e.g. X86::AL's super-register list is AX, EAX, RAX.
-  ///
-  const unsigned *getSuperRegisters(unsigned RegNo) const {
-    return get(RegNo).SuperRegs;
-  }
-
-  /// getName - Return the human-readable symbolic target-specific name for the
-  /// specified physical register.
-  const char *getName(unsigned RegNo) const {
-    return get(RegNo).Name;
-  }
-
   /// getCostPerUse - Return the additional cost of using this register instead
   /// of other registers in its class.
   unsigned getCostPerUse(unsigned RegNo) const {
-    return get(RegNo).CostPerUse;
+    return InfoDesc[RegNo].CostPerUse;
   }
 
-  /// getNumRegs - Return the number of registers this target has (useful for
-  /// sizing arrays holding per register information)
-  unsigned getNumRegs() const {
-    return NumRegs;
+  /// isInAllocatableClass - Return true if the register is in the allocation
+  /// of any register class.
+  bool isInAllocatableClass(unsigned RegNo) const {
+    return InfoDesc[RegNo].inAllocatableClass;
   }
 
   /// getSubRegIndexName - Return the human-readable symbolic target-specific
@@ -566,7 +475,7 @@ public:
   }
 
   /// getRegClass - Returns the register class associated with the enumeration
-  /// value.  See class TargetOperandInfo.
+  /// value.  See class MCOperandInfo.
   const TargetRegisterClass *getRegClass(unsigned i) const {
     assert(i < getNumRegClasses() && "Register Class ID out of range");
     return RegClassBegin[i];
@@ -732,15 +641,6 @@ public:
     return false; // Must return a value in order to compile with VS 2005
   }
 
-  /// getCallFrameSetup/DestroyOpcode - These methods return the opcode of the
-  /// frame setup/destroy instructions if they exist (-1 otherwise).  Some
-  /// targets use pseudo instructions in order to abstract away the difference
-  /// between operating with a frame pointer and operating without, through the
-  /// use of these two instructions.
-  ///
-  int getCallFrameSetupOpcode() const { return CallFrameSetupOpcode; }
-  int getCallFrameDestroyOpcode() const { return CallFrameDestroyOpcode; }
-
   /// eliminateCallFramePseudoInstr - This method is called during prolog/epilog
   /// code insertion to eliminate call frame setup and destroy pseudo
   /// instructions (but only if the Target is using them).  It is responsible
@@ -752,9 +652,6 @@ public:
   eliminateCallFramePseudoInstr(MachineFunction &MF,
                                 MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator MI) const {
-    assert(getCallFrameSetupOpcode()== -1 && getCallFrameDestroyOpcode()== -1 &&
-           "eliminateCallFramePseudoInstr must be implemented if using"
-           " call frame setup/destroy pseudo instructions!");
     assert(0 && "Call Frame Pseudo Instructions do not exist on this target!");
   }
 
@@ -785,26 +682,14 @@ public:
   //===--------------------------------------------------------------------===//
   /// Debug information queries.
 
-  /// getDwarfRegNum - Map a target register to an equivalent dwarf register
-  /// number.  Returns -1 if there is no equivalent value.  The second
-  /// parameter allows targets to use different numberings for EH info and
-  /// debugging info.
-  virtual int getDwarfRegNum(unsigned RegNum, bool isEH) const = 0;
-
-  virtual int getLLVMRegNum(unsigned RegNum, bool isEH) const = 0;
-
   /// getFrameRegister - This method should return the register used as a base
   /// for values allocated in the current stack frame.
   virtual unsigned getFrameRegister(const MachineFunction &MF) const = 0;
 
-  /// getRARegister - This method should return the register where the return
-  /// address can be found.
-  virtual unsigned getRARegister() const = 0;
-
-  /// getSEHRegNum - Map a target register to an equivalent SEH register
-  /// number.  Returns -1 if there is no equivalent value.
-  virtual int getSEHRegNum(unsigned i) const {
-    return i;
+  /// getCompactUnwindRegNum - This function maps the register to the number for
+  /// compact unwind encoding. Return -1 if the register isn't valid.
+  virtual int getCompactUnwindRegNum(unsigned, bool) const {
+    return -1;
   }
 };
 

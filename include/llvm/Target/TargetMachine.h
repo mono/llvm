@@ -14,52 +14,34 @@
 #ifndef LLVM_TARGET_TARGETMACHINE_H
 #define LLVM_TARGET_TARGETMACHINE_H
 
-#include "llvm/Target/TargetInstrItineraries.h"
+#include "llvm/MC/MCCodeGenInfo.h"
+#include "llvm/ADT/StringRef.h"
 #include <cassert>
 #include <string>
 
 namespace llvm {
 
-class Target;
+class InstrItineraryData;
+class JITCodeEmitter;
 class MCAsmInfo;
+class MCCodeGenInfo;
+class MCContext;
+class Pass;
+class PassManager;
+class PassManagerBase;
+class Target;
 class TargetData;
-class TargetSubtarget;
+class TargetELFWriterInfo;
+class TargetFrameLowering;
 class TargetInstrInfo;
 class TargetIntrinsicInfo;
 class TargetJITInfo;
 class TargetLowering;
-class TargetSelectionDAGInfo;
-class TargetFrameLowering;
-class JITCodeEmitter;
-class MCContext;
 class TargetRegisterInfo;
-class PassManagerBase;
-class PassManager;
-class Pass;
-class TargetELFWriterInfo;
+class TargetSelectionDAGInfo;
+class TargetSubtargetInfo;
 class formatted_raw_ostream;
 class raw_ostream;
-
-// Relocation model types.
-namespace Reloc {
-  enum Model {
-    Default,
-    Static,
-    PIC_,         // Cannot be named PIC due to collision with -DPIC
-    DynamicNoPIC
-  };
-}
-
-// Code model types.
-namespace CodeModel {
-  enum Model {
-    Default,
-    Small,
-    Kernel,
-    Medium,
-    Large
-  };
-}
 
 // Code generation optimization level.
 namespace CodeGenOpt {
@@ -91,14 +73,24 @@ class TargetMachine {
   TargetMachine(const TargetMachine &);   // DO NOT IMPLEMENT
   void operator=(const TargetMachine &);  // DO NOT IMPLEMENT
 protected: // Can only create subclasses.
-  TargetMachine(const Target &);
+  TargetMachine(const Target &T, StringRef TargetTriple,
+                StringRef CPU, StringRef FS);
 
   /// getSubtargetImpl - virtual method implemented by subclasses that returns
-  /// a reference to that target's TargetSubtarget-derived member variable.
-  virtual const TargetSubtarget *getSubtargetImpl() const { return 0; }
+  /// a reference to that target's TargetSubtargetInfo-derived member variable.
+  virtual const TargetSubtargetInfo *getSubtargetImpl() const { return 0; }
 
   /// TheTarget - The Target that this machine was created for.
   const Target &TheTarget;
+
+  /// TargetTriple, TargetCPU, TargetFS - Triple string, CPU name, and target
+  /// feature strings the TargetMachine instance is created with.
+  std::string TargetTriple;
+  std::string TargetCPU;
+  std::string TargetFS;
+
+  /// CodeGenInfo - Low level target information such as relocation model.
+  const MCCodeGenInfo *CodeGenInfo;
 
   /// AsmInfo - Contains target specific asm information.
   ///
@@ -114,6 +106,10 @@ public:
   virtual ~TargetMachine();
 
   const Target &getTarget() const { return TheTarget; }
+
+  const StringRef getTargetTriple() const { return TargetTriple; }
+  const StringRef getTargetCPU() const { return TargetCPU; }
+  const StringRef getTargetFeatureString() const { return TargetFS; }
 
   // Interfaces to the major aspects of target machine information:
   // -- Instruction opcode and operand information
@@ -132,7 +128,7 @@ public:
   const MCAsmInfo *getMCAsmInfo() const { return AsmInfo; }
 
   /// getSubtarget - This method returns a pointer to the specified type of
-  /// TargetSubtarget.  In debug builds, it verifies that the object being
+  /// TargetSubtargetInfo.  In debug builds, it verifies that the object being
   /// returned is of the correct type.
   template<typename STC> const STC &getSubtarget() const {
     return *static_cast<const STC*>(getSubtargetImpl());
@@ -202,19 +198,11 @@ public:
 
   /// getRelocationModel - Returns the code generation relocation model. The
   /// choices are static, PIC, and dynamic-no-pic, and target default.
-  static Reloc::Model getRelocationModel();
-
-  /// setRelocationModel - Sets the code generation relocation model.
-  ///
-  static void setRelocationModel(Reloc::Model Model);
+  Reloc::Model getRelocationModel() const;
 
   /// getCodeModel - Returns the code model. The choices are small, kernel,
   /// medium, large, and target default.
-  static CodeModel::Model getCodeModel();
-
-  /// setCodeModel - Sets the code model.
-  ///
-  static void setCodeModel(CodeModel::Model Model);
+  CodeModel::Model getCodeModel() const;
 
   /// getAsmVerbosityDefault - Returns the default value of asm verbosity.
   ///
@@ -295,10 +283,10 @@ public:
 /// implemented with the LLVM target-independent code generator.
 ///
 class LLVMTargetMachine : public TargetMachine {
-  std::string TargetTriple;
-
 protected: // Can only create subclasses.
-  LLVMTargetMachine(const Target &T, const std::string &TargetTriple);
+  LLVMTargetMachine(const Target &T, StringRef TargetTriple,
+                    StringRef CPU, StringRef FS,
+                    Reloc::Model RM, CodeModel::Model CM);
 
 private:
   /// addCommonCodeGenPasses - Add standard LLVM codegen passes used for
@@ -307,13 +295,7 @@ private:
   bool addCommonCodeGenPasses(PassManagerBase &, CodeGenOpt::Level,
                               bool DisableVerify, MCContext *&OutCtx);
 
-  virtual void setCodeModelForJIT();
-  virtual void setCodeModelForStatic();
-
 public:
-
-  const std::string &getTargetTriple() const { return TargetTriple; }
-
   /// addPassesToEmitFile - Add passes to the specified pass manager to get the
   /// specified file emitted.  Typically this will involve several steps of code
   /// generation.  If OptLevel is None, the code generator should emit code as

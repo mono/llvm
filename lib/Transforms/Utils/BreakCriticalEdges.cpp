@@ -176,6 +176,11 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
   BasicBlock *TIBB = TI->getParent();
   BasicBlock *DestBB = TI->getSuccessor(SuccNum);
 
+  // Splitting the critical edge to a landing pad block is non-trivial. Don't do
+  // it in this generic function.
+  assert(!DestBB->isLandingPad() &&
+         "Cannot split critical edge to a landing pad block!");
+
   // Create a new basic block, linking it into the CFG.
   BasicBlock *NewBB = BasicBlock::Create(TI->getContext(),
                       TIBB->getName() + "." + DestBB->getName() + "_crit_edge");
@@ -193,44 +198,22 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
   
   // If there are any PHI nodes in DestBB, we need to update them so that they
   // merge incoming values from NewBB instead of from TIBB.
-  if (PHINode *APHI = dyn_cast<PHINode>(DestBB->begin())) {
-    // This conceptually does:
-    //  foreach (PHINode *PN in DestBB)
-    //    PN->setIncomingBlock(PN->getIncomingBlock(TIBB), NewBB);
-    // but is optimized for two cases.
-    
-    if (APHI->getNumIncomingValues() <= 8) {  // Small # preds case.
-      unsigned BBIdx = 0;
-      for (BasicBlock::iterator I = DestBB->begin(); isa<PHINode>(I); ++I) {
-        // We no longer enter through TIBB, now we come in through NewBB.
-        // Revector exactly one entry in the PHI node that used to come from
-        // TIBB to come from NewBB.
-        PHINode *PN = cast<PHINode>(I);
-        
-        // Reuse the previous value of BBIdx if it lines up.  In cases where we
-        // have multiple phi nodes with *lots* of predecessors, this is a speed
-        // win because we don't have to scan the PHI looking for TIBB.  This
-        // happens because the BB list of PHI nodes are usually in the same
-        // order.
-        if (PN->getIncomingBlock(BBIdx) != TIBB)
-          BBIdx = PN->getBasicBlockIndex(TIBB);
-        PN->setIncomingBlock(BBIdx, NewBB);
-      }
-    } else {
-      // However, the foreach loop is slow for blocks with lots of predecessors
-      // because PHINode::getIncomingBlock is O(n) in # preds.  Instead, walk
-      // the user list of TIBB to find the PHI nodes.
-      SmallPtrSet<PHINode*, 16> UpdatedPHIs;
-    
-      for (Value::use_iterator UI = TIBB->use_begin(), E = TIBB->use_end();
-           UI != E; ) {
-        Value::use_iterator Use = UI++;
-        if (PHINode *PN = dyn_cast<PHINode>(*Use)) {
-          // Remove one entry from each PHI.
-          if (PN->getParent() == DestBB && UpdatedPHIs.insert(PN))
-            PN->setOperand(Use.getOperandNo(), NewBB);
-        }
-      }
+  {
+    unsigned BBIdx = 0;
+    for (BasicBlock::iterator I = DestBB->begin(); isa<PHINode>(I); ++I) {
+      // We no longer enter through TIBB, now we come in through NewBB.
+      // Revector exactly one entry in the PHI node that used to come from
+      // TIBB to come from NewBB.
+      PHINode *PN = cast<PHINode>(I);
+
+      // Reuse the previous value of BBIdx if it lines up.  In cases where we
+      // have multiple phi nodes with *lots* of predecessors, this is a speed
+      // win because we don't have to scan the PHI looking for TIBB.  This
+      // happens because the BB list of PHI nodes are usually in the same
+      // order.
+      if (PN->getIncomingBlock(BBIdx) != TIBB)
+	BBIdx = PN->getBasicBlockIndex(TIBB);
+      PN->setIncomingBlock(BBIdx, NewBB);
     }
   }
    
@@ -359,6 +342,8 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
         }
 
         // For each unique exit block...
+        // FIXME: This code is functionally equivalent to the corresponding
+        // loop in LoopSimplify.
         SmallVector<BasicBlock *, 4> ExitBlocks;
         TIL->getExitBlocks(ExitBlocks);
         for (unsigned i = 0, e = ExitBlocks.size(); i != e; ++i) {
@@ -370,10 +355,15 @@ BasicBlock *llvm::SplitCriticalEdge(TerminatorInst *TI, unsigned SuccNum,
           for (pred_iterator I = pred_begin(Exit), E = pred_end(Exit);
                I != E; ++I) {
             BasicBlock *P = *I;
-            if (TIL->contains(P))
+            if (TIL->contains(P)) {
+              if (isa<IndirectBrInst>(P->getTerminator())) {
+                Preds.clear();
+                break;
+              }
               Preds.push_back(P);
-            else
+            } else {
               HasPredOutsideOfLoop = true;
+            }
           }
           // If there are any preds not in the loop, we'll need to split
           // the edges. The Preds.empty() check is needed because a block

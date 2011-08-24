@@ -116,7 +116,7 @@ bool AggressiveAntiDepState::IsLive(unsigned Reg)
 AggressiveAntiDepBreaker::
 AggressiveAntiDepBreaker(MachineFunction& MFi,
                          const RegisterClassInfo &RCI,
-                         TargetSubtarget::RegClassVector& CriticalPathRCs) :
+                         TargetSubtargetInfo::RegClassVector& CriticalPathRCs) :
   AntiDepBreaker(), MF(MFi),
   MRI(MF.getRegInfo()),
   TII(MF.getTarget().getInstrInfo()),
@@ -404,7 +404,7 @@ void AggressiveAntiDepBreaker::PrescanInstruction(MachineInstr *MI,
     // Note register reference...
     const TargetRegisterClass *RC = NULL;
     if (i < MI->getDesc().getNumOperands())
-      RC = MI->getDesc().OpInfo[i].getRegClass(TRI);
+      RC = TII->getRegClass(MI->getDesc(), i, TRI);
     AggressiveAntiDepState::RegisterReference RR = { &MO, RC };
     RegRefs.insert(std::make_pair(Reg, RR));
   }
@@ -479,7 +479,7 @@ void AggressiveAntiDepBreaker::ScanInstruction(MachineInstr *MI,
     // Note register reference...
     const TargetRegisterClass *RC = NULL;
     if (i < MI->getDesc().getNumOperands())
-      RC = MI->getDesc().OpInfo[i].getRegClass(TRI);
+      RC = TII->getRegClass(MI->getDesc(), i, TRI);
     AggressiveAntiDepState::RegisterReference RR = { &MO, RC };
     RegRefs.insert(std::make_pair(Reg, RR));
   }

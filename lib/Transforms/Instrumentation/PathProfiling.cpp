@@ -374,7 +374,7 @@ namespace llvm {
   template<bool xcompile> class TypeBuilder<PathProfilingFunctionTable,
                                             xcompile> {
   public:
-    static const StructType *get(LLVMContext& C) {
+    static StructType *get(LLVMContext& C) {
       return( StructType::get(
                 TypeBuilder<types::i<32>, xcompile>::get(C), // type
                 TypeBuilder<types::i<32>, xcompile>::get(C), // array size
@@ -1029,8 +1029,7 @@ void PathProfiler::insertCounterIncrement(Value* incValue,
     gepIndices[1] = incValue;
 
     GetElementPtrInst* pcPointer =
-      GetElementPtrInst::Create(dag->getCounterArray(),
-                                gepIndices.begin(), gepIndices.end(),
+      GetElementPtrInst::Create(dag->getCounterArray(), gepIndices,
                                 "counterInc", insertPoint);
 
     // Load from the array - call it oldPC
@@ -1062,7 +1061,7 @@ void PathProfiler::insertCounterIncrement(Value* incValue,
 
     CallInst::Create(
       increment ? llvmIncrementHashFunction : llvmDecrementHashFunction,
-      args.begin(), args.end(), "", insertPoint);
+      args, "", insertPoint);
   }
 }
 
@@ -1289,7 +1288,7 @@ void PathProfiler::runOnFunction(std::vector<Constant*> &ftInit,
 
   // Should we store the information in an array or hash
   if( dag.getNumberOfPaths() <= HASH_THRESHHOLD ) {
-    const Type* t = ArrayType::get(Type::getInt32Ty(*Context),
+    Type* t = ArrayType::get(Type::getInt32Ty(*Context),
                                    dag.getNumberOfPaths());
 
     dag.setCounterArray(new GlobalVariable(M, t, false,
@@ -1301,7 +1300,7 @@ void PathProfiler::runOnFunction(std::vector<Constant*> &ftInit,
 
   // Add to global function reference table
   unsigned type;
-  const Type* voidPtr = TypeBuilder<types::i<8>*, true>::get(*Context);
+  Type* voidPtr = TypeBuilder<types::i<8>*, true>::get(*Context);
 
   if( dag.getNumberOfPaths() <= HASH_THRESHHOLD )
     type = ProfilingArray;
@@ -1315,7 +1314,7 @@ void PathProfiler::runOnFunction(std::vector<Constant*> &ftInit,
     ConstantExpr::getBitCast(dag.getCounterArray(), voidPtr) :
     Constant::getNullValue(voidPtr);
 
-  const StructType* at = ftEntryTypeBuilder::get(*Context);
+  StructType* at = ftEntryTypeBuilder::get(*Context);
   ConstantStruct* functionEntry =
     (ConstantStruct*)ConstantStruct::get(at, entryArray);
   ftInit.push_back(functionEntry);
@@ -1379,8 +1378,8 @@ bool PathProfiler::runOnModule(Module &M) {
     runOnFunction(ftInit, *F, M);
   }
 
-  const Type *t = ftEntryTypeBuilder::get(*Context);
-  const ArrayType* ftArrayType = ArrayType::get(t, ftInit.size());
+  Type *t = ftEntryTypeBuilder::get(*Context);
+  ArrayType* ftArrayType = ArrayType::get(t, ftInit.size());
   Constant* ftInitConstant = ConstantArray::get(ftArrayType, ftInit);
 
   DEBUG(dbgs() << " ftArrayType:" << *ftArrayType << "\n");
@@ -1388,7 +1387,7 @@ bool PathProfiler::runOnModule(Module &M) {
   GlobalVariable* functionTable =
     new GlobalVariable(M, ftArrayType, false, GlobalValue::InternalLinkage,
                        ftInitConstant, "functionPathTable");
-  const Type *eltType = ftArrayType->getTypeAtIndex((unsigned)0);
+  Type *eltType = ftArrayType->getTypeAtIndex((unsigned)0);
   InsertProfilingInitCall(Main, "llvm_start_path_profiling", functionTable,
                           PointerType::getUnqual(eltType));
 

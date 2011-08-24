@@ -16,8 +16,10 @@
 #ifndef LLVM_TARGET_ASM_INFO_H
 #define LLVM_TARGET_ASM_INFO_H
 
+#include "llvm/MC/MachineLocation.h"
 #include "llvm/MC/MCDirectives.h"
 #include <cassert>
+#include <vector>
 
 namespace llvm {
   class MCExpr;
@@ -37,6 +39,18 @@ namespace llvm {
     //===------------------------------------------------------------------===//
     // Properties to be set by the target writer, used to configure asm printer.
     //
+    
+    /// PointerSize - Pointer size in bytes.
+    ///               Default is 4.
+    unsigned PointerSize;
+
+    /// IsLittleEndian - True if target is little endian.
+    ///                  Default is true.
+    bool IsLittleEndian;
+
+    /// StackGrowsUp - True if target stack grow up.
+    ///                Default is false.
+    bool StackGrowsUp;
 
     /// HasSubsectionsViaSymbols - True if this target has the MachO
     /// .subsections_via_symbols directive.
@@ -102,6 +116,13 @@ namespace llvm {
     /// emit before and after an inline assembly statement.
     const char *InlineAsmStart;              // Defaults to "#APP\n"
     const char *InlineAsmEnd;                // Defaults to "#NO_APP\n"
+
+    /// Code16Directive, Code32Directive, Code64Directive - These are assembly
+    /// directives that tells the assembler to interpret the following
+    /// instructions differently.
+    const char *Code16Directive;             // Defaults to ".code16"
+    const char *Code32Directive;             // Defaults to ".code32"
+    const char *Code64Directive;             // Defaults to ".code64"
 
     /// AssemblerDialect - Which dialect of an assembler variant to use.
     unsigned AssemblerDialect;               // Defaults to 0
@@ -284,9 +305,17 @@ namespace llvm {
     // use EmitLabelOffsetDifference.
     bool DwarfUsesLabelOffsetForRanges;
 
+    /// DwarfRegNumForCFI - True if dwarf register numbers are printed
+    /// instead of symbolic register names in .cfi_* directives.
+    bool DwarfRegNumForCFI;  // Defaults to false;
+
     //===--- CBE Asm Translation Table -----------------------------------===//
 
     const char *const *AsmTransCBE;          // Defaults to empty
+
+    //===--- Prologue State ----------------------------------------------===//
+
+    std::vector<MachineMove> InitialFrameState;
 
   public:
     explicit MCAsmInfo();
@@ -295,6 +324,21 @@ namespace llvm {
     // FIXME: move these methods to DwarfPrinter when the JIT stops using them.
     static unsigned getSLEB128Size(int Value);
     static unsigned getULEB128Size(unsigned Value);
+
+    /// getPointerSize - Get the pointer size in bytes.
+    unsigned getPointerSize() const {
+      return PointerSize;
+    }
+
+    /// islittleendian - True if the target is little endian.
+    bool isLittleEndian() const {
+      return IsLittleEndian;
+    }
+
+    /// isStackGrowthDirectionUp - True if target stack grow up.
+    bool isStackGrowthDirectionUp() const {
+      return StackGrowsUp;
+    }
 
     bool hasSubsectionsViaSymbols() const { return HasSubsectionsViaSymbols; }
 
@@ -386,6 +430,15 @@ namespace llvm {
     const char *getInlineAsmEnd() const {
       return InlineAsmEnd;
     }
+    const char *getCode16Directive() const {
+      return Code16Directive;
+    }
+    const char *getCode32Directive() const {
+      return Code32Directive;
+    }
+    const char *getCode64Directive() const {
+      return Code64Directive;
+    }
     unsigned getAssemblerDialect() const {
       return AssemblerDialect;
     }
@@ -475,8 +528,19 @@ namespace llvm {
     bool doesDwarfUsesLabelOffsetForRanges() const {
       return DwarfUsesLabelOffsetForRanges;
     }
+    bool useDwarfRegNumForCFI() const {
+      return DwarfRegNumForCFI;
+    }
     const char *const *getAsmCBE() const {
       return AsmTransCBE;
+    }
+
+    void addInitialFrameState(MCSymbol *label, const MachineLocation &D,
+                              const MachineLocation &S) {
+      InitialFrameState.push_back(MachineMove(label, D, S));
+    }
+    const std::vector<MachineMove> &getInitialFrameState() const {
+      return InitialFrameState;
     }
   };
 }

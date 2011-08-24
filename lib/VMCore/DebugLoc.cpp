@@ -104,7 +104,7 @@ MDNode *DebugLoc::getAsMDNode(const LLVMContext &Ctx) const {
   assert(Scope && "If scope is null, this should be isUnknown()");
   
   LLVMContext &Ctx2 = Scope->getContext();
-  const Type *Int32 = Type::getInt32Ty(Ctx2);
+  Type *Int32 = Type::getInt32Ty(Ctx2);
   Value *Elts[] = {
     ConstantInt::get(Int32, getLine()), ConstantInt::get(Int32, getCol()),
     Scope, IA
@@ -126,6 +126,38 @@ DebugLoc DebugLoc::getFromDILocation(MDNode *N) {
     ColNo = Col->getZExtValue();
   
   return get(LineNo, ColNo, Scope, dyn_cast_or_null<MDNode>(N->getOperand(3)));
+}
+
+/// getFromDILexicalBlock - Translate the DILexicalBlock into a DebugLoc.
+DebugLoc DebugLoc::getFromDILexicalBlock(MDNode *N) {
+  if (N == 0 || N->getNumOperands() < 3) return DebugLoc();
+  
+  MDNode *Scope = dyn_cast_or_null<MDNode>(N->getOperand(1));
+  if (Scope == 0) return DebugLoc();
+  
+  unsigned LineNo = 0, ColNo = 0;
+  if (ConstantInt *Line = dyn_cast_or_null<ConstantInt>(N->getOperand(2)))
+    LineNo = Line->getZExtValue();
+  if (ConstantInt *Col = dyn_cast_or_null<ConstantInt>(N->getOperand(3)))
+    ColNo = Col->getZExtValue();
+  
+  return get(LineNo, ColNo, Scope, NULL);
+}
+
+void DebugLoc::dump(const LLVMContext &Ctx) const {
+#ifndef NDEBUG
+  if (!isUnknown()) {
+    dbgs() << getLine();
+    if (getCol() != 0)
+      dbgs() << ',' << getCol();
+    DebugLoc InlinedAtDL = DebugLoc::getFromDILocation(getInlinedAt(Ctx));
+    if (!InlinedAtDL.isUnknown()) {
+      dbgs() << " @ ";
+      InlinedAtDL.dump(Ctx);
+    } else
+      dbgs() << "\n";
+  }
+#endif
 }
 
 //===----------------------------------------------------------------------===//

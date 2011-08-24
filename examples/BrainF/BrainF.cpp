@@ -55,9 +55,9 @@ void BrainF::header(LLVMContext& C) {
   //Function prototypes
 
   //declare void @llvm.memset.p0i8.i32(i8 *, i8, i32, i32, i1)
-  const Type *Tys[] = { Type::getInt8PtrTy(C), Type::getInt32Ty(C) };
+  Type *Tys[] = { Type::getInt8PtrTy(C), Type::getInt32Ty(C) };
   Function *memset_func = Intrinsic::getDeclaration(module, Intrinsic::memset,
-                                                    Tys, 2);
+                                                    Tys);
 
   //declare i32 @getchar()
   getchar_func = cast<Function>(module->
@@ -80,8 +80,8 @@ void BrainF::header(LLVMContext& C) {
   //%arr = malloc i8, i32 %d
   ConstantInt *val_mem = ConstantInt::get(C, APInt(32, memtotal));
   BasicBlock* BB = builder->GetInsertBlock();
-  const Type* IntPtrTy = IntegerType::getInt32Ty(C);
-  const Type* Int8Ty = IntegerType::getInt8Ty(C);
+  Type* IntPtrTy = IntegerType::getInt32Ty(C);
+  Type* Int8Ty = IntegerType::getInt8Ty(C);
   Constant* allocsize = ConstantExpr::getSizeOf(Int8Ty);
   allocsize = ConstantExpr::getTruncOrBitCast(allocsize, IntPtrTy);
   ptr_arr = CallInst::CreateMalloc(BB, IntPtrTy, Int8Ty, allocsize, val_mem, 
@@ -99,7 +99,7 @@ void BrainF::header(LLVMContext& C) {
     };
 
     CallInst *memset_call = builder->
-      CreateCall(memset_func, memset_params, array_endof(memset_params));
+      CreateCall(memset_func, memset_params);
     memset_call->setTailCall(false);
   }
 
@@ -162,8 +162,7 @@ void BrainF::header(LLVMContext& C) {
       };
 
       Constant *msgptr = ConstantExpr::
-        getGetElementPtr(aberrormsg, gep_params,
-                         array_lengthof(gep_params));
+        getGetElementPtr(aberrormsg, gep_params);
 
       Value *puts_params[] = {
         msgptr
@@ -171,7 +170,7 @@ void BrainF::header(LLVMContext& C) {
 
       CallInst *puts_call =
         CallInst::Create(puts_func,
-                         puts_params, array_endof(puts_params),
+                         puts_params,
                          "", aberrorbb);
       puts_call->setTailCall(false);
     }
@@ -229,7 +228,7 @@ void BrainF::readloop(PHINode *phi, BasicBlock *oldbb, BasicBlock *testbb,
           };
           CallInst *putchar_call = builder->
             CreateCall(putchar_func,
-                       putchar_params, array_endof(putchar_params));
+                       putchar_params);
           putchar_call->setTailCall(false);
         }
         break;

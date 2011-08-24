@@ -28,7 +28,6 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
-#include "llvm/CodeGen/RegisterCoalescer.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -56,11 +55,6 @@ static cl::opt<bool>
 NewHeuristic("new-spilling-heuristic",
              cl::desc("Use new spilling heuristic"),
              cl::init(false), cl::Hidden);
-
-static cl::opt<bool>
-PreSplitIntervals("pre-alloc-split",
-                  cl::desc("Pre-register allocation live interval splitting"),
-                  cl::init(false), cl::Hidden);
 
 static cl::opt<bool>
 TrivCoalesceEnds("trivial-coalesce-ends",
@@ -101,10 +95,9 @@ namespace {
       initializeLiveDebugVariablesPass(*PassRegistry::getPassRegistry());
       initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
       initializeStrongPHIEliminationPass(*PassRegistry::getPassRegistry());
-      initializeRegisterCoalescerAnalysisGroup(
+      initializeRegisterCoalescerPass(
         *PassRegistry::getPassRegistry());
       initializeCalculateSpillWeightsPass(*PassRegistry::getPassRegistry());
-      initializePreAllocSplittingPass(*PassRegistry::getPassRegistry());
       initializeLiveStacksPass(*PassRegistry::getPassRegistry());
       initializeMachineDominatorTreePass(*PassRegistry::getPassRegistry());
       initializeMachineLoopInfoPass(*PassRegistry::getPassRegistry());
@@ -215,10 +208,8 @@ namespace {
         AU.addRequiredID(StrongPHIEliminationID);
       // Make sure PassManager knows which analyses to make available
       // to coalescing and which analyses coalescing invalidates.
-      AU.addRequiredTransitive<RegisterCoalescer>();
+      AU.addRequiredTransitiveID(RegisterCoalescerPassID);
       AU.addRequired<CalculateSpillWeights>();
-      if (PreSplitIntervals)
-        AU.addRequiredID(PreAllocSplittingID);
       AU.addRequiredID(LiveStacksID);
       AU.addPreservedID(LiveStacksID);
       AU.addRequired<MachineLoopInfo>();
@@ -401,11 +392,10 @@ INITIALIZE_PASS_BEGIN(RALinScan, "linearscan-regalloc",
 INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
 INITIALIZE_PASS_DEPENDENCY(StrongPHIElimination)
 INITIALIZE_PASS_DEPENDENCY(CalculateSpillWeights)
-INITIALIZE_PASS_DEPENDENCY(PreAllocSplitting)
 INITIALIZE_PASS_DEPENDENCY(LiveStacks)
 INITIALIZE_PASS_DEPENDENCY(MachineLoopInfo)
 INITIALIZE_PASS_DEPENDENCY(VirtRegMap)
-INITIALIZE_AG_DEPENDENCY(RegisterCoalescer)
+INITIALIZE_PASS_DEPENDENCY(RegisterCoalescer)
 INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_END(RALinScan, "linearscan-regalloc",
                     "Linear Scan Register Allocator", false, false)

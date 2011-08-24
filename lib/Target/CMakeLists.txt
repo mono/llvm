@@ -1,9 +1,6 @@
 add_llvm_library(LLVMTarget
   Mangler.cpp
-  SubtargetFeature.cpp
   Target.cpp
-  TargetAsmInfo.cpp
-  TargetAsmLexer.cpp
   TargetData.cpp
   TargetELFWriterInfo.cpp
   TargetFrameLowering.cpp
@@ -13,7 +10,14 @@ add_llvm_library(LLVMTarget
   TargetLoweringObjectFile.cpp
   TargetMachine.cpp
   TargetRegisterInfo.cpp
-  TargetSubtarget.cpp
+  TargetRegistry.cpp
+  TargetSubtargetInfo.cpp
+  )
+
+add_llvm_library_dependencies(LLVMTarget
+  LLVMCore
+  LLVMMC
+  LLVMSupport
   )
 
 set(LLVM_ENUM_ASM_PRINTERS "")

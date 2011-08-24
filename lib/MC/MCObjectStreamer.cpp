@@ -17,11 +17,10 @@
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/Target/TargetAsmBackend.h"
-#include "llvm/Target/TargetAsmInfo.h"
+#include "llvm/MC/MCAsmBackend.h"
 using namespace llvm;
 
-MCObjectStreamer::MCObjectStreamer(MCContext &Context, TargetAsmBackend &TAB,
+MCObjectStreamer::MCObjectStreamer(MCContext &Context, MCAsmBackend &TAB,
                                    raw_ostream &OS, MCCodeEmitter *Emitter_)
   : MCStreamer(Context),
     Assembler(new MCAssembler(Context, TAB,
@@ -31,7 +30,7 @@ MCObjectStreamer::MCObjectStreamer(MCContext &Context, TargetAsmBackend &TAB,
 {
 }
 
-MCObjectStreamer::MCObjectStreamer(MCContext &Context, TargetAsmBackend &TAB,
+MCObjectStreamer::MCObjectStreamer(MCContext &Context, MCAsmBackend &TAB,
                                    raw_ostream &OS, MCCodeEmitter *Emitter_,
                                    MCAssembler *_Assembler)
   : MCStreamer(Context), Assembler(_Assembler), CurSectionData(0)
@@ -197,9 +196,9 @@ void MCObjectStreamer::EmitInstToFragment(const MCInst &Inst) {
 
 void MCObjectStreamer::EmitDwarfAdvanceLineAddr(int64_t LineDelta,
                                                 const MCSymbol *LastLabel,
-                                                const MCSymbol *Label) {
+                                                const MCSymbol *Label,
+                                                unsigned PointerSize) {
   if (!LastLabel) {
-    int PointerSize = getContext().getTargetAsmInfo().getPointerSize();
     EmitDwarfSetLineAddr(LineDelta, Label, PointerSize);
     return;
   }

@@ -136,19 +136,17 @@ void MBlazeAsmPrinter::printSavedRegsBitmask() {
   const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
   for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
     unsigned Reg = CSI[i].getReg();
-    unsigned RegNum = MBlazeRegisterInfo::getRegisterNumbering(Reg);
+    unsigned RegNum = getMBlazeRegisterNumbering(Reg);
     if (MBlaze::GPRRegisterClass->contains(Reg))
       CPUBitmask |= (1 << RegNum);
   }
 
   // Return Address and Frame registers must also be set in CPUBitmask.
   if (TFI->hasFP(*MF))
-    CPUBitmask |= (1 << MBlazeRegisterInfo::
-                getRegisterNumbering(RI.getFrameRegister(*MF)));
+    CPUBitmask |= (1 <<  getMBlazeRegisterNumbering(RI.getFrameRegister(*MF)));
 
   if (MFI->adjustsStack())
-    CPUBitmask |= (1 << MBlazeRegisterInfo::
-                getRegisterNumbering(RI.getRARegister()));
+    CPUBitmask |= (1 << getMBlazeRegisterNumbering(RI.getRARegister()));
 
   // Print CPUBitmask
   OutStreamer.EmitRawText("\t.mask\t0x" + Twine::utohexstr(CPUBitmask));
@@ -318,19 +316,7 @@ isBlockOnlyReachableByFallthrough(const MachineBasicBlock *MBB) const {
   return I == Pred->end() || !I->getDesc().isBarrier();
 }
 
-static MCInstPrinter *createMBlazeMCInstPrinter(const Target &T,
-                                                TargetMachine &TM,
-                                                unsigned SyntaxVariant,
-                                                const MCAsmInfo &MAI) {
-  if (SyntaxVariant == 0)
-    return new MBlazeInstPrinter(TM, MAI);
-  return 0;
-}
-
 // Force static initialization.
 extern "C" void LLVMInitializeMBlazeAsmPrinter() {
   RegisterAsmPrinter<MBlazeAsmPrinter> X(TheMBlazeTarget);
-  TargetRegistry::RegisterMCInstPrinter(TheMBlazeTarget,
-                                        createMBlazeMCInstPrinter);
-
 }

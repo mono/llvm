@@ -503,7 +503,7 @@
 // CHECK: 	ud2
         	ud2
 
-// CHECK: 	movnti	%ecx, 3735928559(%ebx,%ecx,8)
+// CHECK: 	movntil	%ecx, 3735928559(%ebx,%ecx,8)
         	movnti	%ecx,0xdeadbeef(%ebx,%ecx,8)
 
 // CHECK: 	clflush	3735928559(%ebx,%ecx,8)
@@ -4505,23 +4505,23 @@
 // CHECK:  encoding: [0xdf,0xea]
         	fucomip	%st(2),%st
 
-// CHECK: movnti	%ecx, 3735928559(%ebx,%ecx,8)
+// CHECK: movntil	%ecx, 3735928559(%ebx,%ecx,8)
 // CHECK:  encoding: [0x0f,0xc3,0x8c,0xcb,0xef,0xbe,0xad,0xde]
         	movnti	%ecx,0xdeadbeef(%ebx,%ecx,8)
 
-// CHECK: movnti	%ecx, 69
+// CHECK: movntil	%ecx, 69
 // CHECK:  encoding: [0x0f,0xc3,0x0d,0x45,0x00,0x00,0x00]
         	movnti	%ecx,0x45
 
-// CHECK: movnti	%ecx, 32493
+// CHECK: movntil	%ecx, 32493
 // CHECK:  encoding: [0x0f,0xc3,0x0d,0xed,0x7e,0x00,0x00]
         	movnti	%ecx,0x7eed
 
-// CHECK: movnti	%ecx, 3133065982
+// CHECK: movntil	%ecx, 3133065982
 // CHECK:  encoding: [0x0f,0xc3,0x0d,0xfe,0xca,0xbe,0xba]
         	movnti	%ecx,0xbabecafe
 
-// CHECK: movnti	%ecx, 305419896
+// CHECK: movntil	%ecx, 305419896
 // CHECK:  encoding: [0x0f,0xc3,0x0d,0x78,0x56,0x34,0x12]
         	movnti	%ecx,0x12345678
 
@@ -14177,19 +14177,19 @@
 // CHECK: 	fucompi	%st(2)
         	fucomip	%st(2),%st
 
-// CHECK: 	movnti	%ecx, 3735928559(%ebx,%ecx,8)
+// CHECK: 	movntil	%ecx, 3735928559(%ebx,%ecx,8)
         	movnti	%ecx,0xdeadbeef(%ebx,%ecx,8)
 
-// CHECK: 	movnti	%ecx, 69
-        	movnti	%ecx,0x45
+// CHECK: 	movntil	%ecx, 69
+        	movntil	%ecx,0x45
 
-// CHECK: 	movnti	%ecx, 32493
+// CHECK: 	movntil	%ecx, 32493
         	movnti	%ecx,0x7eed
 
-// CHECK: 	movnti	%ecx, 3133065982
+// CHECK: 	movntil	%ecx, 3133065982
         	movnti	%ecx,0xbabecafe
 
-// CHECK: 	movnti	%ecx, 305419896
+// CHECK: 	movntil	%ecx, 305419896
         	movnti	%ecx,0x12345678
 
 // CHECK: 	clflush	3735928559(%ebx,%ecx,8)
@@ -19571,7 +19571,24 @@
 // CHECK: 	aeskeygenassist	$125, (%edx,%eax,4), %xmm2
                 aeskeygenassist $125, (%edx,%eax,4), %xmm2
 
-// CHECK:   blendvps	(%rax), %xmm1   # encoding: [0x66,0x0f,0x38,0x14,0x08]
-            blendvps (%rax), %xmm1
+// CHECK:   blendvps	(%eax), %xmm1   # encoding: [0x66,0x0f,0x38,0x14,0x08]
+            blendvps (%eax), %xmm1
 // CHECK:   blendvps	%xmm2, %xmm1    # encoding: [0x66,0x0f,0x38,0x14,0xca]
             blendvps %xmm2, %xmm1
+
+// rdar://9795008
+// These instructions take a mask not an 8-bit sign extended value.
+// CHECK: blendps $129, %xmm2, %xmm1
+          blendps $0x81, %xmm2, %xmm1
+// CHECK: blendpd $129, %xmm2, %xmm1
+          blendpd $0x81, %xmm2, %xmm1
+// CHECK: pblendw $129, %xmm2, %xmm1
+          pblendw $0x81, %xmm2, %xmm1
+// CHECK: mpsadbw $129, %xmm2, %xmm1
+          mpsadbw $0x81, %xmm2, %xmm1
+// CHECK: dpps $129, %xmm2, %xmm1
+          dpps $0x81, %xmm2, %xmm1
+// CHECK: dppd $129, %xmm2, %xmm1
+          dppd $0x81, %xmm2, %xmm1
+// CHECK: insertps $129, %xmm2, %xmm1
+          insertps $0x81, %xmm2, %xmm1

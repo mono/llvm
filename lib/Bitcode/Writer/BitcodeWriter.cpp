@@ -21,7 +21,6 @@
 #include "llvm/Instructions.h"
 #include "llvm/Module.h"
 #include "llvm/Operator.h"
-#include "llvm/TypeSymbolTable.h"
 #include "llvm/ValueSymbolTable.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -29,6 +28,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Program.h"
 #include <cctype>
+#include <map>
 using namespace llvm;
 
 /// These are manifest constants used by the bitcode writer. They do not need to
@@ -57,7 +57,6 @@ enum {
   FUNCTION_INST_RET_VAL_ABBREV,
   FUNCTION_INST_UNREACHABLE_ABBREV
 };
-
 
 static unsigned GetEncodedCastOpcode(unsigned Opcode) {
   switch (Opcode) {
@@ -101,13 +100,54 @@ static unsigned GetEncodedBinaryOpcode(unsigned Opcode) {
   }
 }
 
-static void WriteStringRecord(unsigned Code, const std::string &Str,
+static unsigned GetEncodedRMWOperation(AtomicRMWInst::BinOp Op) {
+  switch (Op) {
+  default: llvm_unreachable("Unknown RMW operation!");
+  case AtomicRMWInst::Xchg: return bitc::RMW_XCHG;
+  case AtomicRMWInst::Add: return bitc::RMW_ADD;
+  case AtomicRMWInst::Sub: return bitc::RMW_SUB;
+  case AtomicRMWInst::And: return bitc::RMW_AND;
+  case AtomicRMWInst::Nand: return bitc::RMW_NAND;
+  case AtomicRMWInst::Or: return bitc::RMW_OR;
+  case AtomicRMWInst::Xor: return bitc::RMW_XOR;
+  case AtomicRMWInst::Max: return bitc::RMW_MAX;
+  case AtomicRMWInst::Min: return bitc::RMW_MIN;
+  case AtomicRMWInst::UMax: return bitc::RMW_UMAX;
+  case AtomicRMWInst::UMin: return bitc::RMW_UMIN;
+  }
+}
+
+static unsigned GetEncodedOrdering(AtomicOrdering Ordering) {
+  switch (Ordering) {
+  default: llvm_unreachable("Unknown atomic ordering");
+  case NotAtomic: return bitc::ORDERING_NOTATOMIC;
+  case Unordered: return bitc::ORDERING_UNORDERED;
+  case Monotonic: return bitc::ORDERING_MONOTONIC;
+  case Acquire: return bitc::ORDERING_ACQUIRE;
+  case Release: return bitc::ORDERING_RELEASE;
+  case AcquireRelease: return bitc::ORDERING_ACQREL;
+  case SequentiallyConsistent: return bitc::ORDERING_SEQCST;
+  }
+}
+
+static unsigned GetEncodedSynchScope(SynchronizationScope SynchScope) {
+  switch (SynchScope) {
+  default: llvm_unreachable("Unknown synchronization scope");
+  case SingleThread: return bitc::SYNCHSCOPE_SINGLETHREAD;
+  case CrossThread: return bitc::SYNCHSCOPE_CROSSTHREAD;
+  }
+}
+
+static void WriteStringRecord(unsigned Code, StringRef Str,
                               unsigned AbbrevToUse, BitstreamWriter &Stream) {
   SmallVector<unsigned, 64> Vals;
 
   // Code: [strchar x N]
-  for (unsigned i = 0, e = Str.size(); i != e; ++i)
+  for (unsigned i = 0, e = Str.size(); i != e; ++i) {
+    if (AbbrevToUse && !BitCodeAbbrevOp::isChar6(Str[i]))
+      AbbrevToUse = 0;
     Vals.push_back(Str[i]);
+  }
 
   // Emit the finished record.
   Stream.EmitRecord(Code, Vals, AbbrevToUse);
@@ -151,7 +191,7 @@ static void WriteAttributeTable(const ValueEnumerator &VE,
 static void WriteTypeTable(const ValueEnumerator &VE, BitstreamWriter &Stream) {
   const ValueEnumerator::TypeList &TypeList = VE.getTypes();
 
-  Stream.EnterSubblock(bitc::TYPE_BLOCK_ID, 4 /*count from # abbrevs */);
+  Stream.EnterSubblock(bitc::TYPE_BLOCK_ID_NEW, 4 /*count from # abbrevs */);
   SmallVector<uint64_t, 64> TypeVals;
 
   // Abbrev for TYPE_CODE_POINTER.
@@ -172,15 +212,31 @@ static void WriteTypeTable(const ValueEnumerator &VE, BitstreamWriter &Stream) {
                             Log2_32_Ceil(VE.getTypes().size()+1)));
   unsigned FunctionAbbrev = Stream.EmitAbbrev(Abbv);
 
-  // Abbrev for TYPE_CODE_STRUCT.
+  // Abbrev for TYPE_CODE_STRUCT_ANON.
   Abbv = new BitCodeAbbrev();
-  Abbv->Add(BitCodeAbbrevOp(bitc::TYPE_CODE_STRUCT));
+  Abbv->Add(BitCodeAbbrevOp(bitc::TYPE_CODE_STRUCT_ANON));
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1));  // ispacked
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed,
                             Log2_32_Ceil(VE.getTypes().size()+1)));
-  unsigned StructAbbrev = Stream.EmitAbbrev(Abbv);
+  unsigned StructAnonAbbrev = Stream.EmitAbbrev(Abbv);
 
+  // Abbrev for TYPE_CODE_STRUCT_NAME.
+  Abbv = new BitCodeAbbrev();
+  Abbv->Add(BitCodeAbbrevOp(bitc::TYPE_CODE_STRUCT_NAME));
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Char6));
+  unsigned StructNameAbbrev = Stream.EmitAbbrev(Abbv);
+
+  // Abbrev for TYPE_CODE_STRUCT_NAMED.
+  Abbv = new BitCodeAbbrev();
+  Abbv->Add(BitCodeAbbrevOp(bitc::TYPE_CODE_STRUCT_NAMED));
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 1));  // ispacked
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed,
+                            Log2_32_Ceil(VE.getTypes().size()+1)));
+  unsigned StructNamedAbbrev = Stream.EmitAbbrev(Abbv);
+  
   // Abbrev for TYPE_CODE_ARRAY.
   Abbv = new BitCodeAbbrev();
   Abbv->Add(BitCodeAbbrevOp(bitc::TYPE_CODE_ARRAY));
@@ -196,29 +252,28 @@ static void WriteTypeTable(const ValueEnumerator &VE, BitstreamWriter &Stream) {
 
   // Loop over all of the types, emitting each in turn.
   for (unsigned i = 0, e = TypeList.size(); i != e; ++i) {
-    const Type *T = TypeList[i];
+    Type *T = TypeList[i];
     int AbbrevToUse = 0;
     unsigned Code = 0;
 
     switch (T->getTypeID()) {
     default: llvm_unreachable("Unknown type!");
-    case Type::VoidTyID:   Code = bitc::TYPE_CODE_VOID;   break;
-    case Type::FloatTyID:  Code = bitc::TYPE_CODE_FLOAT;  break;
-    case Type::DoubleTyID: Code = bitc::TYPE_CODE_DOUBLE; break;
-    case Type::X86_FP80TyID: Code = bitc::TYPE_CODE_X86_FP80; break;
-    case Type::FP128TyID: Code = bitc::TYPE_CODE_FP128; break;
+    case Type::VoidTyID:      Code = bitc::TYPE_CODE_VOID;   break;
+    case Type::FloatTyID:     Code = bitc::TYPE_CODE_FLOAT;  break;
+    case Type::DoubleTyID:    Code = bitc::TYPE_CODE_DOUBLE; break;
+    case Type::X86_FP80TyID:  Code = bitc::TYPE_CODE_X86_FP80; break;
+    case Type::FP128TyID:     Code = bitc::TYPE_CODE_FP128; break;
     case Type::PPC_FP128TyID: Code = bitc::TYPE_CODE_PPC_FP128; break;
-    case Type::LabelTyID:  Code = bitc::TYPE_CODE_LABEL;  break;
-    case Type::OpaqueTyID: Code = bitc::TYPE_CODE_OPAQUE; break;
-    case Type::MetadataTyID: Code = bitc::TYPE_CODE_METADATA; break;
-    case Type::X86_MMXTyID: Code = bitc::TYPE_CODE_X86_MMX; break;
+    case Type::LabelTyID:     Code = bitc::TYPE_CODE_LABEL;  break;
+    case Type::MetadataTyID:  Code = bitc::TYPE_CODE_METADATA; break;
+    case Type::X86_MMXTyID:   Code = bitc::TYPE_CODE_X86_MMX; break;
     case Type::IntegerTyID:
       // INTEGER: [width]
       Code = bitc::TYPE_CODE_INTEGER;
       TypeVals.push_back(cast<IntegerType>(T)->getBitWidth());
       break;
     case Type::PointerTyID: {
-      const PointerType *PTy = cast<PointerType>(T);
+      PointerType *PTy = cast<PointerType>(T);
       // POINTER: [pointee type, address space]
       Code = bitc::TYPE_CODE_POINTER;
       TypeVals.push_back(VE.getTypeID(PTy->getElementType()));
@@ -228,7 +283,7 @@ static void WriteTypeTable(const ValueEnumerator &VE, BitstreamWriter &Stream) {
       break;
     }
     case Type::FunctionTyID: {
-      const FunctionType *FT = cast<FunctionType>(T);
+      FunctionType *FT = cast<FunctionType>(T);
       // FUNCTION: [isvararg, attrid, retty, paramty x N]
       Code = bitc::TYPE_CODE_FUNCTION;
       TypeVals.push_back(FT->isVarArg());
@@ -240,19 +295,34 @@ static void WriteTypeTable(const ValueEnumerator &VE, BitstreamWriter &Stream) {
       break;
     }
     case Type::StructTyID: {
-      const StructType *ST = cast<StructType>(T);
+      StructType *ST = cast<StructType>(T);
       // STRUCT: [ispacked, eltty x N]
-      Code = bitc::TYPE_CODE_STRUCT;
       TypeVals.push_back(ST->isPacked());
       // Output all of the element types.
       for (StructType::element_iterator I = ST->element_begin(),
            E = ST->element_end(); I != E; ++I)
         TypeVals.push_back(VE.getTypeID(*I));
-      AbbrevToUse = StructAbbrev;
+      
+      if (ST->isLiteral()) {
+        Code = bitc::TYPE_CODE_STRUCT_ANON;
+        AbbrevToUse = StructAnonAbbrev;
+      } else {
+        if (ST->isOpaque()) {
+          Code = bitc::TYPE_CODE_OPAQUE;
+        } else {
+          Code = bitc::TYPE_CODE_STRUCT_NAMED;
+          AbbrevToUse = StructNamedAbbrev;
+        }
+
+        // Emit the name if it is present.
+        if (!ST->getName().empty())
+          WriteStringRecord(bitc::TYPE_CODE_STRUCT_NAME, ST->getName(),
+                            StructNameAbbrev, Stream);
+      }
       break;
     }
     case Type::ArrayTyID: {
-      const ArrayType *AT = cast<ArrayType>(T);
+      ArrayType *AT = cast<ArrayType>(T);
       // ARRAY: [numelts, eltty]
       Code = bitc::TYPE_CODE_ARRAY;
       TypeVals.push_back(AT->getNumElements());
@@ -261,7 +331,7 @@ static void WriteTypeTable(const ValueEnumerator &VE, BitstreamWriter &Stream) {
       break;
     }
     case Type::VectorTyID: {
-      const VectorType *VT = cast<VectorType>(T);
+      VectorType *VT = cast<VectorType>(T);
       // VECTOR [numelts, eltty]
       Code = bitc::TYPE_CODE_VECTOR;
       TypeVals.push_back(VT->getNumElements());
@@ -338,14 +408,15 @@ static void WriteModuleInfo(const Module *M, const ValueEnumerator &VE,
        GV != E; ++GV) {
     MaxAlignment = std::max(MaxAlignment, GV->getAlignment());
     MaxGlobalType = std::max(MaxGlobalType, VE.getTypeID(GV->getType()));
-
-    if (!GV->hasSection()) continue;
-    // Give section names unique ID's.
-    unsigned &Entry = SectionMap[GV->getSection()];
-    if (Entry != 0) continue;
-    WriteStringRecord(bitc::MODULE_CODE_SECTIONNAME, GV->getSection(),
-                      0/*TODO*/, Stream);
-    Entry = SectionMap.size();
+    if (GV->hasSection()) {
+      // Give section names unique ID's.
+      unsigned &Entry = SectionMap[GV->getSection()];
+      if (!Entry) {
+        WriteStringRecord(bitc::MODULE_CODE_SECTIONNAME, GV->getSection(),
+                          0/*TODO*/, Stream);
+        Entry = SectionMap.size();
+      }
+    }
   }
   for (Module::const_iterator F = M->begin(), E = M->end(); F != E; ++F) {
     MaxAlignment = std::max(MaxAlignment, F->getAlignment());
@@ -682,7 +753,7 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
   SmallVector<uint64_t, 64> Record;
 
   const ValueEnumerator::ValueList &Vals = VE.getValues();
-  const Type *LastTy = 0;
+  Type *LastTy = 0;
   for (unsigned i = FirstVal; i != LastVal; ++i) {
     const Value *V = Vals[i].first;
     // If we need to switch types, do so now.
@@ -747,7 +818,7 @@ static void WriteConstants(unsigned FirstVal, unsigned LastVal,
       }
     } else if (const ConstantFP *CFP = dyn_cast<ConstantFP>(C)) {
       Code = bitc::CST_CODE_FLOAT;
-      const Type *Ty = CFP->getType();
+      Type *Ty = CFP->getType();
       if (Ty->isFloatTy() || Ty->isDoubleTy()) {
         Record.push_back(CFP->getValueAPF().bitcastToAPInt().getZExtValue());
       } else if (Ty->isX86_FP80Ty()) {
@@ -1049,8 +1120,8 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
   case Instruction::Invoke: {
     const InvokeInst *II = cast<InvokeInst>(&I);
     const Value *Callee(II->getCalledValue());
-    const PointerType *PTy = cast<PointerType>(Callee->getType());
-    const FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
+    PointerType *PTy = cast<PointerType>(Callee->getType());
+    FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
     Code = bitc::FUNC_CODE_INST_INVOKE;
 
     Vals.push_back(VE.getAttributeID(II->getAttributes()));
@@ -1071,6 +1142,10 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     }
     break;
   }
+  case Instruction::Resume:
+    Code = bitc::FUNC_CODE_INST_RESUME;
+    PushValueAndType(I.getOperand(0), InstID, Vals, VE);
+    break;
   case Instruction::Unwind:
     Code = bitc::FUNC_CODE_INST_UNWIND;
     break;
@@ -1079,12 +1154,33 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     AbbrevToUse = FUNCTION_INST_UNREACHABLE_ABBREV;
     break;
 
-  case Instruction::PHI:
+  case Instruction::PHI: {
+    const PHINode &PN = cast<PHINode>(I);
     Code = bitc::FUNC_CODE_INST_PHI;
-    Vals.push_back(VE.getTypeID(I.getType()));
-    for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i)
-      Vals.push_back(VE.getValueID(I.getOperand(i)));
+    Vals.push_back(VE.getTypeID(PN.getType()));
+    for (unsigned i = 0, e = PN.getNumIncomingValues(); i != e; ++i) {
+      Vals.push_back(VE.getValueID(PN.getIncomingValue(i)));
+      Vals.push_back(VE.getValueID(PN.getIncomingBlock(i)));
+    }
     break;
+  }
+
+  case Instruction::LandingPad: {
+    const LandingPadInst &LP = cast<LandingPadInst>(I);
+    Code = bitc::FUNC_CODE_INST_LANDINGPAD;
+    Vals.push_back(VE.getTypeID(LP.getType()));
+    PushValueAndType(LP.getPersonalityFn(), InstID, Vals, VE);
+    Vals.push_back(LP.isCleanup());
+    Vals.push_back(LP.getNumClauses());
+    for (unsigned I = 0, E = LP.getNumClauses(); I != E; ++I) {
+      if (LP.isCatch(I))
+        Vals.push_back(LandingPadInst::Catch);
+      else
+        Vals.push_back(LandingPadInst::Filter);
+      PushValueAndType(LP.getClause(I), InstID, Vals, VE);
+    }
+    break;
+  }
 
   case Instruction::Alloca:
     Code = bitc::FUNC_CODE_INST_ALLOCA;
@@ -1095,24 +1191,66 @@ static void WriteInstruction(const Instruction &I, unsigned InstID,
     break;
 
   case Instruction::Load:
-    Code = bitc::FUNC_CODE_INST_LOAD;
-    if (!PushValueAndType(I.getOperand(0), InstID, Vals, VE))  // ptr
-      AbbrevToUse = FUNCTION_INST_LOAD_ABBREV;
-
+    if (cast<LoadInst>(I).isAtomic()) {
+      Code = bitc::FUNC_CODE_INST_LOADATOMIC;
+      PushValueAndType(I.getOperand(0), InstID, Vals, VE);
+    } else {
+      Code = bitc::FUNC_CODE_INST_LOAD;
+      if (!PushValueAndType(I.getOperand(0), InstID, Vals, VE))  // ptr
+        AbbrevToUse = FUNCTION_INST_LOAD_ABBREV;
+    }
     Vals.push_back(Log2_32(cast<LoadInst>(I).getAlignment())+1);
     Vals.push_back(cast<LoadInst>(I).isVolatile());
+    if (cast<LoadInst>(I).isAtomic()) {
+      Vals.push_back(GetEncodedOrdering(cast<LoadInst>(I).getOrdering()));
+      Vals.push_back(GetEncodedSynchScope(cast<LoadInst>(I).getSynchScope()));
+    }
     break;
   case Instruction::Store:
-    Code = bitc::FUNC_CODE_INST_STORE;
+    if (cast<StoreInst>(I).isAtomic())
+      Code = bitc::FUNC_CODE_INST_STOREATOMIC;
+    else
+      Code = bitc::FUNC_CODE_INST_STORE;
     PushValueAndType(I.getOperand(1), InstID, Vals, VE);  // ptrty + ptr
     Vals.push_back(VE.getValueID(I.getOperand(0)));       // val.
     Vals.push_back(Log2_32(cast<StoreInst>(I).getAlignment())+1);
     Vals.push_back(cast<StoreInst>(I).isVolatile());
+    if (cast<StoreInst>(I).isAtomic()) {
+      Vals.push_back(GetEncodedOrdering(cast<StoreInst>(I).getOrdering()));
+      Vals.push_back(GetEncodedSynchScope(cast<StoreInst>(I).getSynchScope()));
+    }
+    break;
+  case Instruction::AtomicCmpXchg:
+    Code = bitc::FUNC_CODE_INST_CMPXCHG;
+    PushValueAndType(I.getOperand(0), InstID, Vals, VE);  // ptrty + ptr
+    Vals.push_back(VE.getValueID(I.getOperand(1)));       // cmp.
+    Vals.push_back(VE.getValueID(I.getOperand(2)));       // newval.
+    Vals.push_back(cast<AtomicCmpXchgInst>(I).isVolatile());
+    Vals.push_back(GetEncodedOrdering(
+                     cast<AtomicCmpXchgInst>(I).getOrdering()));
+    Vals.push_back(GetEncodedSynchScope(
+                     cast<AtomicCmpXchgInst>(I).getSynchScope()));
+    break;
+  case Instruction::AtomicRMW:
+    Code = bitc::FUNC_CODE_INST_ATOMICRMW;
+    PushValueAndType(I.getOperand(0), InstID, Vals, VE);  // ptrty + ptr
+    Vals.push_back(VE.getValueID(I.getOperand(1)));       // val.
+    Vals.push_back(GetEncodedRMWOperation(
+                     cast<AtomicRMWInst>(I).getOperation()));
+    Vals.push_back(cast<AtomicRMWInst>(I).isVolatile());
+    Vals.push_back(GetEncodedOrdering(cast<AtomicRMWInst>(I).getOrdering()));
+    Vals.push_back(GetEncodedSynchScope(
+                     cast<AtomicRMWInst>(I).getSynchScope()));
+    break;
+  case Instruction::Fence:
+    Code = bitc::FUNC_CODE_INST_FENCE;
+    Vals.push_back(GetEncodedOrdering(cast<FenceInst>(I).getOrdering()));
+    Vals.push_back(GetEncodedSynchScope(cast<FenceInst>(I).getSynchScope()));
     break;
   case Instruction::Call: {
     const CallInst &CI = cast<CallInst>(I);
-    const PointerType *PTy = cast<PointerType>(CI.getCalledValue()->getType());
-    const FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
+    PointerType *PTy = cast<PointerType>(CI.getCalledValue()->getType());
+    FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
 
     Code = bitc::FUNC_CODE_INST_CALL;
 
@@ -1271,46 +1409,6 @@ static void WriteFunction(const Function &F, ValueEnumerator &VE,
   if (NeedsMetadataAttachment)
     WriteMetadataAttachment(F, VE, Stream);
   VE.purgeFunction();
-  Stream.ExitBlock();
-}
-
-/// WriteTypeSymbolTable - Emit a block for the specified type symtab.
-static void WriteTypeSymbolTable(const TypeSymbolTable &TST,
-                                 const ValueEnumerator &VE,
-                                 BitstreamWriter &Stream) {
-  if (TST.empty()) return;
-
-  Stream.EnterSubblock(bitc::TYPE_SYMTAB_BLOCK_ID, 3);
-
-  // 7-bit fixed width VST_CODE_ENTRY strings.
-  BitCodeAbbrev *Abbv = new BitCodeAbbrev();
-  Abbv->Add(BitCodeAbbrevOp(bitc::VST_CODE_ENTRY));
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed,
-                            Log2_32_Ceil(VE.getTypes().size()+1)));
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 7));
-  unsigned V7Abbrev = Stream.EmitAbbrev(Abbv);
-
-  SmallVector<unsigned, 64> NameVals;
-
-  for (TypeSymbolTable::const_iterator TI = TST.begin(), TE = TST.end();
-       TI != TE; ++TI) {
-    // TST_ENTRY: [typeid, namechar x N]
-    NameVals.push_back(VE.getTypeID(TI->second));
-
-    const std::string &Str = TI->first;
-    bool is7Bit = true;
-    for (unsigned i = 0, e = Str.size(); i != e; ++i) {
-      NameVals.push_back((unsigned char)Str[i]);
-      if (Str[i] & 128)
-        is7Bit = false;
-    }
-
-    // Emit the finished record.
-    Stream.EmitRecord(bitc::VST_CODE_ENTRY, NameVals, is7Bit ? V7Abbrev : 0);
-    NameVals.clear();
-  }
-
   Stream.ExitBlock();
 }
 
@@ -1516,9 +1614,6 @@ static void WriteModule(const Module *M, BitstreamWriter &Stream) {
 
   // Emit metadata.
   WriteModuleMetadataStore(M, Stream);
-
-  // Emit the type symbol table information.
-  WriteTypeSymbolTable(M->getTypeSymbolTable(), VE, Stream);
 
   // Emit names for globals/functions etc.
   WriteValueSymbolTable(M->getValueSymbolTable(), VE, Stream);

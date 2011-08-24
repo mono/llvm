@@ -1,4 +1,3 @@
-
 //===-- SparcISelLowering.cpp - Sparc DAG Lowering Implementation ---------===//
 //
 //                     The LLVM Compiler Infrastructure
@@ -632,8 +631,8 @@ SparcTargetLowering::getSRetArgSize(SelectionDAG &DAG, SDValue Callee) const
   assert(CalleeFn->hasStructRetAttr() &&
          "Callee does not have the StructRet attribute.");
 
-  const PointerType *Ty = cast<PointerType>(CalleeFn->arg_begin()->getType());
-  const Type *ElementTy = Ty->getElementType();
+  PointerType *Ty = cast<PointerType>(CalleeFn->arg_begin()->getType());
+  Type *ElementTy = Ty->getElementType();
   return getTargetData()->getTypeAllocSize(ElementTy);
 }
 
@@ -749,15 +748,19 @@ SparcTargetLowering::SparcTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::SELECT_CC, MVT::f32, Custom);
   setOperationAction(ISD::SELECT_CC, MVT::f64, Custom);
 
-  // SPARC has no intrinsics for these particular operations.
+  // FIXME: There are instructions available for ATOMIC_FENCE
+  // on SparcV8 and later.
   setOperationAction(ISD::MEMBARRIER, MVT::Other, Expand);
+  setOperationAction(ISD::ATOMIC_FENCE, MVT::Other, Expand);
 
   setOperationAction(ISD::FSIN , MVT::f64, Expand);
   setOperationAction(ISD::FCOS , MVT::f64, Expand);
   setOperationAction(ISD::FREM , MVT::f64, Expand);
+  setOperationAction(ISD::FMA  , MVT::f64, Expand);
   setOperationAction(ISD::FSIN , MVT::f32, Expand);
   setOperationAction(ISD::FCOS , MVT::f32, Expand);
   setOperationAction(ISD::FREM , MVT::f32, Expand);
+  setOperationAction(ISD::FMA  , MVT::f32, Expand);
   setOperationAction(ISD::CTPOP, MVT::i32, Expand);
   setOperationAction(ISD::CTTZ , MVT::i32, Expand);
   setOperationAction(ISD::CTLZ , MVT::i32, Expand);
@@ -1263,26 +1266,6 @@ SparcTargetLowering::getRegForInlineAsmConstraint(const std::string &Constraint,
   }
 
   return TargetLowering::getRegForInlineAsmConstraint(Constraint, VT);
-}
-
-std::vector<unsigned> SparcTargetLowering::
-getRegClassForInlineAsmConstraint(const std::string &Constraint,
-                                  EVT VT) const {
-  if (Constraint.size() != 1)
-    return std::vector<unsigned>();
-
-  switch (Constraint[0]) {
-  default: break;
-  case 'r':
-    return make_vector<unsigned>(SP::L0, SP::L1, SP::L2, SP::L3,
-                                 SP::L4, SP::L5, SP::L6, SP::L7,
-                                 SP::I0, SP::I1, SP::I2, SP::I3,
-                                 SP::I4, SP::I5,
-                                 SP::O0, SP::O1, SP::O2, SP::O3,
-                                 SP::O4, SP::O5, SP::O7, 0);
-  }
-
-  return std::vector<unsigned>();
 }
 
 bool

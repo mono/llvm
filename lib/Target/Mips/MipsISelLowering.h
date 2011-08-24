@@ -79,7 +79,14 @@ namespace llvm {
       BuildPairF64,
       ExtractElementF64,
 
-      WrapperPIC
+      WrapperPIC,
+
+      DynAlloc,
+
+      Sync,
+
+      Ext,
+      Ins
     };
   }
 
@@ -90,6 +97,8 @@ namespace llvm {
   class MipsTargetLowering : public TargetLowering  {
   public:
     explicit MipsTargetLowering(MipsTargetMachine &TM);
+
+    virtual bool allowsUnalignedMemoryAccesses (EVT VT) const;
 
     /// LowerOperation - Provide custom lowering hooks for some operations.
     virtual SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const;
@@ -126,6 +135,8 @@ namespace llvm {
     SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerMEMBARRIER(SDValue Op, SelectionDAG& DAG) const;
+    SDValue LowerATOMIC_FENCE(SDValue Op, SelectionDAG& DAG) const;
 
     virtual SDValue
       LowerFormalArguments(SDValue Chain,
@@ -165,10 +176,6 @@ namespace llvm {
 
     std::pair<unsigned, const TargetRegisterClass*>
               getRegForInlineAsmConstraint(const std::string &Constraint,
-              EVT VT) const;
-
-    std::vector<unsigned>
-    getRegClassForInlineAsmConstraint(const std::string &Constraint,
               EVT VT) const;
 
     virtual bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const;

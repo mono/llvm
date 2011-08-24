@@ -41,7 +41,7 @@ using namespace llvm;
   ENTRY(ARM_FORMAT_BRFRM,          2) \
   ENTRY(ARM_FORMAT_BRMISCFRM,      3) \
   ENTRY(ARM_FORMAT_DPFRM,          4) \
-  ENTRY(ARM_FORMAT_DPSOREGFRM,     5) \
+  ENTRY(ARM_FORMAT_DPSOREGREGFRM,     5) \
   ENTRY(ARM_FORMAT_LDFRM,          6) \
   ENTRY(ARM_FORMAT_STFRM,          7) \
   ENTRY(ARM_FORMAT_LDMISCFRM,      8) \
@@ -77,7 +77,8 @@ using namespace llvm;
   ENTRY(ARM_FORMAT_N3RegVecSh,    38) \
   ENTRY(ARM_FORMAT_NVecExtract,   39) \
   ENTRY(ARM_FORMAT_NVecMulScalar, 40) \
-  ENTRY(ARM_FORMAT_NVTBL,         41)
+  ENTRY(ARM_FORMAT_NVTBL,         41) \
+  ENTRY(ARM_FORMAT_DPSOREGIMMFRM, 42)
 
 // ARM instruction format specifies the encoding used by the instruction.
 #define ENTRY(n, v) n = v,
@@ -421,6 +422,9 @@ public:
 protected:
   // Populates the insn given the uid.
   void insnWithID(insn_t &Insn, unsigned Opcode) const {
+    if (AllInstructions[Opcode]->isPseudo)
+      return;
+
     BitsInit &Bits = getBitsField(*AllInstructions[Opcode]->TheDef, "Inst");
 
     for (unsigned i = 0; i < BIT_WIDTH; ++i)
@@ -1592,10 +1596,6 @@ ARMDEBackend::populateInstruction(const CodeGenInstruction &CGI,
     // The following special cases are for conflict resolutions.
     //
 
-    // RSCSri and RSCSrs set the 's' bit, but are not predicated.  We are
-    // better off using the generic RSCri and RSCrs instructions.
-    if (Name == "RSCSri" || Name == "RSCSrs") return false;
-
     // A8-598: VEXT
     // Vector Extract extracts elements from the bottom end of the second
     // operand vector and the top end of the first, concatenates them and
@@ -1615,21 +1615,8 @@ ARMDEBackend::populateInstruction(const CodeGenInstruction &CGI,
     if (!thumbInstruction(Form))
       return false;
 
-    // A8.6.189 STM / STMIA / STMEA -- Encoding T1
-    // There's only STMIA_UPD for Thumb1.
-    if (Name == "tSTMIA")
-      return false;
-
-    // On Darwin R9 is call-clobbered.  Ignore the non-Darwin counterparts.
-    if (Name == "tBL" || Name == "tBLXi" || Name == "tBLXr")
-      return false;
-
     // A8.6.25 BX.  Use the generic tBX_Rm, ignore tBX_RET and tBX_RET_vararg.
     if (Name == "tBX_RET" || Name == "tBX_RET_vararg")
-      return false;
-
-    // Ignore the TPsoft (TLS) instructions, which conflict with tBLr9.
-    if (Name == "tTPsoft" || Name == "t2TPsoft")
       return false;
 
     // Ignore tADR, prefer tADDrPCi.
@@ -1644,12 +1631,8 @@ ARMDEBackend::populateInstruction(const CodeGenInstruction &CGI,
     // Ignore tADDrSP, tADDspr, and tPICADD, prefer the generic tADDhirr.
     // Ignore t2SUBrSPs, prefer the t2SUB[S]r[r|s].
     // Ignore t2ADDrSPs, prefer the t2ADD[S]r[r|s].
-    // Ignore t2ADDrSPi/t2SUBrSPi, which have more generic couterparts.
-    // Ignore t2ADDrSPi12/t2SUBrSPi12, which have more generic couterparts
     if (Name == "tADDrSP" || Name == "tADDspr" || Name == "tPICADD" ||
-        Name == "t2SUBrSPs" || Name == "t2ADDrSPs" ||
-        Name == "t2ADDrSPi" || Name == "t2SUBrSPi" ||
-        Name == "t2ADDrSPi12" || Name == "t2SUBrSPi12")
+        Name == "t2SUBrSPs" || Name == "t2ADDrSPs")
       return false;
 
     // FIXME: Use ldr.n to work around a Darwin assembler bug.
@@ -1663,18 +1646,14 @@ ARMDEBackend::populateInstruction(const CodeGenInstruction &CGI,
 
     // Resolve conflicts:
     //
-    //   tBfar conflicts with tBLr9
-    //   tPOP_RET/t2LDMIA_RET conflict with tPOP/t2LDM (ditto)
+    //   t2LDMIA_RET conflict with t2LDM (ditto)
     //   tMOVCCi conflicts with tMOVi8
     //   tMOVCCr conflicts with tMOVgpr2gpr
-    //   tSpill conflicts with tSTRspi
     //   tLDRcp conflicts with tLDRspi
-    //   tRestore conflicts with tLDRspi
     //   t2MOVCCi16 conflicts with tMOVi16
-    if (Name == "tBfar" ||
-        Name == "tPOP_RET" || Name == "t2LDMIA_RET" ||
+    if (Name == "t2LDMIA_RET" ||
         Name == "tMOVCCi" || Name == "tMOVCCr" ||
-        Name == "tSpill" || Name == "tLDRcp" || Name == "tRestore" ||
+        Name == "tLDRcp" || 
         Name == "t2MOVCCi16")
       return false;
   }

@@ -259,7 +259,8 @@ void Thumb1FrameLowering::emitPrologue(MachineFunction &MF) const {
   // will be allocated after this, so we can still use the base pointer
   // to reference locals.
   if (RegInfo->hasBasePointer(MF))
-    BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVgpr2gpr), BasePtr).addReg(ARM::SP);
+    AddDefaultPred(BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVr), BasePtr)
+                   .addReg(ARM::SP));
 
   // If the frame has variable sized objects then the epilogue must restore
   // the sp from fp. We can assume there's an FP here since hasFP already
@@ -276,7 +277,7 @@ static bool isCalleeSavedRegister(unsigned Reg, const unsigned *CSRegs) {
 }
 
 static bool isCSRestore(MachineInstr *MI, const unsigned *CSRegs) {
-  if (MI->getOpcode() == ARM::tRestore &&
+  if (MI->getOpcode() == ARM::tLDRspi &&
       MI->getOperand(1).isFI() &&
       isCalleeSavedRegister(MI->getOperand(0).getReg(), CSRegs))
     return true;
@@ -338,11 +339,13 @@ void Thumb1FrameLowering::emitEpilogue(MachineFunction &MF,
                "No scratch register to restore SP from FP!");
         emitThumbRegPlusImmediate(MBB, MBBI, dl, ARM::R4, FramePtr, -NumBytes,
                                   TII, *RegInfo);
-        BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVtgpr2gpr), ARM::SP)
-          .addReg(ARM::R4);
+        AddDefaultPred(BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVr),
+                               ARM::SP)
+          .addReg(ARM::R4));
       } else
-        BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVtgpr2gpr), ARM::SP)
-          .addReg(FramePtr);
+        AddDefaultPred(BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVr),
+                               ARM::SP)
+          .addReg(FramePtr));
     } else {
       if (MBBI->getOpcode() == ARM::tBX_RET &&
           &MBB.front() != MBBI &&
@@ -369,8 +372,8 @@ void Thumb1FrameLowering::emitEpilogue(MachineFunction &MF,
 
     emitSPUpdate(MBB, MBBI, TII, dl, *RegInfo, VARegSaveSize);
 
-    BuildMI(MBB, MBBI, dl, TII.get(ARM::tBX_RET_vararg))
-      .addReg(ARM::R3, RegState::Kill);
+    AddDefaultPred(BuildMI(MBB, MBBI, dl, TII.get(ARM::tBX_RET_vararg))
+      .addReg(ARM::R3, RegState::Kill));
     // erase the old tBX_RET instruction
     MBB.erase(MBBI);
   }

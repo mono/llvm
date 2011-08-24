@@ -16,7 +16,9 @@
 
 #include "ARM.h"
 #include "llvm/Target/TargetRegisterInfo.h"
-#include "ARMGenRegisterInfo.h.inc"
+
+#define GET_REGINFO_HEADER
+#include "ARMGenRegisterInfo.inc"
 
 namespace llvm {
   class ARMSubtarget;
@@ -29,19 +31,6 @@ namespace ARMRI {
     RegPairOdd  = 1,
     RegPairEven = 2
   };
-}
-
-/// isARMLowRegister - Returns true if the register is low register r0-r7.
-///
-static inline bool isARMLowRegister(unsigned Reg) {
-  using namespace ARM;
-  switch (Reg) {
-  case R0:  case R1:  case R2:  case R3:
-  case R4:  case R5:  case R6:  case R7:
-    return true;
-  default:
-    return false;
-  }
 }
 
 /// isARMArea1Register - Returns true if the register is a low register (r0-r7)
@@ -162,16 +151,12 @@ public:
   bool cannotEliminateFrame(const MachineFunction &MF) const;
 
   // Debug information queries.
-  unsigned getRARegister() const;
   unsigned getFrameRegister(const MachineFunction &MF) const;
   unsigned getBaseRegister() const { return BasePtr; }
 
   // Exception handling queries.
   unsigned getEHExceptionRegister() const;
   unsigned getEHHandlerRegister() const;
-
-  int getDwarfRegNum(unsigned RegNum, bool isEH) const;
-  int getLLVMRegNum(unsigned RegNum, bool isEH) const;
 
   bool isLowRegister(unsigned Reg) const;
 

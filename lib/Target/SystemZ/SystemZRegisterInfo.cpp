@@ -25,12 +25,15 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/ADT/BitVector.h"
+
+#define GET_REGINFO_TARGET_DESC
+#include "SystemZGenRegisterInfo.inc"
+
 using namespace llvm;
 
 SystemZRegisterInfo::SystemZRegisterInfo(SystemZTargetMachine &tm,
                                          const SystemZInstrInfo &tii)
-  : SystemZGenRegisterInfo(SystemZ::ADJCALLSTACKUP, SystemZ::ADJCALLSTACKDOWN),
-    TM(tm), TII(tii) {
+  : SystemZGenRegisterInfo(0), TM(tm), TII(tii) {
 }
 
 const unsigned*
@@ -123,11 +126,6 @@ SystemZRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   MI.getOperand(i+1).ChangeToImmediate(Offset);
 }
 
-unsigned SystemZRegisterInfo::getRARegister() const {
-  assert(0 && "What is the return address register");
-  return 0;
-}
-
 unsigned
 SystemZRegisterInfo::getFrameRegister(const MachineFunction &MF) const {
   assert(0 && "What is the frame register");
@@ -143,16 +141,3 @@ unsigned SystemZRegisterInfo::getEHHandlerRegister() const {
   assert(0 && "What is the exception handler register");
   return 0;
 }
-
-int SystemZRegisterInfo::getDwarfRegNum(unsigned RegNum, bool isEH) const {
-  assert(0 && "What is the dwarf register number");
-  return -1;
-}
-
-int SystemZRegisterInfo::getLLVMRegNum(unsigned DwarfRegNo, bool isEH) const {
-  assert(0 && "What is the dwarf register number");
-  return -1;
-}
-
-
-#include "SystemZGenRegisterInfo.inc"

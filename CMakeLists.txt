@@ -82,7 +82,7 @@ set(LLVM_ALL_TARGETS
   )
 
 # List of targets with JIT support:
-set(LLVM_TARGETS_WITH_JIT X86 PowerPC ARM)
+set(LLVM_TARGETS_WITH_JIT X86 PowerPC ARM Mips)
 
 if( MSVC )
   set(LLVM_TARGETS_TO_BUILD X86
@@ -181,7 +181,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 include_directories( ${LLVM_BINARY_DIR}/include ${LLVM_MAIN_INCLUDE_DIR})
 
 if( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
-   SET(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-include llvm/Support/Solaris.h")
+   SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include llvm/Support/Solaris.h")
 endif( ${CMAKE_SYSTEM_NAME} MATCHES SunOS )
 
 include(AddLLVM)

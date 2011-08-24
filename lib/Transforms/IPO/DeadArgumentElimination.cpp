@@ -206,9 +206,9 @@ bool DAE::DeleteDeadVarargs(Function &Fn) {
 
   // Start by computing a new prototype for the function, which is the same as
   // the old function, but doesn't have isVarArg set.
-  const FunctionType *FTy = Fn.getFunctionType();
+  FunctionType *FTy = Fn.getFunctionType();
 
-  std::vector<const Type*> Params(FTy->param_begin(), FTy->param_end());
+  std::vector<Type*> Params(FTy->param_begin(), FTy->param_end());
   FunctionType *NFTy = FunctionType::get(FTy->getReturnType(),
                                                 Params, false);
   unsigned NumArgs = Params.size();
@@ -244,11 +244,11 @@ bool DAE::DeleteDeadVarargs(Function &Fn) {
     Instruction *New;
     if (InvokeInst *II = dyn_cast<InvokeInst>(Call)) {
       New = InvokeInst::Create(NF, II->getNormalDest(), II->getUnwindDest(),
-                               Args.begin(), Args.end(), "", Call);
+                               Args, "", Call);
       cast<InvokeInst>(New)->setCallingConv(CS.getCallingConv());
       cast<InvokeInst>(New)->setAttributes(PAL);
     } else {
-      New = CallInst::Create(NF, Args.begin(), Args.end(), "", Call);
+      New = CallInst::Create(NF, Args, "", Call);
       cast<CallInst>(New)->setCallingConv(CS.getCallingConv());
       cast<CallInst>(New)->setAttributes(PAL);
       if (cast<CallInst>(Call)->isTailCall())
@@ -344,7 +344,7 @@ bool DAE::RemoveDeadArgumentsFromCallers(Function &Fn)
 static unsigned NumRetVals(const Function *F) {
   if (F->getReturnType()->isVoidTy())
     return 0;
-  else if (const StructType *STy = dyn_cast<StructType>(F->getReturnType()))
+  else if (StructType *STy = dyn_cast<StructType>(F->getReturnType()))
     return STy->getNumElements();
   else
     return 1;
@@ -491,7 +491,7 @@ void DAE::SurveyFunction(const Function &F) {
   // Keep track of the number of live retvals, so we can skip checks once all
   // of them turn out to be live.
   unsigned NumLiveRetVals = 0;
-  const Type *STy = dyn_cast<StructType>(F.getReturnType());
+  Type *STy = dyn_cast<StructType>(F.getReturnType());
   // Loop all uses of the function.
   for (Value::const_use_iterator I = F.use_begin(), E = F.use_end();
        I != E; ++I) {
@@ -646,8 +646,8 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
 
   // Start by computing a new prototype for the function, which is the same as
   // the old function, but has fewer arguments and a different return type.
-  const FunctionType *FTy = F->getFunctionType();
-  std::vector<const Type*> Params;
+  FunctionType *FTy = F->getFunctionType();
+  std::vector<Type*> Params;
 
   // Set up to build a new list of parameter attributes.
   SmallVector<AttributeWithIndex, 8> AttributesVec;
@@ -659,17 +659,17 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
 
   // Find out the new return value.
 
-  const Type *RetTy = FTy->getReturnType();
-  const Type *NRetTy = NULL;
+  Type *RetTy = FTy->getReturnType();
+  Type *NRetTy = NULL;
   unsigned RetCount = NumRetVals(F);
 
   // -1 means unused, other numbers are the new index
   SmallVector<int, 5> NewRetIdxs(RetCount, -1);
-  std::vector<const Type*> RetTypes;
+  std::vector<Type*> RetTypes;
   if (RetTy->isVoidTy()) {
     NRetTy = RetTy;
   } else {
-    const StructType *STy = dyn_cast<StructType>(RetTy);
+    StructType *STy = dyn_cast<StructType>(RetTy);
     if (STy)
       // Look at each of the original return values individually.
       for (unsigned i = 0; i != RetCount; ++i) {
@@ -822,11 +822,11 @@ bool DAE::RemoveDeadStuffFromFunction(Function *F) {
     Instruction *New;
     if (InvokeInst *II = dyn_cast<InvokeInst>(Call)) {
       New = InvokeInst::Create(NF, II->getNormalDest(), II->getUnwindDest(),
-                               Args.begin(), Args.end(), "", Call);
+                               Args, "", Call);
       cast<InvokeInst>(New)->setCallingConv(CS.getCallingConv());
       cast<InvokeInst>(New)->setAttributes(NewCallPAL);
     } else {
-      New = CallInst::Create(NF, Args.begin(), Args.end(), "", Call);
+      New = CallInst::Create(NF, Args, "", Call);
       cast<CallInst>(New)->setCallingConv(CS.getCallingConv());
       cast<CallInst>(New)->setAttributes(NewCallPAL);
       if (cast<CallInst>(Call)->isTailCall())

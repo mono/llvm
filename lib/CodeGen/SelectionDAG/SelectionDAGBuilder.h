@@ -132,10 +132,13 @@ private:
     Constant* Low;
     Constant* High;
     MachineBasicBlock* BB;
+    uint32_t ExtraWeight;
 
-    Case() : Low(0), High(0), BB(0) { }
-    Case(Constant* low, Constant* high, MachineBasicBlock* bb) :
-      Low(low), High(high), BB(bb) { }
+    Case() : Low(0), High(0), BB(0), ExtraWeight(0) { }
+    Case(Constant* low, Constant* high, MachineBasicBlock* bb,
+         uint32_t extraweight) : Low(low), High(high), BB(bb),
+         ExtraWeight(extraweight) { }
+
     APInt size() const {
       const APInt &rHigh = cast<ConstantInt>(High)->getValue();
       const APInt &rLow  = cast<ConstantInt>(Low)->getValue();
@@ -203,20 +206,30 @@ private:
     CaseBlock(ISD::CondCode cc, const Value *cmplhs, const Value *cmprhs,
               const Value *cmpmiddle,
               MachineBasicBlock *truebb, MachineBasicBlock *falsebb,
-              MachineBasicBlock *me)
+              MachineBasicBlock *me,
+              uint32_t trueweight = 0, uint32_t falseweight = 0)
       : CC(cc), CmpLHS(cmplhs), CmpMHS(cmpmiddle), CmpRHS(cmprhs),
-        TrueBB(truebb), FalseBB(falsebb), ThisBB(me) {}
+        TrueBB(truebb), FalseBB(falsebb), ThisBB(me),
+        TrueWeight(trueweight), FalseWeight(falseweight) { }
+
     // CC - the condition code to use for the case block's setcc node
     ISD::CondCode CC;
+
     // CmpLHS/CmpRHS/CmpMHS - The LHS/MHS/RHS of the comparison to emit.
     // Emit by default LHS op RHS. MHS is used for range comparisons:
     // If MHS is not null: (LHS <= MHS) and (MHS <= RHS).
     const Value *CmpLHS, *CmpMHS, *CmpRHS;
+
     // TrueBB/FalseBB - the block to branch to if the setcc is true/false.
     MachineBasicBlock *TrueBB, *FalseBB;
+
     // ThisBB - the block into which to emit the code for the setcc and branches
     MachineBasicBlock *ThisBB;
+
+    // TrueWeight/FalseWeight - branch weights.
+    uint32_t TrueWeight, FalseWeight;
   };
+
   struct JumpTable {
     JumpTable(unsigned R, unsigned J, MachineBasicBlock *M,
               MachineBasicBlock *D): Reg(R), JTI(J), MBB(M), Default(D) {}
@@ -440,7 +453,8 @@ private:
                                 MachineBasicBlock *SwitchBB);
 
   uint32_t getEdgeWeight(MachineBasicBlock *Src, MachineBasicBlock *Dst);
-  void addSuccessorWithWeight(MachineBasicBlock *Src, MachineBasicBlock *Dst);
+  void addSuccessorWithWeight(MachineBasicBlock *Src, MachineBasicBlock *Dst,
+                              uint32_t Weight = 0);
 public:
   void visitSwitchCase(CaseBlock &CB,
                        MachineBasicBlock *SwitchBB);
@@ -457,6 +471,7 @@ public:
 private:
   // These all get lowered before this pass.
   void visitInvoke(const InvokeInst &I);
+  void visitResume(const ResumeInst &I);
   void visitUnwind(const UnwindInst &I);
 
   void visitBinary(const User &I, unsigned OpCode);
@@ -471,7 +486,7 @@ private:
   void visitSRem(const User &I) { visitBinary(I, ISD::SREM); }
   void visitFRem(const User &I) { visitBinary(I, ISD::FREM); }
   void visitUDiv(const User &I) { visitBinary(I, ISD::UDIV); }
-  void visitSDiv(const User &I) { visitBinary(I, ISD::SDIV); }
+  void visitSDiv(const User &I);
   void visitFDiv(const User &I) { visitBinary(I, ISD::FDIV); }
   void visitAnd (const User &I) { visitBinary(I, ISD::AND); }
   void visitOr  (const User &I) { visitBinary(I, ISD::OR); }
@@ -501,6 +516,7 @@ private:
 
   void visitExtractValue(const ExtractValueInst &I);
   void visitInsertValue(const InsertValueInst &I);
+  void visitLandingPad(const LandingPadInst &I);
 
   void visitGetElementPtr(const User &I);
   void visitSelect(const User &I);
@@ -508,6 +524,9 @@ private:
   void visitAlloca(const AllocaInst &I);
   void visitLoad(const LoadInst &I);
   void visitStore(const StoreInst &I);
+  void visitAtomicCmpXchg(const AtomicCmpXchgInst &I);
+  void visitAtomicRMW(const AtomicRMWInst &I);
+  void visitFence(const FenceInst &I);
   void visitPHI(const PHINode &I);
   void visitCall(const CallInst &I);
   bool visitMemCmpCall(const CallInst &I);

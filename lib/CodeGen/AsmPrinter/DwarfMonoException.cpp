@@ -19,7 +19,6 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineLocation.h"
 #include "llvm/CodeGen/MonoMachineFunctionInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -34,7 +33,6 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
-#include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/FormattedStream.h"
@@ -62,22 +60,12 @@ static inline const MCExpr *MakeStartMinusEndExpr(const MCStreamer &MCOS,
   return Res3;
 }
 
-static int getDataAlignmentFactor(MCStreamer &streamer) {
-  MCContext &context = streamer.getContext();
-  const TargetAsmInfo &asmInfo = context.getTargetAsmInfo();
-  int size = asmInfo.getPointerSize();
-  if (asmInfo.getStackGrowthDirection() == TargetFrameLowering::StackGrowsUp)
-    return size;
- else
-   return -size;
-}
-
 static const MachineLocation TranslateMachineLocation(
-                                                  const TargetAsmInfo &AsmInfo,
+                                                  const MCRegisterInfo &RegInfo,
                                                   const MachineLocation &Loc) {
   unsigned Reg = Loc.getReg() == MachineLocation::VirtualFP ?
     MachineLocation::VirtualFP :
-    unsigned(AsmInfo.getDwarfRegNum(Loc.getReg(), true));
+    unsigned(RegInfo.getDwarfRegNum(Loc.getReg(), true));
   const MachineLocation &NewLoc = Loc.isReg() ?
     MachineLocation(Reg) : MachineLocation(Reg, Loc.getOffset());
   return NewLoc;
@@ -87,14 +75,14 @@ static void EncodeCFIInstructions (MCStreamer &streamer,
                                    const std::vector<MachineMove> &Moves,
                                    std::vector<MCCFIInstruction> &Instructions) {
       MCContext &context = streamer.getContext();
-      const TargetAsmInfo &asmInfo = context.getTargetAsmInfo();
+      const MCRegisterInfo &regInfo = context.getRegisterInfo();
       
       for (int i = 0, n = Moves.size(); i != n; ++i) {
         MCSymbol *Label = Moves[i].getLabel();
         const MachineLocation &Dst =
-          TranslateMachineLocation(asmInfo, Moves[i].getDestination());
+          TranslateMachineLocation(regInfo, Moves[i].getDestination());
         const MachineLocation &Src =
-          TranslateMachineLocation(asmInfo, Moves[i].getSource());
+          TranslateMachineLocation(regInfo, Moves[i].getSource());
         MCCFIInstruction Inst(Label, Dst, Src);
         Instructions.push_back(Inst);
       }
@@ -102,9 +90,7 @@ static void EncodeCFIInstructions (MCStreamer &streamer,
 
 void EmitCFIInstruction(MCStreamer &Streamer,
                         const MCCFIInstruction &Instr,
-                        int &CFAOffset) {
-  int dataAlignmentFactor = getDataAlignmentFactor(Streamer);
-
+                        int &CFAOffset, int DataAlignmentFactor) {
   switch (Instr.getOperation()) {
   case MCCFIInstruction::Move:
   case MCCFIInstruction::RelMove: {
@@ -142,7 +128,7 @@ void EmitCFIInstruction(MCStreamer &Streamer,
     int Offset = Dst.getOffset();
     if (IsRelative)
       Offset -= CFAOffset;
-    Offset = Offset / dataAlignmentFactor;
+    Offset = Offset / DataAlignmentFactor;
 
     if (Offset < 0) {
       Streamer.EmitIntValue(dwarf::DW_CFA_offset_extended_sf, 1);
@@ -179,7 +165,8 @@ void EmitCFIInstruction(MCStreamer &Streamer,
 void EmitCFIInstructions(MCStreamer &streamer,
                          const std::vector<MCCFIInstruction> &Instrs,
                          MCSymbol *BaseLabel,
-                         int &CFAOffset) {
+                         int &CFAOffset,
+                         int DataAlignmentFactor) {
   for (unsigned i = 0, N = Instrs.size(); i < N; ++i) {
     const MCCFIInstruction &Instr = Instrs[i];
     MCSymbol *Label = Instr.getLabel();
@@ -195,7 +182,7 @@ void EmitCFIInstructions(MCStreamer &streamer,
       }
     }
 
-    EmitCFIInstruction(streamer, Instr, CFAOffset);
+    EmitCFIInstruction(streamer, Instr, CFAOffset, DataAlignmentFactor);
   }
 }
 
@@ -475,7 +462,7 @@ void DwarfException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
     // Mono typeinfos are simple constant integers. Emit the constant itself.
     //
     assert(GV);
-    ConstantInt *ci = dyn_cast<ConstantInt>(GV->getInitializer());
+    const ConstantInt *ci = dyn_cast<ConstantInt>(GV->getInitializer());
 
     Asm->OutStreamer.AddComment("TypeInfo");
     Asm->OutStreamer.EmitIntValue(ci->getZExtValue(),Asm->GetSizeOfEncodedValue(TTypeEncoding),
@@ -587,7 +574,6 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   Asm->EmitSLEB128(stackGrowth, "CIE Data Alignment Factor");
   Asm->OutStreamer.AddComment("CIE Return Address Column");
   const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
-  const TargetFrameLowering *TFI = Asm->TM.getFrameLowering();
   Asm->EmitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
 
   if (Personality) {
@@ -600,12 +586,16 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
 
   int CFAOffset = 0;
 
+  int dataAlignmentFactor = stackGrowth;
+
+  MCStreamer& streamer = Asm->OutStreamer;
+
   // Initial CIE program
-  std::vector<MachineMove> Moves;
-  TFI->getInitialFrameState(Moves);
+  const std::vector<MachineMove> Moves = 
+    streamer.getContext().getAsmInfo().getInitialFrameState();
   std::vector<MCCFIInstruction> Instructions;
-  EncodeCFIInstructions (Asm->OutStreamer, Moves, Instructions);
-  EmitCFIInstructions(Asm->OutStreamer, Instructions, NULL, CFAOffset);
+  EncodeCFIInstructions (streamer, Moves, Instructions);
+  EmitCFIInstructions(streamer, Instructions, NULL, CFAOffset, dataAlignmentFactor);
 
   int CIECFAOffset = CFAOffset;
 
@@ -642,7 +632,7 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
       CFAOffset = CIECFAOffset;
 
       EncodeCFIInstructions (Asm->OutStreamer, EHFrameInfo.Moves, Instructions);
-      EmitCFIInstructions(Asm->OutStreamer, Instructions, NULL, CFAOffset);
+      EmitCFIInstructions(Asm->OutStreamer, Instructions, NULL, CFAOffset, dataAlignmentFactor);
 
       Asm->OutStreamer.AddBlankLine();
   }

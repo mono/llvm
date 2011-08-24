@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "Mips.h"
-#include "MipsMCAsmInfo.h"
 #include "MipsTargetMachine.h"
 #include "llvm/PassManager.h"
 #include "llvm/Target/TargetRegistry.h"
@@ -22,8 +21,6 @@ extern "C" void LLVMInitializeMipsTarget() {
   // Register the target.
   RegisterTargetMachine<MipsTargetMachine> X(TheMipsTarget);
   RegisterTargetMachine<MipselTargetMachine> Y(TheMipselTarget);
-  RegisterAsmInfo<MipsMCAsmInfo> A(TheMipsTarget);
-  RegisterAsmInfo<MipsMCAsmInfo> B(TheMipselTarget);
 }
 
 // DataLayout --> Big-endian, 32-bit pointer/ABI/alignment
@@ -34,29 +31,25 @@ extern "C" void LLVMInitializeMipsTarget() {
 // an easier handling.
 // Using CodeModel::Large enables different CALL behavior.
 MipsTargetMachine::
-MipsTargetMachine(const Target &T, const std::string &TT, const std::string &FS,
+MipsTargetMachine(const Target &T, StringRef TT,
+                  StringRef CPU, StringRef FS,
+                  Reloc::Model RM, CodeModel::Model CM,
                   bool isLittle=false):
-  LLVMTargetMachine(T, TT),
-  Subtarget(TT, FS, isLittle),
+  LLVMTargetMachine(T, TT, CPU, FS, RM, CM),
+  Subtarget(TT, CPU, FS, isLittle),
   DataLayout(isLittle ? 
              std::string("e-p:32:32:32-i8:8:32-i16:16:32-i64:64:64-n32") :
              std::string("E-p:32:32:32-i8:8:32-i16:16:32-i64:64:64-n32")),
   InstrInfo(*this),
   FrameLowering(Subtarget),
-  TLInfo(*this), TSInfo(*this) {
-  // Abicall enables PIC by default
-  if (getRelocationModel() == Reloc::Default) {
-    if (Subtarget.isABI_O32())
-      setRelocationModel(Reloc::PIC_);
-    else
-      setRelocationModel(Reloc::Static);
-  }
+  TLInfo(*this), TSInfo(*this), JITInfo() {
 }
 
 MipselTargetMachine::
-MipselTargetMachine(const Target &T, const std::string &TT,
-                    const std::string &FS) :
-  MipsTargetMachine(T, TT, FS, true) {}
+MipselTargetMachine(const Target &T, StringRef TT,
+                    StringRef CPU, StringRef FS,
+                    Reloc::Model RM, CodeModel::Model CM) :
+  MipsTargetMachine(T, TT, CPU, FS, RM, CM, true) {}
 
 // Install an instruction selector pass using
 // the ISelDag to gen Mips code.
@@ -88,3 +81,12 @@ addPostRegAlloc(PassManagerBase &PM, CodeGenOpt::Level OptLevel) {
   PM.add(createMipsExpandPseudoPass(*this));
   return true;
 }
+
+bool MipsTargetMachine::addCodeEmitter(PassManagerBase &PM,
+                                          CodeGenOpt::Level OptLevel,
+                                          JITCodeEmitter &JCE) {
+  // Machine code emitter pass for Mips.
+  PM.add(createMipsJITCodeEmitterPass(*this, JCE));
+  return false;
+}
+

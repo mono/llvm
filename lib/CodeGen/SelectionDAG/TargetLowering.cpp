@@ -139,6 +139,10 @@ static void InitLibcallNames(const char **Names) {
   Names[RTLIB::REM_F64] = "fmod";
   Names[RTLIB::REM_F80] = "fmodl";
   Names[RTLIB::REM_PPCF128] = "fmodl";
+  Names[RTLIB::FMA_F32] = "fmaf";
+  Names[RTLIB::FMA_F64] = "fma";
+  Names[RTLIB::FMA_F80] = "fmal";
+  Names[RTLIB::FMA_PPCF128] = "fmal";
   Names[RTLIB::POWI_F32] = "__powisf2";
   Names[RTLIB::POWI_F64] = "__powidf2";
   Names[RTLIB::POWI_F80] = "__powixf2";
@@ -613,6 +617,7 @@ TargetLowering::TargetLowering(const TargetMachine &tm,
   PrefLoopAlignment = 0;
   MinStackArgumentAlignment = 1;
   ShouldFoldAtomicFences = false;
+  InsertFencesForAtomic = false;
 
   InitLibcallNames(LibcallRoutineNames);
   InitCmpLibcallCCs(CmpLibcallCCs);
@@ -992,7 +997,7 @@ unsigned TargetLowering::getVectorTypeBreakdown(LLVMContext &Context, EVT VT,
 /// type of the given function.  This does not require a DAG or a return value,
 /// and is suitable for use before any DAGs for the function are constructed.
 /// TODO: Move this out of TargetLowering.cpp.
-void llvm::GetReturnInfo(const Type* ReturnType, Attributes attr,
+void llvm::GetReturnInfo(Type* ReturnType, Attributes attr,
                          SmallVectorImpl<ISD::OutputArg> &Outs,
                          const TargetLowering &TLI,
                          SmallVectorImpl<uint64_t> *Offsets) {
@@ -1050,7 +1055,7 @@ void llvm::GetReturnInfo(const Type* ReturnType, Attributes attr,
 /// getByValTypeAlignment - Return the desired alignment for ByVal aggregate
 /// function arguments in the caller parameter area.  This is the actual
 /// alignment, not its logarithm.
-unsigned TargetLowering::getByValTypeAlignment(const Type *Ty) const {
+unsigned TargetLowering::getByValTypeAlignment(Type *Ty) const {
   return TD->getCallFrameTypeAlignment(Ty);
 }
 
@@ -2623,7 +2628,6 @@ PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const {
 
 TargetLowering::ConstraintType
 TargetLowering::getConstraintType(const std::string &Constraint) const {
-  // FIXME: lots more standard ones to handle.
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     default: break;
@@ -2737,13 +2741,6 @@ void TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
   }
 }
 
-std::vector<unsigned> TargetLowering::
-getRegClassForInlineAsmConstraint(const std::string &Constraint,
-                                  EVT VT) const {
-  return std::vector<unsigned>();
-}
-
-
 std::pair<unsigned, const TargetRegisterClass*> TargetLowering::
 getRegForInlineAsmConstraint(const std::string &Constraint,
                              EVT VT) const {
@@ -2844,7 +2841,7 @@ TargetLowering::AsmOperandInfoVector TargetLowering::ParseConstraints(
       // corresponding argument.
       assert(!CS.getType()->isVoidTy() &&
              "Bad inline asm!");
-      if (const StructType *STy = dyn_cast<StructType>(CS.getType())) {
+      if (StructType *STy = dyn_cast<StructType>(CS.getType())) {
         OpInfo.ConstraintVT = getValueType(STy->getElementType(ResNo));
       } else {
         assert(ResNo == 0 && "Asm only has one result!");
@@ -2861,16 +2858,16 @@ TargetLowering::AsmOperandInfoVector TargetLowering::ParseConstraints(
     }
 
     if (OpInfo.CallOperandVal) {
-      const llvm::Type *OpTy = OpInfo.CallOperandVal->getType();
+      llvm::Type *OpTy = OpInfo.CallOperandVal->getType();
       if (OpInfo.isIndirect) {
-        const llvm::PointerType *PtrTy = dyn_cast<PointerType>(OpTy);
+        llvm::PointerType *PtrTy = dyn_cast<PointerType>(OpTy);
         if (!PtrTy)
           report_fatal_error("Indirect operand for inline asm not a pointer!");
         OpTy = PtrTy->getElementType();
       }
 
       // Look for vector wrapped in a struct. e.g. { <16 x i8> }.
-      if (const StructType *STy = dyn_cast<StructType>(OpTy))
+      if (StructType *STy = dyn_cast<StructType>(OpTy))
         if (STy->getNumElements() == 1)
           OpTy = STy->getElementType(0);
 
@@ -2970,10 +2967,13 @@ TargetLowering::AsmOperandInfoVector TargetLowering::ParseConstraints(
       AsmOperandInfo &Input = ConstraintOperands[OpInfo.MatchingInput];
 
       if (OpInfo.ConstraintVT != Input.ConstraintVT) {
+	std::pair<unsigned, const TargetRegisterClass*> MatchRC =
+	  getRegForInlineAsmConstraint(OpInfo.ConstraintCode, OpInfo.ConstraintVT);
+	std::pair<unsigned, const TargetRegisterClass*> InputRC =
+	  getRegForInlineAsmConstraint(Input.ConstraintCode, Input.ConstraintVT);
         if ((OpInfo.ConstraintVT.isInteger() !=
              Input.ConstraintVT.isInteger()) ||
-            (OpInfo.ConstraintVT.getSizeInBits() !=
-             Input.ConstraintVT.getSizeInBits())) {
+            (MatchRC.second != InputRC.second)) {
           report_fatal_error("Unsupported asm: input constraint"
                              " with a matching output constraint of"
                              " incompatible type!");
@@ -3188,7 +3188,7 @@ void TargetLowering::ComputeConstraintToUse(AsmOperandInfo &OpInfo,
 /// isLegalAddressingMode - Return true if the addressing mode represented
 /// by AM is legal for this target, for a load/store of the specified type.
 bool TargetLowering::isLegalAddressingMode(const AddrMode &AM,
-                                           const Type *Ty) const {
+                                           Type *Ty) const {
   // The default implementation of this implements a conservative RISCy, r+r and
   // r+i addr mode.
 
@@ -3217,6 +3217,32 @@ bool TargetLowering::isLegalAddressingMode(const AddrMode &AM,
   }
 
   return true;
+}
+
+/// BuildExactDiv - Given an exact SDIV by a constant, create a multiplication
+/// with the multiplicative inverse of the constant.
+SDValue TargetLowering::BuildExactSDIV(SDValue Op1, SDValue Op2, DebugLoc dl,
+                                       SelectionDAG &DAG) const {
+  ConstantSDNode *C = cast<ConstantSDNode>(Op2);
+  APInt d = C->getAPIntValue();
+  assert(d != 0 && "Division by zero!");
+
+  // Shift the value upfront if it is even, so the LSB is one.
+  unsigned ShAmt = d.countTrailingZeros();
+  if (ShAmt) {
+    // TODO: For UDIV use SRL instead of SRA.
+    SDValue Amt = DAG.getConstant(ShAmt, getShiftAmountTy(Op1.getValueType()));
+    Op1 = DAG.getNode(ISD::SRA, dl, Op1.getValueType(), Op1, Amt);
+    d = d.ashr(ShAmt);
+  }
+
+  // Calculate the multiplicative inverse, using Newton's method.
+  APInt t, xn = d;
+  while ((t = d*xn) != 1)
+    xn *= APInt(d.getBitWidth(), 2) - t;
+
+  Op2 = DAG.getConstant(xn, Op1.getValueType());
+  return DAG.getNode(ISD::MUL, dl, Op1.getValueType(), Op1, Op2);
 }
 
 /// BuildSDIVSequence - Given an ISD::SDIV node expressing a divide by constant,

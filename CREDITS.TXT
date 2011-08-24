@@ -241,6 +241,10 @@ E: duraid@octopus.com.au
 W: http://kinoko.c.u-tokyo.ac.jp/~duraid/
 D: IA64 backend, BigBlock register allocator
 
+N: John McCall
+E: rjmccall@apple.com
+D: Clang semantic analysis and IR generation
+
 N: Michael McCracken
 E: michael.mccracken@gmail.com
 D: Line number support for llvmgcc
@@ -293,6 +297,10 @@ N: Wesley Peck
 E: peckw@wesleypeck.com
 W: http://wesleypeck.com/
 D: MicroBlaze backend
+
+N: Francois Pichet
+E: pichet2000@gmail.com
+D: MSVC support
 
 N: Vladimir Prus
 W: http://vladimir_prus.blogspot.com

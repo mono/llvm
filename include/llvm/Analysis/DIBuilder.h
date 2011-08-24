@@ -48,8 +48,18 @@ namespace llvm {
     LLVMContext & VMContext;
     MDNode *TheCU;
 
+    MDNode *TempEnumTypes;
+    MDNode *TempRetainTypes;
+    MDNode *TempSubprograms;
+    MDNode *TempGVs;
+
     Function *DeclareFn;     // llvm.dbg.declare
     Function *ValueFn;       // llvm.dbg.value
+
+    SmallVector<Value *, 4> AllEnumTypes;
+    SmallVector<Value *, 4> AllRetainTypes;
+    SmallVector<Value *, 4> AllSubprograms;
+    SmallVector<Value *, 4> AllGVs;
 
     DIBuilder(const DIBuilder &);       // DO NOT IMPLEMENT
     void operator=(const DIBuilder &);  // DO NOT IMPLEMENT
@@ -58,6 +68,9 @@ namespace llvm {
     explicit DIBuilder(Module &M);
     const MDNode *getCU() { return TheCU; }
     enum ComplexAddrKind { OpPlus=1, OpDeref };
+
+    /// finalize - Construct any deferred debug info descriptors.
+    void finalize();
 
     /// createCompileUnit - A CompileUnit provides an anchor for all debugging
     /// information generated during this instance of compilation.
@@ -135,6 +148,7 @@ namespace llvm {
                              unsigned Flags);
 
     /// createMemberType - Create debugging information entry for a member.
+    /// @param Scope        Member scope.
     /// @param Name         Member name.
     /// @param File         File where this member is defined.
     /// @param LineNo       Line number.
@@ -143,7 +157,7 @@ namespace llvm {
     /// @param OffsetInBits Member offset.
     /// @param Flags        Flags to encode member attribute, e.g. private
     /// @param Ty           Parent type.
-    DIType createMemberType(StringRef Name, DIFile File,
+    DIType createMemberType(DIDescriptor Scope, StringRef Name, DIFile File,
                             unsigned LineNo, uint64_t SizeInBits, 
                             uint64_t AlignInBits, uint64_t OffsetInBits, 
                             unsigned Flags, DIType Ty);

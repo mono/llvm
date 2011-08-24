@@ -86,14 +86,15 @@ private:
   // Complex Pattern.
   bool SelectAddr(SDValue N, SDValue &Base, SDValue &Offset);
 
-  SDNode *SelectLoadFp64(SDNode *N);
-  SDNode *SelectStoreFp64(SDNode *N);
-
   // getI32Imm - Return a target constant with the specified
   // value, of type i32.
   inline SDValue getI32Imm(unsigned Imm) {
     return CurDAG->getTargetConstant(Imm, MVT::i32);
   }
+
+  virtual bool SelectInlineAsmMemoryOperand(const SDValue &Op,
+                                            char ConstraintCode,
+                                            std::vector<SDValue> &OutOps);
 };
 
 }
@@ -109,7 +110,7 @@ SDNode *MipsDAGToDAGISel::getGlobalBaseReg() {
 /// ComplexPattern used on MipsInstrInfo
 /// Used on Mips Load/Store instructions
 bool MipsDAGToDAGISel::
-SelectAddr(SDValue Addr, SDValue &Offset, SDValue &Base) {
+SelectAddr(SDValue Addr, SDValue &Base, SDValue &Offset) {
   // if Address is FI, get the TargetFrameIndex.
   if (FrameIndexSDNode *FIN = dyn_cast<FrameIndexSDNode>(Addr)) {
     Base   = CurDAG->getTargetFrameIndex(FIN->getIndex(), MVT::i32);
@@ -166,7 +167,8 @@ SelectAddr(SDValue Addr, SDValue &Offset, SDValue &Base) {
          Addr.getOperand(0).getOpcode() == ISD::LOAD) &&
         Addr.getOperand(1).getOpcode() == MipsISD::Lo) {
       SDValue LoVal = Addr.getOperand(1);
-      if (dyn_cast<ConstantPoolSDNode>(LoVal.getOperand(0))) {
+      if (isa<ConstantPoolSDNode>(LoVal.getOperand(0)) || 
+          isa<GlobalAddressSDNode>(LoVal.getOperand(0))) {
         Base = Addr.getOperand(0);
         Offset = LoVal.getOperand(0);
         return true;
@@ -177,130 +179,6 @@ SelectAddr(SDValue Addr, SDValue &Offset, SDValue &Base) {
   Base   = Addr;
   Offset = CurDAG->getTargetConstant(0, MVT::i32);
   return true;
-}
-
-SDNode *MipsDAGToDAGISel::SelectLoadFp64(SDNode *N) {
-  MVT::SimpleValueType NVT =
-    N->getValueType(0).getSimpleVT().SimpleTy;
-
-  if (!Subtarget.isMips1() || NVT != MVT::f64)
-    return NULL;
-
-  LoadSDNode *LN = cast<LoadSDNode>(N);
-  if (LN->getExtensionType() != ISD::NON_EXTLOAD ||
-      LN->getAddressingMode() != ISD::UNINDEXED)
-    return NULL;
-
-  SDValue Chain = N->getOperand(0);
-  SDValue N1 = N->getOperand(1);
-  SDValue Offset0, Offset1, Base;
-
-  if (!SelectAddr(N1, Offset0, Base) ||
-      N1.getValueType() != MVT::i32)
-    return NULL;
-
-  MachineSDNode::mmo_iterator MemRefs0 = MF->allocateMemRefsArray(1);
-  MemRefs0[0] = cast<MemSDNode>(N)->getMemOperand();
-  DebugLoc dl = N->getDebugLoc();
-
-  // The second load should start after for 4 bytes.
-  if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Offset0))
-    Offset1 = CurDAG->getTargetConstant(C->getSExtValue()+4, MVT::i32);
-  else if (ConstantPoolSDNode *CP = dyn_cast<ConstantPoolSDNode>(Offset0))
-    Offset1 = CurDAG->getTargetConstantPool(CP->getConstVal(),
-                                            MVT::i32,
-                                            CP->getAlignment(),
-                                            CP->getOffset()+4,
-                                            CP->getTargetFlags());
-  else
-    return NULL;
-
-  // Choose the offsets depending on the endianess
-  if (TM.getTargetData()->isBigEndian())
-    std::swap(Offset0, Offset1);
-
-  // Instead of:
-  //    ldc $f0, X($3)
-  // Generate:
-  //    lwc $f0, X($3)
-  //    lwc $f1, X+4($3)
-  SDNode *LD0 = CurDAG->getMachineNode(Mips::LWC1, dl, MVT::f32,
-                                    MVT::Other, Offset0, Base, Chain);
-  SDValue Undef = SDValue(CurDAG->getMachineNode(TargetOpcode::IMPLICIT_DEF,
-                                                 dl, NVT), 0);
-  SDValue I0 = CurDAG->getTargetInsertSubreg(Mips::sub_fpeven, dl,
-                            MVT::f64, Undef, SDValue(LD0, 0));
-
-  SDNode *LD1 = CurDAG->getMachineNode(Mips::LWC1, dl, MVT::f32,
-                          MVT::Other, Offset1, Base, SDValue(LD0, 1));
-  SDValue I1 = CurDAG->getTargetInsertSubreg(Mips::sub_fpodd, dl,
-                            MVT::f64, I0, SDValue(LD1, 0));
-
-  ReplaceUses(SDValue(N, 0), I1);
-  ReplaceUses(SDValue(N, 1), Chain);
-  cast<MachineSDNode>(LD0)->setMemRefs(MemRefs0, MemRefs0 + 1);
-  cast<MachineSDNode>(LD1)->setMemRefs(MemRefs0, MemRefs0 + 1);
-  return I1.getNode();
-}
-
-SDNode *MipsDAGToDAGISel::SelectStoreFp64(SDNode *N) {
-
-  if (!Subtarget.isMips1() ||
-      N->getOperand(1).getValueType() != MVT::f64)
-    return NULL;
-
-  SDValue Chain = N->getOperand(0);
-
-  StoreSDNode *SN = cast<StoreSDNode>(N);
-  if (SN->isTruncatingStore() || SN->getAddressingMode() != ISD::UNINDEXED)
-    return NULL;
-
-  SDValue N1 = N->getOperand(1);
-  SDValue N2 = N->getOperand(2);
-  SDValue Offset0, Offset1, Base;
-
-  if (!SelectAddr(N2, Offset0, Base) ||
-      N1.getValueType() != MVT::f64 ||
-      N2.getValueType() != MVT::i32)
-    return NULL;
-
-  MachineSDNode::mmo_iterator MemRefs0 = MF->allocateMemRefsArray(1);
-  MemRefs0[0] = cast<MemSDNode>(N)->getMemOperand();
-  DebugLoc dl = N->getDebugLoc();
-
-  // Get the even and odd part from the f64 register
-  SDValue FPOdd = CurDAG->getTargetExtractSubreg(Mips::sub_fpodd,
-                                                 dl, MVT::f32, N1);
-  SDValue FPEven = CurDAG->getTargetExtractSubreg(Mips::sub_fpeven,
-                                                 dl, MVT::f32, N1);
-
-  // The second store should start after for 4 bytes.
-  if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(Offset0))
-    Offset1 = CurDAG->getTargetConstant(C->getSExtValue()+4, MVT::i32);
-  else
-    return NULL;
-
-  // Choose the offsets depending on the endianess
-  if (TM.getTargetData()->isBigEndian())
-    std::swap(Offset0, Offset1);
-
-  // Instead of:
-  //    sdc $f0, X($3)
-  // Generate:
-  //    swc $f0, X($3)
-  //    swc $f1, X+4($3)
-  SDValue Ops0[] = { FPEven, Offset0, Base, Chain };
-  Chain = SDValue(CurDAG->getMachineNode(Mips::SWC1, dl,
-                                       MVT::Other, Ops0, 4), 0);
-  cast<MachineSDNode>(Chain.getNode())->setMemRefs(MemRefs0, MemRefs0 + 1);
-
-  SDValue Ops1[] = { FPOdd, Offset1, Base, Chain };
-  Chain = SDValue(CurDAG->getMachineNode(Mips::SWC1, dl,
-                                       MVT::Other, Ops1, 4), 0);
-  cast<MachineSDNode>(Chain.getNode())->setMemRefs(MemRefs0, MemRefs0 + 1);
-
-  ReplaceUses(SDValue(N, 0), Chain);
-  return Chain.getNode();
 }
 
 /// Select instructions not customized! Used for
@@ -412,30 +290,11 @@ SDNode* MipsDAGToDAGISel::Select(SDNode *Node) {
       if (Node->getValueType(0) == MVT::f64 && CN->isExactlyValue(+0.0)) {
         SDValue Zero = CurDAG->getCopyFromReg(CurDAG->getEntryNode(), dl,
                                         Mips::ZERO, MVT::i32);
-        SDValue Undef = SDValue(
-          CurDAG->getMachineNode(TargetOpcode::IMPLICIT_DEF, dl, MVT::f64), 0);
-        SDNode *MTC = CurDAG->getMachineNode(Mips::MTC1, dl, MVT::f32, Zero);
-        SDValue I0 = CurDAG->getTargetInsertSubreg(Mips::sub_fpeven, dl,
-                            MVT::f64, Undef, SDValue(MTC, 0));
-        SDValue I1 = CurDAG->getTargetInsertSubreg(Mips::sub_fpodd, dl,
-                            MVT::f64, I0, SDValue(MTC, 0));
-        ReplaceUses(SDValue(Node, 0), I1);
-        return I1.getNode();
+        return CurDAG->getMachineNode(Mips::BuildPairF64, dl, MVT::f64, Zero,
+                                      Zero);
       }
       break;
     }
-
-    case ISD::LOAD:
-      if (SDNode *ResNode = SelectLoadFp64(Node))
-        return ResNode;
-      // Other cases are autogenerated.
-      break;
-
-    case ISD::STORE:
-      if (SDNode *ResNode = SelectStoreFp64(Node))
-        return ResNode;
-      // Other cases are autogenerated.
-      break;
 
     case MipsISD::ThreadPointer: {
       unsigned SrcReg = Mips::HWR29;
@@ -460,6 +319,14 @@ SDNode* MipsDAGToDAGISel::Select(SDNode *Node) {
     DEBUG(ResNode->dump(CurDAG));
   DEBUG(errs() << "\n");
   return ResNode;
+}
+
+bool MipsDAGToDAGISel::
+SelectInlineAsmMemoryOperand(const SDValue &Op, char ConstraintCode,
+                             std::vector<SDValue> &OutOps) {
+  assert(ConstraintCode == 'm' && "unexpected asm memory constraint");
+  OutOps.push_back(Op);
+  return false;
 }
 
 /// createMipsISelDag - This pass converts a legalized DAG into a

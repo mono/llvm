@@ -460,6 +460,11 @@ class AESAI<bits<8> o, Format F, dag outs, dag ins, string asm,
 class CLMULIi8<bits<8> o, Format F, dag outs, dag ins, string asm,
                list<dag>pattern>
       : Ii8<o, F, outs, ins, asm, pattern, SSEPackedInt>, TA,
+        OpSize, Requires<[HasCLMUL]>;
+
+class AVXCLMULIi8<bits<8> o, Format F, dag outs, dag ins, string asm,
+                  list<dag>pattern>
+      : Ii8<o, F, outs, ins, asm, pattern, SSEPackedInt>, TA,
         OpSize, VEX_4V, Requires<[HasAVX, HasCLMUL]>;
 
 // FMA3 Instruction Templates
@@ -496,6 +501,9 @@ class RSDI<bits<8> o, Format F, dag outs, dag ins, string asm,
 class RPDI<bits<8> o, Format F, dag outs, dag ins, string asm,
            list<dag> pattern>
       : PDI<o, F, outs, ins, asm, pattern>, REX_W;
+class VRPDI<bits<8> o, Format F, dag outs, dag ins, string asm,
+           list<dag> pattern>
+      : VPDI<o, F, outs, ins, asm, pattern>, VEX_W;
 
 // MMX Instruction templates
 //

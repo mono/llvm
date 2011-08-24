@@ -251,6 +251,7 @@ class X86MemOperand<string printMethod> : Operand<iPTR> {
   let ParserMatchClass = X86MemAsmOperand;
 }
 
+let OperandType = "OPERAND_MEMORY" in {
 def opaque32mem : X86MemOperand<"printopaquemem">;
 def opaque48mem : X86MemOperand<"printopaquemem">;
 def opaque80mem : X86MemOperand<"printopaquemem">;
@@ -267,6 +268,7 @@ def f64mem  : X86MemOperand<"printf64mem">;
 def f80mem  : X86MemOperand<"printf80mem">;
 def f128mem : X86MemOperand<"printf128mem">;
 def f256mem : X86MemOperand<"printf256mem">;
+}
 
 // A version of i8mem for use on x86-64 that uses GR64_NOREX instead of
 // plain GR64, so that it doesn't potentially require a REX prefix.
@@ -274,6 +276,7 @@ def i8mem_NOREX : Operand<i64> {
   let PrintMethod = "printi8mem";
   let MIOperandInfo = (ops GR64_NOREX, i8imm, GR64_NOREX_NOSP, i32imm, i8imm);
   let ParserMatchClass = X86MemAsmOperand;
+  let OperandType = "OPERAND_MEMORY";
 }
 
 // GPRs available for tailcall.
@@ -287,6 +290,7 @@ def i32mem_TC : Operand<i32> {
   let PrintMethod = "printi32mem";
   let MIOperandInfo = (ops GR32_TC, i8imm, GR32_TC, i32imm, i8imm);
   let ParserMatchClass = X86MemAsmOperand;
+  let OperandType = "OPERAND_MEMORY";
 }
 
 // Special i64mem for addresses of load folding tail calls. These are not
@@ -297,9 +301,11 @@ def i64mem_TC : Operand<i64> {
   let MIOperandInfo = (ops ptr_rc_tailcall, i8imm,
                        ptr_rc_tailcall, i32imm, i8imm);
   let ParserMatchClass = X86MemAsmOperand;
+  let OperandType = "OPERAND_MEMORY";
 }
 
-let ParserMatchClass = X86AbsMemAsmOperand,
+let OperandType = "OPERAND_PCREL",
+    ParserMatchClass = X86AbsMemAsmOperand,
     PrintMethod = "print_pcrel_imm" in {
 def i32imm_pcrel : Operand<i32>;
 def i16imm_pcrel : Operand<i16>;
@@ -317,9 +323,15 @@ def brtarget8 : Operand<OtherVT>;
 
 def SSECC : Operand<i8> {
   let PrintMethod = "printSSECC";
+  let OperandType = "OPERAND_IMMEDIATE";
 }
 
 class ImmSExtAsmOperandClass : AsmOperandClass {
+  let SuperClasses = [ImmAsmOperand];
+  let RenderMethod = "addImmOperands";
+}
+
+class ImmZExtAsmOperandClass : AsmOperandClass {
   let SuperClasses = [ImmAsmOperand];
   let RenderMethod = "addImmOperands";
 }
@@ -351,6 +363,12 @@ def ImmSExti32i8AsmOperand : ImmSExtAsmOperandClass {
   let Name = "ImmSExti32i8";
 }
 
+// [0, 0x000000FF]
+def ImmZExtu32u8AsmOperand : ImmZExtAsmOperandClass {
+  let Name = "ImmZExtu32u8";
+}
+
+
 // [0, 0x0000007F]                                            |
 //   [0xFFFFFFFFFFFFFF80, 0xFFFFFFFFFFFFFFFF]
 def ImmSExti64i8AsmOperand : ImmSExtAsmOperandClass {
@@ -363,15 +381,23 @@ def ImmSExti64i8AsmOperand : ImmSExtAsmOperandClass {
 // 16-bits but only 8 bits are significant.
 def i16i8imm  : Operand<i16> {
   let ParserMatchClass = ImmSExti16i8AsmOperand;
+  let OperandType = "OPERAND_IMMEDIATE";
 }
 // 32-bits but only 8 bits are significant.
 def i32i8imm  : Operand<i32> {
   let ParserMatchClass = ImmSExti32i8AsmOperand;
+  let OperandType = "OPERAND_IMMEDIATE";
+}
+// 32-bits but only 8 bits are significant, and those 8 bits are unsigned.
+def u32u8imm  : Operand<i32> {
+  let ParserMatchClass = ImmZExtu32u8AsmOperand;
+  let OperandType = "OPERAND_IMMEDIATE";
 }
 
 // 64-bits but only 32 bits are significant.
 def i64i32imm  : Operand<i64> {
   let ParserMatchClass = ImmSExti64i32AsmOperand;
+  let OperandType = "OPERAND_IMMEDIATE";
 }
 
 // 64-bits but only 32 bits are significant, and those bits are treated as being
@@ -379,11 +405,13 @@ def i64i32imm  : Operand<i64> {
 def i64i32imm_pcrel : Operand<i64> {
   let PrintMethod = "print_pcrel_imm";
   let ParserMatchClass = X86AbsMemAsmOperand;
+  let OperandType = "OPERAND_PCREL";
 }
 
 // 64-bits but only 8 bits are significant.
 def i64i8imm   : Operand<i64> {
   let ParserMatchClass = ImmSExti64i8AsmOperand;
+  let OperandType = "OPERAND_IMMEDIATE";
 }
 
 def lea64_32mem : Operand<i32> {
@@ -438,8 +466,10 @@ def HasFMA3      : Predicate<"Subtarget->hasFMA3()">;
 def HasFMA4      : Predicate<"Subtarget->hasFMA4()">;
 def FPStackf32   : Predicate<"!Subtarget->hasXMM()">;
 def FPStackf64   : Predicate<"!Subtarget->hasXMMInt()">;
-def In32BitMode  : Predicate<"!Subtarget->is64Bit()">, AssemblerPredicate;
-def In64BitMode  : Predicate<"Subtarget->is64Bit()">, AssemblerPredicate;
+def In32BitMode  : Predicate<"!Subtarget->is64Bit()">,
+                             AssemblerPredicate<"!Mode64Bit">;
+def In64BitMode  : Predicate<"Subtarget->is64Bit()">,
+                             AssemblerPredicate<"Mode64Bit">;
 def IsWin64      : Predicate<"Subtarget->isTargetWin64()">;
 def NotWin64     : Predicate<"!Subtarget->isTargetWin64()">;
 def SmallCode    : Predicate<"TM.getCodeModel() == CodeModel::Small">;
@@ -669,7 +699,7 @@ def PUSH64rmm: I<0xFF, MRM6m, (outs), (ins i64mem:$src), "push{q}\t$src", []>;
 }
 
 let Defs = [RSP], Uses = [RSP], neverHasSideEffects = 1, mayStore = 1 in {
-def PUSH64i8   : Ii8<0x6a, RawFrm, (outs), (ins i8imm:$imm),
+def PUSH64i8   : Ii8<0x6a, RawFrm, (outs), (ins i64i8imm:$imm),
                      "push{q}\t$imm", []>;
 def PUSH64i16  : Ii16<0x68, RawFrm, (outs), (ins i16imm:$imm),
                       "push{q}\t$imm", []>;

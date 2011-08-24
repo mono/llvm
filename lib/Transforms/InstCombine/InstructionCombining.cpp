@@ -46,6 +46,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GetElementPtrTypeIterator.h"
 #include "llvm/Support/PatternMatch.h"
+#include "llvm/Support/ValueHandle.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm-c/Initialization.h"
@@ -83,7 +84,7 @@ void InstCombiner::getAnalysisUsage(AnalysisUsage &AU) const {
 /// ShouldChangeType - Return true if it is desirable to convert a computation
 /// from 'From' to 'To'.  We don't want to convert from a legal to an illegal
 /// type for example, or from a smaller to a larger illegal type.
-bool InstCombiner::ShouldChangeType(const Type *From, const Type *To) const {
+bool InstCombiner::ShouldChangeType(Type *From, Type *To) const {
   assert(From->isIntegerTy() && To->isIntegerTy());
   
   // If we don't have TD, we don't know if the source/dest are legal.
@@ -107,6 +108,43 @@ bool InstCombiner::ShouldChangeType(const Type *From, const Type *To) const {
   return true;
 }
 
+// Return true, if No Signed Wrap should be maintained for I.
+// The No Signed Wrap flag can be kept if the operation "B (I.getOpcode) C",
+// where both B and C should be ConstantInts, results in a constant that does
+// not overflow. This function only handles the Add and Sub opcodes. For
+// all other opcodes, the function conservatively returns false.
+static bool MaintainNoSignedWrap(BinaryOperator &I, Value *B, Value *C) {
+  OverflowingBinaryOperator *OBO = dyn_cast<OverflowingBinaryOperator>(&I);
+  if (!OBO || !OBO->hasNoSignedWrap()) {
+    return false;
+  }
+
+  // We reason about Add and Sub Only.
+  Instruction::BinaryOps Opcode = I.getOpcode();
+  if (Opcode != Instruction::Add && 
+      Opcode != Instruction::Sub) {
+    return false;
+  }
+
+  ConstantInt *CB = dyn_cast<ConstantInt>(B);
+  ConstantInt *CC = dyn_cast<ConstantInt>(C);
+
+  if (!CB || !CC) {
+    return false;
+  }
+
+  const APInt &BVal = CB->getValue();
+  const APInt &CVal = CC->getValue();
+  bool Overflow = false;
+
+  if (Opcode == Instruction::Add) {
+    BVal.sadd_ov(CVal, Overflow);
+  } else {
+    BVal.ssub_ov(CVal, Overflow);
+  }
+
+  return !Overflow;
+}
 
 /// SimplifyAssociativeOrCommutative - This performs a few simplifications for
 /// operators which are associative or commutative:
@@ -158,7 +196,16 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
           I.setOperand(1, V);
           // Conservatively clear the optional flags, since they may not be
           // preserved by the reassociation.
-          I.clearSubclassOptionalData();
+          if (MaintainNoSignedWrap(I, B, C) &&
+	      (!Op0 || (isa<BinaryOperator>(Op0) && Op0->hasNoSignedWrap()))) {
+            // Note: this is only valid because SimplifyBinOp doesn't look at
+            // the operands to Op0.
+            I.clearSubclassOptionalData();
+            I.setHasNoSignedWrap(true);
+          } else {
+            I.clearSubclassOptionalData();
+          }
+            
           Changed = true;
           ++NumReassoc;
           continue;
@@ -240,7 +287,7 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
         Constant *C2 = cast<Constant>(Op1->getOperand(1));
 
         Constant *Folded = ConstantExpr::get(Opcode, C1, C2);
-        Instruction *New = BinaryOperator::Create(Opcode, A, B);
+        BinaryOperator *New = BinaryOperator::Create(Opcode, A, B);
         InsertNewInstWith(New, I);
         New->takeName(Op1);
         I.setOperand(0, New);
@@ -248,6 +295,7 @@ bool InstCombiner::SimplifyAssociativeOrCommutative(BinaryOperator &I) {
         // Conservatively clear the optional flags, since they may not be
         // preserved by the reassociation.
         I.clearSubclassOptionalData();
+
         Changed = true;
         continue;
       }
@@ -516,8 +564,8 @@ Instruction *InstCombiner::FoldOpIntoSelect(Instruction &Op, SelectInst *SI) {
     // If it's a bitcast involving vectors, make sure it has the same number of
     // elements on both sides.
     if (BitCastInst *BC = dyn_cast<BitCastInst>(&Op)) {
-      const VectorType *DestTy = dyn_cast<VectorType>(BC->getDestTy());
-      const VectorType *SrcTy = dyn_cast<VectorType>(BC->getSrcTy());
+      VectorType *DestTy = dyn_cast<VectorType>(BC->getDestTy());
+      VectorType *SrcTy = dyn_cast<VectorType>(BC->getSrcTy());
 
       // Verify that either both or neither are vectors.
       if ((SrcTy == NULL) != (DestTy == NULL)) return 0;
@@ -654,7 +702,7 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I) {
     }
   } else { 
     CastInst *CI = cast<CastInst>(&I);
-    const Type *RetTy = CI->getType();
+    Type *RetTy = CI->getType();
     for (unsigned i = 0; i != NumPHIValues; ++i) {
       Value *InV;
       if (Constant *InC = dyn_cast<Constant>(PN->getIncomingValue(i)))
@@ -680,7 +728,7 @@ Instruction *InstCombiner::FoldOpIntoPhi(Instruction &I) {
 /// or not there is a sequence of GEP indices into the type that will land us at
 /// the specified offset.  If so, fill them into NewIndices and return the
 /// resultant element type, otherwise return null.
-const Type *InstCombiner::FindElementAtOffset(const Type *Ty, int64_t Offset, 
+Type *InstCombiner::FindElementAtOffset(Type *Ty, int64_t Offset, 
                                           SmallVectorImpl<Value*> &NewIndices) {
   if (!TD) return 0;
   if (!Ty->isSized()) return 0;
@@ -688,7 +736,7 @@ const Type *InstCombiner::FindElementAtOffset(const Type *Ty, int64_t Offset,
   // Start with the index over the outer type.  Note that the type size
   // might be zero (even if the offset isn't zero) if the indexed type
   // is something like [0 x {int, int}]
-  const Type *IntPtrTy = TD->getIntPtrType(Ty->getContext());
+  Type *IntPtrTy = TD->getIntPtrType(Ty->getContext());
   int64_t FirstIdx = 0;
   if (int64_t TySize = TD->getTypeAllocSize(Ty)) {
     FirstIdx = Offset/TySize;
@@ -711,7 +759,7 @@ const Type *InstCombiner::FindElementAtOffset(const Type *Ty, int64_t Offset,
     if (uint64_t(Offset*8) >= TD->getTypeSizeInBits(Ty))
       return 0;
     
-    if (const StructType *STy = dyn_cast<StructType>(Ty)) {
+    if (StructType *STy = dyn_cast<StructType>(Ty)) {
       const StructLayout *SL = TD->getStructLayout(STy);
       assert(Offset < (int64_t)SL->getSizeInBytes() &&
              "Offset must stay within the indexed type");
@@ -722,7 +770,7 @@ const Type *InstCombiner::FindElementAtOffset(const Type *Ty, int64_t Offset,
       
       Offset -= SL->getElementOffset(Elt);
       Ty = STy->getElementType(Elt);
-    } else if (const ArrayType *AT = dyn_cast<ArrayType>(Ty)) {
+    } else if (ArrayType *AT = dyn_cast<ArrayType>(Ty)) {
       uint64_t EltSize = TD->getTypeAllocSize(AT->getElementType());
       assert(EltSize && "Cannot index into a zero-sized array");
       NewIndices.push_back(ConstantInt::get(IntPtrTy,Offset/EltSize));
@@ -737,12 +785,20 @@ const Type *InstCombiner::FindElementAtOffset(const Type *Ty, int64_t Offset,
   return Ty;
 }
 
-
+static bool shouldMergeGEPs(GEPOperator &GEP, GEPOperator &Src) {
+  // If this GEP has only 0 indices, it is the same pointer as
+  // Src. If Src is not a trivial GEP too, don't combine
+  // the indices.
+  if (GEP.hasAllZeroIndices() && !Src.hasAllZeroIndices() &&
+      !Src.hasOneUse())
+    return false;
+  return true;
+}
 
 Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
   SmallVector<Value*, 8> Ops(GEP.op_begin(), GEP.op_end());
 
-  if (Value *V = SimplifyGEPInst(&Ops[0], Ops.size(), TD))
+  if (Value *V = SimplifyGEPInst(Ops, TD))
     return ReplaceInstUsesWith(GEP, V);
 
   Value *PtrOp = GEP.getOperand(0);
@@ -751,13 +807,13 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
   // by multiples of a zero size type with zero.
   if (TD) {
     bool MadeChange = false;
-    const Type *IntPtrTy = TD->getIntPtrType(GEP.getContext());
+    Type *IntPtrTy = TD->getIntPtrType(GEP.getContext());
 
     gep_type_iterator GTI = gep_type_begin(GEP);
     for (User::op_iterator I = GEP.op_begin() + 1, E = GEP.op_end();
          I != E; ++I, ++GTI) {
       // Skip indices into struct types.
-      const SequentialType *SeqTy = dyn_cast<SequentialType>(*GTI);
+      SequentialType *SeqTy = dyn_cast<SequentialType>(*GTI);
       if (!SeqTy) continue;
 
       // If the element type has zero size then any index over it is equivalent
@@ -785,13 +841,15 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
   // getelementptr instructions into a single instruction.
   //
   if (GEPOperator *Src = dyn_cast<GEPOperator>(PtrOp)) {
+    if (!shouldMergeGEPs(*cast<GEPOperator>(&GEP), *Src))
+      return 0;
+
     // Note that if our source is a gep chain itself that we wait for that
     // chain to be resolved before we perform this transformation.  This
     // avoids us creating a TON of code in some cases.
-    //
-    if (GetElementPtrInst *SrcGEP =
-          dyn_cast<GetElementPtrInst>(Src->getOperand(0)))
-      if (SrcGEP->getNumOperands() == 2)
+    if (GEPOperator *SrcGEP =
+          dyn_cast<GEPOperator>(Src->getOperand(0)))
+      if (SrcGEP->getNumOperands() == 2 && shouldMergeGEPs(*Src, *SrcGEP))
         return 0;   // Wait until our source is folded to completion.
 
     SmallVector<Value*, 8> Indices;
@@ -843,15 +901,14 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
 
     if (!Indices.empty())
       return (GEP.isInBounds() && Src->isInBounds()) ?
-        GetElementPtrInst::CreateInBounds(Src->getOperand(0), Indices.begin(),
-                                          Indices.end(), GEP.getName()) :
-        GetElementPtrInst::Create(Src->getOperand(0), Indices.begin(),
-                                  Indices.end(), GEP.getName());
+        GetElementPtrInst::CreateInBounds(Src->getOperand(0), Indices,
+                                          GEP.getName()) :
+        GetElementPtrInst::Create(Src->getOperand(0), Indices, GEP.getName());
   }
 
   // Handle gep(bitcast x) and gep(gep x, 0, 0, 0).
   Value *StrippedPtr = PtrOp->stripPointerCasts();
-  const PointerType *StrippedPtrTy =cast<PointerType>(StrippedPtr->getType());
+  PointerType *StrippedPtrTy =cast<PointerType>(StrippedPtr->getType());
   if (StrippedPtr != PtrOp &&
     StrippedPtrTy->getAddressSpace() == GEP.getPointerAddressSpace()) {
 
@@ -867,21 +924,20 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
     //
     // This occurs when the program declares an array extern like "int X[];"
     if (HasZeroPointerIndex) {
-      const PointerType *CPTy = cast<PointerType>(PtrOp->getType());
-      if (const ArrayType *CATy =
+      PointerType *CPTy = cast<PointerType>(PtrOp->getType());
+      if (ArrayType *CATy =
           dyn_cast<ArrayType>(CPTy->getElementType())) {
         // GEP (bitcast i8* X to [0 x i8]*), i32 0, ... ?
         if (CATy->getElementType() == StrippedPtrTy->getElementType()) {
           // -> GEP i8* X, ...
           SmallVector<Value*, 8> Idx(GEP.idx_begin()+1, GEP.idx_end());
           GetElementPtrInst *Res =
-            GetElementPtrInst::Create(StrippedPtr, Idx.begin(),
-                                      Idx.end(), GEP.getName());
+            GetElementPtrInst::Create(StrippedPtr, Idx, GEP.getName());
           Res->setIsInBounds(GEP.isInBounds());
           return Res;
         }
         
-        if (const ArrayType *XATy =
+        if (ArrayType *XATy =
               dyn_cast<ArrayType>(StrippedPtrTy->getElementType())){
           // GEP (bitcast [10 x i8]* X to [0 x i8]*), i32 0, ... ?
           if (CATy->getElementType() == XATy->getElementType()) {
@@ -899,8 +955,8 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       // Transform things like:
       // %t = getelementptr i32* bitcast ([2 x i32]* %str to i32*), i32 %V
       // into:  %t1 = getelementptr [2 x i32]* %str, i32 0, i32 %V; bitcast
-      const Type *SrcElTy = StrippedPtrTy->getElementType();
-      const Type *ResElTy=cast<PointerType>(PtrOp->getType())->getElementType();
+      Type *SrcElTy = StrippedPtrTy->getElementType();
+      Type *ResElTy=cast<PointerType>(PtrOp->getType())->getElementType();
       if (TD && SrcElTy->isArrayTy() &&
           TD->getTypeAllocSize(cast<ArrayType>(SrcElTy)->getElementType()) ==
           TD->getTypeAllocSize(ResElTy)) {
@@ -908,8 +964,8 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
         Idx[0] = Constant::getNullValue(Type::getInt32Ty(GEP.getContext()));
         Idx[1] = GEP.getOperand(1);
         Value *NewGEP = GEP.isInBounds() ?
-          Builder->CreateInBoundsGEP(StrippedPtr, Idx, Idx + 2, GEP.getName()) :
-          Builder->CreateGEP(StrippedPtr, Idx, Idx + 2, GEP.getName());
+          Builder->CreateInBoundsGEP(StrippedPtr, Idx, GEP.getName()) :
+          Builder->CreateGEP(StrippedPtr, Idx, GEP.getName());
         // V and GEP are both pointer types --> BitCast
         return new BitCastInst(NewGEP, GEP.getType());
       }
@@ -967,8 +1023,8 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
           Idx[0] = Constant::getNullValue(Type::getInt32Ty(GEP.getContext()));
           Idx[1] = NewIdx;
           Value *NewGEP = GEP.isInBounds() ?
-            Builder->CreateInBoundsGEP(StrippedPtr, Idx, Idx + 2,GEP.getName()):
-            Builder->CreateGEP(StrippedPtr, Idx, Idx + 2, GEP.getName());
+            Builder->CreateInBoundsGEP(StrippedPtr, Idx, GEP.getName()):
+            Builder->CreateGEP(StrippedPtr, Idx, GEP.getName());
           // The NewGEP must be pointer typed, so must the old one -> BitCast
           return new BitCastInst(NewGEP, GEP.getType());
         }
@@ -1015,14 +1071,12 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       // field at Offset in 'A's type.  If so, we can pull the cast through the
       // GEP.
       SmallVector<Value*, 8> NewIndices;
-      const Type *InTy =
+      Type *InTy =
         cast<PointerType>(BCI->getOperand(0)->getType())->getElementType();
       if (FindElementAtOffset(InTy, Offset, NewIndices)) {
         Value *NGEP = GEP.isInBounds() ?
-          Builder->CreateInBoundsGEP(BCI->getOperand(0), NewIndices.begin(),
-                                     NewIndices.end()) :
-          Builder->CreateGEP(BCI->getOperand(0), NewIndices.begin(),
-                             NewIndices.end());
+          Builder->CreateInBoundsGEP(BCI->getOperand(0), NewIndices) :
+          Builder->CreateGEP(BCI->getOperand(0), NewIndices);
         
         if (NGEP->getType() == GEP.getType())
           return ReplaceInstUsesWith(GEP, NGEP);
@@ -1037,15 +1091,43 @@ Instruction *InstCombiner::visitGetElementPtrInst(GetElementPtrInst &GEP) {
 
 
 
-static bool IsOnlyNullComparedAndFreed(const Value &V) {
-  for (Value::const_use_iterator UI = V.use_begin(), UE = V.use_end();
+static bool IsOnlyNullComparedAndFreed(Value *V, SmallVectorImpl<WeakVH> &Users,
+                                       int Depth = 0) {
+  if (Depth == 8)
+    return false;
+
+  for (Value::use_iterator UI = V->use_begin(), UE = V->use_end();
        UI != UE; ++UI) {
-    const User *U = *UI;
-    if (isFreeCall(U))
+    User *U = *UI;
+    if (isFreeCall(U)) {
+      Users.push_back(U);
       continue;
-    if (const ICmpInst *ICI = dyn_cast<ICmpInst>(U))
-      if (ICI->isEquality() && isa<ConstantPointerNull>(ICI->getOperand(1)))
+    }
+    if (ICmpInst *ICI = dyn_cast<ICmpInst>(U)) {
+      if (ICI->isEquality() && isa<ConstantPointerNull>(ICI->getOperand(1))) {
+        Users.push_back(ICI);
         continue;
+      }
+    }
+    if (BitCastInst *BCI = dyn_cast<BitCastInst>(U)) {
+      if (IsOnlyNullComparedAndFreed(BCI, Users, Depth+1)) {
+        Users.push_back(BCI);
+        continue;
+      }
+    }
+    if (GetElementPtrInst *GEPI = dyn_cast<GetElementPtrInst>(U)) {
+      if (IsOnlyNullComparedAndFreed(GEPI, Users, Depth+1)) {
+        Users.push_back(GEPI);
+        continue;
+      }
+    }
+    if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(U)) {
+      if (II->getIntrinsicID() == Intrinsic::lifetime_start ||
+          II->getIntrinsicID() == Intrinsic::lifetime_end) {
+        Users.push_back(II);
+        continue;
+      }
+    }
     return false;
   }
   return true;
@@ -1055,25 +1137,20 @@ Instruction *InstCombiner::visitMalloc(Instruction &MI) {
   // If we have a malloc call which is only used in any amount of comparisons
   // to null and free calls, delete the calls and replace the comparisons with
   // true or false as appropriate.
-  if (IsOnlyNullComparedAndFreed(MI)) {
-    for (Value::use_iterator UI = MI.use_begin(), UE = MI.use_end();
-         UI != UE;) {
-      // We can assume that every remaining use is a free call or an icmp eq/ne
-      // to null, so the cast is safe.
-      Instruction *I = cast<Instruction>(*UI);
+  SmallVector<WeakVH, 64> Users;
+  if (IsOnlyNullComparedAndFreed(&MI, Users)) {
+    for (unsigned i = 0, e = Users.size(); i != e; ++i) {
+      Instruction *I = cast_or_null<Instruction>(&*Users[i]);
+      if (!I) continue;
 
-      // Early increment here, as we're about to get rid of the user.
-      ++UI;
-
-      if (isFreeCall(I)) {
-        EraseInstFromFunction(*cast<CallInst>(I));
-        continue;
+      if (ICmpInst *C = dyn_cast<ICmpInst>(I)) {
+        ReplaceInstUsesWith(*C,
+                            ConstantInt::get(Type::getInt1Ty(C->getContext()),
+                                             C->isFalseWhenEqual()));
+      } else if (isa<BitCastInst>(I) || isa<GetElementPtrInst>(I)) {
+        ReplaceInstUsesWith(*I, UndefValue::get(I->getType()));
       }
-      // Again, the cast is safe.
-      ICmpInst *C = cast<ICmpInst>(I);
-      ReplaceInstUsesWith(*C, ConstantInt::get(Type::getInt1Ty(C->getContext()),
-                                               C->isFalseWhenEqual()));
-      EraseInstFromFunction(*C);
+      EraseInstFromFunction(*I);
     }
     return EraseInstFromFunction(MI);
   }
@@ -1191,7 +1268,7 @@ Instruction *InstCombiner::visitExtractValueInst(ExtractValueInst &EV) {
       if (EV.getNumIndices() > 1)
         // Extract the remaining indices out of the constant indexed by the
         // first index
-        return ExtractValueInst::Create(V, EV.idx_begin() + 1, EV.idx_end());
+        return ExtractValueInst::Create(V, EV.getIndices().slice(1));
       else
         return ReplaceInstUsesWith(EV, V);
     }
@@ -1214,7 +1291,7 @@ Instruction *InstCombiner::visitExtractValueInst(ExtractValueInst &EV) {
         // with
         // %E = extractvalue { i32, { i32 } } %A, 0
         return ExtractValueInst::Create(IV->getAggregateOperand(),
-                                        EV.idx_begin(), EV.idx_end());
+                                        EV.getIndices());
     }
     if (exti == exte && insi == inse)
       // Both iterators are at the end: Index lists are identical. Replace
@@ -1232,9 +1309,9 @@ Instruction *InstCombiner::visitExtractValueInst(ExtractValueInst &EV) {
       // by switching the order of the insert and extract (though the
       // insertvalue should be left in, since it may have other uses).
       Value *NewEV = Builder->CreateExtractValue(IV->getAggregateOperand(),
-                                                 EV.idx_begin(), EV.idx_end());
+                                                 EV.getIndices());
       return InsertValueInst::Create(NewEV, IV->getInsertedValueOperand(),
-                                     insi, inse);
+                                     makeArrayRef(insi, inse));
     }
     if (insi == inse)
       // The insert list is a prefix of the extract list
@@ -1246,7 +1323,7 @@ Instruction *InstCombiner::visitExtractValueInst(ExtractValueInst &EV) {
       // with
       // %E extractvalue { i32 } { i32 42 }, 0
       return ExtractValueInst::Create(IV->getInsertedValueOperand(), 
-                                      exti, exte);
+                                      makeArrayRef(exti, exte));
   }
   if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(Agg)) {
     // We're extracting from an intrinsic, see if we're the only user, which
@@ -1302,7 +1379,7 @@ Instruction *InstCombiner::visitExtractValueInst(ExtractValueInst &EV) {
     // load from a GEP. This reduces the size of the load.
     // FIXME: If a load is used only by extractvalue instructions then this
     //        could be done regardless of having multiple uses.
-    if (!L->isVolatile() && L->hasOneUse()) {
+    if (L->isSimple() && L->hasOneUse()) {
       // extractvalue has integer indices, getelementptr has Value*s. Convert.
       SmallVector<Value*, 4> Indices;
       // Prefix an i32 0 since we need the first element.
@@ -1314,8 +1391,7 @@ Instruction *InstCombiner::visitExtractValueInst(ExtractValueInst &EV) {
       // We need to insert these at the location of the old load, not at that of
       // the extractvalue.
       Builder->SetInsertPoint(L->getParent(), L);
-      Value *GEP = Builder->CreateInBoundsGEP(L->getPointerOperand(),
-                                              Indices.begin(), Indices.end());
+      Value *GEP = Builder->CreateInBoundsGEP(L->getPointerOperand(), Indices);
       // Returning the load directly will cause the main loop to insert it in
       // the wrong spot, so use ReplaceInstUsesWith().
       return ReplaceInstUsesWith(EV, Builder->CreateLoad(GEP));
@@ -1342,7 +1418,8 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
   assert(I->hasOneUse() && "Invariants didn't hold!");
 
   // Cannot move control-flow-involving, volatile loads, vaarg, etc.
-  if (isa<PHINode>(I) || I->mayHaveSideEffects() || isa<TerminatorInst>(I))
+  if (isa<PHINode>(I) || isa<LandingPadInst>(I) || I->mayHaveSideEffects() ||
+      isa<TerminatorInst>(I))
     return false;
 
   // Do not sink alloca instructions out of the entry block.
@@ -1359,8 +1436,7 @@ static bool TryToSinkInstruction(Instruction *I, BasicBlock *DestBlock) {
         return false;
   }
 
-  BasicBlock::iterator InsertPos = DestBlock->getFirstNonPHI();
-
+  BasicBlock::iterator InsertPos = DestBlock->getFirstInsertionPt();
   I->moveBefore(InsertPos);
   ++NumSunkInst;
   return true;

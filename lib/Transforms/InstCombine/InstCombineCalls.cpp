@@ -22,8 +22,8 @@ using namespace llvm;
 
 /// getPromotedType - Return the specified type promoted as it would be to pass
 /// though a va_arg area.
-static const Type *getPromotedType(const Type *Ty) {
-  if (const IntegerType* ITy = dyn_cast<IntegerType>(Ty)) {
+static Type *getPromotedType(Type *Ty) {
+  if (IntegerType* ITy = dyn_cast<IntegerType>(Ty)) {
     if (ITy->getBitWidth() < 32)
       return Type::getInt32Ty(Ty->getContext());
   }
@@ -64,7 +64,7 @@ Instruction *InstCombiner::SimplifyMemTransfer(MemIntrinsic *MI) {
   unsigned DstAddrSp =
     cast<PointerType>(MI->getArgOperand(0)->getType())->getAddressSpace();
 
-  const IntegerType* IntType = IntegerType::get(MI->getContext(), Size<<3);
+  IntegerType* IntType = IntegerType::get(MI->getContext(), Size<<3);
   Type *NewSrcPtrTy = PointerType::get(IntType, SrcAddrSp);
   Type *NewDstPtrTy = PointerType::get(IntType, DstAddrSp);
   
@@ -76,18 +76,18 @@ Instruction *InstCombiner::SimplifyMemTransfer(MemIntrinsic *MI) {
   // integer datatype.
   Value *StrippedDest = MI->getArgOperand(0)->stripPointerCasts();
   if (StrippedDest != MI->getArgOperand(0)) {
-    const Type *SrcETy = cast<PointerType>(StrippedDest->getType())
+    Type *SrcETy = cast<PointerType>(StrippedDest->getType())
                                     ->getElementType();
     if (TD && SrcETy->isSized() && TD->getTypeStoreSize(SrcETy) == Size) {
       // The SrcETy might be something like {{{double}}} or [1 x double].  Rip
       // down through these levels if so.
       while (!SrcETy->isSingleValueType()) {
-        if (const StructType *STy = dyn_cast<StructType>(SrcETy)) {
+        if (StructType *STy = dyn_cast<StructType>(SrcETy)) {
           if (STy->getNumElements() == 1)
             SrcETy = STy->getElementType(0);
           else
             break;
-        } else if (const ArrayType *ATy = dyn_cast<ArrayType>(SrcETy)) {
+        } else if (ArrayType *ATy = dyn_cast<ArrayType>(SrcETy)) {
           if (ATy->getNumElements() == 1)
             SrcETy = ATy->getElementType();
           else
@@ -142,7 +142,7 @@ Instruction *InstCombiner::SimplifyMemSet(MemSetInst *MI) {
   
   // memset(s,c,n) -> store s, c (for n=1,2,4,8)
   if (Len <= 8 && isPowerOf2_32((uint32_t)Len)) {
-    const Type *ITy = IntegerType::get(MI->getContext(), Len*8);  // n=1 -> i8.
+    Type *ITy = IntegerType::get(MI->getContext(), Len*8);  // n=1 -> i8.
     
     Value *Dest = MI->getDest();
     unsigned DstAddrSp = cast<PointerType>(Dest->getType())->getAddressSpace();
@@ -217,10 +217,10 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
         if (GVSrc->isConstant()) {
           Module *M = CI.getParent()->getParent()->getParent();
           Intrinsic::ID MemCpyID = Intrinsic::memcpy;
-          const Type *Tys[3] = { CI.getArgOperand(0)->getType(),
-                                 CI.getArgOperand(1)->getType(),
-                                 CI.getArgOperand(2)->getType() };
-          CI.setCalledFunction(Intrinsic::getDeclaration(M, MemCpyID, Tys, 3));
+          Type *Tys[3] = { CI.getArgOperand(0)->getType(),
+                           CI.getArgOperand(1)->getType(),
+                           CI.getArgOperand(2)->getType() };
+          CI.setCalledFunction(Intrinsic::getDeclaration(M, MemCpyID, Tys));
           Changed = true;
         }
     }
@@ -250,7 +250,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     // We need target data for just about everything so depend on it.
     if (!TD) break;
     
-    const Type *ReturnTy = CI.getType();
+    Type *ReturnTy = CI.getType();
     uint64_t DontKnow = II->getArgOperand(1) == Builder->getTrue() ? 0 : -1ULL;
 
     // Get to the real allocated thing and offset as fast as possible.
@@ -266,8 +266,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
       // Get the current byte offset into the thing. Use the original
       // operand in case we're looking through a bitcast.
       SmallVector<Value*, 8> Ops(GEP->idx_begin(), GEP->idx_end());
-      Offset = TD->getIndexedOffset(GEP->getPointerOperandType(),
-                                    Ops.data(), Ops.size());
+      Offset = TD->getIndexedOffset(GEP->getPointerOperandType(), Ops);
 
       Op1 = GEP->getPointerOperand()->stripPointerCasts();
 
@@ -300,7 +299,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
       }
     } else if (CallInst *MI = extractMallocCall(Op1)) {
       // Get allocation size.
-      const Type* MallocType = getMallocAllocatedType(MI);
+      Type* MallocType = getMallocAllocatedType(MI);
       if (MallocType && MallocType->isSized())
         if (Value *NElems = getMallocArraySize(MI, TD, true))
           if (ConstantInt *NElements = dyn_cast<ConstantInt>(NElems))
@@ -355,7 +354,9 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
   case Intrinsic::cttz: {
     // If all bits below the first known one are known zero,
     // this value is constant.
-    const IntegerType *IT = cast<IntegerType>(II->getArgOperand(0)->getType());
+    IntegerType *IT = dyn_cast<IntegerType>(II->getArgOperand(0)->getType());
+    // FIXME: Try to simplify vectors of integers.
+    if (!IT) break;
     uint32_t BitWidth = IT->getBitWidth();
     APInt KnownZero(BitWidth, 0);
     APInt KnownOne(BitWidth, 0);
@@ -372,7 +373,9 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
   case Intrinsic::ctlz: {
     // If all bits above the first known one are known zero,
     // this value is constant.
-    const IntegerType *IT = cast<IntegerType>(II->getArgOperand(0)->getType());
+    IntegerType *IT = dyn_cast<IntegerType>(II->getArgOperand(0)->getType());
+    // FIXME: Try to simplify vectors of integers.
+    if (!IT) break;
     uint32_t BitWidth = IT->getBitWidth();
     APInt KnownZero(BitWidth, 0);
     APInt KnownOne(BitWidth, 0);
@@ -388,7 +391,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
     break;
   case Intrinsic::uadd_with_overflow: {
     Value *LHS = II->getArgOperand(0), *RHS = II->getArgOperand(1);
-    const IntegerType *IT = cast<IntegerType>(II->getArgOperand(0)->getType());
+    IntegerType *IT = cast<IntegerType>(II->getArgOperand(0)->getType());
     uint32_t BitWidth = IT->getBitWidth();
     APInt Mask = APInt::getSignBit(BitWidth);
     APInt LHSKnownZero(BitWidth, 0);
@@ -412,7 +415,8 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
           UndefValue::get(LHS->getType()),
           ConstantInt::getTrue(II->getContext())
         };
-        Constant *Struct = ConstantStruct::get(II->getContext(), V, 2, false);
+        StructType *ST = cast<StructType>(II->getType());
+        Constant *Struct = ConstantStruct::get(ST, V);
         return InsertValueInst::Create(Struct, Add, 0);
       }
 
@@ -425,7 +429,8 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
           UndefValue::get(LHS->getType()),
           ConstantInt::getFalse(II->getContext())
         };
-        Constant *Struct = ConstantStruct::get(II->getContext(), V, 2, false);
+        StructType *ST = cast<StructType>(II->getType());
+        Constant *Struct = ConstantStruct::get(ST, V);
         return InsertValueInst::Create(Struct, Add, 0);
       }
     }
@@ -452,7 +457,8 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
           UndefValue::get(II->getArgOperand(0)->getType()),
           ConstantInt::getFalse(II->getContext())
         };
-        Constant *Struct = ConstantStruct::get(II->getContext(), V, 2, false);
+        Constant *Struct =
+          ConstantStruct::get(cast<StructType>(II->getType()), V);
         return InsertValueInst::Create(Struct, II->getArgOperand(0), 0);
       }
     }
@@ -472,7 +478,8 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
           UndefValue::get(II->getArgOperand(0)->getType()),
           ConstantInt::getFalse(II->getContext())
         };
-        Constant *Struct = ConstantStruct::get(II->getContext(), V, 2, false);
+        Constant *Struct = 
+          ConstantStruct::get(cast<StructType>(II->getType()), V);
         return InsertValueInst::Create(Struct, II->getArgOperand(0), 0);
       }
     }
@@ -503,7 +510,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
         UndefValue::get(LHS->getType()),
         Builder->getFalse()
       };
-      Constant *Struct = ConstantStruct::get(II->getContext(), V, 2, false);
+      Constant *Struct = ConstantStruct::get(cast<StructType>(II->getType()),V);
       return InsertValueInst::Create(Struct, Mul, 0);
     }
   } // FALL THROUGH
@@ -532,7 +539,8 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
           UndefValue::get(II->getArgOperand(0)->getType()),
           ConstantInt::getFalse(II->getContext())
         };
-        Constant *Struct = ConstantStruct::get(II->getContext(), V, 2, false);
+        Constant *Struct = 
+          ConstantStruct::get(cast<StructType>(II->getType()), V);
         return InsertValueInst::Create(Struct, II->getArgOperand(0), 0);
       }
     }
@@ -550,7 +558,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
   case Intrinsic::ppc_altivec_stvxl:
     // Turn stvx -> store if the pointer is known aligned.
     if (getOrEnforceKnownAlignment(II->getArgOperand(1), 16, TD) >= 16) {
-      const Type *OpPtrTy = 
+      Type *OpPtrTy = 
         PointerType::getUnqual(II->getArgOperand(0)->getType());
       Value *Ptr = Builder->CreateBitCast(II->getArgOperand(1), OpPtrTy);
       return new StoreInst(II->getArgOperand(0), Ptr);
@@ -561,7 +569,7 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
   case Intrinsic::x86_sse2_storeu_dq:
     // Turn X86 storeu -> store if the pointer is known aligned.
     if (getOrEnforceKnownAlignment(II->getArgOperand(0), 16, TD) >= 16) {
-      const Type *OpPtrTy = 
+      Type *OpPtrTy = 
         PointerType::getUnqual(II->getArgOperand(1)->getType());
       Value *Ptr = Builder->CreateBitCast(II->getArgOperand(0), OpPtrTy);
       return new StoreInst(II->getArgOperand(1), Ptr);
@@ -724,9 +732,11 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
       }
     }
     
-    // If the stack restore is in a return/unwind block and if there are no
-    // allocas or calls between the restore and the return, nuke the restore.
-    if (!CannotRemove && (isa<ReturnInst>(TI) || isa<UnwindInst>(TI)))
+    // If the stack restore is in a return, resume, or unwind block and if there
+    // are no allocas or calls between the restore and the return, nuke the
+    // restore.
+    if (!CannotRemove && (isa<ReturnInst>(TI) || isa<ResumeInst>(TI) ||
+                          isa<UnwindInst>(TI)))
       return EraseInstFromFunction(CI);
     break;
   }
@@ -756,9 +766,9 @@ static bool isSafeToEliminateVarargsCast(const CallSite CS,
   if (!CS.paramHasAttr(ix, Attribute::ByVal))
     return true;
 
-  const Type* SrcTy = 
+  Type* SrcTy = 
             cast<PointerType>(CI->getOperand(0)->getType())->getElementType();
-  const Type* DstTy = cast<PointerType>(CI->getType())->getElementType();
+  Type* DstTy = cast<PointerType>(CI->getType())->getElementType();
   if (!SrcTy->isSized() || !DstTy->isSized())
     return false;
   if (!TD || TD->getTypeAllocSize(SrcTy) != TD->getTypeAllocSize(DstTy))
@@ -875,8 +885,8 @@ Instruction *InstCombiner::visitCallSite(CallSite CS) {
       if (In->getIntrinsicID() == Intrinsic::init_trampoline)
         return transformCallThroughTrampoline(CS);
 
-  const PointerType *PTy = cast<PointerType>(Callee->getType());
-  const FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
+  PointerType *PTy = cast<PointerType>(Callee->getType());
+  FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
   if (FTy->isVarArg()) {
     int ix = FTy->getNumParams() + (isa<InvokeInst>(Callee) ? 3 : 1);
     // See if we can optimize any arguments passed through the varargs area of
@@ -925,9 +935,9 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
   // would cause a type conversion of one of our arguments, change this call to
   // be a direct call with arguments casted to the appropriate types.
   //
-  const FunctionType *FT = Callee->getFunctionType();
-  const Type *OldRetTy = Caller->getType();
-  const Type *NewRetTy = FT->getReturnType();
+  FunctionType *FT = Callee->getFunctionType();
+  Type *OldRetTy = Caller->getType();
+  Type *NewRetTy = FT->getReturnType();
 
   if (NewRetTy->isStructTy())
     return false; // TODO: Handle multiple return values.
@@ -973,8 +983,8 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
 
   CallSite::arg_iterator AI = CS.arg_begin();
   for (unsigned i = 0, e = NumCommonArgs; i != e; ++i, ++AI) {
-    const Type *ParamTy = FT->getParamType(i);
-    const Type *ActTy = (*AI)->getType();
+    Type *ParamTy = FT->getParamType(i);
+    Type *ActTy = (*AI)->getType();
 
     if (!CastInst::isCastable(ActTy, ParamTy))
       return false;   // Cannot transform this parameter value.
@@ -986,11 +996,11 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
     // If the parameter is passed as a byval argument, then we have to have a
     // sized type and the sized type has to have the same size as the old type.
     if (ParamTy != ActTy && (Attrs & Attribute::ByVal)) {
-      const PointerType *ParamPTy = dyn_cast<PointerType>(ParamTy);
+      PointerType *ParamPTy = dyn_cast<PointerType>(ParamTy);
       if (ParamPTy == 0 || !ParamPTy->getElementType()->isSized() || TD == 0)
         return false;
       
-      const Type *CurElTy = cast<PointerType>(ActTy)->getElementType();
+      Type *CurElTy = cast<PointerType>(ActTy)->getElementType();
       if (TD->getTypeAllocSize(CurElTy) !=
           TD->getTypeAllocSize(ParamPTy->getElementType()))
         return false;
@@ -1014,7 +1024,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
     // If the callee is just a declaration, don't change the varargsness of the
     // call.  We don't want to introduce a varargs call where one doesn't
     // already exist.
-    const PointerType *APTy = cast<PointerType>(CS.getCalledValue()->getType());
+    PointerType *APTy = cast<PointerType>(CS.getCalledValue()->getType());
     if (FT->isVarArg()!=cast<FunctionType>(APTy->getElementType())->isVarArg())
       return false;
   }
@@ -1053,7 +1063,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
 
   AI = CS.arg_begin();
   for (unsigned i = 0; i != NumCommonArgs; ++i, ++AI) {
-    const Type *ParamTy = FT->getParamType(i);
+    Type *ParamTy = FT->getParamType(i);
     if ((*AI)->getType() == ParamTy) {
       Args.push_back(*AI);
     } else {
@@ -1080,7 +1090,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
     } else {
       // Add all of the arguments in their promoted form to the arg list.
       for (unsigned i = FT->getNumParams(); i != NumActualArgs; ++i, ++AI) {
-        const Type *PTy = getPromotedType((*AI)->getType());
+        Type *PTy = getPromotedType((*AI)->getType());
         if (PTy != (*AI)->getType()) {
           // Must promote to pass through va_arg area!
           Instruction::CastOps opcode =
@@ -1109,13 +1119,13 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
   Instruction *NC;
   if (InvokeInst *II = dyn_cast<InvokeInst>(Caller)) {
     NC = Builder->CreateInvoke(Callee, II->getNormalDest(),
-                               II->getUnwindDest(), Args.begin(), Args.end());
+                               II->getUnwindDest(), Args);
     NC->takeName(II);
     cast<InvokeInst>(NC)->setCallingConv(II->getCallingConv());
     cast<InvokeInst>(NC)->setAttributes(NewCallerPAL);
   } else {
     CallInst *CI = cast<CallInst>(Caller);
-    NC = Builder->CreateCall(Callee, Args.begin(), Args.end());
+    NC = Builder->CreateCall(Callee, Args);
     NC->takeName(CI);
     if (CI->isTailCall())
       cast<CallInst>(NC)->setTailCall();
@@ -1159,8 +1169,8 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
 //
 Instruction *InstCombiner::transformCallThroughTrampoline(CallSite CS) {
   Value *Callee = CS.getCalledValue();
-  const PointerType *PTy = cast<PointerType>(Callee->getType());
-  const FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
+  PointerType *PTy = cast<PointerType>(Callee->getType());
+  FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
   const AttrListPtr &Attrs = CS.getAttributes();
 
   // If the call already has the 'nest' attribute somewhere then give up -
@@ -1172,13 +1182,13 @@ Instruction *InstCombiner::transformCallThroughTrampoline(CallSite CS) {
     cast<IntrinsicInst>(cast<BitCastInst>(Callee)->getOperand(0));
 
   Function *NestF =cast<Function>(Tramp->getArgOperand(1)->stripPointerCasts());
-  const PointerType *NestFPTy = cast<PointerType>(NestF->getType());
-  const FunctionType *NestFTy = cast<FunctionType>(NestFPTy->getElementType());
+  PointerType *NestFPTy = cast<PointerType>(NestF->getType());
+  FunctionType *NestFTy = cast<FunctionType>(NestFPTy->getElementType());
 
   const AttrListPtr &NestAttrs = NestF->getAttributes();
   if (!NestAttrs.isEmpty()) {
     unsigned NestIdx = 1;
-    const Type *NestTy = 0;
+    Type *NestTy = 0;
     Attributes NestAttr = Attribute::None;
 
     // Look for a parameter marked with the 'nest' attribute.
@@ -1240,7 +1250,7 @@ Instruction *InstCombiner::transformCallThroughTrampoline(CallSite CS) {
       // Handle this by synthesizing a new function type, equal to FTy
       // with the chain parameter inserted.
 
-      std::vector<const Type*> NewTypes;
+      std::vector<Type*> NewTypes;
       NewTypes.reserve(FTy->getNumParams()+1);
 
       // Insert the chain's type into the list of parameter types, which may
@@ -1280,11 +1290,11 @@ Instruction *InstCombiner::transformCallThroughTrampoline(CallSite CS) {
       if (InvokeInst *II = dyn_cast<InvokeInst>(Caller)) {
         NewCaller = InvokeInst::Create(NewCallee,
                                        II->getNormalDest(), II->getUnwindDest(),
-                                       NewArgs.begin(), NewArgs.end());
+                                       NewArgs);
         cast<InvokeInst>(NewCaller)->setCallingConv(II->getCallingConv());
         cast<InvokeInst>(NewCaller)->setAttributes(NewPAL);
       } else {
-        NewCaller = CallInst::Create(NewCallee, NewArgs.begin(), NewArgs.end());
+        NewCaller = CallInst::Create(NewCallee, NewArgs);
         if (cast<CallInst>(Caller)->isTailCall())
           cast<CallInst>(NewCaller)->setTailCall();
         cast<CallInst>(NewCaller)->

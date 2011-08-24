@@ -89,7 +89,7 @@ static void recursive_mkdir(const char *filename) {
       pathname = malloc(i + 1);
       strncpy(pathname, filename, i);
       pathname[i] = '\0';
-#ifdef _MSC_VER
+#ifdef _WIN32
       _mkdir(pathname);
 #else
       mkdir(pathname, 0750);  /* some of these will fail, ignore it. */
@@ -114,7 +114,11 @@ void llvm_gcda_start_file(const char *orig_filename) {
   output_file = fopen(filename, "wb");
 
   /* gcda file, version 404*, stamp LLVM. */
+#ifdef __APPLE__
+  fwrite("adcg*204MVLL", 12, 1, output_file);
+#else
   fwrite("adcg*404MVLL", 12, 1, output_file);
+#endif
 
 #ifdef DEBUG_GCDAPROFILING
   printf("llvmgcda: [%s]\n", orig_filename);

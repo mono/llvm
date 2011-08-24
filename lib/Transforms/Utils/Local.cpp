@@ -27,7 +27,6 @@
 #include "llvm/Analysis/DebugInfo.h"
 #include "llvm/Analysis/DIBuilder.h"
 #include "llvm/Analysis/Dominators.h"
-#include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/ProfileInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -227,13 +226,17 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions) {
 bool llvm::isInstructionTriviallyDead(Instruction *I) {
   if (!I->use_empty() || isa<TerminatorInst>(I)) return false;
 
+  // We don't want the landingpad instruction removed by anything this general.
+  if (isa<LandingPadInst>(I))
+    return false;
+
   // We don't want debug info removed by anything this general, unless
   // debug info is empty.
   if (DbgDeclareInst *DDI = dyn_cast<DbgDeclareInst>(I)) {
-    if (DDI->getAddress()) 
+    if (DDI->getAddress())
       return false;
     return true;
-  } 
+  }
   if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(I)) {
     if (DVI->getValue())
       return false;
@@ -244,10 +247,16 @@ bool llvm::isInstructionTriviallyDead(Instruction *I) {
 
   // Special case intrinsics that "may have side effects" but can be deleted
   // when dead.
-  if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I))
+  if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(I)) {
     // Safe to delete llvm.stacksave if dead.
     if (II->getIntrinsicID() == Intrinsic::stacksave)
       return true;
+
+    // Lifetime intrinsics are dead when their right-hand is undef.
+    if (II->getIntrinsicID() == Intrinsic::lifetime_start ||
+        II->getIntrinsicID() == Intrinsic::lifetime_end)
+      return isa<UndefValue>(II->getArgOperand(1));
+  }
   return false;
 }
 
@@ -427,10 +436,6 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB, Pass *P) {
   BasicBlock *PredBB = DestBB->getSinglePredecessor();
   assert(PredBB && "Block doesn't have a single predecessor!");
   
-  // Splice all the instructions from PredBB to DestBB.
-  PredBB->getTerminator()->eraseFromParent();
-  DestBB->getInstList().splice(DestBB->begin(), PredBB->getInstList());
-
   // Zap anything that took the address of DestBB.  Not doing this will give the
   // address an invalid value.
   if (DestBB->hasAddressTaken()) {
@@ -445,6 +450,10 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB, Pass *P) {
   // Anything that branched to PredBB now branches to DestBB.
   PredBB->replaceAllUsesWith(DestBB);
   
+  // Splice all the instructions from PredBB to DestBB.
+  PredBB->getTerminator()->eraseFromParent();
+  DestBB->getInstList().splice(DestBB->begin(), PredBB->getInstList());
+
   if (P) {
     DominatorTree *DT = P->getAnalysisIfAvailable<DominatorTree>();
     if (DT) {
@@ -536,9 +545,9 @@ static bool CanPropagatePredecessorsForPHIs(BasicBlock *BB, BasicBlock *Succ) {
 
 /// TryToSimplifyUncondBranchFromEmptyBlock - BB is known to contain an
 /// unconditional branch, and contains no instructions other than PHI nodes,
-/// potential debug intrinsics and the branch.  If possible, eliminate BB by
-/// rewriting all the predecessors to branch to the successor block and return
-/// true.  If we can't transform, return false.
+/// potential side-effect free intrinsics and the branch.  If possible,
+/// eliminate BB by rewriting all the predecessors to branch to the successor
+/// block and return true.  If we can't transform, return false.
 bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB) {
   assert(BB != &BB->getParent()->getEntryBlock() &&
          "TryToSimplifyUncondBranchFromEmptyBlock called on entry block!");
@@ -613,13 +622,15 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB) {
     }
   }
   
-  while (PHINode *PN = dyn_cast<PHINode>(&BB->front())) {
-    if (Succ->getSinglePredecessor()) {
-      // BB is the only predecessor of Succ, so Succ will end up with exactly
-      // the same predecessors BB had.
-      Succ->getInstList().splice(Succ->begin(),
-                                 BB->getInstList(), BB->begin());
-    } else {
+  if (Succ->getSinglePredecessor()) {
+    // BB is the only predecessor of Succ, so Succ will end up with exactly
+    // the same predecessors BB had.
+
+    // Copy over any phi, debug or lifetime instruction.
+    BB->getTerminator()->eraseFromParent();
+    Succ->getInstList().splice(Succ->getFirstNonPHI(), BB->getInstList());
+  } else {
+    while (PHINode *PN = dyn_cast<PHINode>(&BB->front())) {
       // We explicitly check for such uses in CanPropagatePredecessorsForPHIs.
       assert(PN->use_empty() && "There shouldn't be any uses here!");
       PN->eraseFromParent();
@@ -642,7 +653,7 @@ bool llvm::EliminateDuplicatePHINodes(BasicBlock *BB) {
   bool Changed = false;
 
   // This implementation doesn't currently consider undef operands
-  // specially. Theroetically, two phis which are identical except for
+  // specially. Theoretically, two phis which are identical except for
   // one having an undef where the other doesn't could be collapsed.
 
   // Map from PHI hash values to PHI nodes. If multiple PHIs have
@@ -660,10 +671,15 @@ bool llvm::EliminateDuplicatePHINodes(BasicBlock *BB) {
     // them, which helps expose duplicates, but we have to check all the
     // operands to be safe in case instcombine hasn't run.
     uintptr_t Hash = 0;
+    // This hash algorithm is quite weak as hash functions go, but it seems
+    // to do a good enough job for this particular purpose, and is very quick.
     for (User::op_iterator I = PN->op_begin(), E = PN->op_end(); I != E; ++I) {
-      // This hash algorithm is quite weak as hash functions go, but it seems
-      // to do a good enough job for this particular purpose, and is very quick.
       Hash ^= reinterpret_cast<uintptr_t>(static_cast<Value *>(*I));
+      Hash = (Hash << 7) | (Hash >> (sizeof(uintptr_t) * CHAR_BIT - 7));
+    }
+    for (PHINode::block_iterator I = PN->block_begin(), E = PN->block_end();
+         I != E; ++I) {
+      Hash ^= reinterpret_cast<uintptr_t>(static_cast<BasicBlock *>(*I));
       Hash = (Hash << 7) | (Hash >> (sizeof(uintptr_t) * CHAR_BIT - 7));
     }
     // Avoid colliding with the DenseMap sentinels ~0 and ~0-1.

@@ -25,9 +25,9 @@ void llvm::InsertProfilingInitCall(Function *MainFn, const char *FnName,
                                    GlobalValue *Array,
                                    PointerType *arrayType) {
   LLVMContext &Context = MainFn->getContext();
-  const Type *ArgVTy =
+  Type *ArgVTy =
     PointerType::getUnqual(Type::getInt8PtrTy(Context));
-  const PointerType *UIntPtr = arrayType ? arrayType :
+  PointerType *UIntPtr = arrayType ? arrayType :
     Type::getInt32PtrTy(Context);
   Module &M = *MainFn->getParent();
   Constant *InitFn = M.getOrInsertFunction(FnName, Type::getInt32Ty(Context),
@@ -51,8 +51,7 @@ void llvm::InsertProfilingInitCall(Function *MainFn, const char *FnName,
                              Constant::getNullValue(Type::getInt32Ty(Context)));
   unsigned NumElements = 0;
   if (Array) {
-    Args[2] = ConstantExpr::getGetElementPtr(Array, &GEPIndices[0],
-                                             GEPIndices.size());
+    Args[2] = ConstantExpr::getGetElementPtr(Array, GEPIndices);
     NumElements =
       cast<ArrayType>(Array->getType()->getElementType())->getNumElements();
   } else {
@@ -62,8 +61,7 @@ void llvm::InsertProfilingInitCall(Function *MainFn, const char *FnName,
   }
   Args[3] = ConstantInt::get(Type::getInt32Ty(Context), NumElements);
 
-  CallInst *InitCall = CallInst::Create(InitFn, Args.begin(), Args.end(),
-                                        "newargc", InsertPos);
+  CallInst *InitCall = CallInst::Create(InitFn, Args, "newargc", InsertPos);
 
   // If argc or argv are not available in main, just pass null values in.
   Function::arg_iterator AI;
@@ -121,7 +119,7 @@ void llvm::IncrementCounterInBlock(BasicBlock *BB, unsigned CounterNum,
   Indices[0] = Constant::getNullValue(Type::getInt32Ty(Context));
   Indices[1] = ConstantInt::get(Type::getInt32Ty(Context), CounterNum);
   Constant *ElementPtr =
-    ConstantExpr::getGetElementPtr(CounterArray, &Indices[0], Indices.size());
+    ConstantExpr::getGetElementPtr(CounterArray, Indices);
 
   // Load, increment and store the value back.
   Value *OldVal = new LoadInst(ElementPtr, "OldFuncCounter", InsertPos);
@@ -134,11 +132,11 @@ void llvm::IncrementCounterInBlock(BasicBlock *BB, unsigned CounterNum,
 void llvm::InsertProfilingShutdownCall(Function *Callee, Module *Mod) {
   // llvm.global_dtors is an array of type { i32, void ()* }. Prepare those
   // types.
-  const Type *GlobalDtorElems[2] = {
+  Type *GlobalDtorElems[2] = {
     Type::getInt32Ty(Mod->getContext()),
     FunctionType::get(Type::getVoidTy(Mod->getContext()), false)->getPointerTo()
   };
-  const StructType *GlobalDtorElemTy =
+  StructType *GlobalDtorElemTy =
       StructType::get(Mod->getContext(), GlobalDtorElems, false);
 
   // Construct the new element we'll be adding.
@@ -164,7 +162,8 @@ void llvm::InsertProfilingShutdownCall(Function *Callee, Module *Mod) {
   GlobalVariable *GlobalDtors = new GlobalVariable(
       *Mod, ArrayType::get(GlobalDtorElemTy, 1), false,
       GlobalValue::AppendingLinkage, NULL, "llvm.global_dtors");
-  dtors.push_back(ConstantStruct::get(Mod->getContext(), Elem, 2, false));
+                                    
+  dtors.push_back(ConstantStruct::get(GlobalDtorElemTy, Elem));
   GlobalDtors->setInitializer(ConstantArray::get(
       cast<ArrayType>(GlobalDtors->getType()->getElementType()), dtors));
 }

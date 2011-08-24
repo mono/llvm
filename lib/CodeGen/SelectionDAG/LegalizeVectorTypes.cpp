@@ -44,7 +44,8 @@ void DAGTypeLegalizer::ScalarizeVectorResult(SDNode *N, unsigned ResNo) {
     N->dump(&DAG);
     dbgs() << "\n";
 #endif
-    llvm_unreachable("Do not know how to scalarize the result of this operator!");
+    report_fatal_error("Do not know how to scalarize the result of this "
+                       "operator!\n");
 
   case ISD::BITCAST:           R = ScalarizeVecRes_BITCAST(N); break;
   case ISD::BUILD_VECTOR:      R = N->getOperand(0); break;
@@ -524,12 +525,11 @@ void DAGTypeLegalizer::SplitVecRes_BITCAST(SDNode *N, SDValue &Lo,
 
   // Handle some special cases efficiently.
   switch (getTypeAction(InVT)) {
-  default:
-    assert(false && "Unknown type action!");
   case TargetLowering::TypeLegal:
   case TargetLowering::TypePromoteInteger:
   case TargetLowering::TypeSoftenFloat:
   case TargetLowering::TypeScalarizeVector:
+  case TargetLowering::TypeWidenVector:
     break;
   case TargetLowering::TypeExpandInteger:
   case TargetLowering::TypeExpandFloat:
@@ -670,7 +670,7 @@ void DAGTypeLegalizer::SplitVecRes_INSERT_VECTOR_ELT(SDNode *N, SDValue &Lo,
   // Store the new element.  This may be larger than the vector element type,
   // so use a truncating store.
   SDValue EltPtr = GetVectorElementPointer(StackPtr, EltVT, Idx);
-  const Type *VecType = VecVT.getTypeForEVT(*DAG.getContext());
+  Type *VecType = VecVT.getTypeForEVT(*DAG.getContext());
   unsigned Alignment =
     TLI.getTargetData()->getPrefTypeAlignment(VecType);
   Store = DAG.getTruncStore(Store, dl, Elt, EltPtr, MachinePointerInfo(), EltVT,
@@ -1661,6 +1661,7 @@ SDValue DAGTypeLegalizer::WidenVecRes_CONCAT_VECTORS(SDNode *N) {
   EVT WidenVT = TLI.getTypeToTransformTo(*DAG.getContext(), N->getValueType(0));
   DebugLoc dl = N->getDebugLoc();
   unsigned WidenNumElts = WidenVT.getVectorNumElements();
+  unsigned NumInElts = InVT.getVectorNumElements();
   unsigned NumOperands = N->getNumOperands();
 
   bool InputWidened = false; // Indicates we need to widen the input.
@@ -1686,17 +1687,17 @@ SDValue DAGTypeLegalizer::WidenVecRes_CONCAT_VECTORS(SDNode *N) {
         if (N->getOperand(i).getOpcode() != ISD::UNDEF)
           break;
 
-      if (i > NumOperands)
+      if (i == NumOperands)
         // Everything but the first operand is an UNDEF so just return the
         // widened first operand.
         return GetWidenedVector(N->getOperand(0));
 
       if (NumOperands == 2) {
         // Replace concat of two operands with a shuffle.
-        SmallVector<int, 16> MaskOps(WidenNumElts);
-        for (unsigned i=0; i < WidenNumElts/2; ++i) {
+        SmallVector<int, 16> MaskOps(WidenNumElts, -1);
+        for (unsigned i = 0; i < NumInElts; ++i) {
           MaskOps[i] = i;
-          MaskOps[i+WidenNumElts/2] = i+WidenNumElts;
+          MaskOps[i + NumInElts] = i + WidenNumElts;
         }
         return DAG.getVectorShuffle(WidenVT, dl,
                                     GetWidenedVector(N->getOperand(0)),
@@ -1708,7 +1709,6 @@ SDValue DAGTypeLegalizer::WidenVecRes_CONCAT_VECTORS(SDNode *N) {
 
   // Fall back to use extracts and build vector.
   EVT EltVT = WidenVT.getVectorElementType();
-  unsigned NumInElts = InVT.getVectorNumElements();
   SmallVector<SDValue, 16> Ops(WidenNumElts);
   unsigned Idx = 0;
   for (unsigned i=0; i < NumOperands; ++i) {
@@ -1970,6 +1970,7 @@ SDValue DAGTypeLegalizer::WidenVecRes_VSETCC(SDNode *N) {
   assert(InOp1.getValueType() == WidenInVT &&
          InOp2.getValueType() == WidenInVT &&
          "Input not widened to expected type!");
+  (void)WidenInVT;
   return DAG.getNode(ISD::VSETCC, N->getDebugLoc(),
                      WidenVT, InOp1, InOp2, N->getOperand(2));
 }

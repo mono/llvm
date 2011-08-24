@@ -26,10 +26,10 @@ def Use32BitAddresses : Predicate<"!getSubtarget().is64Bit()">;
 def Use64BitAddresses : Predicate<"getSubtarget().is64Bit()">;
 
 // Shader Model Support
-def SupportsSM13       : Predicate<"getSubtarget().supportsSM13()">;
-def DoesNotSupportSM13 : Predicate<"!getSubtarget().supportsSM13()">;
-def SupportsSM20       : Predicate<"getSubtarget().supportsSM20()">;
-def DoesNotSupportSM20 : Predicate<"!getSubtarget().supportsSM20()">;
+def FDivNeedsRoundingMode : Predicate<"getSubtarget().fdivNeedsRoundingMode()">;
+def FDivNoRoundingMode : Predicate<"!getSubtarget().fdivNeedsRoundingMode()">;
+def FMadNeedsRoundingMode : Predicate<"getSubtarget().fmadNeedsRoundingMode()">;
+def FMadNoRoundingMode : Predicate<"!getSubtarget().fmadNeedsRoundingMode()">;
 
 // PTX Version Support
 def SupportsPTX21       : Predicate<"getSubtarget().supportsPTX21()">;
@@ -163,6 +163,22 @@ def MEMpi : Operand<i32> {
   let PrintMethod = "printParamOperand";
   let MIOperandInfo = (ops i32imm);
 }
+def MEMret : Operand<i32> {
+  let PrintMethod = "printReturnOperand";
+  let MIOperandInfo = (ops i32imm);
+}
+
+// def SDT_PTXCallSeqStart : SDCallSeqStart<[SDTCisVT<0, i32>]>;
+// def SDT_PTXCallSeqEnd   : SDCallSeqEnd<[SDTCisVT<0, i32>, SDTCisVT<1, i32>]>;
+
+// def PTXcallseq_start : SDNode<"ISD::CALLSEQ_START", SDT_PTXCallSeqStart,
+//                               [SDNPHasChain, SDNPOutGlue]>;
+// def PTXcallseq_end   : SDNode<"ISD::CALLSEQ_END", SDT_PTXCallSeqEnd,
+//                               [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+
+def PTXcall : SDNode<"PTXISD::CALL", SDTNone,
+                     [SDNPHasChain, SDNPVariadic, SDNPOptInGlue, SDNPOutGlue]>;
+
 
 // Branch & call targets have OtherVT type.
 def brtarget   : Operand<OtherVT>;
@@ -180,9 +196,18 @@ def PTXsra : SDNode<"ISD::SRA", SDTIntBinOp>;
 def PTXexit
   : SDNode<"PTXISD::EXIT", SDTNone, [SDNPHasChain]>;
 def PTXret
-  : SDNode<"PTXISD::RET",  SDTNone, [SDNPHasChain]>;
+  : SDNode<"PTXISD::RET",  SDTNone,
+           [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 def PTXcopyaddress
   : SDNode<"PTXISD::COPY_ADDRESS", SDTypeProfile<1, 1, []>, []>;
+
+// Load/store .param space
+def PTXloadparam
+  : SDNode<"PTXISD::LOAD_PARAM", SDTypeProfile<1, 1, [SDTCisVT<1, i32>]>,
+           [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue]>;
+def PTXstoreparam
+  : SDNode<"PTXISD::STORE_PARAM", SDTypeProfile<0, 2, [SDTCisVT<0, i32>]>,
+           [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue]>;
 
 //===----------------------------------------------------------------------===//
 // Instruction Class Templates
@@ -600,43 +625,43 @@ def FDIVrr32SM13 : InstPTX<(outs RegF32:$d),
                        (ins RegF32:$a, RegF32:$b),
                        "div.rn.f32\t$d, $a, $b",
                        [(set RegF32:$d, (fdiv RegF32:$a, RegF32:$b))]>,
-                   Requires<[SupportsSM13]>;
+                   Requires<[FDivNeedsRoundingMode]>;
 def FDIVri32SM13 : InstPTX<(outs RegF32:$d),
                        (ins RegF32:$a, f32imm:$b),
                        "div.rn.f32\t$d, $a, $b",
                        [(set RegF32:$d, (fdiv RegF32:$a, fpimm:$b))]>,
-                   Requires<[SupportsSM13]>;
+                   Requires<[FDivNeedsRoundingMode]>;
 def FDIVrr32SM10 : InstPTX<(outs RegF32:$d),
                        (ins RegF32:$a, RegF32:$b),
                        "div.f32\t$d, $a, $b",
                        [(set RegF32:$d, (fdiv RegF32:$a, RegF32:$b))]>,
-                   Requires<[DoesNotSupportSM13]>;
+                   Requires<[FDivNoRoundingMode]>;
 def FDIVri32SM10 : InstPTX<(outs RegF32:$d),
                        (ins RegF32:$a, f32imm:$b),
                        "div.f32\t$d, $a, $b",
                        [(set RegF32:$d, (fdiv RegF32:$a, fpimm:$b))]>,
-                   Requires<[DoesNotSupportSM13]>;
+                   Requires<[FDivNoRoundingMode]>;
 
 def FDIVrr64SM13 : InstPTX<(outs RegF64:$d),
                            (ins RegF64:$a, RegF64:$b),
                            "div.rn.f64\t$d, $a, $b",
                            [(set RegF64:$d, (fdiv RegF64:$a, RegF64:$b))]>,
-                   Requires<[SupportsSM13]>;
+                   Requires<[FDivNeedsRoundingMode]>;
 def FDIVri64SM13 : InstPTX<(outs RegF64:$d),
                            (ins RegF64:$a, f64imm:$b),
                            "div.rn.f64\t$d, $a, $b",
                            [(set RegF64:$d, (fdiv RegF64:$a, fpimm:$b))]>,
-                   Requires<[SupportsSM13]>;
+                   Requires<[FDivNeedsRoundingMode]>;
 def FDIVrr64SM10 : InstPTX<(outs RegF64:$d),
                            (ins RegF64:$a, RegF64:$b),
                            "div.f64\t$d, $a, $b",
                            [(set RegF64:$d, (fdiv RegF64:$a, RegF64:$b))]>,
-                   Requires<[DoesNotSupportSM13]>;
+                   Requires<[FDivNoRoundingMode]>;
 def FDIVri64SM10 : InstPTX<(outs RegF64:$d),
                            (ins RegF64:$a, f64imm:$b),
                            "div.f64\t$d, $a, $b",
                            [(set RegF64:$d, (fdiv RegF64:$a, fpimm:$b))]>,
-                   Requires<[DoesNotSupportSM13]>;
+                   Requires<[FDivNoRoundingMode]>;
 
 
 
@@ -648,8 +673,10 @@ def FDIVri64SM10 : InstPTX<(outs RegF64:$d),
 // In the short term, mad is supported on all PTX versions and we use a
 // default rounding mode no matter what shader model or PTX version.
 // TODO: Allow the rounding mode to be selectable through llc.
-defm FMADSM13 : PTX_FLOAT_4OP<"mad.rn", fmul, fadd>, Requires<[SupportsSM13, SupportsFMA]>;
-defm FMAD : PTX_FLOAT_4OP<"mad", fmul, fadd>, Requires<[DoesNotSupportSM13, SupportsFMA]>;
+defm FMADSM13 : PTX_FLOAT_4OP<"mad.rn", fmul, fadd>,
+                Requires<[FMadNeedsRoundingMode, SupportsFMA]>;
+defm FMAD : PTX_FLOAT_4OP<"mad", fmul, fadd>,
+            Requires<[FMadNoRoundingMode, SupportsFMA]>;
 
 ///===- Floating-Point Intrinsic Instructions -----------------------------===//
 
@@ -696,6 +723,10 @@ defm SETPLTu16 : PTX_SETP_I<RegI16, "u16", i16imm, SETULT, "lt">;
 defm SETPLEu16 : PTX_SETP_I<RegI16, "u16", i16imm, SETULE, "le">;
 defm SETPGTu16 : PTX_SETP_I<RegI16, "u16", i16imm, SETUGT, "gt">;
 defm SETPGEu16 : PTX_SETP_I<RegI16, "u16", i16imm, SETUGE, "ge">;
+defm SETPLTs16 : PTX_SETP_I<RegI16, "s16", i16imm, SETLT,  "lt">;
+defm SETPLEs16 : PTX_SETP_I<RegI16, "s16", i16imm, SETLE,  "le">;
+defm SETPGTs16 : PTX_SETP_I<RegI16, "s16", i16imm, SETGT,  "gt">;
+defm SETPGEs16 : PTX_SETP_I<RegI16, "s16", i16imm, SETGE,  "ge">;
 
 // Compare u32
 
@@ -705,6 +736,10 @@ defm SETPLTu32 : PTX_SETP_I<RegI32, "u32", i32imm, SETULT, "lt">;
 defm SETPLEu32 : PTX_SETP_I<RegI32, "u32", i32imm, SETULE, "le">;
 defm SETPGTu32 : PTX_SETP_I<RegI32, "u32", i32imm, SETUGT, "gt">;
 defm SETPGEu32 : PTX_SETP_I<RegI32, "u32", i32imm, SETUGE, "ge">;
+defm SETPLTs32 : PTX_SETP_I<RegI32, "s32", i32imm, SETLT,  "lt">;
+defm SETPLEs32 : PTX_SETP_I<RegI32, "s32", i32imm, SETLE,  "le">;
+defm SETPGTs32 : PTX_SETP_I<RegI32, "s32", i32imm, SETGT,  "gt">;
+defm SETPGEs32 : PTX_SETP_I<RegI32, "s32", i32imm, SETGE,  "ge">;
 
 // Compare u64
 
@@ -714,6 +749,10 @@ defm SETPLTu64 : PTX_SETP_I<RegI64, "u64", i64imm, SETULT, "lt">;
 defm SETPLEu64 : PTX_SETP_I<RegI64, "u64", i64imm, SETULE, "le">;
 defm SETPGTu64 : PTX_SETP_I<RegI64, "u64", i64imm, SETUGT, "gt">;
 defm SETPGEu64 : PTX_SETP_I<RegI64, "u64", i64imm, SETUGE, "ge">;
+defm SETPLTs64 : PTX_SETP_I<RegI64, "s64", i64imm, SETLT,  "lt">;
+defm SETPLEs64 : PTX_SETP_I<RegI64, "s64", i64imm, SETLE,  "le">;
+defm SETPGTs64 : PTX_SETP_I<RegI64, "s64", i64imm, SETGT,  "gt">;
+defm SETPGEs64 : PTX_SETP_I<RegI64, "s64", i64imm, SETGE,  "ge">;
 
 // Compare f32
 
@@ -804,17 +843,48 @@ defm LDc : PTX_LD_ALL<"ld.const",  load_constant>;
 defm LDl : PTX_LD_ALL<"ld.local",  load_local>;
 defm LDs : PTX_LD_ALL<"ld.shared", load_shared>;
 
-// This is a special instruction that is manually inserted for kernel parameters
-def LDpiU16 : InstPTX<(outs RegI16:$d), (ins MEMpi:$a),
-                      "ld.param.u16\t$d, [$a]", []>;
-def LDpiU32 : InstPTX<(outs RegI32:$d), (ins MEMpi:$a),
-                      "ld.param.u32\t$d, [$a]", []>;
-def LDpiU64 : InstPTX<(outs RegI64:$d), (ins MEMpi:$a),
-                      "ld.param.u64\t$d, [$a]", []>;
-def LDpiF32 : InstPTX<(outs RegF32:$d), (ins MEMpi:$a),
-                      "ld.param.f32\t$d, [$a]", []>;
-def LDpiF64 : InstPTX<(outs RegF64:$d), (ins MEMpi:$a),
-                      "ld.param.f64\t$d, [$a]", []>;
+// These instructions are used to load/store from the .param space for
+// device and kernel parameters
+
+let hasSideEffects = 1 in {
+  def LDpiPred : InstPTX<(outs RegPred:$d), (ins MEMpi:$a),
+                         "ld.param.pred\t$d, [$a]",
+                         [(set RegPred:$d, (PTXloadparam timm:$a))]>;
+  def LDpiU16  : InstPTX<(outs RegI16:$d), (ins MEMpi:$a),
+                         "ld.param.u16\t$d, [$a]",
+                         [(set RegI16:$d, (PTXloadparam timm:$a))]>;
+  def LDpiU32  : InstPTX<(outs RegI32:$d), (ins MEMpi:$a),
+                         "ld.param.u32\t$d, [$a]",
+                         [(set RegI32:$d, (PTXloadparam timm:$a))]>;
+  def LDpiU64  : InstPTX<(outs RegI64:$d), (ins MEMpi:$a),
+                         "ld.param.u64\t$d, [$a]",
+                         [(set RegI64:$d, (PTXloadparam timm:$a))]>;
+  def LDpiF32  : InstPTX<(outs RegF32:$d), (ins MEMpi:$a),
+                         "ld.param.f32\t$d, [$a]",
+                         [(set RegF32:$d, (PTXloadparam timm:$a))]>;
+  def LDpiF64  : InstPTX<(outs RegF64:$d), (ins MEMpi:$a),
+                         "ld.param.f64\t$d, [$a]",
+                         [(set RegF64:$d, (PTXloadparam timm:$a))]>;
+
+  def STpiPred : InstPTX<(outs), (ins MEMret:$d, RegPred:$a),
+                         "st.param.pred\t[$d], $a",
+                         [(PTXstoreparam timm:$d, RegPred:$a)]>;
+  def STpiU16  : InstPTX<(outs), (ins MEMret:$d, RegI16:$a),
+                         "st.param.u16\t[$d], $a",
+                         [(PTXstoreparam timm:$d, RegI16:$a)]>;
+  def STpiU32  : InstPTX<(outs), (ins MEMret:$d, RegI32:$a),
+                         "st.param.u32\t[$d], $a",
+                         [(PTXstoreparam timm:$d, RegI32:$a)]>;
+  def STpiU64  : InstPTX<(outs), (ins MEMret:$d, RegI64:$a),
+                         "st.param.u64\t[$d], $a",
+                         [(PTXstoreparam timm:$d, RegI64:$a)]>;
+  def STpiF32  : InstPTX<(outs), (ins MEMret:$d, RegF32:$a),
+                         "st.param.f32\t[$d], $a",
+                         [(PTXstoreparam timm:$d, RegF32:$a)]>;
+  def STpiF64  : InstPTX<(outs), (ins MEMret:$d, RegF64:$a),
+                         "st.param.f64\t[$d], $a",
+                         [(PTXstoreparam timm:$d, RegF64:$a)]>;
+}
 
 // Stores
 defm STg : PTX_ST_ALL<"st.global", store_global>;
@@ -826,32 +896,44 @@ defm STs : PTX_ST_ALL<"st.shared", store_shared>;
 // TODO: Do something with st.param if/when it is needed.
 
 // Conversion to pred
-
+// PTX does not directly support converting to a predicate type, so we fake it
+// by performing a greater-than test between the value and zero.  This follows
+// the C convention that any non-zero value is equivalent to 'true'.
 def CVT_pred_u16
-  : InstPTX<(outs RegPred:$d), (ins RegI16:$a), "cvt.pred.u16\t$d, $a",
+  : InstPTX<(outs RegPred:$d), (ins RegI16:$a), "setp.gt.u16\t$d, $a, 0",
             [(set RegPred:$d, (trunc RegI16:$a))]>;
 
 def CVT_pred_u32
-  : InstPTX<(outs RegPred:$d), (ins RegI32:$a), "cvt.pred.u32\t$d, $a",
+  : InstPTX<(outs RegPred:$d), (ins RegI32:$a), "setp.gt.u32\t$d, $a, 0",
             [(set RegPred:$d, (trunc RegI32:$a))]>;
 
 def CVT_pred_u64
-  : InstPTX<(outs RegPred:$d), (ins RegI64:$a), "cvt.pred.u64\t$d, $a",
+  : InstPTX<(outs RegPred:$d), (ins RegI64:$a), "setp.gt.u64\t$d, $a, 0",
             [(set RegPred:$d, (trunc RegI64:$a))]>;
 
 def CVT_pred_f32
-  : InstPTX<(outs RegPred:$d), (ins RegF32:$a), "cvt.rzi.pred.f32\t$d, $a",
+  : InstPTX<(outs RegPred:$d), (ins RegF32:$a), "setp.gt.f32\t$d, $a, 0",
             [(set RegPred:$d, (fp_to_uint RegF32:$a))]>;
 
 def CVT_pred_f64
-  : InstPTX<(outs RegPred:$d), (ins RegF64:$a), "cvt.rzi.pred.f64\t$d, $a",
+  : InstPTX<(outs RegPred:$d), (ins RegF64:$a), "setp.gt.f64\t$d, $a, 0",
             [(set RegPred:$d, (fp_to_uint RegF64:$a))]>;
 
 // Conversion to u16
+// PTX does not directly support converting a predicate to a value, so we
+// use a select instruction to select either 0 or 1 (integer or fp) based
+// on the truth value of the predicate.
+def CVT_u16_preda
+  : InstPTX<(outs RegI16:$d), (ins RegPred:$a), "selp.u16\t$d, 1, 0, $a",
+            [(set RegI16:$d, (anyext RegPred:$a))]>;
 
 def CVT_u16_pred
-  : InstPTX<(outs RegI16:$d), (ins RegPred:$a), "cvt.u16.pred\t$d, $a",
+  : InstPTX<(outs RegI16:$d), (ins RegPred:$a), "selp.u16\t$d, 1, 0, $a",
             [(set RegI16:$d, (zext RegPred:$a))]>;
+
+def CVT_u16_preds
+  : InstPTX<(outs RegI16:$d), (ins RegPred:$a), "selp.u16\t$d, 1, 0, $a",
+            [(set RegI16:$d, (sext RegPred:$a))]>;
 
 def CVT_u16_u32
   : InstPTX<(outs RegI16:$d), (ins RegI32:$a), "cvt.u16.u32\t$d, $a",
@@ -872,12 +954,24 @@ def CVT_u16_f64
 // Conversion to u32
 
 def CVT_u32_pred
-  : InstPTX<(outs RegI32:$d), (ins RegPred:$a), "cvt.u32.pred\t$d, $a",
+  : InstPTX<(outs RegI32:$d), (ins RegPred:$a), "selp.u32\t$d, 1, 0, $a",
             [(set RegI32:$d, (zext RegPred:$a))]>;
+
+def CVT_u32_b16
+  : InstPTX<(outs RegI32:$d), (ins RegI16:$a), "cvt.u32.u16\t$d, $a",
+            [(set RegI32:$d, (anyext RegI16:$a))]>;
 
 def CVT_u32_u16
   : InstPTX<(outs RegI32:$d), (ins RegI16:$a), "cvt.u32.u16\t$d, $a",
             [(set RegI32:$d, (zext RegI16:$a))]>;
+
+def CVT_u32_preds
+  : InstPTX<(outs RegI32:$d), (ins RegPred:$a), "selp.u32\t$d, 1, 0, $a",
+            [(set RegI32:$d, (sext RegPred:$a))]>;
+
+def CVT_u32_s16
+  : InstPTX<(outs RegI32:$d), (ins RegI16:$a), "cvt.u32.s16\t$d, $a",
+            [(set RegI32:$d, (sext RegI16:$a))]>;
 
 def CVT_u32_u64
   : InstPTX<(outs RegI32:$d), (ins RegI64:$a), "cvt.u32.u64\t$d, $a",
@@ -894,16 +988,28 @@ def CVT_u32_f64
 // Conversion to u64
 
 def CVT_u64_pred
-  : InstPTX<(outs RegI64:$d), (ins RegPred:$a), "cvt.u64.pred\t$d, $a",
+  : InstPTX<(outs RegI64:$d), (ins RegPred:$a), "selp.u64\t$d, 1, 0, $a",
             [(set RegI64:$d, (zext RegPred:$a))]>;
+
+def CVT_u64_preds
+  : InstPTX<(outs RegI64:$d), (ins RegPred:$a), "selp.u64\t$d, 1, 0, $a",
+            [(set RegI64:$d, (sext RegPred:$a))]>;
 
 def CVT_u64_u16
   : InstPTX<(outs RegI64:$d), (ins RegI16:$a), "cvt.u64.u16\t$d, $a",
             [(set RegI64:$d, (zext RegI16:$a))]>;
 
+def CVT_u64_s16
+  : InstPTX<(outs RegI64:$d), (ins RegI16:$a), "cvt.u64.s16\t$d, $a",
+            [(set RegI64:$d, (sext RegI16:$a))]>;
+
 def CVT_u64_u32
   : InstPTX<(outs RegI64:$d), (ins RegI32:$a), "cvt.u64.u32\t$d, $a",
             [(set RegI64:$d, (zext RegI32:$a))]>;
+
+def CVT_u64_s32
+  : InstPTX<(outs RegI64:$d), (ins RegI32:$a), "cvt.u64.s32\t$d, $a",
+            [(set RegI64:$d, (sext RegI32:$a))]>;
 
 def CVT_u64_f32
   : InstPTX<(outs RegI64:$d), (ins RegF32:$a), "cvt.rzi.u64.f32\t$d, $a",
@@ -916,7 +1022,8 @@ def CVT_u64_f64
 // Conversion to f32
 
 def CVT_f32_pred
-  : InstPTX<(outs RegF32:$d), (ins RegPred:$a), "cvt.rn.f32.pred\t$d, $a",
+  : InstPTX<(outs RegF32:$d), (ins RegPred:$a),
+            "selp.f32\t$d, 0F3F800000, 0F00000000, $a",  // 1.0
             [(set RegF32:$d, (uint_to_fp RegPred:$a))]>;
 
 def CVT_f32_u16
@@ -938,7 +1045,8 @@ def CVT_f32_f64
 // Conversion to f64
 
 def CVT_f64_pred
-  : InstPTX<(outs RegF64:$d), (ins RegPred:$a), "cvt.rn.f64.pred\t$d, $a",
+  : InstPTX<(outs RegF64:$d), (ins RegPred:$a), 
+            "selp.f64\t$d, 0D3F80000000000000, 0D0000000000000000, $a",  // 1.0
             [(set RegF64:$d, (uint_to_fp RegPred:$a))]>;
 
 def CVT_f64_u16
@@ -976,6 +1084,44 @@ let isReturn = 1, isTerminator = 1, isBarrier = 1 in {
   def EXIT : InstPTX<(outs), (ins), "exit", [(PTXexit)]>;
   def RET  : InstPTX<(outs), (ins), "ret",  [(PTXret)]>;
 }
+
+let hasSideEffects = 1 in {
+  def CALL : InstPTX<(outs), (ins), "call", [(PTXcall)]>;
+}
+
+
+///===- Spill Instructions ------------------------------------------------===//
+// Special instructions used for stack spilling
+def STACKSTOREI16 : InstPTX<(outs), (ins i32imm:$d, RegI16:$a),
+                            "mov.u16\ts$d, $a", []>;
+def STACKSTOREI32 : InstPTX<(outs), (ins i32imm:$d, RegI32:$a),
+                            "mov.u32\ts$d, $a", []>;
+def STACKSTOREI64 : InstPTX<(outs), (ins i32imm:$d, RegI64:$a),
+                            "mov.u64\ts$d, $a", []>;
+def STACKSTOREF32 : InstPTX<(outs), (ins i32imm:$d, RegF32:$a),
+                            "mov.f32\ts$d, $a", []>;
+def STACKSTOREF64 : InstPTX<(outs), (ins i32imm:$d, RegF64:$a),
+                            "mov.f64\ts$d, $a", []>;
+
+def STACKLOADI16 : InstPTX<(outs), (ins RegI16:$d, i32imm:$a),
+                           "mov.u16\t$d, s$a", []>;
+def STACKLOADI32 : InstPTX<(outs), (ins RegI32:$d, i32imm:$a),
+                           "mov.u32\t$d, s$a", []>;
+def STACKLOADI64 : InstPTX<(outs), (ins RegI64:$d, i32imm:$a),
+                           "mov.u64\t$d, s$a", []>;
+def STACKLOADF32 : InstPTX<(outs), (ins RegF32:$d, i32imm:$a),
+                           "mov.f32\t$d, s$a", []>;
+def STACKLOADF64 : InstPTX<(outs), (ins RegF64:$d, i32imm:$a),
+                           "mov.f64\t$d, s$a", []>;
+
+
+// Call handling
+// def ADJCALLSTACKUP :
+//   InstPTX<(outs), (ins i32imm:$amt1, i32imm:$amt2), "",
+//           [(PTXcallseq_end timm:$amt1, timm:$amt2)]>;
+// def ADJCALLSTACKDOWN :
+//   InstPTX<(outs), (ins i32imm:$amt), "",
+//           [(PTXcallseq_start timm:$amt)]>;
 
 ///===- Intrinsic Instructions --------------------------------------------===//
 

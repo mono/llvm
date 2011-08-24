@@ -39,6 +39,11 @@ UnrollAllowPartial("unroll-allow-partial", cl::init(false), cl::Hidden,
   cl::desc("Allows loops to be partially unrolled until "
            "-unroll-threshold loop size is reached."));
 
+// Temporary flag to be made default shortly.
+static cl::opt<bool>
+UnrollWithSCEV("unroll-scev", cl::init(false), cl::Hidden,
+  cl::desc("Use ScalarEvolution to analyze loop trip counts for unrolling"));
+
 namespace {
   class LoopUnroll : public LoopPass {
   public:
@@ -49,7 +54,7 @@ namespace {
       CurrentAllowPartial = (P == -1) ? UnrollAllowPartial : (bool)P;
 
       UserThreshold = (T != -1) || (UnrollThreshold.getNumOccurrences() > 0);
-     
+
       initializeLoopUnrollPass(*PassRegistry::getPassRegistry());
     }
 
@@ -57,11 +62,11 @@ namespace {
     /// that the loop unroll should be performed regardless of how much
     /// code expansion would result.
     static const unsigned NoThreshold = UINT_MAX;
-    
+
     // Threshold to use when optsize is specified (and there is no
     // explicit -unroll-threshold).
     static const unsigned OptSizeUnrollThreshold = 50;
-    
+
     unsigned CurrentCount;
     unsigned CurrentThreshold;
     bool     CurrentAllowPartial;
@@ -79,6 +84,7 @@ namespace {
       AU.addPreservedID(LoopSimplifyID);
       AU.addRequiredID(LCSSAID);
       AU.addPreservedID(LCSSAID);
+      AU.addRequired<ScalarEvolution>();
       AU.addPreserved<ScalarEvolution>();
       // FIXME: Loop unroll requires LCSSA. And LCSSA requires dom info.
       // If loop unroll does not preserve dom info then LCSSA pass on next
@@ -107,39 +113,55 @@ static unsigned ApproximateLoopSize(const Loop *L, unsigned &NumCalls) {
        I != E; ++I)
     Metrics.analyzeBasicBlock(*I);
   NumCalls = Metrics.NumInlineCandidates;
-  
+
   unsigned LoopSize = Metrics.NumInsts;
-  
+
   // Don't allow an estimate of size zero.  This would allows unrolling of loops
   // with huge iteration counts, which is a compile time problem even if it's
   // not a problem for code quality.
   if (LoopSize == 0) LoopSize = 1;
-  
+
   return LoopSize;
 }
 
 bool LoopUnroll::runOnLoop(Loop *L, LPPassManager &LPM) {
   LoopInfo *LI = &getAnalysis<LoopInfo>();
+  ScalarEvolution *SE = &getAnalysis<ScalarEvolution>();
 
   BasicBlock *Header = L->getHeader();
   DEBUG(dbgs() << "Loop Unroll: F[" << Header->getParent()->getName()
         << "] Loop %" << Header->getName() << "\n");
   (void)Header;
-  
+
   // Determine the current unrolling threshold.  While this is normally set
   // from UnrollThreshold, it is overridden to a smaller value if the current
   // function is marked as optimize-for-size, and the unroll threshold was
   // not user specified.
   unsigned Threshold = CurrentThreshold;
-  if (!UserThreshold && 
+  if (!UserThreshold &&
       Header->getParent()->hasFnAttr(Attribute::OptimizeForSize))
     Threshold = OptSizeUnrollThreshold;
 
-  // Find trip count
-  unsigned TripCount = L->getSmallConstantTripCount();
-  unsigned Count = CurrentCount;
-
+  // Find trip count and trip multiple if count is not available
+  unsigned TripCount = 0;
+  unsigned TripMultiple = 1;
+  if (UnrollWithSCEV) {
+    // Find "latch trip count". UnrollLoop assumes that control cannot exit
+    // via the loop latch on any iteration prior to TripCount. The loop may exit
+    // early via an earlier branch.
+    BasicBlock *LatchBlock = L->getLoopLatch();
+    if (LatchBlock) {
+      TripCount = SE->getSmallConstantTripCount(L, LatchBlock);
+      TripMultiple = SE->getSmallConstantTripMultiple(L, LatchBlock);
+    }
+  }
+  else {
+    TripCount = L->getSmallConstantTripCount();
+    if (TripCount == 0)
+      TripMultiple = L->getSmallConstantTripMultiple();
+  }
   // Automatically select an unroll count.
+  unsigned Count = CurrentCount;
   if (Count == 0) {
     // Conservative heuristic: if we know the trip count, see if we can
     // completely unroll (subject to the threshold, checked below); otherwise
@@ -182,12 +204,8 @@ bool LoopUnroll::runOnLoop(Loop *L, LPPassManager &LPM) {
   }
 
   // Unroll the loop.
-  Function *F = L->getHeader()->getParent();
-  if (!UnrollLoop(L, Count, LI, &LPM))
+  if (!UnrollLoop(L, Count, TripCount, TripMultiple, LI, &LPM))
     return false;
 
-  // FIXME: Reconstruct dom info, because it is not preserved properly.
-  if (DominatorTree *DT = getAnalysisIfAvailable<DominatorTree>())
-    DT->runOnFunction(*F);
   return true;
 }

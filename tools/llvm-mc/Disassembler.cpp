@@ -65,15 +65,26 @@ static bool PrintInsts(const MCDisassembler &DisAsm,
   for (Index = 0; Index < Bytes.size(); Index += Size) {
     MCInst Inst;
 
-    if (DisAsm.getInstruction(Inst, Size, memoryObject, Index,
-                               /*REMOVE*/ nulls())) {
-      Printer.printInst(&Inst, Out);
-      Out << "\n";
-    } else {
+    MCDisassembler::DecodeStatus S;
+    S = DisAsm.getInstruction(Inst, Size, memoryObject, Index,
+                              /*REMOVE*/ nulls());
+    switch (S) {
+    case MCDisassembler::Fail:
       SM.PrintMessage(SMLoc::getFromPointer(Bytes[Index].second),
                       "invalid instruction encoding", "warning");
       if (Size == 0)
         Size = 1; // skip illegible bytes
+      break;
+
+    case MCDisassembler::SoftFail:
+      SM.PrintMessage(SMLoc::getFromPointer(Bytes[Index].second),
+                      "potentially undefined instruction encoding", "warning");
+      // Fall through
+
+    case MCDisassembler::Success:
+      Printer.printInst(&Inst, Out);
+      Out << "\n";
+      break;
     }
   }
 
@@ -127,12 +138,12 @@ static bool ByteArrayFromString(ByteArrayTy &ByteArray,
   return false;
 }
 
-int Disassembler::disassemble(const Target &T,  TargetMachine &TM,
+int Disassembler::disassemble(const Target &T,
                               const std::string &Triple,
                               MemoryBuffer &Buffer,
                               raw_ostream &Out) {
   // Set up disassembler.
-  OwningPtr<const MCAsmInfo> AsmInfo(T.createAsmInfo(Triple));
+  OwningPtr<const MCAsmInfo> AsmInfo(T.createMCAsmInfo(Triple));
 
   if (!AsmInfo) {
     errs() << "error: no assembly info for target " << Triple << "\n";
@@ -146,7 +157,7 @@ int Disassembler::disassemble(const Target &T,  TargetMachine &TM,
   }
 
   int AsmPrinterVariant = AsmInfo->getAssemblerDialect();
-  OwningPtr<MCInstPrinter> IP(T.createMCInstPrinter(TM, AsmPrinterVariant,
+  OwningPtr<MCInstPrinter> IP(T.createMCInstPrinter(AsmPrinterVariant,
                                                     *AsmInfo));
   if (!IP) {
     errs() << "error: no instruction printer for target " << Triple << '\n';

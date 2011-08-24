@@ -17,18 +17,20 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
-#include "llvm/CodeGen/MachineLocation.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Type.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/STLExtras.h"
+
+#define GET_REGINFO_TARGET_DESC
+#include "SparcGenRegisterInfo.inc"
+
 using namespace llvm;
 
 SparcRegisterInfo::SparcRegisterInfo(SparcSubtarget &st,
                                      const TargetInstrInfo &tii)
-  : SparcGenRegisterInfo(SP::ADJCALLSTACKDOWN, SP::ADJCALLSTACKUP),
-    Subtarget(st), TII(tii) {
+  : SparcGenRegisterInfo(SP::I7), Subtarget(st), TII(tii) {
 }
 
 const unsigned* SparcRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF)
@@ -110,10 +112,6 @@ SparcRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
 void SparcRegisterInfo::
 processFunctionBeforeFrameFinalized(MachineFunction &MF) const {}
 
-unsigned SparcRegisterInfo::getRARegister() const {
-  return SP::I7;
-}
-
 unsigned SparcRegisterInfo::getFrameRegister(const MachineFunction &MF) const {
   return SP::I6;
 }
@@ -127,14 +125,3 @@ unsigned SparcRegisterInfo::getEHHandlerRegister() const {
   llvm_unreachable("What is the exception handler register");
   return 0;
 }
-
-int SparcRegisterInfo::getDwarfRegNum(unsigned RegNum, bool isEH) const {
-  return SparcGenRegisterInfo::getDwarfRegNumFull(RegNum, 0);
-}
-
-int SparcRegisterInfo::getLLVMRegNum(unsigned DwarfRegNo, bool isEH) const {
-  return SparcGenRegisterInfo::getLLVMRegNumFull(DwarfRegNo,0);
-}
-
-#include "SparcGenRegisterInfo.inc"
-

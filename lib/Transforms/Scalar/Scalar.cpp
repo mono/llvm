@@ -48,6 +48,7 @@ void llvm::initializeScalarOpts(PassRegistry &Registry) {
   initializeLoopUnswitchPass(Registry);
   initializeLoopIdiomRecognizePass(Registry);
   initializeLowerAtomicPass(Registry);
+  initializeLowerExpectIntrinsicPass(Registry);
   initializeMemCpyOptPass(Registry);
   initializeObjCARCAliasAnalysisPass(Registry);
   initializeObjCARCExpandPass(Registry);
@@ -185,4 +186,8 @@ void LLVMAddTypeBasedAliasAnalysisPass(LLVMPassManagerRef PM) {
 
 void LLVMAddBasicAliasAnalysisPass(LLVMPassManagerRef PM) {
   unwrap(PM)->add(createBasicAliasAnalysisPass());
+}
+
+void LLVMAddLowerExpectIntrinsicPass(LLVMPassManagerRef PM) {
+  unwrap(PM)->add(createLowerExpectIntrinsicPass());
 }

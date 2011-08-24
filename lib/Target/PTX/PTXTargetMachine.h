@@ -32,8 +32,10 @@ class PTXTargetMachine : public LLVMTargetMachine {
     PTXTargetLowering TLInfo;
 
   public:
-    PTXTargetMachine(const Target &T, const std::string &TT,
-                     const std::string &FS, bool is64Bit);
+    PTXTargetMachine(const Target &T, StringRef TT,
+                     StringRef CPU, StringRef FS,
+                     Reloc::Model RM, CodeModel::Model CM,
+                     bool is64Bit);
 
     virtual const TargetData *getTargetData() const { return &DataLayout; }
 
@@ -60,15 +62,17 @@ class PTXTargetMachine : public LLVMTargetMachine {
 class PTX32TargetMachine : public PTXTargetMachine {
 public:
 
-  PTX32TargetMachine(const Target &T, const std::string &TT,
-                     const std::string& FS);
+  PTX32TargetMachine(const Target &T, StringRef TT,
+                     StringRef CPU, StringRef FS,
+                     Reloc::Model RM, CodeModel::Model CM);
 }; // class PTX32TargetMachine
 
 class PTX64TargetMachine : public PTXTargetMachine {
 public:
 
-  PTX64TargetMachine(const Target &T, const std::string &TT,
-                     const std::string& FS);
+  PTX64TargetMachine(const Target &T, StringRef TT,
+                     StringRef CPU, StringRef FS,
+                     Reloc::Model RM, CodeModel::Model CM);
 }; // class PTX32TargetMachine
 
 } // namespace llvm

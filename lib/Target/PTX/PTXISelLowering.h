@@ -24,12 +24,14 @@ class PTXTargetMachine;
 namespace PTXISD {
   enum NodeType {
     FIRST_NUMBER = ISD::BUILTIN_OP_END,
-    READ_PARAM,
+    LOAD_PARAM,
+    STORE_PARAM,
     EXIT,
     RET,
-    COPY_ADDRESS
+    COPY_ADDRESS,
+    CALL
   };
-} // namespace PTXISD
+}                               // namespace PTXISD
 
 class PTXTargetLowering : public TargetLowering {
   public:
@@ -58,6 +60,16 @@ class PTXTargetLowering : public TargetLowering {
                   const SmallVectorImpl<SDValue> &OutVals,
                   DebugLoc dl,
                   SelectionDAG &DAG) const;
+
+    virtual SDValue
+      LowerCall(SDValue Chain, SDValue Callee,
+                CallingConv::ID CallConv, bool isVarArg,
+                bool &isTailCall,
+                const SmallVectorImpl<ISD::OutputArg> &Outs,
+                const SmallVectorImpl<SDValue> &OutVals,
+                const SmallVectorImpl<ISD::InputArg> &Ins,
+                DebugLoc dl, SelectionDAG &DAG,
+                SmallVectorImpl<SDValue> &InVals) const;
 
     virtual MVT::SimpleValueType getSetCCResultType(EVT VT) const;
 

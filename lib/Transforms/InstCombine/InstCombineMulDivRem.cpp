@@ -421,7 +421,7 @@ Instruction *InstCombiner::commonIDivTransforms(BinaryOperator &I) {
 
 /// dyn_castZExtVal - Checks if V is a zext or constant that can
 /// be truncated to Ty without losing bits.
-static Value *dyn_castZExtVal(Value *V, const Type *Ty) {
+static Value *dyn_castZExtVal(Value *V, Type *Ty) {
   if (ZExtInst *Z = dyn_cast<ZExtInst>(V)) {
     if (Z->getSrcTy() == Ty)
       return Z->getOperand(0);
@@ -691,14 +691,14 @@ Instruction *InstCombiner::visitSRem(BinaryOperator &I) {
     bool hasNegative = false;
     for (unsigned i = 0; !hasNegative && i != VWidth; ++i)
       if (ConstantInt *RHS = dyn_cast<ConstantInt>(RHSV->getOperand(i)))
-        if (RHS->getValue().isNegative())
+        if (RHS->isNegative())
           hasNegative = true;
 
     if (hasNegative) {
       std::vector<Constant *> Elts(VWidth);
       for (unsigned i = 0; i != VWidth; ++i) {
         if (ConstantInt *RHS = dyn_cast<ConstantInt>(RHSV->getOperand(i))) {
-          if (RHS->getValue().isNegative())
+          if (RHS->isNegative())
             Elts[i] = cast<ConstantInt>(ConstantExpr::getNeg(RHS));
           else
             Elts[i] = RHS;

@@ -1,4 +1,5 @@
 import os
+import sys
 
 class TestingConfig:
     """"
@@ -14,11 +15,17 @@ class TestingConfig:
                 'LD_LIBRARY_PATH' : os.environ.get('LD_LIBRARY_PATH',''),
                 'PATH' : os.pathsep.join(litConfig.path +
                                          [os.environ.get('PATH','')]),
-                'PATHEXT' : os.environ.get('PATHEXT',''),
                 'SYSTEMROOT' : os.environ.get('SYSTEMROOT',''),
-                'LLVM_DISABLE_CRT_DEBUG' : '1',
-                'PYTHONUNBUFFERED' : '1',
                 }
+
+            if sys.platform == 'win32':
+                environment.update({
+                        'LLVM_DISABLE_CRT_DEBUG' : '1',
+                        'PATHEXT' : os.environ.get('PATHEXT',''),
+                        'PYTHONUNBUFFERED' : '1',
+                        'TEMP' : os.environ.get('TEMP',''),
+                        'TMP' : os.environ.get('TMP',''),
+                        })
 
             config = TestingConfig(parent,
                                    name = '<unnamed>',
@@ -74,7 +81,6 @@ class TestingConfig:
 
     def clone(self, path):
         # FIXME: Chain implementations?
-        # See attribute chaining in finish()
         #
         # FIXME: Allow extra parameters?
         cfg = TestingConfig(self, self.name, self.suffixes, self.test_format,
@@ -102,9 +108,3 @@ class TestingConfig:
             # files. Should we distinguish them?
             self.test_source_root = str(self.test_source_root)
         self.excludes = set(self.excludes)
-
-        # chain attributes by copying them
-        if self.parent:
-            for k,v in vars(self.parent).items():
-                if not hasattr(self, k):
-                    setattr(self, k, v)

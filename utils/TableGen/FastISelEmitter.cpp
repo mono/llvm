@@ -18,6 +18,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "FastISelEmitter.h"
+#include "Error.h"
 #include "Record.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/VectorExtras.h"
@@ -247,6 +248,8 @@ struct OperandsSignature {
       
       // For now, the only other thing we accept is register operands.
       const CodeGenRegisterClass *RC = 0;
+      if (OpLeafRec->isSubClassOf("RegisterOperand"))
+        OpLeafRec = OpLeafRec->getValueAsDef("RegClass");
       if (OpLeafRec->isSubClassOf("RegisterClass"))
         RC = &Target.getRegisterClass(OpLeafRec);
       else if (OpLeafRec->isSubClassOf("Register"))
@@ -453,6 +456,8 @@ void FastISelMap::collectPatterns(CodeGenDAGPatterns &CGP) {
     std::string SubRegNo;
     if (Op->getName() != "EXTRACT_SUBREG") {
       Record *Op0Rec = II.Operands[0].Rec;
+      if (Op0Rec->isSubClassOf("RegisterOperand"))
+        Op0Rec = Op0Rec->getValueAsDef("RegClass");
       if (!Op0Rec->isSubClassOf("RegisterClass"))
         continue;
       DstRC = &Target.getRegisterClass(Op0Rec);
@@ -499,7 +504,7 @@ void FastISelMap::collectPatterns(CodeGenDAGPatterns &CGP) {
 
     std::vector<std::string>* PhysRegInputs = new std::vector<std::string>();
     if (InstPatNode->getOperator()->getName() == "imm" ||
-        InstPatNode->getOperator()->getName() == "fpimmm")
+        InstPatNode->getOperator()->getName() == "fpimm")
       PhysRegInputs->push_back("");
     else {
       // Compute the PhysRegs used by the given pattern, and check that
