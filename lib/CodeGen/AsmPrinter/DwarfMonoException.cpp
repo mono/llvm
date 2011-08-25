@@ -100,17 +100,19 @@ void EmitCFIInstruction(MCStreamer &Streamer,
 
     // If advancing cfa.
     if (Dst.isReg() && Dst.getReg() == MachineLocation::VirtualFP) {
-      if (Src.getReg() == MachineLocation::VirtualFP) {
-        Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_offset, 1);
-      } else {
-        Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa, 1);
-        Streamer.EmitULEB128IntValue(Src.getReg());
-      }
-
       if (IsRelative)
         CFAOffset += Src.getOffset();
       else
         CFAOffset = -Src.getOffset();
+
+      if (Src.getReg() == MachineLocation::VirtualFP) {
+        Streamer.AddComment ("def_cfa_offset");
+        Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_offset, 1);
+      } else {
+        Streamer.AddComment ("def_cfa");
+        Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa, 1);
+        Streamer.EmitULEB128IntValue(Src.getReg());
+      }
 
       Streamer.EmitULEB128IntValue(CFAOffset);
       return;
@@ -118,6 +120,7 @@ void EmitCFIInstruction(MCStreamer &Streamer,
 
     if (Src.isReg() && Src.getReg() == MachineLocation::VirtualFP) {
       assert(Dst.isReg() && "Machine move not supported yet.");
+        Streamer.AddComment ("def_cfa_register");
       Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_register, 1);
       Streamer.EmitULEB128IntValue(Dst.getReg());
       return;
@@ -131,13 +134,16 @@ void EmitCFIInstruction(MCStreamer &Streamer,
     Offset = Offset / DataAlignmentFactor;
 
     if (Offset < 0) {
+      Streamer.AddComment ("cfa_offset_extended_sf");
       Streamer.EmitIntValue(dwarf::DW_CFA_offset_extended_sf, 1);
       Streamer.EmitULEB128IntValue(Reg);
       Streamer.EmitSLEB128IntValue(Offset);
     } else if (Reg < 64) {
+      Streamer.AddComment ("cfa_offset");
       Streamer.EmitIntValue(dwarf::DW_CFA_offset + Reg, 1);
       Streamer.EmitULEB128IntValue(Offset);
     } else {
+      Streamer.AddComment ("cfa_offset_extended");
       Streamer.EmitIntValue(dwarf::DW_CFA_offset_extended, 1);
       Streamer.EmitULEB128IntValue(Reg);
       Streamer.EmitULEB128IntValue(Offset);
@@ -177,6 +183,7 @@ void EmitCFIInstructions(MCStreamer &streamer,
     if (BaseLabel && Label) {
       MCSymbol *ThisSym = Label;
       if (ThisSym != BaseLabel) {
+        streamer.AddComment ("cfa_advance");
         streamer.EmitDwarfAdvanceFrameAddr(BaseLabel, ThisSym);
         BaseLabel = ThisSym;
       }
@@ -494,6 +501,8 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
       TargetFrameLowering::StackGrowsDown)
     stackGrowth *= -1;
 
+  MCStreamer& Streamer = Asm->OutStreamer;
+
   //
   // The Mono runtime obtains EH info for LLVM JITted code by decoding the GNU EH frame
   // created by LLVM. For static compilation, this has certain problems:
@@ -522,30 +531,30 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   //
 
   // Can't use rodata as the symbols we reference are in the text segment
-  Asm->OutStreamer.SwitchSection(TLOF.getTextSection());
+  Streamer.SwitchSection(TLOF.getTextSection());
 
   MCSymbol *EHFrameHdrSym =
 	  Asm->OutContext.GetOrCreateSymbol(Twine("mono_eh_frame"));
   MCSymbol *EHFrameEndSym = Asm->GetTempSymbol ("mono_eh_frame_end");
 
   Asm->EmitAlignment(4);
-  Asm->OutStreamer.EmitLabel(EHFrameHdrSym);
-  const MCExpr *Length = MakeStartMinusEndExpr(Asm->OutStreamer, *EHFrameHdrSym,
+  Streamer.EmitLabel(EHFrameHdrSym);
+  const MCExpr *Length = MakeStartMinusEndExpr(Streamer, *EHFrameHdrSym,
                                                *EHFrameEndSym, 0);
   if (Asm->MAI->hasDotTypeDotSizeDirective()) {
-    Asm->OutStreamer.EmitELFSize(EHFrameHdrSym, Length);
-    Asm->OutStreamer.EmitSymbolAttribute(EHFrameHdrSym, MCSA_ELF_TypeObject);
+    Streamer.EmitELFSize(EHFrameHdrSym, Length);
+    Streamer.EmitSymbolAttribute(EHFrameHdrSym, MCSA_ELF_TypeObject);
   }
 
   // Header
 
-  Asm->OutStreamer.AddComment("version");
-  Asm->OutStreamer.EmitIntValue(1, 1, 0);
+  Streamer.AddComment("version");
+  Streamer.EmitIntValue(1, 1, 0);
 
   // Search table
   Asm->EmitAlignment(2);
-  Asm->OutStreamer.AddComment("fde_count");
-  Asm->OutStreamer.EmitIntValue (EHFrames.size(), 4, 0);
+  Streamer.AddComment("fde_count");
+  Streamer.EmitIntValue (EHFrames.size(), 4, 0);
   for (std::vector<FunctionEHFrameInfo>::iterator
 		   I = EHFrames.begin(), E = EHFrames.end(); I != E; ++I) {
 	  const FunctionEHFrameInfo &EHFrameInfo = *I;
@@ -572,13 +581,13 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   // This comes right after the search table
   Asm->EmitULEB128(1, "CIE Code Alignment Factor");
   Asm->EmitSLEB128(stackGrowth, "CIE Data Alignment Factor");
-  Asm->OutStreamer.AddComment("CIE Return Address Column");
+  Streamer.AddComment("CIE Return Address Column");
   const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
   Asm->EmitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
 
   if (Personality) {
     Asm->EmitEncodingByte(PerEncoding, "Personality");
-    Asm->OutStreamer.AddComment("Personality");
+    Streamer.AddComment("Personality");
     Asm->EmitReference(Personality, PerEncoding);
   } else {
     Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "Personality");
@@ -588,26 +597,24 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
 
   int dataAlignmentFactor = stackGrowth;
 
-  MCStreamer& streamer = Asm->OutStreamer;
-
   // Initial CIE program
   const std::vector<MachineMove> Moves = 
-    streamer.getContext().getAsmInfo().getInitialFrameState();
+    Streamer.getContext().getAsmInfo().getInitialFrameState();
   std::vector<MCCFIInstruction> Instructions;
-  EncodeCFIInstructions (streamer, Moves, Instructions);
-  EmitCFIInstructions(streamer, Instructions, NULL, CFAOffset, dataAlignmentFactor);
+  EncodeCFIInstructions (Streamer, Moves, Instructions);
+  EmitCFIInstructions(Streamer, Instructions, NULL, CFAOffset, dataAlignmentFactor);
 
   int CIECFAOffset = CFAOffset;
 
   // FDEs
-  Asm->OutStreamer.AddBlankLine();
+  Streamer.AddBlankLine();
   for (std::vector<FunctionEHFrameInfo>::iterator
 		   I = EHFrames.begin(), E = EHFrames.end(); I != E; ++I) {
 	  const FunctionEHFrameInfo &EHFrameInfo = *I;
       int Index = EHFrameInfo.Number;
 
 	  MCSymbol *FDEBeginSym = Asm->GetTempSymbol ("mono_eh_func_begin", Index);
-      Asm->OutStreamer.EmitLabel(FDEBeginSym);
+      Streamer.EmitLabel(FDEBeginSym);
 
       // No need for length, CIE, PC begin, PC range, alignment
 
@@ -617,25 +624,26 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
         // in 4 bytes
         Asm->EmitULEB128(1, "Has augmentation");
 
-        Asm->OutStreamer.AddComment("Augmentation size");
+        Streamer.AddComment("Augmentation size");
         Asm->EmitLabelDifference(Asm->GetTempSymbol("mono_fde_aug_end", Index),
                                  Asm->GetTempSymbol("mono_fde_aug_begin", Index),
                                  4);
 
-        Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("mono_fde_aug_begin", Index));
+        Streamer.EmitLabel(Asm->GetTempSymbol("mono_fde_aug_begin", Index));
         EmitMonoLSDA (&EHFrameInfo);
-        Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("mono_fde_aug_end", Index));
+        Streamer.EmitLabel(Asm->GetTempSymbol("mono_fde_aug_end", Index));
       } else {
         Asm->EmitULEB128(0, "Has augmentation");
       }
 
       CFAOffset = CIECFAOffset;
 
-      EncodeCFIInstructions (Asm->OutStreamer, EHFrameInfo.Moves, Instructions);
-      EmitCFIInstructions(Asm->OutStreamer, Instructions, NULL, CFAOffset, dataAlignmentFactor);
+      std::vector<MCCFIInstruction> Instructions;
+      EncodeCFIInstructions (Streamer, EHFrameInfo.Moves, Instructions);
+      EmitCFIInstructions(Streamer, Instructions, NULL, CFAOffset, dataAlignmentFactor);
 
-      Asm->OutStreamer.AddBlankLine();
+      Streamer.AddBlankLine();
   }
 
-  Asm->OutStreamer.EmitLabel(EHFrameEndSym);
+  Streamer.EmitLabel(EHFrameEndSym);
 }
