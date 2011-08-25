@@ -78,8 +78,17 @@ def t_adrlabel : Operand<i32> {
 }
 
 // Scaled 4 immediate.
-def t_imm_s4 : Operand<i32> {
+def t_imm0_1020s4_asmoperand: AsmOperandClass { let Name = "Imm0_1020s4"; }
+def t_imm0_1020s4 : Operand<i32> {
   let PrintMethod = "printThumbS4ImmOperand";
+  let ParserMatchClass = t_imm0_1020s4_asmoperand;
+  let OperandType = "OPERAND_IMMEDIATE";
+}
+
+def t_imm0_508s4_asmoperand: AsmOperandClass { let Name = "Imm0_508s4"; }
+def t_imm0_508s4 : Operand<i32> {
+  let PrintMethod = "printThumbS4ImmOperand";
+  let ParserMatchClass = t_imm0_508s4_asmoperand;
   let OperandType = "OPERAND_IMMEDIATE";
 }
 
@@ -305,58 +314,64 @@ def tPICADD : TIt<(outs GPR:$dst), (ins GPR:$lhs, pclabel:$cp), IIC_iALUr, "",
 // This is rematerializable, which is particularly useful for taking the
 // address of locals.
 let isReMaterializable = 1 in
-def tADDrSPi : T1I<(outs tGPR:$dst), (ins GPR:$sp, t_imm_s4:$rhs), IIC_iALUi,
-                   "add\t$dst, $sp, $rhs", []>,
+def tADDrSPi : T1pI<(outs tGPR:$dst), (ins GPRsp:$sp, t_imm0_1020s4:$imm),
+                    IIC_iALUi, "add", "\t$dst, $sp, $imm", []>,
                T1Encoding<{1,0,1,0,1,?}> {
   // A6.2 & A8.6.8
   bits<3> dst;
-  bits<8> rhs;
+  bits<8> imm;
   let Inst{10-8} = dst;
-  let Inst{7-0}  = rhs;
+  let Inst{7-0}  = imm;
   let DecoderMethod = "DecodeThumbAddSpecialReg";
 }
 
 // ADD sp, sp, #<imm7>
-def tADDspi : TIt<(outs GPR:$dst), (ins GPR:$lhs, t_imm_s4:$rhs), IIC_iALUi,
-                  "add\t$dst, $rhs", []>,
+def tADDspi : T1pIt<(outs GPRsp:$Rdn), (ins GPRsp:$Rn, t_imm0_508s4:$imm),
+                     IIC_iALUi, "add", "\t$Rdn, $imm", []>,
               T1Misc<{0,0,0,0,0,?,?}> {
   // A6.2.5 & A8.6.8
-  bits<7> rhs;
-  let Inst{6-0} = rhs;
+  bits<7> imm;
+  let Inst{6-0} = imm;
   let DecoderMethod = "DecodeThumbAddSPImm";
 }
 
 // SUB sp, sp, #<imm7>
 // FIXME: The encoding and the ASM string don't match up.
-def tSUBspi : TIt<(outs GPR:$dst), (ins GPR:$lhs, t_imm_s4:$rhs), IIC_iALUi,
-                  "sub\t$dst, $rhs", []>,
+def tSUBspi : T1pIt<(outs GPRsp:$Rdn), (ins GPRsp:$Rn, t_imm0_508s4:$imm),
+                    IIC_iALUi, "sub", "\t$Rdn, $imm", []>,
               T1Misc<{0,0,0,0,1,?,?}> {
   // A6.2.5 & A8.6.214
-  bits<7> rhs;
-  let Inst{6-0} = rhs;
+  bits<7> imm;
+  let Inst{6-0} = imm;
   let DecoderMethod = "DecodeThumbAddSPImm";
 }
 
+// Can optionally specify SP as a three operand instruction.
+def : tInstAlias<"add${p} sp, sp, $imm",
+                 (tADDspi SP, t_imm0_508s4:$imm, pred:$p)>;
+def : tInstAlias<"sub${p} sp, sp, $imm",
+                 (tSUBspi SP, t_imm0_508s4:$imm, pred:$p)>;
+
 // ADD <Rm>, sp
-def tADDrSP : TIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iALUr,
-                  "add\t$dst, $rhs", []>,
+def tADDrSP : T1pIt<(outs GPR:$Rdn), (ins GPR:$Rn, GPRsp:$sp), IIC_iALUr,
+                  "add", "\t$Rdn, $sp, $Rn", []>,
               T1Special<{0,0,?,?}> {
   // A8.6.9 Encoding T1
-  bits<4> dst;
-  let Inst{7}   = dst{3};
+  bits<4> Rdn;
+  let Inst{7}   = Rdn{3};
   let Inst{6-3} = 0b1101;
-  let Inst{2-0} = dst{2-0};
+  let Inst{2-0} = Rdn{2-0};
   let DecoderMethod = "DecodeThumbAddSPReg";
 }
 
 // ADD sp, <Rm>
-def tADDspr : TIt<(outs GPR:$dst), (ins GPR:$lhs, GPR:$rhs), IIC_iALUr,
-                  "add\t$dst, $rhs", []>,
+def tADDspr : T1pIt<(outs GPRsp:$Rdn), (ins GPRsp:$Rn, GPR:$Rm), IIC_iALUr,
+                  "add", "\t$Rdn, $Rm", []>,
               T1Special<{0,0,?,?}> {
   // A8.6.9 Encoding T2
-  bits<4> dst;
+  bits<4> Rm;
   let Inst{7} = 1;
-  let Inst{6-3} = dst;
+  let Inst{6-3} = Rm;
   let Inst{2-0} = 0b101;
   let DecoderMethod = "DecodeThumbAddSPReg";
 }
@@ -726,9 +741,10 @@ def tLDMIA_UPD :
 
 // There is no non-writeback version of STM for Thumb.
 let mayStore = 1, hasExtraSrcRegAllocReq = 1 in
-def tSTMIA_UPD : T1I<(outs),
-                     (ins tGPR:$Rn, pred:$p, reglist:$regs, variable_ops),
-                     IIC_iStore_mu, "stm${p}\t$Rn!, $regs", []>,
+def tSTMIA_UPD : Thumb1I<(outs GPR:$wb),
+                         (ins tGPR:$Rn, pred:$p, reglist:$regs, variable_ops),
+                         AddrModeNone, 2, IIC_iStore_mu,
+                         "stm${p}\t$Rn!, $regs", "$Rn = $wb", []>,
                      T1Encoding<{1,1,0,0,0,?}> {
   bits<3> Rn;
   bits<8> regs;

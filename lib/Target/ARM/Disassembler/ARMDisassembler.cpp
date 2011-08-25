@@ -18,10 +18,10 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCContext.h"
-#include "llvm/Target/TargetRegistry.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MemoryObject.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 
 // Pull DecodeStatus and its enum values into the global namespace.
@@ -228,6 +228,10 @@ static DecodeStatus DecodeThumbBCCTargetOperand(llvm::MCInst &Inst,unsigned Val,
                                 uint64_t Address, const void *Decoder);
 static DecodeStatus DecodeThumbBLTargetOperand(llvm::MCInst &Inst, unsigned Val,
                                 uint64_t Address, const void *Decoder);
+static DecodeStatus DecodeITCond(llvm::MCInst &Inst, unsigned Val,
+                                uint64_t Address, const void *Decoder);
+static DecodeStatus DecodeITMask(llvm::MCInst &Inst, unsigned Val,
+                                uint64_t Address, const void *Decoder);
 
 #include "ARMGenDisassemblerTables.inc"
 #include "ARMGenInstrInfo.inc"
@@ -415,7 +419,8 @@ void ThumbDisassembler::UpdateThumbVFPPredicate(MCInst &MI) const {
 
   const MCOperandInfo *OpInfo = ARMInsts[MI.getOpcode()].OpInfo;
   MCInst::iterator I = MI.begin();
-  for (unsigned i = 0, e = MI.size(); i < e; ++i, ++I) {
+  unsigned short NumOps = ARMInsts[MI.getOpcode()].NumOperands;
+  for (unsigned i = 0; i < NumOps; ++i, ++I) {
     if (OpInfo[i].isPredicate() ) {
       I->setImm(CC);
       ++I;
@@ -2534,8 +2539,8 @@ static DecodeStatus DecodeThumbAddSPReg(llvm::MCInst &Inst, uint16_t Insn,
     Rdm |= fieldFromInstruction16(Insn, 7, 1) << 3;
 
     CHECK(S, DecodeGPRRegisterClass(Inst, Rdm, Address, Decoder));
-    Inst.addOperand(MCOperand::CreateReg(ARM::SP));
     CHECK(S, DecodeGPRRegisterClass(Inst, Rdm, Address, Decoder));
+    Inst.addOperand(MCOperand::CreateReg(ARM::SP));
   } else if (Inst.getOpcode() == ARM::tADDspr) {
     unsigned Rm = fieldFromInstruction16(Insn, 3, 4);
 
@@ -3286,6 +3291,29 @@ static DecodeStatus DecodeVMOVRRS(llvm::MCInst &Inst, unsigned Insn,
   CHECK(S, DecodeSPRRegisterClass(Inst, Rm+1, Address, Decoder));
   CHECK(S, DecodePredicateOperand(Inst, pred, Address, Decoder));
 
+  return S;
+}
+
+static DecodeStatus DecodeITCond(llvm::MCInst &Inst, unsigned Cond,
+                                 uint64_t Address, const void *Decoder) {
+  DecodeStatus S = Success;
+  if (Cond == 0xF) {
+    Cond = 0xE;
+    CHECK(S, Unpredictable);
+  }
+
+  Inst.addOperand(MCOperand::CreateImm(Cond));
+  return S;
+}
+
+static DecodeStatus DecodeITMask(llvm::MCInst &Inst, unsigned Mask,
+                                 uint64_t Address, const void *Decoder) {
+  DecodeStatus S = Success;
+  if (Mask == 0) {
+    Mask = 0x8;
+    CHECK(S, Unpredictable);
+  }
+  Inst.addOperand(MCOperand::CreateImm(Mask));
   return S;
 }
 

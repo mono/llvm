@@ -556,6 +556,7 @@ static int ARMFlagFromOpName(LiteralConstantEmitter *type,
   REG("GPR");
   REG("rGPR");
   REG("GPRnopc");
+  REG("GPRsp");
   REG("tcGPR");
   REG("cc_out");
   REG("s_cc_out");
@@ -602,7 +603,8 @@ static int ARMFlagFromOpName(LiteralConstantEmitter *type,
   IMM("pkh_lsl_amt");
   IMM("pkh_asr_amt");
   IMM("jt2block_operand");
-  IMM("t_imm_s4");
+  IMM("t_imm0_1020s4");
+  IMM("t_imm0_508s4");
   IMM("pclabel");
   IMM("adrlabel");
   IMM("t_adrlabel");

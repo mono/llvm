@@ -17,9 +17,14 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/TargetRegistry.h"
 using namespace llvm;
+
+static cl::opt<bool>
+EnableGlobalMerge("global-merge", cl::Hidden,
+                  cl::desc("Enable global merge pass"),
+                  cl::init(true));
 
 extern "C" void LLVMInitializeARMTarget() {
   // Register the target.
@@ -81,10 +86,9 @@ ThumbTargetMachine::ThumbTargetMachine(const Target &T, StringRef TT,
               : (ARMFrameLowering*)new Thumb1FrameLowering(Subtarget)) {
 }
 
-// Pass Pipeline Configuration
 bool ARMBaseTargetMachine::addPreISel(PassManagerBase &PM,
                                       CodeGenOpt::Level OptLevel) {
-  if (OptLevel != CodeGenOpt::None)
+  if (OptLevel != CodeGenOpt::None && EnableGlobalMerge)
     PM.add(createARMGlobalMergePass(getTargetLowering()));
 
   return false;

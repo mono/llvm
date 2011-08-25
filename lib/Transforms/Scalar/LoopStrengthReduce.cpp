@@ -3423,6 +3423,9 @@ LSRInstance::AdjustInsertPositionForExpand(BasicBlock::iterator IP,
   // Don't insert instructions before PHI nodes.
   while (isa<PHINode>(IP)) ++IP;
 
+  // Ignore landingpad instructions.
+  while (isa<LandingPadInst>(IP)) ++IP;
+
   // Ignore debug intrinsics.
   while (isa<DbgInfoIntrinsic>(IP)) ++IP;
 
@@ -3618,10 +3621,18 @@ void LSRInstance::RewriteForPHI(PHINode *PN,
       // users.
       if (e != 1 && BB->getTerminator()->getNumSuccessors() > 1 &&
           !isa<IndirectBrInst>(BB->getTerminator())) {
-        Loop *PNLoop = LI.getLoopFor(PN->getParent());
-        if (!PNLoop || PN->getParent() != PNLoop->getHeader()) {
+        BasicBlock *Parent = PN->getParent();
+        Loop *PNLoop = LI.getLoopFor(Parent);
+        if (!PNLoop || Parent != PNLoop->getHeader()) {
           // Split the critical edge.
-          BasicBlock *NewBB = SplitCriticalEdge(BB, PN->getParent(), P);
+          BasicBlock *NewBB = 0;
+          if (!Parent->isLandingPad()) {
+            NewBB = SplitCriticalEdge(BB, Parent, P);
+          } else {
+            SmallVector<BasicBlock*, 2> NewBBs;
+            SplitLandingPadPredecessors(Parent, BB, "", "", P, NewBBs);
+            NewBB = NewBBs[0];
+          }
 
           // If PN is outside of the loop and BB is in the loop, we want to
           // move the block to be immediately before the PHI block, not

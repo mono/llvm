@@ -14,11 +14,13 @@
 // IT block predicate field
 def it_pred : Operand<i32> {
   let PrintMethod = "printMandatoryPredicateOperand";
+  let DecoderMethod = "DecodeITCond";
 }
 
 // IT block condition mask
 def it_mask : Operand<i32> {
   let PrintMethod = "printThumbITMask";
+  let DecoderMethod = "DecodeITMask";
 }
 
 // Shifted operands. No register controlled shifts for Thumb2.

@@ -621,7 +621,7 @@ ARMFrameLowering::ResolveFrameIndexReference(const MachineFunction &MF,
         }
       }
     } else if (AFI->isThumb2Function()) {
-      // Use  add <rd>, sp, #<imm8> 
+      // Use  add <rd>, sp, #<imm8>
       //      ldr <rd>, [sp, #<imm8>]
       // if at all possible to save space.
       if (Offset >= 0 && (Offset & 3) == 0 && Offset <= 1020)
@@ -764,8 +764,10 @@ void ARMFrameLowering::emitPopInst(MachineBasicBlock &MBB,
                        .addReg(ARM::SP));
       for (unsigned i = 0, e = Regs.size(); i < e; ++i)
         MIB.addReg(Regs[i], getDefRegState(true));
-      if (DeleteRet)
+      if (DeleteRet) {
+        MIB->copyImplicitOps(&*MI);
         MI->eraseFromParent();
+      }
       MI = MIB;
     } else if (Regs.size() == 1) {
       // If we adjusted the reg to PC from LR above, switch it back here. We

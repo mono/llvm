@@ -22,8 +22,8 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetAsmParser.h"
-#include "llvm/Target/TargetRegistry.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/OwningPtr.h"
@@ -412,6 +412,22 @@ public:
   bool isCondCode() const { return Kind == CondCode; }
   bool isCCOut() const { return Kind == CCOut; }
   bool isImm() const { return Kind == Immediate; }
+  bool isImm0_1020s4() const {
+    if (Kind != Immediate)
+      return false;
+    const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
+    if (!CE) return false;
+    int64_t Value = CE->getValue();
+    return ((Value & 3) == 0) && Value >= 0 && Value <= 1020;
+  }
+  bool isImm0_508s4() const {
+    if (Kind != Immediate)
+      return false;
+    const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
+    if (!CE) return false;
+    int64_t Value = CE->getValue();
+    return ((Value & 3) == 0) && Value >= 0 && Value <= 508;
+  }
   bool isImm0_255() const {
     if (Kind != Immediate)
       return false;
@@ -789,6 +805,22 @@ public:
   void addImmOperands(MCInst &Inst, unsigned N) const {
     assert(N == 1 && "Invalid number of operands!");
     addExpr(Inst, getImm());
+  }
+
+  void addImm0_1020s4Operands(MCInst &Inst, unsigned N) const {
+    assert(N == 1 && "Invalid number of operands!");
+    // The immediate is scaled by four in the encoding and is stored
+    // in the MCInst as such. Lop off the low two bits here.
+    const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
+    Inst.addOperand(MCOperand::CreateImm(CE->getValue() / 4));
+  }
+
+  void addImm0_508s4Operands(MCInst &Inst, unsigned N) const {
+    assert(N == 1 && "Invalid number of operands!");
+    // The immediate is scaled by four in the encoding and is stored
+    // in the MCInst as such. Lop off the low two bits here.
+    const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
+    Inst.addOperand(MCOperand::CreateImm(CE->getValue() / 4));
   }
 
   void addImm0_255Operands(MCInst &Inst, unsigned N) const {
@@ -2883,6 +2915,25 @@ bool ARMAsmParser::shouldOmitCCOutOperand(StringRef Mnemonic,
       static_cast<ARMOperand*>(Operands[4])->isReg() &&
       static_cast<ARMOperand*>(Operands[1])->getReg() == 0)
     return true;
+  // Register-register 'add' for thumb does not have a cc_out operand
+  // when it's an ADD Rdm, SP, {Rdm|#imm} instruction.
+  if (isThumb() && Mnemonic == "add" && Operands.size() == 6 &&
+      static_cast<ARMOperand*>(Operands[3])->isReg() &&
+      static_cast<ARMOperand*>(Operands[4])->isReg() &&
+      static_cast<ARMOperand*>(Operands[4])->getReg() == ARM::SP &&
+      static_cast<ARMOperand*>(Operands[1])->getReg() == 0)
+    return true;
+  // Register-register 'add/sub' for thumb does not have a cc_out operand
+  // when it's an ADD/SUB SP, #imm. Be lenient on count since there's also
+  // the "add/sub SP, SP, #imm" version. If the follow-up operands aren't
+  // right, this will result in better diagnostics (which operand is off)
+  // anyway.
+  if (isThumb() && (Mnemonic == "add" || Mnemonic == "sub") &&
+      (Operands.size() == 5 || Operands.size() == 6) &&
+      static_cast<ARMOperand*>(Operands[3])->isReg() &&
+      static_cast<ARMOperand*>(Operands[3])->getReg() == ARM::SP &&
+      static_cast<ARMOperand*>(Operands[1])->getReg() == 0)
+    return true;
 
   return false;
 }
@@ -2900,6 +2951,12 @@ bool ARMAsmParser::ParseInstruction(StringRef Name, SMLoc NameLoc,
   bool CarrySetting;
   Mnemonic = splitMnemonic(Mnemonic, PredicationCode, CarrySetting,
                            ProcessorIMod);
+
+  // In Thumb1, only the branch (B) instruction can be predicated.
+  if (isThumbOne() && PredicationCode != ARMCC::AL && Mnemonic != "b") {
+    Parser.EatToEndOfStatement();
+    return Error(NameLoc, "conditional execution not supported in Thumb1");
+  }
 
   Operands.push_back(ARMOperand::CreateToken(Mnemonic, NameLoc));
 
@@ -2964,7 +3021,11 @@ bool ARMAsmParser::ParseInstruction(StringRef Name, SMLoc NameLoc,
     Next = Name.find('.', Start + 1);
     StringRef ExtraToken = Name.slice(Start, Next);
 
-    Operands.push_back(ARMOperand::CreateToken(ExtraToken, NameLoc));
+    // For now, we're only parsing Thumb1 (for the most part), so
+    // just ignore ".n" qualifiers. We'll use them to restrict
+    // matching when we do Thumb2.
+    if (ExtraToken != ".n")
+      Operands.push_back(ARMOperand::CreateToken(ExtraToken, NameLoc));
   }
 
   // Read the remaining operands.
@@ -3152,7 +3213,7 @@ validateInstruction(MCInst &Inst,
   }
   case ARM::tSTMIA_UPD: {
     bool listContainsBase;
-    if (checkLowRegisterList(Inst, 3, 0, 0, listContainsBase))
+    if (checkLowRegisterList(Inst, 4, 0, 0, listContainsBase))
       return Error(Operands[4]->getStartLoc(),
                    "registers must be in range r0-r7");
     break;
