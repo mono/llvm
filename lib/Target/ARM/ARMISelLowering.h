@@ -71,6 +71,11 @@ namespace llvm {
       SRA_FLAG,     // V,Flag = sra_flag X -> sra X, 1 + save carry out.
       RRX,          // V = RRX X, Flag     -> srl X, 1 + shift in carry flag.
 
+      ADDC,         // Add with carry
+      ADDE,         // Add using carry
+      SUBC,         // Sub with carry
+      SUBE,         // Sub using carry
+
       VMOVRRD,      // double to two gprs.
       VMOVDRR,      // Two gprs to double.
 
@@ -206,7 +211,17 @@ namespace llvm {
       VST4_UPD,
       VST2LN_UPD,
       VST3LN_UPD,
-      VST4LN_UPD
+      VST4LN_UPD,
+
+      // 64-bit atomic ops (value split into two registers)
+      ATOMADD64_DAG,
+      ATOMSUB64_DAG,
+      ATOMOR64_DAG,
+      ATOMXOR64_DAG,
+      ATOMAND64_DAG,
+      ATOMNAND64_DAG,
+      ATOMSWAP64_DAG,
+      ATOMCMPXCHG64_DAG
     };
   }
 
@@ -240,9 +255,15 @@ namespace llvm {
 
     virtual const char *getTargetNodeName(unsigned Opcode) const;
 
+    /// getSetCCResultType - Return the value type to use for ISD::SETCC.
+    virtual EVT getSetCCResultType(EVT VT) const;
+
     virtual MachineBasicBlock *
       EmitInstrWithCustomInserter(MachineInstr *MI,
                                   MachineBasicBlock *MBB) const;
+
+    virtual void
+    AdjustInstrPostInstrSelection(MachineInstr *MI, SDNode *Node) const;
 
     SDValue PerformCMOVCombine(SDNode *N, SelectionDAG &DAG) const;
     virtual SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const;
@@ -485,6 +506,12 @@ namespace llvm {
                                         MachineBasicBlock *BB,
                                         unsigned Size,
                                         unsigned BinOpcode) const;
+    MachineBasicBlock *EmitAtomicBinary64(MachineInstr *MI,
+                                          MachineBasicBlock *BB,
+                                          unsigned Op1,
+                                          unsigned Op2,
+                                          bool NeedsCarry = false,
+                                          bool IsCmpxchg = false) const;
     MachineBasicBlock * EmitAtomicBinaryMinMax(MachineInstr *MI,
                                                MachineBasicBlock *BB,
                                                unsigned Size,

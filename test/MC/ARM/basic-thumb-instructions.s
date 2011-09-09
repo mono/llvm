@@ -1,4 +1,9 @@
+@---
+@ Run these test in both Thumb1 and Thumb2 modes, as all of the encodings
+@ should be valid, and parse the same, in both.
+@---
 @ RUN: llvm-mc -triple=thumbv6-apple-darwin -show-encoding < %s | FileCheck %s
+@ RUN: llvm-mc -triple=thumbv7-apple-darwin -show-encoding < %s | FileCheck %s
   .syntax unified
   .globl _func
 
@@ -26,11 +31,13 @@ _func:
 @ ADD (immediate)
 @------------------------------------------------------------------------------
         adds r1, r2, #3
+@ When Rd is not explicitly specified, encoding T2 is preferred even though
+@ the literal is in the range [0,7] which would allow encoding T1.
         adds r2, #3
         adds r2, #8
 
 @ CHECK: adds	r1, r2, #3              @ encoding: [0xd1,0x1c]
-@ CHECK: adds	r2, r2, #3              @ encoding: [0xd2,0x1c]
+@ CHECK: adds	r2, #3                  @ encoding: [0x03,0x32]
 @ CHECK: adds	r2, #8                  @ encoding: [0x08,0x32]
 
 
@@ -74,10 +81,11 @@ _func:
 @ ADR
 @------------------------------------------------------------------------------
         adr r2, _baz
+        adr	r2, #3
 
 @ CHECK: adr	r2, _baz                @ encoding: [A,0xa2]
             @   fixup A - offset: 0, value: _baz, kind: fixup_thumb_adr_pcrel_10
-
+@ CHECK: adr	r2, #3                  @ encoding: [0x03,0xa2]
 
 @------------------------------------------------------------------------------
 @ ASR (immediate)
@@ -104,12 +112,28 @@ _func:
 @------------------------------------------------------------------------------
         b _baz
         beq _bar
+        b       #1838
+        b       #-420
+        beq     #336
+        beq     #160
 
 @ CHECK: b	_baz                    @ encoding: [A,0xe0'A']
              @   fixup A - offset: 0, value: _baz, kind: fixup_arm_thumb_br
 @ CHECK: beq	_bar                    @ encoding: [A,0xd0]
              @   fixup A - offset: 0, value: _bar, kind: fixup_arm_thumb_bcc
+@ CHECK: b       #1838                   @ encoding: [0x97,0xe3]
+@ CHECK: b       #-420                   @ encoding: [0x2e,0xe7]
+@ CHECK: beq     #336                    @ encoding: [0xa8,0xd0]
+@ CHECK: beq     #160                    @ encoding: [0x50,0xd0]
 
+@------------------------------------------------------------------------------
+@ BL/BLX
+@------------------------------------------------------------------------------
+        blx     #884800
+        blx     #1769600
+
+@ CHECK: blx     #884800                 @ encoding: [0xd8,0xf0,0x20,0xe8]
+@ CHECK: blx     #1769600                @ encoding: [0xb0,0xf1,0x40,0xe8]
 
 @------------------------------------------------------------------------------
 @ BICS
@@ -220,10 +244,13 @@ _func:
 @ LDR (literal)
 @------------------------------------------------------------------------------
         ldr r1, _foo
+        ldr     r3, #604
+        ldr     r3, #368
 
 @ CHECK: ldr	r1, _foo                @ encoding: [A,0x49]
              @   fixup A - offset: 0, value: _foo, kind: fixup_arm_thumb_cp
-
+@ CHECK: ldr     r3, #604                @ encoding: [0x97,0x4b]
+@ CHECK: ldr     r3, #368                @ encoding: [0x5c,0x4b]
 
 @------------------------------------------------------------------------------
 @ LDR (register)
@@ -365,15 +392,6 @@ _func:
         negs r3, r4
 
 @ CHECK: rsbs	r3, r4, #0              @ encoding: [0x63,0x42]
-
-
-@------------------------------------------------------------------------------
-@ NOP
-@------------------------------------------------------------------------------
-        nop
-
-@ CHECK: nop                            @ encoding: [0xc0,0x46]
-
 
 @------------------------------------------------------------------------------
 @ ORR

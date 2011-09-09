@@ -51,6 +51,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetOptions.h"
 using namespace llvm;
 using namespace dwarf;
 
@@ -180,6 +181,8 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
 
   // X86 is weird, it always uses i8 for shift amounts and setcc results.
   setBooleanContents(ZeroOrOneBooleanContent);
+  // X86-SSE is even stranger. It uses -1 or 0 for vector masks.
+  setBooleanVectorContents(ZeroOrNegativeOneBooleanContent);
 
   // For 64-bit since we have so many registers use the ILP scheduler, for
   // 32-bit code use the register pressure specific scheduling.
@@ -478,6 +481,10 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setOperationAction(ISD::ATOMIC_SWAP, MVT::i64, Custom);
   }
 
+  if (Subtarget->hasCmpxchg16b()) {
+    setOperationAction(ISD::ATOMIC_CMP_SWAP, MVT::i128, Custom);
+  }
+
   // FIXME - use subtarget debug flags
   if (!Subtarget->isTargetDarwin() &&
       !Subtarget->isTargetELF() &&
@@ -499,7 +506,8 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   setOperationAction(ISD::FRAME_TO_ARGS_OFFSET, MVT::i32, Custom);
   setOperationAction(ISD::FRAME_TO_ARGS_OFFSET, MVT::i64, Custom);
 
-  setOperationAction(ISD::TRAMPOLINE, MVT::Other, Custom);
+  setOperationAction(ISD::INIT_TRAMPOLINE, MVT::Other, Custom);
+  setOperationAction(ISD::ADJUST_TRAMPOLINE, MVT::Other, Custom);
 
   setOperationAction(ISD::TRAP, MVT::Other, Legal);
 
@@ -516,11 +524,16 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
 
   setOperationAction(ISD::STACKSAVE,          MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE,       MVT::Other, Expand);
-  setOperationAction(ISD::DYNAMIC_STACKALLOC,
-                     (Subtarget->is64Bit() ? MVT::i64 : MVT::i32),
-                     (Subtarget->isTargetCOFF()
-                      && !Subtarget->isTargetEnvMacho()
-                      ? Custom : Expand));
+
+  if (Subtarget->isTargetCOFF() && !Subtarget->isTargetEnvMacho())
+    setOperationAction(ISD::DYNAMIC_STACKALLOC, Subtarget->is64Bit() ?
+                       MVT::i64 : MVT::i32, Custom);
+  else if (EnableSegmentedStacks)
+    setOperationAction(ISD::DYNAMIC_STACKALLOC, Subtarget->is64Bit() ?
+                       MVT::i64 : MVT::i32, Custom);
+  else
+    setOperationAction(ISD::DYNAMIC_STACKALLOC, Subtarget->is64Bit() ?
+                       MVT::i64 : MVT::i32, Expand);
 
   if (!UseSoftFloat && X86ScalarSSEf64) {
     // f32 and f64 use SSE.
@@ -699,7 +712,7 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setOperationAction(ISD::ROTL, (MVT::SimpleValueType)VT, Expand);
     setOperationAction(ISD::ROTR, (MVT::SimpleValueType)VT, Expand);
     setOperationAction(ISD::BSWAP, (MVT::SimpleValueType)VT, Expand);
-    setOperationAction(ISD::VSETCC, (MVT::SimpleValueType)VT, Expand);
+    setOperationAction(ISD::SETCC, (MVT::SimpleValueType)VT, Expand);
     setOperationAction(ISD::FLOG, (MVT::SimpleValueType)VT, Expand);
     setOperationAction(ISD::FLOG2, (MVT::SimpleValueType)VT, Expand);
     setOperationAction(ISD::FLOG10, (MVT::SimpleValueType)VT, Expand);
@@ -776,7 +789,7 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setOperationAction(ISD::VECTOR_SHUFFLE,     MVT::v4f32, Custom);
     setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v4f32, Custom);
     setOperationAction(ISD::SELECT,             MVT::v4f32, Custom);
-    setOperationAction(ISD::VSETCC,             MVT::v4f32, Custom);
+    setOperationAction(ISD::SETCC,              MVT::v4f32, Custom);
   }
 
   if (!UseSoftFloat && Subtarget->hasXMMInt()) {
@@ -806,10 +819,10 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setOperationAction(ISD::FSQRT,              MVT::v2f64, Legal);
     setOperationAction(ISD::FNEG,               MVT::v2f64, Custom);
 
-    setOperationAction(ISD::VSETCC,             MVT::v2f64, Custom);
-    setOperationAction(ISD::VSETCC,             MVT::v16i8, Custom);
-    setOperationAction(ISD::VSETCC,             MVT::v8i16, Custom);
-    setOperationAction(ISD::VSETCC,             MVT::v4i32, Custom);
+    setOperationAction(ISD::SETCC,              MVT::v2f64, Custom);
+    setOperationAction(ISD::SETCC,              MVT::v16i8, Custom);
+    setOperationAction(ISD::SETCC,              MVT::v8i16, Custom);
+    setOperationAction(ISD::SETCC,              MVT::v4i32, Custom);
 
     setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v16i8, Custom);
     setOperationAction(ISD::SCALAR_TO_VECTOR,   MVT::v8i16, Custom);
@@ -904,6 +917,12 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setOperationAction(ISD::SHL,                MVT::v4i32, Custom);
     setOperationAction(ISD::SHL,                MVT::v16i8, Custom);
 
+    setOperationAction(ISD::VSELECT,            MVT::v2f64, Custom);
+    setOperationAction(ISD::VSELECT,            MVT::v2i64, Custom);
+    setOperationAction(ISD::VSELECT,            MVT::v16i8, Custom);
+    setOperationAction(ISD::VSELECT,            MVT::v4i32, Custom);
+    setOperationAction(ISD::VSELECT,            MVT::v4f32, Custom);
+
     // i8 and i16 vectors are custom , because the source register and source
     // source memory operand types are not the same width.  f32 vectors are
     // custom since the immediate controlling the insert encodes additional
@@ -939,7 +958,7 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
   }
 
   if (Subtarget->hasSSE42() || Subtarget->hasAVX())
-    setOperationAction(ISD::VSETCC,             MVT::v2i64, Custom);
+    setOperationAction(ISD::SETCC,             MVT::v2i64, Custom);
 
   if (!UseSoftFloat && Subtarget->hasAVX()) {
     addRegisterClass(MVT::v32i8,  X86::VR256RegisterClass);
@@ -991,10 +1010,10 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
     setOperationAction(ISD::SRA,               MVT::v8i32, Custom);
     setOperationAction(ISD::SRA,               MVT::v16i16, Custom);
 
-    setOperationAction(ISD::VSETCC,            MVT::v32i8, Custom);
-    setOperationAction(ISD::VSETCC,            MVT::v16i16, Custom);
-    setOperationAction(ISD::VSETCC,            MVT::v8i32, Custom);
-    setOperationAction(ISD::VSETCC,            MVT::v4i64, Custom);
+    setOperationAction(ISD::SETCC,             MVT::v32i8, Custom);
+    setOperationAction(ISD::SETCC,             MVT::v16i16, Custom);
+    setOperationAction(ISD::SETCC,             MVT::v8i32, Custom);
+    setOperationAction(ISD::SETCC,             MVT::v4i64, Custom);
 
     setOperationAction(ISD::SELECT,            MVT::v4f64, Custom);
     setOperationAction(ISD::SELECT,            MVT::v4i64, Custom);
@@ -1134,8 +1153,9 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
 }
 
 
-MVT::SimpleValueType X86TargetLowering::getSetCCResultType(EVT VT) const {
-  return MVT::i8;
+EVT X86TargetLowering::getSetCCResultType(EVT VT) const {
+  if (!VT.isVector()) return MVT::i8;
+  return VT.changeVectorElementTypeToInteger();
 }
 
 
@@ -1926,6 +1946,8 @@ X86TargetLowering::LowerFormalArguments(SDValue Chain,
       // fastcc functions can't have varargs.
       FuncInfo->setVarArgsFrameIndex(0xAAAAAAA);
   }
+
+  FuncInfo->setArgumentStackSize(StackSize);
 
   return Chain;
 }
@@ -3571,6 +3593,13 @@ static bool isUNPCKL_v_undef_Mask(const SmallVectorImpl<int> &Mask, EVT VT) {
   if (NumElems != 2 && NumElems != 4 && NumElems != 8 && NumElems != 16)
     return false;
 
+  // For 256-bit i64/f64, use MOVDDUPY instead, so reject the matching pattern
+  // FIXME: Need a better way to get rid of this, there's no latency difference
+  // between UNPCKLPD and MOVDDUP, the later should always be checked first and
+  // the former later. We should also remove the "_undef" special mask.
+  if (NumElems == 4 && VT.getSizeInBits() == 256)
+    return false;
+
   // Handle 128 and 256-bit vector lengths. AVX defines UNPCK* to operate
   // independently on 128-bit lanes.
   unsigned NumLanes = VT.getSizeInBits() / 128;
@@ -3924,11 +3953,38 @@ bool X86::isMOVSLDUPMask(ShuffleVectorSDNode *N,
   return true;
 }
 
-/// isMOVDDUPMask - Return true if the specified VECTOR_SHUFFLE operand
-/// specifies a shuffle of elements that is suitable for input to MOVDDUP.
-bool X86::isMOVDDUPMask(ShuffleVectorSDNode *N) {
-  int e = N->getValueType(0).getVectorNumElements() / 2;
+/// isMOVDDUPYMask - Return true if the specified VECTOR_SHUFFLE operand
+/// specifies a shuffle of elements that is suitable for input to 256-bit
+/// version of MOVDDUP.
+static bool isMOVDDUPYMask(ShuffleVectorSDNode *N,
+                           const X86Subtarget *Subtarget) {
+  EVT VT = N->getValueType(0);
+  int NumElts = VT.getVectorNumElements();
+  bool V2IsUndef = N->getOperand(1).getOpcode() == ISD::UNDEF;
 
+  if (!Subtarget->hasAVX() || VT.getSizeInBits() != 256 ||
+      !V2IsUndef || NumElts != 4)
+    return false;
+
+  for (int i = 0; i != NumElts/2; ++i)
+    if (!isUndefOrEqual(N->getMaskElt(i), 0))
+      return false;
+  for (int i = NumElts/2; i != NumElts; ++i)
+    if (!isUndefOrEqual(N->getMaskElt(i), NumElts/2))
+      return false;
+  return true;
+}
+
+/// isMOVDDUPMask - Return true if the specified VECTOR_SHUFFLE operand
+/// specifies a shuffle of elements that is suitable for input to 128-bit
+/// version of MOVDDUP.
+bool X86::isMOVDDUPMask(ShuffleVectorSDNode *N) {
+  EVT VT = N->getValueType(0);
+
+  if (VT.getSizeInBits() != 128)
+    return false;
+
+  int e = VT.getVectorNumElements() / 2;
   for (int i = 0; i < e; ++i)
     if (!isUndefOrEqual(N->getMaskElt(i), i))
       return false;
@@ -6205,8 +6261,11 @@ SDValue getMOVLowToHigh(SDValue &Op, DebugLoc &dl, SelectionDAG &DAG,
   if (HasSSE2 && VT == MVT::v2f64)
     return getTargetShuffleNode(X86ISD::MOVLHPD, dl, VT, V1, V2, DAG);
 
-  // v4f32 or v4i32
-  return getTargetShuffleNode(X86ISD::MOVLHPS, dl, VT, V1, V2, DAG);
+  // v4f32 or v4i32: canonizalized to v4f32 (which is legal for SSE1)
+  return DAG.getNode(ISD::BITCAST, dl, VT,
+                     getTargetShuffleNode(X86ISD::MOVLHPS, dl, MVT::v4f32,
+                           DAG.getNode(ISD::BITCAST, dl, MVT::v4f32, V1),
+                           DAG.getNode(ISD::BITCAST, dl, MVT::v4f32, V2), DAG));
 }
 
 static
@@ -6285,11 +6344,11 @@ SDValue getMOVLP(SDValue &Op, DebugLoc &dl, SelectionDAG &DAG, bool HasSSE2) {
   // this is horrible, but will stay like this until we move all shuffle
   // matching to x86 specific nodes. Note that for the 1st condition all
   // types are matched with movsd.
-  if ((HasSSE2 && NumElems == 2) || !X86::isMOVLMask(SVOp))
-    return getTargetShuffleNode(X86ISD::MOVSD, dl, VT, V1, V2, DAG);
-  else if (HasSSE2)
+  if (HasSSE2) {
+    if (NumElems == 2)
+      return getTargetShuffleNode(X86ISD::MOVSD, dl, VT, V1, V2, DAG);
     return getTargetShuffleNode(X86ISD::MOVSS, dl, VT, V1, V2, DAG);
-
+  }
 
   assert(VT != MVT::v4i32 && "unsupported shuffle type");
 
@@ -6371,12 +6430,16 @@ static bool isVectorBroadcast(SDValue &Op) {
 
   if (Is256)
     V = V.getOperand(1);
-  if (V.hasOneUse() && V.getOpcode() != ISD::SCALAR_TO_VECTOR)
+
+  if (!V.hasOneUse())
     return false;
 
   // Check the source scalar_to_vector type. 256-bit broadcasts are
   // supported for 32/64-bit sizes, while 128-bit ones are only supported
   // for 32-bit scalars.
+  if (V.getOpcode() != ISD::SCALAR_TO_VECTOR)
+    return false;
+
   unsigned ScalarSize = V.getOperand(0).getValueType().getSizeInBits();
   if (ScalarSize != 32 && ScalarSize != 64)
     return false;
@@ -6696,6 +6759,10 @@ X86TargetLowering::LowerVECTOR_SHUFFLE(SDValue Op, SelectionDAG &DAG) const {
   // Generate target specific nodes for 128 or 256-bit shuffles only
   // supported in the AVX instruction set.
   //
+
+  // Handle VMOVDDUPY permutations
+  if (isMOVDDUPYMask(SVOp, Subtarget))
+    return getTargetShuffleNode(X86ISD::MOVDDUP, dl, VT, V1, DAG);
 
   // Handle VPERMILPS* permutations
   if (isVPERMILPSMask(M, VT, Subtarget))
@@ -7682,6 +7749,9 @@ SDValue X86TargetLowering::LowerUINT_TO_FP_i32(SDValue Op,
   SDValue Load = DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, MVT::v4i32,
                              Op.getOperand(0));
 
+  // Zero out the upper parts of the register.
+  Load = getShuffleVectorZeroOrUndef(Load, 0, true, Subtarget->hasSSE2(), DAG);
+
   Load = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, MVT::f64,
                      DAG.getNode(ISD::BITCAST, dl, MVT::v2f64, Load),
                      DAG.getIntPtrConstant(0));
@@ -8269,6 +8339,9 @@ SDValue X86TargetLowering::LowerToBT(SDValue And, ISD::CondCode CC,
 }
 
 SDValue X86TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
+
+  if (Op.getValueType().isVector()) return LowerVSETCC(Op, DAG);
+
   assert(Op.getValueType() == MVT::i8 && "SetCC type must be 8-bit integer");
   SDValue Op0 = Op.getOperand(0);
   SDValue Op1 = Op.getOperand(1);
@@ -8324,7 +8397,7 @@ SDValue X86TargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
 static SDValue Lower256IntVETCC(SDValue Op, SelectionDAG &DAG) {
   EVT VT = Op.getValueType();
 
-  assert(VT.getSizeInBits() == 256 && Op.getOpcode() == ISD::VSETCC &&
+  assert(VT.getSizeInBits() == 256 && Op.getOpcode() == ISD::SETCC &&
          "Unsupported value type for operation");
 
   int NumElems = VT.getVectorNumElements();
@@ -8628,6 +8701,36 @@ SDValue X86TargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
   return DAG.getNode(X86ISD::CMOV, DL, VTs, Ops, array_lengthof(Ops));
 }
 
+SDValue X86TargetLowering::LowerVSELECT(SDValue Op, SelectionDAG &DAG) const {
+  SDValue Cond  = Op.getOperand(0);
+  SDValue Op1 = Op.getOperand(1);
+  SDValue Op2 = Op.getOperand(2);
+  DebugLoc DL = Op.getDebugLoc();
+
+  SDValue Ops[] = {Op1, Op2, Cond};
+
+  assert(Op1.getValueType().isVector() && "Op1 must be a vector");
+  assert(Op2.getValueType().isVector() && "Op2 must be a vector");
+  assert(Cond.getValueType().isVector() && "Cond must be a vector");
+  assert(Op1.getValueType() == Op2.getValueType() && "Type mismatch");
+
+  EVT VT = Op1.getValueType();
+  switch (VT.getSimpleVT().SimpleTy) {
+    default: break;
+    case MVT::v2i64:
+    case MVT::v2f64:
+         return DAG.getNode(X86ISD::BLENDVPD, DL, VT, Ops, array_lengthof(Ops));
+    case MVT::v4i32:
+    case MVT::v4f32:
+         return DAG.getNode(X86ISD::BLENDVPS, DL, VT , Ops, array_lengthof(Ops));
+    case MVT::v16i8:
+         return DAG.getNode(X86ISD::PBLENDVB, DL, VT , Ops, array_lengthof(Ops));
+  }
+
+  return SDValue();
+}
+
+
 // isAndOrOfSingleUseSetCCs - Return true if node is an ISD::AND or
 // ISD::OR of two X86ISD::SETCC nodes each of which has no other use apart
 // from the AND / OR.
@@ -8808,9 +8911,11 @@ SDValue X86TargetLowering::LowerBRCOND(SDValue Op, SelectionDAG &DAG) const {
 SDValue
 X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
                                            SelectionDAG &DAG) const {
-  assert((Subtarget->isTargetCygMing() || Subtarget->isTargetWindows()) &&
-         "This should be used only on Windows targets");
-  assert(!Subtarget->isTargetEnvMacho());
+  assert((Subtarget->isTargetCygMing() || Subtarget->isTargetWindows() ||
+          EnableSegmentedStacks) &&
+         "This should be used only on Windows targets or when segmented stacks "
+         "are being used");
+  assert(!Subtarget->isTargetEnvMacho() && "Not implemented");
   DebugLoc dl = Op.getDebugLoc();
 
   // Get the inputs.
@@ -8818,23 +8923,49 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
   SDValue Size  = Op.getOperand(1);
   // FIXME: Ensure alignment here
 
-  SDValue Flag;
+  bool Is64Bit = Subtarget->is64Bit();
+  EVT SPTy = Is64Bit ? MVT::i64 : MVT::i32;
 
-  EVT SPTy = Subtarget->is64Bit() ? MVT::i64 : MVT::i32;
-  unsigned Reg = (Subtarget->is64Bit() ? X86::RAX : X86::EAX);
+  if (EnableSegmentedStacks) {
+    MachineFunction &MF = DAG.getMachineFunction();
+    MachineRegisterInfo &MRI = MF.getRegInfo();
 
-  Chain = DAG.getCopyToReg(Chain, dl, Reg, Size, Flag);
-  Flag = Chain.getValue(1);
+    if (Is64Bit) {
+      // The 64 bit implementation of segmented stacks needs to clobber both r10
+      // r11. This makes it impossible to use it along with nested parameters.
+      const Function *F = MF.getFunction();
 
-  SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
+      for (Function::const_arg_iterator I = F->arg_begin(), E = F->arg_end();
+           I != E; I++)
+        if (I->hasNestAttr())
+          report_fatal_error("Cannot use segmented stacks with functions that "
+                             "have nested arguments.");
+    }
 
-  Chain = DAG.getNode(X86ISD::WIN_ALLOCA, dl, NodeTys, Chain, Flag);
-  Flag = Chain.getValue(1);
+    const TargetRegisterClass *AddrRegClass =
+      getRegClassFor(Subtarget->is64Bit() ? MVT::i64:MVT::i32);
+    unsigned Vreg = MRI.createVirtualRegister(AddrRegClass);
+    Chain = DAG.getCopyToReg(Chain, dl, Vreg, Size);
+    SDValue Value = DAG.getNode(X86ISD::SEG_ALLOCA, dl, SPTy, Chain,
+                                DAG.getRegister(Vreg, SPTy));
+    SDValue Ops1[2] = { Value, Chain };
+    return DAG.getMergeValues(Ops1, 2, dl);
+  } else {
+    SDValue Flag;
+    unsigned Reg = (Subtarget->is64Bit() ? X86::RAX : X86::EAX);
 
-  Chain = DAG.getCopyFromReg(Chain, dl, X86StackPtr, SPTy).getValue(1);
+    Chain = DAG.getCopyToReg(Chain, dl, Reg, Size, Flag);
+    Flag = Chain.getValue(1);
+    SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
 
-  SDValue Ops1[2] = { Chain.getValue(0), Chain };
-  return DAG.getMergeValues(Ops1, 2, dl);
+    Chain = DAG.getNode(X86ISD::WIN_ALLOCA, dl, NodeTys, Chain, Flag);
+    Flag = Chain.getValue(1);
+
+    Chain = DAG.getCopyFromReg(Chain, dl, X86StackPtr, SPTy).getValue(1);
+
+    SDValue Ops1[2] = { Chain.getValue(0), Chain };
+    return DAG.getMergeValues(Ops1, 2, dl);
+  }
 }
 
 SDValue X86TargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
@@ -9329,8 +9460,13 @@ SDValue X86TargetLowering::LowerEH_RETURN(SDValue Op, SelectionDAG &DAG) const {
                      Chain, DAG.getRegister(StoreAddrReg, getPointerTy()));
 }
 
-SDValue X86TargetLowering::LowerTRAMPOLINE(SDValue Op,
-                                             SelectionDAG &DAG) const {
+SDValue X86TargetLowering::LowerADJUST_TRAMPOLINE(SDValue Op,
+                                                  SelectionDAG &DAG) const {
+  return Op.getOperand(0);
+}
+
+SDValue X86TargetLowering::LowerINIT_TRAMPOLINE(SDValue Op,
+                                                SelectionDAG &DAG) const {
   SDValue Root = Op.getOperand(0);
   SDValue Trmp = Op.getOperand(1); // trampoline
   SDValue FPtr = Op.getOperand(2); // nested function
@@ -9394,9 +9530,7 @@ SDValue X86TargetLowering::LowerTRAMPOLINE(SDValue Op,
                                 MachinePointerInfo(TrmpAddr, 22),
                                 false, false, 0);
 
-    SDValue Ops[] =
-      { Trmp, DAG.getNode(ISD::TokenFactor, dl, MVT::Other, OutChains, 6) };
-    return DAG.getMergeValues(Ops, 2, dl);
+    return DAG.getNode(ISD::TokenFactor, dl, MVT::Other, OutChains, 6);
   } else {
     const Function *Func =
       cast<Function>(cast<SrcValueSDNode>(Op.getOperand(5))->getValue());
@@ -9476,9 +9610,7 @@ SDValue X86TargetLowering::LowerTRAMPOLINE(SDValue Op,
                                 MachinePointerInfo(TrmpAddr, 6),
                                 false, false, 1);
 
-    SDValue Ops[] =
-      { Trmp, DAG.getNode(ISD::TokenFactor, dl, MVT::Other, OutChains, 4) };
-    return DAG.getMergeValues(Ops, 2, dl);
+    return DAG.getNode(ISD::TokenFactor, dl, MVT::Other, OutChains, 4);
   }
 }
 
@@ -9959,7 +10091,6 @@ SDValue X86TargetLowering::LowerSIGN_EXTEND_INREG(SDValue Op, SelectionDAG &DAG)
   SDNode* Node = Op.getNode();
   EVT ExtraVT = cast<VTSDNode>(Node->getOperand(1))->getVT();
   EVT VT = Node->getValueType(0);
-
   if (Subtarget->hasSSE2() && VT.isVector()) {
     unsigned BitsDiff = VT.getScalarType().getSizeInBits() -
                         ExtraVT.getScalarType().getSizeInBits();
@@ -10265,8 +10396,8 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::FCOPYSIGN:          return LowerFCOPYSIGN(Op, DAG);
   case ISD::FGETSIGN:           return LowerFGETSIGN(Op, DAG);
   case ISD::SETCC:              return LowerSETCC(Op, DAG);
-  case ISD::VSETCC:             return LowerVSETCC(Op, DAG);
   case ISD::SELECT:             return LowerSELECT(Op, DAG);
+  case ISD::VSELECT:            return LowerVSELECT(Op, DAG);
   case ISD::BRCOND:             return LowerBRCOND(Op, DAG);
   case ISD::JumpTable:          return LowerJumpTable(Op, DAG);
   case ISD::VASTART:            return LowerVASTART(Op, DAG);
@@ -10279,7 +10410,8 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
                                 return LowerFRAME_TO_ARGS_OFFSET(Op, DAG);
   case ISD::DYNAMIC_STACKALLOC: return LowerDYNAMIC_STACKALLOC(Op, DAG);
   case ISD::EH_RETURN:          return LowerEH_RETURN(Op, DAG);
-  case ISD::TRAMPOLINE:         return LowerTRAMPOLINE(Op, DAG);
+  case ISD::INIT_TRAMPOLINE:    return LowerINIT_TRAMPOLINE(Op, DAG);
+  case ISD::ADJUST_TRAMPOLINE:  return LowerADJUST_TRAMPOLINE(Op, DAG);
   case ISD::FLT_ROUNDS_:        return LowerFLT_ROUNDS_(Op, DAG);
   case ISD::CTLZ:               return LowerCTLZ(Op, DAG);
   case ISD::CTTZ:               return LowerCTTZ(Op, DAG);
@@ -10314,9 +10446,8 @@ static void ReplaceATOMIC_LOAD(SDNode *Node,
   // FIXME: On 32-bit, load -> fild or movq would be more efficient
   //        (The only way to get a 16-byte load is cmpxchg16b)
   // FIXME: 16-byte ATOMIC_CMP_SWAP isn't actually hooked up at the moment.
-  SDValue Zero = DAG.getConstant(0, cast<AtomicSDNode>(Node)->getMemoryVT());
-  SDValue Swap = DAG.getAtomic(ISD::ATOMIC_CMP_SWAP, dl,
-                               cast<AtomicSDNode>(Node)->getMemoryVT(),
+  SDValue Zero = DAG.getConstant(0, VT);
+  SDValue Swap = DAG.getAtomic(ISD::ATOMIC_CMP_SWAP, dl, VT,
                                Node->getOperand(0),
                                Node->getOperand(1), Zero, Zero,
                                cast<AtomicSDNode>(Node)->getMemOperand(),
@@ -10394,37 +10525,48 @@ void X86TargetLowering::ReplaceNodeResults(SDNode *N,
   }
   case ISD::ATOMIC_CMP_SWAP: {
     EVT T = N->getValueType(0);
-    assert (T == MVT::i64 && "Only know how to expand i64 Cmp and Swap");
+    assert((T == MVT::i64 || T == MVT::i128) && "can only expand cmpxchg pair");
+    bool Regs64bit = T == MVT::i128;
+    EVT HalfT = Regs64bit ? MVT::i64 : MVT::i32;
     SDValue cpInL, cpInH;
-    cpInL = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, MVT::i32, N->getOperand(2),
-                        DAG.getConstant(0, MVT::i32));
-    cpInH = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, MVT::i32, N->getOperand(2),
-                        DAG.getConstant(1, MVT::i32));
-    cpInL = DAG.getCopyToReg(N->getOperand(0), dl, X86::EAX, cpInL, SDValue());
-    cpInH = DAG.getCopyToReg(cpInL.getValue(0), dl, X86::EDX, cpInH,
-                             cpInL.getValue(1));
+    cpInL = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, HalfT, N->getOperand(2),
+                        DAG.getConstant(0, HalfT));
+    cpInH = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, HalfT, N->getOperand(2),
+                        DAG.getConstant(1, HalfT));
+    cpInL = DAG.getCopyToReg(N->getOperand(0), dl,
+                             Regs64bit ? X86::RAX : X86::EAX,
+                             cpInL, SDValue());
+    cpInH = DAG.getCopyToReg(cpInL.getValue(0), dl,
+                             Regs64bit ? X86::RDX : X86::EDX,
+                             cpInH, cpInL.getValue(1));
     SDValue swapInL, swapInH;
-    swapInL = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, MVT::i32, N->getOperand(3),
-                          DAG.getConstant(0, MVT::i32));
-    swapInH = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, MVT::i32, N->getOperand(3),
-                          DAG.getConstant(1, MVT::i32));
-    swapInL = DAG.getCopyToReg(cpInH.getValue(0), dl, X86::EBX, swapInL,
-                               cpInH.getValue(1));
-    swapInH = DAG.getCopyToReg(swapInL.getValue(0), dl, X86::ECX, swapInH,
-                               swapInL.getValue(1));
+    swapInL = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, HalfT, N->getOperand(3),
+                          DAG.getConstant(0, HalfT));
+    swapInH = DAG.getNode(ISD::EXTRACT_ELEMENT, dl, HalfT, N->getOperand(3),
+                          DAG.getConstant(1, HalfT));
+    swapInL = DAG.getCopyToReg(cpInH.getValue(0), dl,
+                               Regs64bit ? X86::RBX : X86::EBX,
+                               swapInL, cpInH.getValue(1));
+    swapInH = DAG.getCopyToReg(swapInL.getValue(0), dl,
+                               Regs64bit ? X86::RCX : X86::ECX, 
+                               swapInH, swapInL.getValue(1));
     SDValue Ops[] = { swapInH.getValue(0),
                       N->getOperand(1),
                       swapInH.getValue(1) };
     SDVTList Tys = DAG.getVTList(MVT::Other, MVT::Glue);
     MachineMemOperand *MMO = cast<AtomicSDNode>(N)->getMemOperand();
-    SDValue Result = DAG.getMemIntrinsicNode(X86ISD::LCMPXCHG8_DAG, dl, Tys,
+    unsigned Opcode = Regs64bit ? X86ISD::LCMPXCHG16_DAG :
+                                  X86ISD::LCMPXCHG8_DAG;
+    SDValue Result = DAG.getMemIntrinsicNode(Opcode, dl, Tys,
                                              Ops, 3, T, MMO);
-    SDValue cpOutL = DAG.getCopyFromReg(Result.getValue(0), dl, X86::EAX,
-                                        MVT::i32, Result.getValue(1));
-    SDValue cpOutH = DAG.getCopyFromReg(cpOutL.getValue(1), dl, X86::EDX,
-                                        MVT::i32, cpOutL.getValue(2));
+    SDValue cpOutL = DAG.getCopyFromReg(Result.getValue(0), dl,
+                                        Regs64bit ? X86::RAX : X86::EAX,
+                                        HalfT, Result.getValue(1));
+    SDValue cpOutH = DAG.getCopyFromReg(cpOutL.getValue(1), dl,
+                                        Regs64bit ? X86::RDX : X86::EDX,
+                                        HalfT, cpOutL.getValue(2));
     SDValue OpsF[] = { cpOutL.getValue(0), cpOutH.getValue(0)};
-    Results.push_back(DAG.getNode(ISD::BUILD_PAIR, dl, MVT::i64, OpsF, 2));
+    Results.push_back(DAG.getNode(ISD::BUILD_PAIR, dl, T, OpsF, 2));
     Results.push_back(cpOutH.getValue(1));
     return;
   }
@@ -10590,6 +10732,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::VAARG_64:           return "X86ISD::VAARG_64";
   case X86ISD::WIN_ALLOCA:         return "X86ISD::WIN_ALLOCA";
   case X86ISD::MEMBARRIER:         return "X86ISD::MEMBARRIER";
+  case X86ISD::SEG_ALLOCA:         return "X86ISD::SEG_ALLOCA";
   }
 }
 
@@ -11135,7 +11278,9 @@ X86TargetLowering::EmitPCMP(MachineInstr *MI, MachineBasicBlock *BB,
     if (!(Op.isReg() && Op.isImplicit()))
       MIB.addOperand(Op);
   }
-  BuildMI(*BB, MI, dl, TII->get(X86::MOVAPSrr), MI->getOperand(0).getReg())
+  BuildMI(*BB, MI, dl,
+    TII->get(Subtarget->hasAVX() ? X86::VMOVAPSrr : X86::MOVAPSrr),
+             MI->getOperand(0).getReg())
     .addReg(X86::XMM0);
 
   MI->eraseFromParent();
@@ -11490,6 +11635,7 @@ X86TargetLowering::EmitVAStartSaveXMMRegsWithCustomInserter(
     MBB->addSuccessor(EndMBB);
   }
 
+  unsigned MOVOpc = Subtarget->hasAVX() ? X86::VMOVAPSmr : X86::MOVAPSmr;
   // In the XMM save block, save all the XMM argument registers.
   for (int i = 3, e = MI->getNumOperands(); i != e; ++i) {
     int64_t Offset = (i - 3) * 16 + VarArgsFPOffset;
@@ -11498,7 +11644,7 @@ X86TargetLowering::EmitVAStartSaveXMMRegsWithCustomInserter(
           MachinePointerInfo::getFixedStack(RegSaveFrameIndex, Offset),
         MachineMemOperand::MOStore,
         /*Size=*/16, /*Align=*/16);
-    BuildMI(XMMSaveMBB, DL, TII->get(X86::MOVAPSmr))
+    BuildMI(XMMSaveMBB, DL, TII->get(MOVOpc))
       .addFrameIndex(RegSaveFrameIndex)
       .addImm(/*Scale=*/1)
       .addReg(/*IndexReg=*/0)
@@ -11542,17 +11688,9 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
 
   // If the EFLAGS register isn't dead in the terminator, then claim that it's
   // live into the sink and copy blocks.
-  const MachineFunction *MF = BB->getParent();
-  const TargetRegisterInfo *TRI = MF->getTarget().getRegisterInfo();
-  BitVector ReservedRegs = TRI->getReservedRegs(*MF);
-
-  for (unsigned I = 0, E = MI->getNumOperands(); I != E; ++I) {
-    const MachineOperand &MO = MI->getOperand(I);
-    if (!MO.isReg() || !MO.isUse() || MO.isKill()) continue;
-    unsigned Reg = MO.getReg();
-    if (Reg != X86::EFLAGS) continue;
-    copy0MBB->addLiveIn(Reg);
-    sinkMBB->addLiveIn(Reg);
+  if (!MI->killsRegister(X86::EFLAGS)) {
+    copy0MBB->addLiveIn(X86::EFLAGS);
+    sinkMBB->addLiveIn(X86::EFLAGS);
   }
 
   // Transfer the remainder of BB and its successor edges to sinkMBB.
@@ -11585,6 +11723,119 @@ X86TargetLowering::EmitLoweredSelect(MachineInstr *MI,
 
   MI->eraseFromParent();   // The pseudo instruction is gone now.
   return sinkMBB;
+}
+
+MachineBasicBlock *
+X86TargetLowering::EmitLoweredSegAlloca(MachineInstr *MI, MachineBasicBlock *BB,
+                                        bool Is64Bit) const {
+  const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
+  DebugLoc DL = MI->getDebugLoc();
+  MachineFunction *MF = BB->getParent();
+  const BasicBlock *LLVM_BB = BB->getBasicBlock();
+
+  assert(EnableSegmentedStacks);
+
+  unsigned TlsReg = Is64Bit ? X86::FS : X86::GS;
+  unsigned TlsOffset = Is64Bit ? 0x70 : 0x30;
+
+  // BB:
+  //  ... [Till the alloca]
+  // If stacklet is not large enough, jump to mallocMBB
+  //
+  // bumpMBB:
+  //  Allocate by subtracting from RSP
+  //  Jump to continueMBB
+  //
+  // mallocMBB:
+  //  Allocate by call to runtime
+  //
+  // continueMBB:
+  //  ...
+  //  [rest of original BB]
+  //
+
+  MachineBasicBlock *mallocMBB = MF->CreateMachineBasicBlock(LLVM_BB);
+  MachineBasicBlock *bumpMBB = MF->CreateMachineBasicBlock(LLVM_BB);
+  MachineBasicBlock *continueMBB = MF->CreateMachineBasicBlock(LLVM_BB);
+
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+  const TargetRegisterClass *AddrRegClass =
+    getRegClassFor(Is64Bit ? MVT::i64:MVT::i32);
+
+  unsigned mallocPtrVReg = MRI.createVirtualRegister(AddrRegClass),
+    bumpSPPtrVReg = MRI.createVirtualRegister(AddrRegClass),
+    tmpSPVReg = MRI.createVirtualRegister(AddrRegClass),
+    sizeVReg = MI->getOperand(1).getReg(),
+    physSPReg = Is64Bit ? X86::RSP : X86::ESP;
+
+  MachineFunction::iterator MBBIter = BB;
+  ++MBBIter;
+
+  MF->insert(MBBIter, bumpMBB);
+  MF->insert(MBBIter, mallocMBB);
+  MF->insert(MBBIter, continueMBB);
+
+  continueMBB->splice(continueMBB->begin(), BB, llvm::next
+                      (MachineBasicBlock::iterator(MI)), BB->end());
+  continueMBB->transferSuccessorsAndUpdatePHIs(BB);
+
+  // Add code to the main basic block to check if the stack limit has been hit,
+  // and if so, jump to mallocMBB otherwise to bumpMBB.
+  BuildMI(BB, DL, TII->get(TargetOpcode::COPY), tmpSPVReg).addReg(physSPReg);
+  BuildMI(BB, DL, TII->get(Is64Bit ? X86::SUB64rr:X86::SUB32rr), tmpSPVReg)
+    .addReg(tmpSPVReg).addReg(sizeVReg);
+  BuildMI(BB, DL, TII->get(Is64Bit ? X86::CMP64mr:X86::CMP32mr))
+    .addReg(0).addImm(0).addReg(0).addImm(TlsOffset).addReg(TlsReg)
+    .addReg(tmpSPVReg);
+  BuildMI(BB, DL, TII->get(X86::JG_4)).addMBB(mallocMBB);
+
+  // bumpMBB simply decreases the stack pointer, since we know the current
+  // stacklet has enough space.
+  BuildMI(bumpMBB, DL, TII->get(TargetOpcode::COPY), physSPReg)
+    .addReg(tmpSPVReg);
+  BuildMI(bumpMBB, DL, TII->get(TargetOpcode::COPY), bumpSPPtrVReg)
+    .addReg(tmpSPVReg);
+  BuildMI(bumpMBB, DL, TII->get(X86::JMP_4)).addMBB(continueMBB);
+
+  // Calls into a routine in libgcc to allocate more space from the heap.
+  if (Is64Bit) {
+    BuildMI(mallocMBB, DL, TII->get(X86::MOV64rr), X86::RDI)
+      .addReg(sizeVReg);
+    BuildMI(mallocMBB, DL, TII->get(X86::CALL64pcrel32))
+    .addExternalSymbol("__morestack_allocate_stack_space").addReg(X86::RDI);
+  } else {
+    BuildMI(mallocMBB, DL, TII->get(X86::SUB32ri), physSPReg).addReg(physSPReg)
+      .addImm(12);
+    BuildMI(mallocMBB, DL, TII->get(X86::PUSH32r)).addReg(sizeVReg);
+    BuildMI(mallocMBB, DL, TII->get(X86::CALLpcrel32))
+      .addExternalSymbol("__morestack_allocate_stack_space");
+  }
+
+  if (!Is64Bit)
+    BuildMI(mallocMBB, DL, TII->get(X86::ADD32ri), physSPReg).addReg(physSPReg)
+      .addImm(16);
+
+  BuildMI(mallocMBB, DL, TII->get(TargetOpcode::COPY), mallocPtrVReg)
+    .addReg(Is64Bit ? X86::RAX : X86::EAX);
+  BuildMI(mallocMBB, DL, TII->get(X86::JMP_4)).addMBB(continueMBB);
+
+  // Set up the CFG correctly.
+  BB->addSuccessor(bumpMBB);
+  BB->addSuccessor(mallocMBB);
+  mallocMBB->addSuccessor(continueMBB);
+  bumpMBB->addSuccessor(continueMBB);
+
+  // Take care of the PHI nodes.
+  BuildMI(*continueMBB, continueMBB->begin(), DL, TII->get(X86::PHI),
+          MI->getOperand(0).getReg())
+    .addReg(mallocPtrVReg).addMBB(mallocMBB)
+    .addReg(bumpSPPtrVReg).addMBB(bumpMBB);
+
+  // Delete the original pseudo instruction.
+  MI->eraseFromParent();
+
+  // And we're done.
+  return continueMBB;
 }
 
 MachineBasicBlock *
@@ -11722,6 +11973,10 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     return BB;
   case X86::WIN_ALLOCA:
     return EmitLoweredWinAlloca(MI, BB);
+  case X86::SEG_ALLOCA_32:
+    return EmitLoweredSegAlloca(MI, BB, false);
+  case X86::SEG_ALLOCA_64:
+    return EmitLoweredSegAlloca(MI, BB, true);
   case X86::TLSCall_32:
   case X86::TLSCall_64:
     return EmitLoweredTLSCall(MI, BB);

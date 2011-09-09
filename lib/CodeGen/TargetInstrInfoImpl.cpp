@@ -362,6 +362,19 @@ isReallyTriviallyReMaterializableGeneric(const MachineInstr *MI,
   const TargetInstrInfo &TII = *TM.getInstrInfo();
   const TargetRegisterInfo &TRI = *TM.getRegisterInfo();
 
+  // Remat clients assume operand 0 is the defined register.
+  if (!MI->getNumOperands() || !MI->getOperand(0).isReg())
+    return false;
+  unsigned DefReg = MI->getOperand(0).getReg();
+
+  // A sub-register definition can only be rematerialized if the instruction
+  // doesn't read the other parts of the register.  Otherwise it is really a
+  // read-modify-write operation on the full virtual register which cannot be
+  // moved safely.
+  if (TargetRegisterInfo::isVirtualRegister(DefReg) &&
+      MI->getOperand(0).getSubReg() && MI->readsVirtualRegister(DefReg))
+    return false;
+
   // A load from a fixed stack slot can be rematerialized. This may be
   // redundant with subsequent checks, but it's target-independent,
   // simple, and a common case.
@@ -421,8 +434,9 @@ isReallyTriviallyReMaterializableGeneric(const MachineInstr *MI,
       continue;
     }
 
-    // Only allow one virtual-register def, and that in the first operand.
-    if (MO.isDef() != (i == 0))
+    // Only allow one virtual-register def.  There may be multiple defs of the
+    // same virtual register, though.
+    if (MO.isDef() && Reg != DefReg)
       return false;
 
     // Don't allow any virtual-register uses. Rematting an instruction with

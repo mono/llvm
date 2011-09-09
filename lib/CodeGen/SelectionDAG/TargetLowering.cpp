@@ -609,6 +609,7 @@ TargetLowering::TargetLowering(const TargetMachine &tm,
   ExceptionPointerRegister = 0;
   ExceptionSelectorRegister = 0;
   BooleanContents = UndefinedBooleanContent;
+  BooleanVectorContents = UndefinedBooleanContent;
   SchedPreferenceInfo = Sched::Latency;
   JumpBufSize = 0;
   JumpBufAlignment = 0;
@@ -915,7 +916,8 @@ const char *TargetLowering::getTargetNodeName(unsigned Opcode) const {
 }
 
 
-MVT::SimpleValueType TargetLowering::getSetCCResultType(EVT VT) const {
+EVT TargetLowering::getSetCCResultType(EVT VT) const {
+  assert(!VT.isVector() && "No default SetCC type for vectors!");
   return PointerTy.SimpleTy;
 }
 
@@ -1765,17 +1767,16 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
     break;
   }
   case ISD::AssertZext: {
-    // Demand all the bits of the input that are demanded in the output.
-    // The low bits are obvious; the high bits are demanded because we're
-    // asserting that they're zero here.
-    if (SimplifyDemandedBits(Op.getOperand(0), NewMask,
+    // AssertZext demands all of the high bits, plus any of the low bits
+    // demanded by its users.
+    EVT VT = cast<VTSDNode>(Op.getOperand(1))->getVT();
+    APInt InMask = APInt::getLowBitsSet(BitWidth,
+                                        VT.getSizeInBits());
+    if (SimplifyDemandedBits(Op.getOperand(0), ~InMask | NewMask,
                              KnownZero, KnownOne, TLO, Depth+1))
       return true;
     assert((KnownZero & KnownOne) == 0 && "Bits known to be one AND zero?");
 
-    EVT VT = cast<VTSDNode>(Op.getOperand(1))->getVT();
-    APInt InMask = APInt::getLowBitsSet(BitWidth,
-                                        VT.getSizeInBits());
     KnownZero |= ~InMask & NewMask;
     break;
   }
@@ -2192,7 +2193,7 @@ TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
         }
       } else if (N1C->getAPIntValue() == 1 &&
                  (VT == MVT::i1 ||
-                  getBooleanContents() == ZeroOrOneBooleanContent)) {
+                  getBooleanContents(false) == ZeroOrOneBooleanContent)) {
         SDValue Op0 = N0;
         if (Op0.getOpcode() == ISD::TRUNCATE)
           Op0 = Op0.getOperand(0);

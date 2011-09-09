@@ -178,7 +178,12 @@ EDDisassembler::EDDisassembler(CPUKey &key) :
   if (!AsmInfo)
     return;
 
-  Disassembler.reset(Tgt->createMCDisassembler());
+  STI.reset(Tgt->createMCSubtargetInfo(tripleString, "", ""));
+  
+  if (!STI)
+    return;
+
+  Disassembler.reset(Tgt->createMCDisassembler(*STI));
   
   if (!Disassembler)
     return;
@@ -187,7 +192,7 @@ EDDisassembler::EDDisassembler(CPUKey &key) :
   
   InstString.reset(new std::string);
   InstStream.reset(new raw_string_ostream(*InstString));
-  InstPrinter.reset(Tgt->createMCInstPrinter(LLVMSyntaxVariant, *AsmInfo));
+  InstPrinter.reset(Tgt->createMCInstPrinter(LLVMSyntaxVariant, *AsmInfo, *STI));
   
   if (!InstPrinter)
     return;
@@ -239,14 +244,17 @@ EDInst *EDDisassembler::createInst(EDByteReaderCallback byteReader,
   MCInst* inst = new MCInst;
   uint64_t byteSize;
   
-  if (!Disassembler->getInstruction(*inst,
-                                    byteSize,
-                                    memoryObject,
-                                    address,
-                                    ErrorStream)) {
+  MCDisassembler::DecodeStatus S;
+  S = Disassembler->getInstruction(*inst, byteSize, memoryObject, address,
+                                   ErrorStream);
+  switch (S) {
+  case MCDisassembler::Fail:
+  case MCDisassembler::SoftFail:
+    // FIXME: Do something different on soft failure mode?
     delete inst;
     return NULL;
-  } else {
+    
+  case MCDisassembler::Success: {
     const llvm::EDInstInfo *thisInstInfo = NULL;
 
     if (InstInfos) {
@@ -256,6 +264,8 @@ EDInst *EDDisassembler::createInst(EDByteReaderCallback byteReader,
     EDInst* sdInst = new EDInst(inst, byteSize, *this, thisInstInfo);
     return sdInst;
   }
+  }
+  return NULL;
 }
 
 void EDDisassembler::initMaps(const MCRegisterInfo &registerInfo) {

@@ -165,7 +165,7 @@ LTOModule *LTOModule::makeLTOModule(MemoryBuffer *buffer,
   std::string CPU;
   TargetMachine *target = march->createTargetMachine(Triple, CPU, FeatureStr);
   LTOModule *Ret = new LTOModule(m.take(), target);
-  bool Err = Ret->ParseSymbols();
+  bool Err = Ret->ParseSymbols(errMsg);
   if (Err) {
     delete Ret;
     return NULL;
@@ -581,7 +581,8 @@ namespace {
       markDefined(*Symbol);
     }
     virtual void EmitELFSize(MCSymbol *Symbol, const MCExpr *Value) {}
-    virtual void EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size) {}
+    virtual void EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
+                                       unsigned ByteAlignment) {}
     virtual void EmitTBSSSymbol(const MCSection *Section, MCSymbol *Symbol,
                                 uint64_t Size, unsigned ByteAlignment) {}
     virtual void EmitBytes(StringRef Data, unsigned AddrSpace) {}
@@ -612,8 +613,10 @@ namespace {
   };
 }
 
-bool LTOModule::addAsmGlobalSymbols(MCContext &Context) {
+bool LTOModule::addAsmGlobalSymbols(MCContext &Context, std::string &errMsg) {
   const std::string &inlineAsm = _module->getModuleInlineAsm();
+  if (inlineAsm.empty())
+    return false;
 
   OwningPtr<RecordStreamer> Streamer(new RecordStreamer(Context));
   MemoryBuffer *Buffer = MemoryBuffer::getMemBuffer(inlineAsm);
@@ -628,6 +631,12 @@ bool LTOModule::addAsmGlobalSymbols(MCContext &Context) {
                                             _target->getTargetFeatureString()));
   OwningPtr<MCTargetAsmParser>
     TAP(_target->getTarget().createMCAsmParser(*STI, *Parser.get()));
+  if (!TAP) {
+    errMsg = "target " + std::string(_target->getTarget().getName()) +
+        " does not define AsmParser.";
+    return true;
+  }
+
   Parser->setTargetParser(*TAP);
   int Res = Parser->Run(false);
   if (Res)
@@ -660,7 +669,7 @@ static bool isAliasToDeclaration(const GlobalAlias &V) {
   return isDeclaration(*V.getAliasedGlobal());
 }
 
-bool LTOModule::ParseSymbols() {
+bool LTOModule::ParseSymbols(std::string &errMsg) {
   // Use mangler to add GlobalPrefix to names to match linker names.
   MCContext Context(*_target->getMCAsmInfo(), *_target->getRegisterInfo(),NULL);
   Mangler mangler(Context, *_target->getTargetData());
@@ -683,7 +692,7 @@ bool LTOModule::ParseSymbols() {
   }
 
   // add asm globals
-  if (addAsmGlobalSymbols(Context))
+  if (addAsmGlobalSymbols(Context, errMsg))
     return true;
 
   // add aliases

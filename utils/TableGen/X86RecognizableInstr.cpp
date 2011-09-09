@@ -68,7 +68,7 @@ namespace X86Local {
     DC = 7, DD = 8, DE = 9, DF = 10,
     XD = 11,  XS = 12,
     T8 = 13,  P_TA = 14,
-    A6 = 15,  A7 = 16
+    A6 = 15,  A7 = 16, TF = 17
   };
 }
 
@@ -225,7 +225,8 @@ RecognizableInstr::RecognizableInstr(DisassemblerTables &tables,
   
   Operands = &insn.Operands.OperandList;
   
-  IsSSE            = HasOpSizePrefix && (Name.find("16") == Name.npos);
+  IsSSE            = (HasOpSizePrefix && (Name.find("16") == Name.npos)) ||
+                     (Name.find("CRC32") != Name.npos);
   HasFROperands    = hasFROperands();
   HasVEX_LPrefix   = has256BitOperands() || Rec->getValueAsBit("hasVEX_L");
   
@@ -257,7 +258,7 @@ RecognizableInstr::RecognizableInstr(DisassemblerTables &tables,
 }
   
 void RecognizableInstr::processInstr(DisassemblerTables &tables,
-                                   const CodeGenInstruction &insn,
+	const CodeGenInstruction &insn,
                                    InstrUID uid)
 {
   // Ignore "asm parser only" instructions.
@@ -318,7 +319,9 @@ InstructionContext RecognizableInstr::insnContext() const {
     else
       insnContext = IC_64BIT;
   } else {
-    if (HasOpSizePrefix)
+    if (HasOpSizePrefix && Prefix == X86Local::TF)
+      insnContext = IC_XD;
+    else if (HasOpSizePrefix)
       insnContext = IC_OPSIZE;
     else if (Prefix == X86Local::XD)
       insnContext = IC_XD;
@@ -623,20 +626,43 @@ void RecognizableInstr::emitInstructionSpecifier(DisassemblerTables &tables) {
   case X86Local::MRMDestReg:
     // Operand 1 is a register operand in the R/M field.
     // Operand 2 is a register operand in the Reg/Opcode field.
+    // - In AVX, there is a register operand in the VEX.vvvv field here -
     // Operand 3 (optional) is an immediate.
-    assert(numPhysicalOperands >= 2 && numPhysicalOperands <= 3 &&
-           "Unexpected number of operands for MRMDestRegFrm");
+    if (HasVEX_4VPrefix)
+      assert(numPhysicalOperands >= 3 && numPhysicalOperands <= 4 &&
+             "Unexpected number of operands for MRMDestRegFrm with VEX_4V");
+    else
+      assert(numPhysicalOperands >= 2 && numPhysicalOperands <= 3 &&
+             "Unexpected number of operands for MRMDestRegFrm");
+  
     HANDLE_OPERAND(rmRegister)
+
+    if (HasVEX_4VPrefix)
+      // FIXME: In AVX, the register below becomes the one encoded
+      // in ModRMVEX and the one above the one in the VEX.VVVV field
+      HANDLE_OPERAND(vvvvRegister)
+          
     HANDLE_OPERAND(roRegister)
     HANDLE_OPTIONAL(immediate)
     break;
   case X86Local::MRMDestMem:
     // Operand 1 is a memory operand (possibly SIB-extended)
     // Operand 2 is a register operand in the Reg/Opcode field.
+    // - In AVX, there is a register operand in the VEX.vvvv field here -
     // Operand 3 (optional) is an immediate.
-    assert(numPhysicalOperands >= 2 && numPhysicalOperands <= 3 &&
-           "Unexpected number of operands for MRMDestMemFrm");
+    if (HasVEX_4VPrefix)
+      assert(numPhysicalOperands >= 3 && numPhysicalOperands <= 4 &&
+             "Unexpected number of operands for MRMDestMemFrm with VEX_4V");
+    else
+      assert(numPhysicalOperands >= 2 && numPhysicalOperands <= 3 &&
+             "Unexpected number of operands for MRMDestMemFrm");
     HANDLE_OPERAND(memory)
+
+    if (HasVEX_4VPrefix)
+      // FIXME: In AVX, the register below becomes the one encoded
+      // in ModRMVEX and the one above the one in the VEX.VVVV field
+      HANDLE_OPERAND(vvvvRegister)
+          
     HANDLE_OPERAND(roRegister)
     HANDLE_OPTIONAL(immediate)
     break;
@@ -805,6 +831,7 @@ void RecognizableInstr::emitDecodePath(DisassemblerTables &tables) const {
     opcodeToSet = Opcode;
     break;
   case X86Local::T8:
+  case X86Local::TF:
     opcodeType = THREEBYTE_38;
     if (needsModRMForDecode(Form))
       filter = new ModFilter(isRegFormat(Form));

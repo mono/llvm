@@ -133,6 +133,8 @@ public:
                              SDValue &Offset, SDValue &Opc);
   bool SelectAddrMode2OffsetImm(SDNode *Op, SDValue N,
                              SDValue &Offset, SDValue &Opc);
+  bool SelectAddrMode2OffsetImmPre(SDNode *Op, SDValue N,
+                             SDValue &Offset, SDValue &Opc);
   bool SelectAddrOffsetNone(SDValue N, SDValue &Base);
   bool SelectAddrMode3(SDValue N, SDValue &Base,
                        SDValue &Offset, SDValue &Opc);
@@ -251,6 +253,8 @@ private:
                                SDValue InFlag);
 
   SDNode *SelectConcatVector(SDNode *N);
+
+  SDNode *SelectAtomic64(SDNode *Node, unsigned Opc);
 
   /// SelectInlineAsmMemoryOperand - Implement addressing mode selection for
   /// inline asm expressions.
@@ -752,6 +756,26 @@ bool ARMDAGToDAGISel::SelectAddrMode2OffsetReg(SDNode *Op, SDValue N,
                                   MVT::i32);
   return true;
 }
+
+bool ARMDAGToDAGISel::SelectAddrMode2OffsetImmPre(SDNode *Op, SDValue N,
+                                            SDValue &Offset, SDValue &Opc) {
+  unsigned Opcode = Op->getOpcode();
+  ISD::MemIndexedMode AM = (Opcode == ISD::LOAD)
+    ? cast<LoadSDNode>(Op)->getAddressingMode()
+    : cast<StoreSDNode>(Op)->getAddressingMode();
+  ARM_AM::AddrOpc AddSub = (AM == ISD::PRE_INC || AM == ISD::POST_INC)
+    ? ARM_AM::add : ARM_AM::sub;
+  int Val;
+  if (isScaledConstantInRange(N, /*Scale=*/1, 0, 0x1000, Val)) { // 12 bits.
+    if (AddSub == ARM_AM::sub) Val *= -1;
+    Offset = CurDAG->getRegister(0, MVT::i32);
+    Opc = CurDAG->getTargetConstant(Val, MVT::i32);
+    return true;
+  }
+
+  return false;
+}
+
 
 bool ARMDAGToDAGISel::SelectAddrMode2OffsetImm(SDNode *Op, SDValue N,
                                             SDValue &Offset, SDValue &Opc) {
@@ -1319,13 +1343,17 @@ SDNode *ARMDAGToDAGISel::SelectARMIndexedLoad(SDNode *N) {
   bool isPre = (AM == ISD::PRE_INC) || (AM == ISD::PRE_DEC);
   unsigned Opcode = 0;
   bool Match = false;
-  if (LoadedVT == MVT::i32 &&
+  if (LoadedVT == MVT::i32 && isPre &&
+      SelectAddrMode2OffsetImmPre(N, LD->getOffset(), Offset, AMOpc)) {
+    Opcode = ARM::LDR_PRE_IMM;
+    Match = true;
+  } else if (LoadedVT == MVT::i32 && !isPre &&
       SelectAddrMode2OffsetImm(N, LD->getOffset(), Offset, AMOpc)) {
-    Opcode = isPre ? ARM::LDR_PRE : ARM::LDR_POST_IMM;
+    Opcode = ARM::LDR_POST_IMM;
     Match = true;
   } else if (LoadedVT == MVT::i32 &&
       SelectAddrMode2OffsetReg(N, LD->getOffset(), Offset, AMOpc)) {
-    Opcode = isPre ? ARM::LDR_PRE : ARM::LDR_POST_REG;
+    Opcode = isPre ? ARM::LDR_PRE_REG : ARM::LDR_POST_REG;
     Match = true;
 
   } else if (LoadedVT == MVT::i16 &&
@@ -1341,23 +1369,37 @@ SDNode *ARMDAGToDAGISel::SelectARMIndexedLoad(SDNode *N) {
         Opcode = isPre ? ARM::LDRSB_PRE : ARM::LDRSB_POST;
       }
     } else {
-      if (SelectAddrMode2OffsetImm(N, LD->getOffset(), Offset, AMOpc)) {
+      if (isPre &&
+          SelectAddrMode2OffsetImmPre(N, LD->getOffset(), Offset, AMOpc)) {
         Match = true;
-        Opcode = isPre ? ARM::LDRB_PRE : ARM::LDRB_POST_IMM;
+        Opcode = ARM::LDRB_PRE_IMM;
+      } else if (!isPre &&
+                  SelectAddrMode2OffsetImm(N, LD->getOffset(), Offset, AMOpc)) {
+        Match = true;
+        Opcode = ARM::LDRB_POST_IMM;
       } else if (SelectAddrMode2OffsetReg(N, LD->getOffset(), Offset, AMOpc)) {
         Match = true;
-        Opcode = isPre ? ARM::LDRB_PRE : ARM::LDRB_POST_REG;
+        Opcode = isPre ? ARM::LDRB_PRE_REG : ARM::LDRB_POST_REG;
       }
     }
   }
 
   if (Match) {
-    SDValue Chain = LD->getChain();
-    SDValue Base = LD->getBasePtr();
-    SDValue Ops[]= { Base, Offset, AMOpc, getAL(CurDAG),
-                     CurDAG->getRegister(0, MVT::i32), Chain };
-    return CurDAG->getMachineNode(Opcode, N->getDebugLoc(), MVT::i32, MVT::i32,
-                                  MVT::Other, Ops, 6);
+    if (Opcode == ARM::LDR_PRE_IMM || Opcode == ARM::LDRB_PRE_IMM) {
+      SDValue Chain = LD->getChain();
+      SDValue Base = LD->getBasePtr();
+      SDValue Ops[]= { Base, AMOpc, getAL(CurDAG),
+                       CurDAG->getRegister(0, MVT::i32), Chain };
+      return CurDAG->getMachineNode(Opcode, N->getDebugLoc(), MVT::i32, MVT::i32,
+                                    MVT::Other, Ops, 5);
+    } else {
+      SDValue Chain = LD->getChain();
+      SDValue Base = LD->getBasePtr();
+      SDValue Ops[]= { Base, Offset, AMOpc, getAL(CurDAG),
+                       CurDAG->getRegister(0, MVT::i32), Chain };
+      return CurDAG->getMachineNode(Opcode, N->getDebugLoc(), MVT::i32, MVT::i32,
+                                    MVT::Other, Ops, 6);
+    }
   }
 
   return NULL;
@@ -2276,6 +2318,25 @@ SDNode *ARMDAGToDAGISel::SelectConcatVector(SDNode *N) {
   return PairDRegs(VT, N->getOperand(0), N->getOperand(1));
 }
 
+SDNode *ARMDAGToDAGISel::SelectAtomic64(SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue, 6> Ops;
+  Ops.push_back(Node->getOperand(1)); // Ptr
+  Ops.push_back(Node->getOperand(2)); // Low part of Val1
+  Ops.push_back(Node->getOperand(3)); // High part of Val1
+  if (Opc == ARM::ATOMCMPXCHG6432) {
+    Ops.push_back(Node->getOperand(4)); // Low part of Val2
+    Ops.push_back(Node->getOperand(5)); // High part of Val2
+  }
+  Ops.push_back(Node->getOperand(0)); // Chain
+  MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(1);
+  MemOp[0] = cast<MemSDNode>(Node)->getMemOperand();
+  SDNode *ResNode = CurDAG->getMachineNode(Opc, Node->getDebugLoc(),
+                                           MVT::i32, MVT::i32, MVT::Other,
+                                           Ops.data() ,Ops.size());
+  cast<MachineSDNode>(ResNode)->setMemRefs(MemOp, MemOp + 1);
+  return ResNode;
+}
+
 SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
   DebugLoc dl = N->getDebugLoc();
 
@@ -3056,6 +3117,23 @@ SDNode *ARMDAGToDAGISel::Select(SDNode *N) {
 
   case ISD::CONCAT_VECTORS:
     return SelectConcatVector(N);
+
+  case ARMISD::ATOMOR64_DAG:
+    return SelectAtomic64(N, ARM::ATOMOR6432);
+  case ARMISD::ATOMXOR64_DAG:
+    return SelectAtomic64(N, ARM::ATOMXOR6432);
+  case ARMISD::ATOMADD64_DAG:
+    return SelectAtomic64(N, ARM::ATOMADD6432);
+  case ARMISD::ATOMSUB64_DAG:
+    return SelectAtomic64(N, ARM::ATOMSUB6432);
+  case ARMISD::ATOMNAND64_DAG:
+    return SelectAtomic64(N, ARM::ATOMNAND6432);
+  case ARMISD::ATOMAND64_DAG:
+    return SelectAtomic64(N, ARM::ATOMAND6432);
+  case ARMISD::ATOMSWAP64_DAG:
+    return SelectAtomic64(N, ARM::ATOMSWAP6432);
+  case ARMISD::ATOMCMPXCHG64_DAG:
+    return SelectAtomic64(N, ARM::ATOMCMPXCHG6432);
   }
 
   return SelectCode(N);

@@ -1571,27 +1571,29 @@ bool InstCombiner::DoOneIteration(Function &F, unsigned Iteration) {
     // Do a quick scan over the function.  If we find any blocks that are
     // unreachable, remove any instructions inside of them.  This prevents
     // the instcombine code from having to deal with some bad special cases.
-    for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB)
-      if (!Visited.count(BB)) {
-        Instruction *Term = BB->getTerminator();
-        while (Term != BB->begin()) {   // Remove instrs bottom-up
-          BasicBlock::iterator I = Term; --I;
+    for (Function::iterator BB = F.begin(), E = F.end(); BB != E; ++BB) {
+      if (Visited.count(BB)) continue;
 
-          DEBUG(errs() << "IC: DCE: " << *I << '\n');
-          // A debug intrinsic shouldn't force another iteration if we weren't
-          // going to do one without it.
-          if (!isa<DbgInfoIntrinsic>(I)) {
-            ++NumDeadInst;
-            MadeIRChange = true;
-          }
-
-          // If I is not void type then replaceAllUsesWith undef.
-          // This allows ValueHandlers and custom metadata to adjust itself.
-          if (!I->getType()->isVoidTy())
-            I->replaceAllUsesWith(UndefValue::get(I->getType()));
-          I->eraseFromParent();
+      // Delete the instructions backwards, as it has a reduced likelihood of
+      // having to update as many def-use and use-def chains.
+      Instruction *EndInst = BB->getTerminator(); // Last not to be deleted.
+      while (EndInst != BB->begin()) {
+        // Delete the next to last instruction.
+        BasicBlock::iterator I = EndInst;
+        Instruction *Inst = --I;
+        if (!Inst->use_empty())
+          Inst->replaceAllUsesWith(UndefValue::get(Inst->getType()));
+        if (isa<LandingPadInst>(Inst)) {
+          EndInst = Inst;
+          continue;
         }
+        if (!isa<DbgInfoIntrinsic>(Inst)) {
+          ++NumDeadInst;
+          MadeIRChange = true;
+        }
+        Inst->eraseFromParent();
       }
+    }
   }
 
   while (!Worklist.isEmpty()) {

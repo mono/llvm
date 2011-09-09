@@ -88,6 +88,7 @@ MipsTargetLowering(MipsTargetMachine &TM)
   // Mips does not have i1 type, so use i32 for
   // setcc operations results (slt, sgt, ...).
   setBooleanContents(ZeroOrOneBooleanContent);
+  setBooleanVectorContents(ZeroOrOneBooleanContent); // FIXME: Is this correct?
 
   // Set up the register classes
   addRegisterClass(MVT::i32, Mips::CPURegsRegisterClass);
@@ -178,6 +179,9 @@ MipsTargetLowering(MipsTargetMachine &TM)
   setOperationAction(ISD::MEMBARRIER,        MVT::Other, Custom);
   setOperationAction(ISD::ATOMIC_FENCE,      MVT::Other, Custom);  
 
+  setOperationAction(ISD::ATOMIC_LOAD,       MVT::i32,    Expand);  
+  setOperationAction(ISD::ATOMIC_STORE,      MVT::i32,    Expand);  
+
   setInsertFencesForAtomic(true);
 
   if (Subtarget->isSingleFloat())
@@ -216,7 +220,7 @@ bool MipsTargetLowering::allowsUnalignedMemoryAccesses(EVT VT) const {
   return SVT == MVT::i32 || SVT == MVT::i16; 
 }
 
-MVT::SimpleValueType MipsTargetLowering::getSetCCResultType(EVT VT) const {
+EVT MipsTargetLowering::getSetCCResultType(EVT VT) const {
   return MVT::i32;
 }
 

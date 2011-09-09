@@ -29,6 +29,7 @@ MCAsmInfo::MCAsmInfo() {
   HasSubsectionsViaSymbols = false;
   HasMachoZeroFillDirective = false;
   HasMachoTBSSDirective = false;
+  StructorOutputOrder = Structors::ReversePriorityOrder;
   HasStaticCtorDtorReferenceInStaticMode = false;
   LinkerRequiresNonEmptyDwarfLines = false;
   MaxInstLength = 4;
@@ -65,7 +66,7 @@ MCAsmInfo::MCAsmInfo() {
   GlobalDirective = "\t.globl\t";
   HasSetDirective = true;
   HasAggressiveSymbolFolding = true;
-  HasLCOMMDirective = false;
+  LCOMMDirectiveType = LCOMM::None;
   COMMDirectiveAlignmentIsInBytes = true;
   HasDotTypeDotSizeDirective = true;
   HasSingleParameterDotFile = true;

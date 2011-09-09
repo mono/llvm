@@ -68,6 +68,7 @@ enum ActionType {
   GenClangAttrPCHRead,
   GenClangAttrPCHWrite,
   GenClangAttrSpellingList,
+  GenClangAttrLateParsedList,
   GenClangDiagsDefs,
   GenClangDiagGroups,
   GenClangDiagsIndexName,
@@ -139,6 +140,9 @@ namespace {
                     clEnumValN(GenClangAttrSpellingList,
                                "gen-clang-attr-spelling-list",
                                "Generate a clang attribute spelling list"),
+                    clEnumValN(GenClangAttrLateParsedList,
+                               "gen-clang-attr-late-parsed-list",
+                               "Generate a clang attribute LateParsed list"),
                     clEnumValN(GenClangDiagsDefs, "gen-clang-diags-defs",
                                "Generate Clang diagnostics definitions"),
                     clEnumValN(GenClangDiagGroups, "gen-clang-diag-groups",
@@ -242,7 +246,7 @@ int main(int argc, char **argv) {
           << ":" << Error << "\n";
         return 1;
       }
-      DepOut.os() << DependFilename << ":";
+      DepOut.os() << OutputFilename << ":";
       const std::vector<std::string> &Dependencies = Parser.getDependencies();
       for (std::vector<std::string>::const_iterator I = Dependencies.begin(),
                                                           E = Dependencies.end();
@@ -295,6 +299,9 @@ int main(int argc, char **argv) {
       break;
     case GenClangAttrSpellingList:
       ClangAttrSpellingListEmitter(Records).run(Out.os());
+      break;
+    case GenClangAttrLateParsedList:
+      ClangAttrLateParsedListEmitter(Records).run(Out.os());
       break;
     case GenClangDiagsDefs:
       ClangDiagsDefsEmitter(Records, ClangComponent).run(Out.os());

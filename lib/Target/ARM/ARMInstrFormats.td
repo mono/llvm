@@ -1100,8 +1100,8 @@ class T2Ipc<dag oops, dag iops, InstrItinClass itin,
             string opc, string asm, list<dag> pattern>
   : Thumb2I<oops, iops, AddrModeT2_pc, 4, itin, opc, asm, "", pattern>;
 class T2Ii8s4<bit P, bit W, bit isLoad, dag oops, dag iops, InstrItinClass itin,
-              string opc, string asm, list<dag> pattern>
-  : Thumb2I<oops, iops, AddrModeT2_i8s4, 4, itin, opc, asm, "",
+              string opc, string asm, string cstr, list<dag> pattern>
+  : Thumb2I<oops, iops, AddrModeT2_i8s4, 4, itin, opc, asm, cstr,
             pattern> {
   bits<4> Rt;
   bits<4> Rt2;
@@ -1117,14 +1117,14 @@ class T2Ii8s4<bit P, bit W, bit isLoad, dag oops, dag iops, InstrItinClass itin,
   let Inst{11-8}  = Rt2{3-0};
   let Inst{7-0}   = addr{7-0};
 }
-
-class T2Ii8s4Tied<bit P, bit W, bit isLoad, dag oops, dag iops, InstrItinClass itin,
-              string opc, string asm, list<dag> pattern>
-  : Thumb2I<oops, iops, AddrModeT2_i8s4, 4, itin, opc, asm, "$base = $wb",
+class T2Ii8s4post<bit P, bit W, bit isLoad, dag oops, dag iops,
+                  InstrItinClass itin, string opc, string asm, string cstr,
+                  list<dag> pattern>
+  : Thumb2I<oops, iops, AddrModeT2_i8s4, 4, itin, opc, asm, cstr,
             pattern> {
   bits<4> Rt;
   bits<4> Rt2;
-  bits<4> base;
+  bits<4> addr;
   bits<9> imm;
   let Inst{31-25} = 0b1110100;
   let Inst{24}    = P;
@@ -1132,12 +1132,11 @@ class T2Ii8s4Tied<bit P, bit W, bit isLoad, dag oops, dag iops, InstrItinClass i
   let Inst{22}    = 1;
   let Inst{21}    = W;
   let Inst{20}    = isLoad;
-  let Inst{19-16} = base{3-0};
+  let Inst{19-16} = addr;
   let Inst{15-12} = Rt{3-0};
   let Inst{11-8}  = Rt2{3-0};
   let Inst{7-0}   = imm{7-0};
 }
-
 
 class T2sI<dag oops, dag iops, InstrItinClass itin,
            string opc, string asm, list<dag> pattern>
@@ -1161,8 +1160,8 @@ class T2XIt<dag oops, dag iops, InstrItinClass itin,
             string asm, string cstr, list<dag> pattern>
   : Thumb2XI<oops, iops, AddrModeNone, 4, itin, asm, cstr, pattern>;
 
-// T2Iidxldst - Thumb2 indexed load / store instructions.
-class T2Iidxldst<bit signed, bits<2> opcod, bit load, bit pre,
+// T2Ipreldst - Thumb2 pre-indexed load / store instructions.
+class T2Ipreldst<bit signed, bits<2> opcod, bit load, bit pre,
                  dag oops, dag iops,
                  AddrMode am, IndexMode im, InstrItinClass itin,
                  string opc, string asm, string cstr, list<dag> pattern>
@@ -1173,25 +1172,55 @@ class T2Iidxldst<bit signed, bits<2> opcod, bit load, bit pre,
   let Pattern = pattern;
   list<Predicate> Predicates = [IsThumb2];
   let DecoderNamespace = "Thumb2";
+
+  bits<4> Rt;
+  bits<13> addr;
   let Inst{31-27} = 0b11111;
   let Inst{26-25} = 0b00;
   let Inst{24}    = signed;
   let Inst{23}    = 0;
   let Inst{22-21} = opcod;
   let Inst{20}    = load;
+  let Inst{19-16} = addr{12-9};
+  let Inst{15-12} = Rt{3-0};
   let Inst{11}    = 1;
   // (P, W) = (1, 1) Pre-indexed or (0, 1) Post-indexed
   let Inst{10}    = pre; // The P bit.
+  let Inst{9}     = addr{8}; // Sign bit
   let Inst{8}     = 1; // The W bit.
+  let Inst{7-0}   = addr{7-0};
+}
 
-  bits<9> addr;
-  let Inst{7-0} = addr{7-0};
-  let Inst{9}   = addr{8}; // Sign bit
+// T2Ipostldst - Thumb2 post-indexed load / store instructions.
+class T2Ipostldst<bit signed, bits<2> opcod, bit load, bit pre,
+                 dag oops, dag iops,
+                 AddrMode am, IndexMode im, InstrItinClass itin,
+                 string opc, string asm, string cstr, list<dag> pattern>
+  : InstARM<am, 4, im, ThumbFrm, GenericDomain, cstr, itin> {
+  let OutOperandList = oops;
+  let InOperandList = !con(iops, (ins pred:$p));
+  let AsmString = !strconcat(opc, "${p}", asm);
+  let Pattern = pattern;
+  list<Predicate> Predicates = [IsThumb2];
+  let DecoderNamespace = "Thumb2";
 
   bits<4> Rt;
   bits<4> Rn;
+  bits<9> offset;
+  let Inst{31-27} = 0b11111;
+  let Inst{26-25} = 0b00;
+  let Inst{24}    = signed;
+  let Inst{23}    = 0;
+  let Inst{22-21} = opcod;
+  let Inst{20}    = load;
+  let Inst{19-16} = Rn;
   let Inst{15-12} = Rt{3-0};
-  let Inst{19-16} = Rn{3-0};
+  let Inst{11}    = 1;
+  // (P, W) = (1, 1) Pre-indexed or (0, 1) Post-indexed
+  let Inst{10}    = pre; // The P bit.
+  let Inst{9}     = offset{8}; // Sign bit
+  let Inst{8}     = 1; // The W bit.
+  let Inst{7-0}   = offset{7-0};
 }
 
 // Tv5Pat - Same as Pat<>, but requires V5T Thumb mode.

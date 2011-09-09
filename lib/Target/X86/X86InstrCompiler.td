@@ -106,6 +106,26 @@ let Defs = [EAX, ESP, EFLAGS], Uses = [ESP] in
   def WIN_ALLOCA : I<0, Pseudo, (outs), (ins),
                      "# dynamic stack allocation",
                      [(X86WinAlloca)]>;
+
+// When using segmented stacks these are lowered into instructions which first
+// check if the current stacklet has enough free memory. If it does, memory is
+// allocated by bumping the stack pointer. Otherwise memory is allocated from 
+// the heap.
+
+let Defs = [EAX, ESP, EFLAGS], Uses = [ESP, EAX] in
+def SEG_ALLOCA_32 : I<0, Pseudo, (outs GR32:$dst), (ins GR32:$size),
+                      "# variable sized alloca for segmented stacks",
+                      [(set GR32:$dst,
+                         (X86SegAlloca GR32:$size))]>,
+                    Requires<[In32BitMode]>;
+
+let Defs = [RAX, RSP, EFLAGS], Uses = [RSP, RAX] in
+def SEG_ALLOCA_64 : I<0, Pseudo, (outs GR64:$dst), (ins GR64:$size),
+                      "# variable sized alloca for segmented stacks",
+                      [(set GR64:$dst,
+                         (X86SegAlloca GR64:$size))]>,
+                    Requires<[In64BitMode]>;
+
 }
 
 
@@ -329,18 +349,11 @@ def TLSCall_64 : I<0, Pseudo, (outs), (ins i64mem:$sym),
 //===----------------------------------------------------------------------===//
 // Conditional Move Pseudo Instructions
 
-let Constraints = "$src1 = $dst" in {
-
-// Conditional moves
-let Uses = [EFLAGS] in {
-
 // X86 doesn't have 8-bit conditional moves. Use a customInserter to
 // emit control flow. An alternative to this is to mark i8 SELECT as Promote,
 // however that requires promoting the operands, and can induce additional
-// i8 register pressure. Note that CMOV_GR8 is conservatively considered to
-// clobber EFLAGS, because if one of the operands is zero, the expansion
-// could involve an xor.
-let usesCustomInserter = 1, Constraints = "", Defs = [EFLAGS] in {
+// i8 register pressure.
+let usesCustomInserter = 1, Uses = [EFLAGS] in {
 def CMOV_GR8 : I<0, Pseudo,
                  (outs GR8:$dst), (ins GR8:$src1, GR8:$src2, i8imm:$cond),
                  "#CMOV_GR8 PSEUDO!",
@@ -380,10 +393,7 @@ def CMOV_RFP80 : I<0, Pseudo,
                       (X86cmov RFP80:$src1, RFP80:$src2, imm:$cond,
                                                   EFLAGS))]>;
 } // Predicates = [NoCMov]
-} // UsesCustomInserter = 1, Constraints = "", Defs = [EFLAGS]
-} // Uses = [EFLAGS]
-
-} // Constraints = "$src1 = $dst" in
+} // UsesCustomInserter = 1, Uses = [EFLAGS]
 
 
 //===----------------------------------------------------------------------===//
@@ -665,12 +675,20 @@ def LOCK_DEC64m : RI<0xFF, MRM1m, (outs), (ins i64mem:$dst),
 
 // Atomic compare and swap.
 let Defs = [EAX, EDX, EFLAGS], Uses = [EAX, EBX, ECX, EDX],
-    isCodeGenOnly = 1 in {
+    isCodeGenOnly = 1 in
 def LCMPXCHG8B : I<0xC7, MRM1m, (outs), (ins i64mem:$ptr),
                "lock\n\t"
                "cmpxchg8b\t$ptr",
                [(X86cas8 addr:$ptr)]>, TB, LOCK;
-}
+
+let Defs = [RAX, RDX, EFLAGS], Uses = [RAX, RBX, RCX, RDX],
+    isCodeGenOnly = 1 in
+def LCMPXCHG16B : RI<0xC7, MRM1m, (outs), (ins i128mem:$ptr),
+                    "lock\n\t"
+                    "cmpxchg16b\t$ptr",
+                    [(X86cas16 addr:$ptr)]>, TB, LOCK,
+                    Requires<[HasCmpxchg16b]>;
+
 let Defs = [AL, EFLAGS], Uses = [AL], isCodeGenOnly = 1 in {
 def LCMPXCHG8 : I<0xB0, MRMDestMem, (outs), (ins i8mem:$ptr, GR8:$swap),
                "lock\n\t"
@@ -722,6 +740,32 @@ def LXADD64 : RI<0xC1, MRMSrcMem, (outs GR64:$dst), (ins GR64:$val,i64mem:$ptr),
                [(set GR64:$dst, (atomic_load_add_64 addr:$ptr, GR64:$val))]>,
                 TB, LOCK;
 }
+
+def ACQUIRE_MOV8rm  : I<0, Pseudo, (outs GR8 :$dst), (ins i8mem :$src),
+                      "#ACQUIRE_MOV PSEUDO!",
+                      [(set GR8:$dst,  (atomic_load_8  addr:$src))]>;
+def ACQUIRE_MOV16rm : I<0, Pseudo, (outs GR16:$dst), (ins i16mem:$src),
+                      "#ACQUIRE_MOV PSEUDO!",
+                      [(set GR16:$dst, (atomic_load_16 addr:$src))]>;
+def ACQUIRE_MOV32rm : I<0, Pseudo, (outs GR32:$dst), (ins i32mem:$src),
+                      "#ACQUIRE_MOV PSEUDO!",
+                      [(set GR32:$dst, (atomic_load_32 addr:$src))]>;
+def ACQUIRE_MOV64rm : I<0, Pseudo, (outs GR64:$dst), (ins i64mem:$src),
+                      "#ACQUIRE_MOV PSEUDO!",
+                      [(set GR64:$dst, (atomic_load_64 addr:$src))]>;
+
+def RELEASE_MOV8mr  : I<0, Pseudo, (outs), (ins i8mem :$dst, GR8 :$src),
+                        "#RELEASE_MOV PSEUDO!",
+                        [(atomic_store_8  addr:$dst, GR8 :$src)]>;
+def RELEASE_MOV16mr : I<0, Pseudo, (outs), (ins i16mem:$dst, GR16:$src),
+                        "#RELEASE_MOV PSEUDO!",
+                        [(atomic_store_16 addr:$dst, GR16:$src)]>;
+def RELEASE_MOV32mr : I<0, Pseudo, (outs), (ins i32mem:$dst, GR32:$src),
+                        "#RELEASE_MOV PSEUDO!",
+                        [(atomic_store_32 addr:$dst, GR32:$src)]>;
+def RELEASE_MOV64mr : I<0, Pseudo, (outs), (ins i64mem:$dst, GR64:$src),
+                        "#RELEASE_MOV PSEUDO!",
+                        [(atomic_store_64 addr:$dst, GR64:$src)]>;
 
 //===----------------------------------------------------------------------===//
 // Conditional Move Pseudo Instructions.
@@ -1691,17 +1735,3 @@ def : Pat<(and GR64:$src1, i64immSExt8:$src2),
           (AND64ri8 GR64:$src1, i64immSExt8:$src2)>;
 def : Pat<(and GR64:$src1, i64immSExt32:$src2),
           (AND64ri32 GR64:$src1, i64immSExt32:$src2)>;
-
-def : Pat<(atomic_load_8 addr:$src), (MOV8rm addr:$src)>;
-def : Pat<(atomic_load_16 addr:$src), (MOV16rm addr:$src)>;
-def : Pat<(atomic_load_32 addr:$src), (MOV32rm addr:$src)>;
-def : Pat<(atomic_load_64 addr:$src), (MOV64rm addr:$src)>;
-
-def : Pat<(atomic_store_8 addr:$ptr, GR8:$val),
-          (MOV8mr addr:$ptr, GR8:$val)>;
-def : Pat<(atomic_store_16 addr:$ptr, GR16:$val),
-          (MOV16mr addr:$ptr, GR16:$val)>;
-def : Pat<(atomic_store_32 addr:$ptr, GR32:$val),
-          (MOV32mr addr:$ptr, GR32:$val)>;
-def : Pat<(atomic_store_64 addr:$ptr, GR64:$val),
-          (MOV64mr addr:$ptr, GR64:$val)>;

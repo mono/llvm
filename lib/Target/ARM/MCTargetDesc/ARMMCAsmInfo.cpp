@@ -69,7 +69,7 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
   Code32Directive = ".code\t32";
 
   WeakRefDirective = "\t.weak\t";
-  HasLCOMMDirective = true;
+  LCOMMDirectiveType = LCOMM::NoAlignment;
   PCSymbol = ".";
 
   HasLEB128 = true;

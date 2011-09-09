@@ -41,7 +41,7 @@ std::string ARM_MC::ParseARMTriple(StringRef TT) {
   unsigned Len = TT.size();
   unsigned Idx = 0;
 
-  // FIXME: Enahnce Triple helper class to extract ARM version.
+  // FIXME: Enhance Triple helper class to extract ARM version.
   bool isThumb = false;
   if (Len >= 5 && TT.substr(0, 4) == "armv")
     Idx = 4;
@@ -84,6 +84,14 @@ std::string ARM_MC::ParseARMTriple(StringRef TT) {
       ARMArchFeature = "+thumb-mode";
     else
       ARMArchFeature += ",+thumb-mode";
+  }
+
+  Triple TheTriple(TT);
+  if (TheTriple.getOS() == Triple::NativeClient) {
+    if (ARMArchFeature.empty())
+      ARMArchFeature = "+nacl-mode";
+    else
+      ARMArchFeature += ",+nacl-mode";
   }
 
   return ARMArchFeature;
@@ -156,9 +164,10 @@ static MCStreamer *createMCStreamer(const Target &T, StringRef TT,
 
 static MCInstPrinter *createARMMCInstPrinter(const Target &T,
                                              unsigned SyntaxVariant,
-                                             const MCAsmInfo &MAI) {
+                                             const MCAsmInfo &MAI,
+                                             const MCSubtargetInfo &STI) {
   if (SyntaxVariant == 0)
-    return new ARMInstPrinter(MAI);
+    return new ARMInstPrinter(MAI, STI);
   return 0;
 }
 

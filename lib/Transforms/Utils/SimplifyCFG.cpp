@@ -63,6 +63,7 @@ class SimplifyCFGOpt {
   bool FoldValueComparisonIntoPredecessors(TerminatorInst *TI,
                                            IRBuilder<> &Builder);
 
+  bool SimplifyResume(ResumeInst *RI, IRBuilder<> &Builder);
   bool SimplifyReturn(ReturnInst *RI, IRBuilder<> &Builder);
   bool SimplifyUnwind(UnwindInst *UI, IRBuilder<> &Builder);
   bool SimplifyUnreachable(UnreachableInst *UI);
@@ -2138,6 +2139,52 @@ static bool SimplifyBranchOnICmpChain(BranchInst *BI, const TargetData *TD,
   return true;
 }
 
+bool SimplifyCFGOpt::SimplifyResume(ResumeInst *RI, IRBuilder<> &Builder) {
+  // If this is a trivial landing pad that just continues unwinding the caught
+  // exception then zap the landing pad, turning its invokes into calls.
+  BasicBlock *BB = RI->getParent();
+  LandingPadInst *LPInst = dyn_cast<LandingPadInst>(BB->getFirstNonPHI());
+  if (RI->getValue() != LPInst)
+    // Not a landing pad, or the resume is not unwinding the exception that
+    // caused control to branch here.
+    return false;
+
+  // Check that there are no other instructions except for debug intrinsics.
+  BasicBlock::iterator I = LPInst, E = RI;
+  while (++I != E)
+    if (!isa<DbgInfoIntrinsic>(I))
+      return false;
+
+  // Turn all invokes that unwind here into calls and delete the basic block.
+  for (pred_iterator PI = pred_begin(BB), PE = pred_end(BB); PI != PE;) {
+    InvokeInst *II = cast<InvokeInst>((*PI++)->getTerminator());
+    SmallVector<Value*, 8> Args(II->op_begin(), II->op_end() - 3);
+    // Insert a call instruction before the invoke.
+    CallInst *Call = CallInst::Create(II->getCalledValue(), Args, "", II);
+    Call->takeName(II);
+    Call->setCallingConv(II->getCallingConv());
+    Call->setAttributes(II->getAttributes());
+    Call->setDebugLoc(II->getDebugLoc());
+
+    // Anything that used the value produced by the invoke instruction now uses
+    // the value produced by the call instruction.  Note that we do this even
+    // for void functions and calls with no uses so that the callgraph edge is
+    // updated.
+    II->replaceAllUsesWith(Call);
+    BB->removePredecessor(II->getParent());
+
+    // Insert a branch to the normal destination right before the invoke.
+    BranchInst::Create(II->getNormalDest(), II);
+
+    // Finally, delete the invoke instruction!
+    II->eraseFromParent();
+  }
+
+  // The landingpad is now unreachable.  Zap it.
+  BB->eraseFromParent();
+  return true;
+}
+
 bool SimplifyCFGOpt::SimplifyReturn(ReturnInst *RI, IRBuilder<> &Builder) {
   BasicBlock *BB = RI->getParent();
   if (!BB->getFirstNonPHIOrDbg()->isTerminator()) return false;
@@ -2723,6 +2770,71 @@ bool SimplifyCFGOpt::SimplifyCondBranch(BranchInst *BI, IRBuilder<> &Builder) {
   return false;
 }
 
+/// Check if passing a value to an instruction will cause undefined behavior.
+static bool passingValueIsAlwaysUndefined(Value *V, Instruction *I) {
+  Constant *C = dyn_cast<Constant>(V);
+  if (!C)
+    return false;
+
+  if (!I->hasOneUse()) // Only look at single-use instructions, for compile time
+    return false;
+
+  if (C->isNullValue()) {
+    Instruction *Use = I->use_back();
+
+    // Now make sure that there are no instructions in between that can alter
+    // control flow (eg. calls)
+    for (BasicBlock::iterator i = ++BasicBlock::iterator(I); &*i != Use; ++i)
+      if (i == I->getParent()->end() || i->mayHaveSideEffects())
+        return false;
+
+    // Look through GEPs. A load from a GEP derived from NULL is still undefined
+    if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(Use))
+      if (GEP->getPointerOperand() == I)
+        return passingValueIsAlwaysUndefined(V, GEP);
+
+    // Look through bitcasts.
+    if (BitCastInst *BC = dyn_cast<BitCastInst>(Use))
+      return passingValueIsAlwaysUndefined(V, BC);
+
+    // Load from null is undefined.
+    if (LoadInst *LI = dyn_cast<LoadInst>(Use))
+      return LI->getPointerAddressSpace() == 0;
+
+    // Store to null is undefined.
+    if (StoreInst *SI = dyn_cast<StoreInst>(Use))
+      return SI->getPointerAddressSpace() == 0 && SI->getPointerOperand() == I;
+  }
+  return false;
+}
+
+/// If BB has an incoming value that will always trigger undefined behavior
+/// (eg. null pointer derefence), remove the branch leading here.
+static bool removeUndefIntroducingPredecessor(BasicBlock *BB) {
+  for (BasicBlock::iterator i = BB->begin();
+       PHINode *PHI = dyn_cast<PHINode>(i); ++i)
+    for (unsigned i = 0, e = PHI->getNumIncomingValues(); i != e; ++i)
+      if (passingValueIsAlwaysUndefined(PHI->getIncomingValue(i), PHI)) {
+        TerminatorInst *T = PHI->getIncomingBlock(i)->getTerminator();
+        IRBuilder<> Builder(T);
+        if (BranchInst *BI = dyn_cast<BranchInst>(T)) {
+          BB->removePredecessor(PHI->getIncomingBlock(i));
+          // Turn uncoditional branches into unreachables and remove the dead
+          // destination from conditional branches.
+          if (BI->isUnconditional())
+            Builder.CreateUnreachable();
+          else
+            Builder.CreateBr(BI->getSuccessor(0) == BB ? BI->getSuccessor(1) :
+                                                         BI->getSuccessor(0));
+          BI->eraseFromParent();
+          return true;
+        }
+        // TODO: SwitchInst.
+      }
+
+  return false;
+}
+
 bool SimplifyCFGOpt::run(BasicBlock *BB) {
   bool Changed = false;
 
@@ -2746,6 +2858,9 @@ bool SimplifyCFGOpt::run(BasicBlock *BB) {
   // Check for and eliminate duplicate PHI nodes in this block.
   Changed |= EliminateDuplicatePHINodes(BB);
 
+  // Check for and remove branches that will always cause undefined behavior.
+  Changed |= removeUndefIntroducingPredecessor(BB);
+
   // Merge basic blocks into their predecessor if there is only one distinct
   // pred, and if there is only one distinct successor of the predecessor, and
   // if there are no PHI nodes.
@@ -2768,6 +2883,8 @@ bool SimplifyCFGOpt::run(BasicBlock *BB) {
     } else {
       if (SimplifyCondBranch(BI, Builder)) return true;
     }
+  } else if (ResumeInst *RI = dyn_cast<ResumeInst>(BB->getTerminator())) {
+    if (SimplifyResume(RI, Builder)) return true;
   } else if (ReturnInst *RI = dyn_cast<ReturnInst>(BB->getTerminator())) {
     if (SimplifyReturn(RI, Builder)) return true;
   } else if (SwitchInst *SI = dyn_cast<SwitchInst>(BB->getTerminator())) {

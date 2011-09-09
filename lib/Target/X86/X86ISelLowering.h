@@ -175,8 +175,10 @@ namespace llvm {
       /// PSIGNB/W/D - Copy integer sign.
       PSIGNB, PSIGNW, PSIGND,
 
-      /// PBLENDVB - Variable blend
+      /// BLENDVXX family of opcodes
       PBLENDVB,
+      BLENDVPD,
+      BLENDVPS,
 
       /// FMAX, FMIN - Floating point max and min.
       ///
@@ -286,6 +288,11 @@ namespace llvm {
       // WIN_ALLOCA - Windows's _chkstk call to do stack probing.
       WIN_ALLOCA,
 
+      // SEG_ALLOCA - For allocating variable amounts of stack space when using
+      // segmented stacks. Check if the current stacklet has enough space, and
+      // falls back to heap allocation if not.
+      SEG_ALLOCA,
+
       // Memory barrier
       MEMBARRIER,
       MFENCE,
@@ -303,9 +310,10 @@ namespace llvm {
       ATOMNAND64_DAG,
       ATOMSWAP64_DAG,
 
-      // LCMPXCHG_DAG, LCMPXCHG8_DAG - Compare and swap.
+      // LCMPXCHG_DAG, LCMPXCHG8_DAG, LCMPXCHG16_DAG - Compare and swap.
       LCMPXCHG_DAG,
       LCMPXCHG8_DAG,
+      LCMPXCHG16_DAG,
 
       // VZEXT_LOAD - Load, scalar_to_vector, and zero extend.
       VZEXT_LOAD,
@@ -566,8 +574,8 @@ namespace llvm {
     /// DAG node.
     virtual const char *getTargetNodeName(unsigned Opcode) const;
 
-    /// getSetCCResultType - Return the ISD::SETCC ValueType
-    virtual MVT::SimpleValueType getSetCCResultType(EVT VT) const;
+    /// getSetCCResultType - Return the value type to use for ISD::SETCC.
+    virtual EVT getSetCCResultType(EVT VT) const;
 
     /// computeMaskedBitsForTargetNode - Determine which of the bits specified
     /// in Mask are known to be either zero or one and return them in the
@@ -803,6 +811,7 @@ namespace llvm {
     SDValue LowerSETCC(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerVSETCC(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSELECT(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerVSELECT(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerBRCOND(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerMEMSET(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerJumpTable(SDValue Op, SelectionDAG &DAG) const;
@@ -815,7 +824,8 @@ namespace llvm {
     SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFRAME_TO_ARGS_OFFSET(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerEH_RETURN(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerTRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerINIT_TRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerADJUST_TRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFLT_ROUNDS_(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerCTLZ(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerCTTZ(SDValue Op, SelectionDAG &DAG) const;
@@ -935,6 +945,10 @@ namespace llvm {
 
     MachineBasicBlock *EmitLoweredWinAlloca(MachineInstr *MI,
                                               MachineBasicBlock *BB) const;
+
+    MachineBasicBlock *EmitLoweredSegAlloca(MachineInstr *MI,
+                                            MachineBasicBlock *BB,
+                                            bool Is64Bit) const;
 
     MachineBasicBlock *EmitLoweredTLSCall(MachineInstr *MI,
                                           MachineBasicBlock *BB) const;

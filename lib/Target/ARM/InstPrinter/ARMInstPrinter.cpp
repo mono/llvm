@@ -35,6 +35,14 @@ static unsigned translateShiftImm(unsigned imm) {
   return imm;
 }
 
+
+ARMInstPrinter::ARMInstPrinter(const MCAsmInfo &MAI,
+                               const MCSubtargetInfo &STI) :
+  MCInstPrinter(MAI) {
+  // Initialize the set of available features.
+  setAvailableFeatures(STI.getFeatureBits());
+}
+
 StringRef ARMInstPrinter::getOpcodeName(unsigned Opcode) const {
   return getInstructionName(Opcode);
 }
@@ -446,7 +454,9 @@ void ARMInstPrinter::printAddrMode5Operand(const MCInst *MI, unsigned OpNum,
 
   O << "[" << getRegisterName(MO1.getReg());
 
-  if (unsigned ImmOffs = ARM_AM::getAM5Offset(MO2.getImm())) {
+  unsigned ImmOffs = ARM_AM::getAM5Offset(MO2.getImm());
+  unsigned Op = ARM_AM::getAM5Op(MO2.getImm());
+  if (ImmOffs || Op == ARM_AM::sub) {
     O << ", #"
       << ARM_AM::getAddrOpcStr(ARM_AM::getAM5Op(MO2.getImm()))
       << ImmOffs * 4;

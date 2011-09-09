@@ -73,7 +73,7 @@ public:
 
   /// isLookupPtrRegClass - Set if this operand is a pointer value and it
   /// requires a callback to look up its register class.
-  bool isLookupPtrRegClass() const { return Flags&(1 <<MCOI::LookupPtrRegClass);}
+  bool isLookupPtrRegClass() const {return Flags&(1 <<MCOI::LookupPtrRegClass);}
 
   /// isPredicate - Set if this is one of the operands that made up of
   /// the predicate operand that controls an isPredicable() instruction.
@@ -116,6 +116,7 @@ namespace MCID {
     Commutable,
     ConvertibleTo3Addr,
     UsesCustomInserter,
+    HasPostISelHook,
     Rematerializable,
     CheapAsAMove,
     ExtraSrcRegAllocReq,
@@ -287,6 +288,18 @@ public:
   /// unconditional branches and return instructions.
   bool isBarrier() const {
     return Flags & (1 << MCID::Barrier);
+  }
+
+  /// findFirstPredOperandIdx() - Find the index of the first operand in the
+  /// operand list that is used to represent the predicate. It returns -1 if
+  /// none is found.
+  int findFirstPredOperandIdx() const {
+    if (isPredicable()) {
+      for (unsigned i = 0, e = getNumOperands(); i != e; ++i)
+        if (OpInfo[i].isPredicate())
+          return i;
+    }
+    return -1;
   }
 
   /// isTerminator - Returns true if this instruction part of the terminator for
@@ -462,6 +475,14 @@ public:
   /// is used to insert this into the MachineBasicBlock.
   bool usesCustomInsertionHook() const {
     return Flags & (1 << MCID::UsesCustomInserter);
+  }
+
+  /// hasPostISelHook - Return true if this instruction requires *adjustment*
+  /// after instruction selection by calling a target hook. For example, this
+  /// can be used to fill in ARM 's' optional operand depending on whether
+  /// the conditional flag register is used.
+  bool hasPostISelHook() const {
+    return Flags & (1 << MCID::HasPostISelHook);
   }
 
   /// isRematerializable - Returns true if this instruction is a candidate for

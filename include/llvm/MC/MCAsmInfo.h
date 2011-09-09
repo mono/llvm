@@ -32,6 +32,14 @@ namespace llvm {
     enum ExceptionsType { None, DwarfCFI, SjLj, ARM, Win64 };
   }
 
+  namespace LCOMM {
+    enum LCOMMType { None, NoAlignment, ByteAlignment };
+  }
+
+  namespace Structors {
+    enum OutputOrder { None, PriorityOrder, ReversePriorityOrder };
+  }
+
   /// MCAsmInfo - This class is intended to be used as a base class for asm
   /// properties and features specific to the target.
   class MCAsmInfo {
@@ -63,6 +71,11 @@ namespace llvm {
     /// HasMachoTBSSDirective - True if this is a MachO target that supports
     /// the macho-specific .tbss directive for emitting thread local BSS Symbols
     bool HasMachoTBSSDirective;                 // Default is false.
+
+    /// StructorOutputOrder - Whether the static ctor/dtor list should be output
+    /// in no particular order, in order of increasing priority or the reverse:
+    /// in order of decreasing priority (the default).
+    Structors::OutputOrder StructorOutputOrder; // Default is reverse order.
 
     /// HasStaticCtorDtorReferenceInStaticMode - True if the compiler should
     /// emit a ".reference .constructors_used" or ".reference .destructors_used"
@@ -229,9 +242,9 @@ namespace llvm {
     /// .long a - b
     bool HasAggressiveSymbolFolding;           // Defaults to true.
 
-    /// HasLCOMMDirective - This is true if the target supports the .lcomm
-    /// directive.
-    bool HasLCOMMDirective;                  // Defaults to false.
+    /// LCOMMDirectiveType - Describes if the target supports the .lcomm
+    /// directive and whether it has an alignment parameter.
+    LCOMM::LCOMMType LCOMMDirectiveType;     // Defaults to LCOMM::None.
 
     /// COMMDirectiveAlignmentIsInBytes - True is COMMDirective's optional
     /// alignment is to be specified in bytes instead of log2(n).
@@ -391,6 +404,9 @@ namespace llvm {
     //
     bool hasMachoZeroFillDirective() const { return HasMachoZeroFillDirective; }
     bool hasMachoTBSSDirective() const { return HasMachoTBSSDirective; }
+    Structors::OutputOrder getStructorOutputOrder() const {
+      return StructorOutputOrder;
+    }
     bool hasStaticCtorDtorReferenceInStaticMode() const {
       return HasStaticCtorDtorReferenceInStaticMode;
     }
@@ -479,7 +495,9 @@ namespace llvm {
     bool hasAggressiveSymbolFolding() const {
       return HasAggressiveSymbolFolding;
     }
-    bool hasLCOMMDirective() const { return HasLCOMMDirective; }
+    LCOMM::LCOMMType getLCOMMDirectiveType() const {
+      return LCOMMDirectiveType;
+    }
     bool hasDotTypeDotSizeDirective() const {return HasDotTypeDotSizeDirective;}
     bool getCOMMDirectiveAlignmentIsInBytes() const {
       return COMMDirectiveAlignmentIsInBytes;

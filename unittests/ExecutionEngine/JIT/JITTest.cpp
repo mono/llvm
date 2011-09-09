@@ -284,6 +284,8 @@ int PlusOne(int arg) {
   return arg + 1;
 }
 
+// ARM tests disabled pending fix for PR10783.
+#if !defined(__arm__)
 TEST_F(JITTest, FarCallToKnownFunction) {
   // x86-64 can only make direct calls to functions within 32 bits of
   // the current PC.  To call anything farther away, we have to load
@@ -461,6 +463,7 @@ TEST_F(JITTest, ModuleDeletion) {
   EXPECT_EQ(RJMM->startExceptionTableCalls.size(),
             NumTablesDeallocated);
 }
+#endif // !defined(__arm__)
 
 // ARM and PPC still emit stubs for calls since the target may be too far away
 // to call directly.  This #if can probably be removed when
@@ -608,6 +611,8 @@ extern "C" int32_t JITTest_AvailableExternallyFunction() {
 }
 namespace {
 
+// ARM tests disabled pending fix for PR10783.
+#if !defined(__arm__)
 TEST_F(JITTest, AvailableExternallyFunctionIsntCompiled) {
   TheJIT->DisableLazyCompilation(true);
   LoadAssembly("define available_externally i32 "
@@ -763,6 +768,7 @@ TEST(LazyLoadedJITTest, EagerCompiledRecursionThroughGhost) {
     (intptr_t)TheJIT->getPointerToFunction(recur1IR));
   EXPECT_EQ(3, recur1(4));
 }
+#endif // !defined(__arm__)
 
 // This code is copied from JITEventListenerTest, but it only runs once for all
 // the tests in this directory.  Everything seems fine, but that's strange

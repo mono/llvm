@@ -143,7 +143,15 @@ void SjLjEHPass::markInvokeCallSite(InvokeInst *II, int InvokeNo,
 
   // If the unwind edge has phi nodes, split the edge.
   if (isa<PHINode>(II->getUnwindDest()->begin())) {
-    SplitCriticalEdge(II, 1, this);
+    // FIXME: New EH - This if-condition will be always true in the new scheme.
+    if (II->getUnwindDest()->isLandingPad()) {
+      SmallVector<BasicBlock*, 2> NewBBs;
+      SplitLandingPadPredecessors(II->getUnwindDest(), II->getParent(),
+                                  ".1", ".2", this, NewBBs);
+      LPadSuccMap[II] = *succ_begin(NewBBs[0]);
+    } else {
+      SplitCriticalEdge(II, 1, this);
+    }
 
     // If there are any phi nodes left, they must have a single predecessor.
     while (PHINode *PN = dyn_cast<PHINode>(II->getUnwindDest()->begin())) {

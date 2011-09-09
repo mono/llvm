@@ -1,4 +1,4 @@
-# RUN: llvm-mc --disassemble %s -triple=thumb-apple-darwin9 | FileCheck %s
+# RUN: llvm-mc --disassemble %s -triple=thumbv7-apple-darwin9 -mattr +t2xtpk,+mp | FileCheck %s
 
 # CHECK:	add	r5, sp, #68
 0x11 0xad
@@ -143,7 +143,7 @@
 # CHECK:	vcmpe.f64	d8, #0
 0xb5 0xee 0xc0 0x8b
 
-# CHECK:	stmdb.w	sp, {r0, r2, r3, r8, r11, lr}
+# CHECK:	stmdb	sp, {r0, r2, r3, r8, r11, lr}
 0x0d 0xe9 0x0d 0x49
 
 # CHECK:	stm	r5!, {r0, r1, r2, r3, r4}
@@ -218,7 +218,7 @@
 # CHECK:	pld	[r5, #30]
 0x95 0xf8 0x1e 0xf0
 
-# CHECK:	stc2	p12, cr15, [r9], {137}
+# CHECK:	stc	p12, cr15, [r9], {137}
 0x89 0xfc 0x89 0xfc
 
 # CHECK:	vmov	r1, r0, d11

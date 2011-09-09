@@ -764,7 +764,7 @@ static unsigned getPreIndexedLoadStoreOpcode(unsigned Opc,
                                              ARM_AM::AddrOpc Mode) {
   switch (Opc) {
   case ARM::LDRi12:
-    return ARM::LDR_PRE;
+    return ARM::LDR_PRE_IMM;
   case ARM::STRi12:
     return ARM::STR_PRE_IMM;
   case ARM::VLDRS:
@@ -907,11 +907,18 @@ bool ARMLoadStoreOpt::MergeBaseUpdateLoadStore(MachineBasicBlock &MBB,
                             getKillRegState(MO.isKill())));
   } else if (isLd) {
     if (isAM2) {
-      int Offset = ARM_AM::getAM2Opc(AddSub, Bytes, ARM_AM::no_shift);
-      // LDR_PRE, LDR_POST,
-      BuildMI(MBB, MBBI, dl, TII->get(NewOpc), MI->getOperand(0).getReg())
-        .addReg(Base, RegState::Define)
-        .addReg(Base).addReg(0).addImm(Offset).addImm(Pred).addReg(PredReg);
+      // LDR_PRE, LDR_POST
+      if (NewOpc == ARM::LDR_PRE_IMM || NewOpc == ARM::LDRB_PRE_IMM) {
+        int Offset = AddSub == ARM_AM::sub ? -Bytes : Bytes;
+        BuildMI(MBB, MBBI, dl, TII->get(NewOpc), MI->getOperand(0).getReg())
+          .addReg(Base, RegState::Define)
+          .addReg(Base).addImm(Offset).addImm(Pred).addReg(PredReg);
+      } else {
+        int Offset = ARM_AM::getAM2Opc(AddSub, Bytes, ARM_AM::no_shift);
+        BuildMI(MBB, MBBI, dl, TII->get(NewOpc), MI->getOperand(0).getReg())
+          .addReg(Base, RegState::Define)
+          .addReg(Base).addReg(0).addImm(Offset).addImm(Pred).addReg(PredReg);
+      }
     } else {
       int Offset = AddSub == ARM_AM::sub ? -Bytes : Bytes;
       // t2LDR_PRE, t2LDR_POST

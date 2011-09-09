@@ -2,17 +2,6 @@
 @ XFAIL: *
 .code 16
 
-@ CHECK: adc	r1, r1, #171            @ encoding: [0xab,0x01,0x41,0xf1]
-  adc	r1, r1, #171
-@ CHECK: adc	r1, r1, #1179666        @ encoding: [0x12,0x11,0x41,0xf1]
-  adc	r1, r1, #1179666
-@ CHECK: adc	r1, r1, #872428544      @ encoding: [0x34,0x21,0x41,0xf1]
-  adc	r1, r1, #872428544
-@ CHECK: adc	r1, r1, #1448498774     @ encoding: [0x56,0x31,0x41,0xf1]
-  adc	r1, r1, #1448498774
-@ CHECK: adc	r1, r1, #66846720       @ encoding: [0x7f,0x71,0x41,0xf1]
-  adc	r1, r1, #66846720
-
 @ CHECK: mvn	r0, #187                @ encoding: [0xbb,0x00,0x6f,0xf0]
   mvn	r0, #187
 @ CHECK: mvn	r0, #11141290           @ encoding: [0xaa,0x10,0x6f,0xf0]
@@ -334,8 +323,6 @@
 @ CHECK: ssat16  r0, #7, r0 @ encoding: [0x20,0xf3,0x06,0x00]
   ssat16  r0, #7, r0
 
-  and r1, #0xff
-  and r1, r1, #0xff
   orr r1, 0x100
   orr r1, r1, 0x100
   eor r1, 0x100
@@ -343,8 +330,6 @@
   bic r1, 0x100
   bic r1, r1, 0x100
 
-@ CHECK: and r1, r1, #255 @ encoding: [0x01,0xf0,0xff,0x01]
-@ CHECK: and r1, r1, #255 @ encoding: [0x01,0xf0,0xff,0x01]
 @ CHECK: orr r1, r1, #256 @ encoding: [0x41,0xf4,0x80,0x71]
 @ CHECK: orr r1, r1, #256 @ encoding: [0x41,0xf4,0x80,0x71]
 @ CHECK: eor r1, r1, #256 @ encoding: [0x81,0xf4,0x80,0x71]

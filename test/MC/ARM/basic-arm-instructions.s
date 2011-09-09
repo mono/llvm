@@ -129,6 +129,8 @@ Lback:
   adr r2, Lback
   adr r3, Lforward
 Lforward:
+  adr	r2, #3
+  adr	r2, #-3
 
 @ CHECK: Lback:
 @ CHECK: adr	r2, Lback    @ encoding: [0bAAAAAAA0,0x20'A',0x0f'A',0b1110001A]
@@ -136,6 +138,8 @@ Lforward:
 @ CHECK: adr	r3, Lforward @ encoding: [0bAAAAAAA0,0x30'A',0x0f'A',0b1110001A]
 @ CHECK:  @   fixup A - offset: 0, value: Lforward, kind: fixup_arm_adr_pcrel_12
 @ CHECK: Lforward:
+@ CHECK: adr	r2, #3                  @ encoding: [0x03,0x20,0x8f,0xe2]
+@ CHECK: adr	r2, #-3                 @ encoding: [0x03,0x20,0x4f,0xe2]
 
 
 @------------------------------------------------------------------------------
@@ -359,12 +363,17 @@ Lforward:
 
   bl _bar
   blx _bar
+  blls #28634268
+  blx	#32424576
+  blx	#16212288
 
 @ CHECK: bl  _bar @ encoding: [A,A,A,0xeb]
 @ CHECK:   @   fixup A - offset: 0, value: _bar, kind: fixup_arm_uncondbranch
 @ CHECK: blx	_bar @ encoding: [A,A,A,0xfa]
            @   fixup A - offset: 0, value: _bar, kind: fixup_arm_uncondbranch
-
+@ CHECK: blls	#28634268               @ encoding: [0x27,0x3b,0x6d,0x9b]
+@ CHECK: blx	#32424576               @ encoding: [0xa0,0xb0,0x7b,0xfa]
+@ CHECK: blx	#16212288               @ encoding: [0x50,0xd8,0x3d,0xfa]
 @------------------------------------------------------------------------------
 @ BLX (register)
 @------------------------------------------------------------------------------
@@ -678,6 +687,14 @@ Lforward:
 @ CHECK: ldrex	r1, [r7]                @ encoding: [0x9f,0x1f,0x97,0xe1]
 @ CHECK: ldrexd	r6, r7, [r8]            @ encoding: [0x9f,0x6f,0xb8,0xe1]
 
+@------------------------------------------------------------------------------
+@ LDRHT
+@------------------------------------------------------------------------------
+        ldrhthi	r8, [r11], #-0
+        ldrhthi	r8, [r11], #0
+
+@ CHECK: ldrhthi	r8, [r11], #-0          @ encoding: [0xb0,0x80,0x7b,0x80]
+@ CHECK: ldrhthi	r8, [r11], #0           @ encoding: [0xb0,0x80,0xfb,0x80]
 
 @------------------------------------------------------------------------------
 @ FIXME: LSL
@@ -1283,6 +1300,7 @@ Lforward:
         rsc r6, r7, r8, lsr r9
         rsc r6, r7, r8, asr r9
         rscle r6, r7, r8, ror r9
+        rscs r1, r8, #4064
 
         @ destination register is optional
         rsc r5, #0xf000
@@ -1308,6 +1326,7 @@ Lforward:
 @ CHECK: rsc	r6, r7, r8, lsr r9      @ encoding: [0x38,0x69,0xe7,0xe0]
 @ CHECK: rsc	r6, r7, r8, asr r9      @ encoding: [0x58,0x69,0xe7,0xe0]
 @ CHECK: rscle	r6, r7, r8, ror r9      @ encoding: [0x78,0x69,0xe7,0xd0]
+@ CHECK: rscs	r1, r8, #4064           @ encoding: [0xfe,0x1e,0xf8,0xe2]
 
 @ CHECK: rsc	r5, r5, #61440          @ encoding: [0x0f,0x5a,0xe5,0xe2]
 @ CHECK: rsc	r4, r4, r5              @ encoding: [0x05,0x40,0xe4,0xe0]
@@ -1867,6 +1886,14 @@ Lforward:
 @ CHECK: strex	r2, r1, [r7]            @ encoding: [0x91,0x2f,0x87,0xe1]
 @ CHECK: strexd	r6, r2, r3, [r8]        @ encoding: [0x92,0x6f,0xa8,0xe1]
 
+@------------------------------------------------------------------------------
+@ STR
+@------------------------------------------------------------------------------
+        strpl	r3, [r10, #-0]!
+        strpl	r3, [r10, #0]!
+
+@ CHECK: strpl	r3, [r10, #-0]!         @ encoding: [0x00,0x30,0x2a,0x55]
+@ CHECK: strpl	r3, [r10]!              @ encoding: [0x00,0x30,0xaa,0x55]
 
 @------------------------------------------------------------------------------
 @ SUB

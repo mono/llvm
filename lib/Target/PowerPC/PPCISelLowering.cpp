@@ -211,7 +211,8 @@ PPCTargetLowering::PPCTargetLowering(PPCTargetMachine &TM)
   setOperationAction(ISD::TRAP, MVT::Other, Legal);
 
   // TRAMPOLINE is custom lowered.
-  setOperationAction(ISD::TRAMPOLINE, MVT::Other, Custom);
+  setOperationAction(ISD::INIT_TRAMPOLINE, MVT::Other, Custom);
+  setOperationAction(ISD::ADJUST_TRAMPOLINE, MVT::Other, Custom);
 
   // VASTART needs to be custom lowered to use the VarArgsFrameIndex
   setOperationAction(ISD::VASTART           , MVT::Other, Custom);
@@ -365,7 +366,11 @@ PPCTargetLowering::PPCTargetLowering(PPCTargetMachine &TM)
     setOperationAction(ISD::BUILD_VECTOR, MVT::v4f32, Custom);
   }
 
+  setOperationAction(ISD::ATOMIC_LOAD,  MVT::i32, Expand);
+  setOperationAction(ISD::ATOMIC_STORE, MVT::i32, Expand);
+
   setBooleanContents(ZeroOrOneBooleanContent);
+  setBooleanVectorContents(ZeroOrOneBooleanContent); // FIXME: Is this correct?
 
   if (TM.getSubtarget<PPCSubtarget>().isPPC64()) {
     setStackPointerRegisterToSaveRestore(PPC::X1);
@@ -465,7 +470,7 @@ const char *PPCTargetLowering::getTargetNodeName(unsigned Opcode) const {
   }
 }
 
-MVT::SimpleValueType PPCTargetLowering::getSetCCResultType(EVT VT) const {
+EVT PPCTargetLowering::getSetCCResultType(EVT VT) const {
   return MVT::i32;
 }
 
@@ -1370,8 +1375,13 @@ SDValue PPCTargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG,
   return DAG.getLoad(VT, dl, InChain, Result, MachinePointerInfo(), false, false, 0);
 }
 
-SDValue PPCTargetLowering::LowerTRAMPOLINE(SDValue Op,
-                                           SelectionDAG &DAG) const {
+SDValue PPCTargetLowering::LowerADJUST_TRAMPOLINE(SDValue Op,
+                                                  SelectionDAG &DAG) const {
+  return Op.getOperand(0);
+}
+
+SDValue PPCTargetLowering::LowerINIT_TRAMPOLINE(SDValue Op,
+                                                SelectionDAG &DAG) const {
   SDValue Chain = Op.getOperand(0);
   SDValue Trmp = Op.getOperand(1); // trampoline
   SDValue FPtr = Op.getOperand(2); // nested function
@@ -1400,16 +1410,13 @@ SDValue PPCTargetLowering::LowerTRAMPOLINE(SDValue Op,
 
   // Lower to a call to __trampoline_setup(Trmp, TrampSize, FPtr, ctx_reg)
   std::pair<SDValue, SDValue> CallResult =
-    LowerCallTo(Chain, Op.getValueType().getTypeForEVT(*DAG.getContext()),
+    LowerCallTo(Chain, Type::getVoidTy(*DAG.getContext()),
                 false, false, false, false, 0, CallingConv::C, false,
                 /*isReturnValueUsed=*/true,
                 DAG.getExternalSymbol("__trampoline_setup", PtrVT),
                 Args, DAG, dl);
 
-  SDValue Ops[] =
-    { CallResult.first, CallResult.second };
-
-  return DAG.getMergeValues(Ops, 2, dl);
+  return CallResult.second;
 }
 
 SDValue PPCTargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG,
@@ -2943,6 +2950,7 @@ PPCTargetLowering::LowerCall_SVR4(SDValue Chain, SDValue Callee,
   SmallVector<TailCallArgumentInfo, 8> TailCallArguments;
   SmallVector<SDValue, 8> MemOpChains;
 
+  bool seenFloatArg = false;
   // Walk the register/memloc assignments, inserting copies/loads.
   for (unsigned i = 0, j = 0, e = ArgLocs.size();
        i != e;
@@ -2987,6 +2995,7 @@ PPCTargetLowering::LowerCall_SVR4(SDValue Chain, SDValue Callee,
     }
 
     if (VA.isRegLoc()) {
+      seenFloatArg |= VA.getLocVT().isFloatingPoint();
       // Put argument in a physical register.
       RegsToPass.push_back(std::make_pair(VA.getLocReg(), Arg));
     } else {
@@ -3013,9 +3022,11 @@ PPCTargetLowering::LowerCall_SVR4(SDValue Chain, SDValue Callee,
     Chain = DAG.getNode(ISD::TokenFactor, dl, MVT::Other,
                         &MemOpChains[0], MemOpChains.size());
 
-  // Set CR6 to true if this is a vararg call.
+  // Set CR6 to true if this is a vararg call with floating args passed in
+  // registers.
   if (isVarArg) {
-    SDValue SetCR(DAG.getMachineNode(PPC::CRSET, dl, MVT::i32), 0);
+    SDValue SetCR(DAG.getMachineNode(seenFloatArg ? PPC::CRSET : PPC::CRUNSET,
+                                     dl, MVT::i32), 0);
     RegsToPass.push_back(std::make_pair(unsigned(PPC::CR1EQ), SetCR));
   }
 
@@ -4492,7 +4503,8 @@ SDValue PPCTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::GlobalTLSAddress:   llvm_unreachable("TLS not implemented for PPC");
   case ISD::JumpTable:          return LowerJumpTable(Op, DAG);
   case ISD::SETCC:              return LowerSETCC(Op, DAG);
-  case ISD::TRAMPOLINE:         return LowerTRAMPOLINE(Op, DAG);
+  case ISD::INIT_TRAMPOLINE:    return LowerINIT_TRAMPOLINE(Op, DAG);
+  case ISD::ADJUST_TRAMPOLINE:  return LowerADJUST_TRAMPOLINE(Op, DAG);
   case ISD::VASTART:
     return LowerVASTART(Op, DAG, PPCSubTarget);
 

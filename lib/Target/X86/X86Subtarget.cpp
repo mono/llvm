@@ -16,9 +16,11 @@
 #include "X86InstrInfo.h"
 #include "llvm/GlobalValue.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Host.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
 #include "llvm/ADT/SmallVector.h"
 
 #define GET_SUBTARGETINFO_TARGET_DESC
@@ -203,6 +205,7 @@ void X86Subtarget::AutoDetectSubtargetFeatures() {
   HasFMA3  = IsIntel && ((ECX >> 12) & 0x1);  ToggleFeature(X86::FeatureFMA3);
   HasPOPCNT = IsIntel && ((ECX >> 23) & 0x1); ToggleFeature(X86::FeaturePOPCNT);
   HasAES   = IsIntel && ((ECX >> 25) & 0x1);  ToggleFeature(X86::FeatureAES);
+  HasCmpxchg16b = ((ECX >> 13) & 0x1); ToggleFeature(X86::FeatureCMPXCHG16B);
 
   if (IsIntel || IsAMD) {
     // Determine if bit test memory instructions are slow.
@@ -254,11 +257,13 @@ X86Subtarget::X86Subtarget(const std::string &TT, const std::string &CPU,
   , IsBTMemSlow(false)
   , IsUAMemFast(false)
   , HasVectorUAMem(false)
+  , HasCmpxchg16b(false)
   , stackAlignment(8)
   // FIXME: this is a known good value for Yonah. How about others?
   , MaxInlineSizeThreshold(128)
   , TargetTriple(TT)
-  , In64BitMode(is64Bit) {
+  , In64BitMode(is64Bit)
+  , InNaClMode(false) {
   // Determine default and user specified characteristics
   if (!FS.empty() || !CPU.empty()) {
     std::string CPUName = CPU;
@@ -304,6 +309,11 @@ X86Subtarget::X86Subtarget(const std::string &TT, const std::string &CPU,
   if (In64BitMode)
     ToggleFeature(X86::Mode64Bit);
 
+  if (isTargetNaCl()) {
+    InNaClMode = true;
+    ToggleFeature(X86::ModeNaCl);
+  }
+
   if (HasAVX)
     X86SSELevel = NoMMXSSE;
     
@@ -312,6 +322,9 @@ X86Subtarget::X86Subtarget(const std::string &TT, const std::string &CPU,
                << ", 64bit " << HasX86_64 << "\n");
   assert((!In64BitMode || HasX86_64) &&
          "64-bit code requested on a subtarget that doesn't support it!");
+
+  if(EnableSegmentedStacks && !isTargetELF())
+    report_fatal_error("Segmented stacks are only implemented on ELF.");
 
   // Stack alignment is 16 bytes on Darwin, FreeBSD, Linux and Solaris (both
   // 32 and 64 bit) and for all 64-bit targets.

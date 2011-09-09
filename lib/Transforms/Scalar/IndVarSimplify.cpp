@@ -76,6 +76,13 @@ namespace llvm {
   cl::opt<bool> DisableIVRewrite(
     "disable-iv-rewrite", cl::Hidden,
     cl::desc("Disable canonical induction variable rewriting"));
+
+  // Trip count verification can be enabled by default under NDEBUG if we
+  // implement a strong expression equivalence checker in SCEV. Until then, we
+  // use the verify-indvars flag, which may assert in some cases.
+  cl::opt<bool> VerifyIndvars(
+    "verify-indvars", cl::Hidden,
+    cl::desc("Verify the ScalarEvolution result after running indvars"));
 }
 
 // Temporary flag for use with -disable-iv-rewrite to force a canonical IV for
@@ -1724,6 +1731,10 @@ void IndVarSimplify::SinkUnusedInvariants(Loop *L) {
     if (isa<DbgInfoIntrinsic>(I))
       continue;
 
+    // Skip landingpad instructions.
+    if (isa<LandingPadInst>(I))
+      continue;
+
     // Don't sink static AllocaInsts out of the entry block, which would
     // turn them into dynamic allocas!
     if (AllocaInst *AI = dyn_cast<AllocaInst>(I))
@@ -1964,7 +1975,8 @@ bool IndVarSimplify::runOnLoop(Loop *L, LPPassManager &LPM) {
   // Verify that LFTR, and any other change have not interfered with SCEV's
   // ability to compute trip count.
 #ifndef NDEBUG
-  if (DisableIVRewrite && !isa<SCEVCouldNotCompute>(BackedgeTakenCount)) {
+  if (DisableIVRewrite && VerifyIndvars &&
+      !isa<SCEVCouldNotCompute>(BackedgeTakenCount)) {
     SE->forgetLoop(L);
     const SCEV *NewBECount = SE->getBackedgeTakenCount(L);
     if (SE->getTypeSizeInBits(BackedgeTakenCount->getType()) <

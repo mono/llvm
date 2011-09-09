@@ -663,14 +663,18 @@ Instruction *DwarfEHPrepare::CreateExceptionValueCall(BasicBlock *BB) {
 /// InsertUnwindResumeCalls - Convert the ResumeInsts that are still present
 /// into calls to the appropriate _Unwind_Resume function.
 bool DwarfEHPrepare::InsertUnwindResumeCalls() {
+  bool UsesNewEH = false;
   SmallVector<ResumeInst*, 16> Resumes;
-  for (Function::iterator I = F->begin(), E = F->end(); I != E; ++I)
-    for (BasicBlock::iterator II = I->begin(), IE = I->end(); II != IE; ++II)
-      if (ResumeInst *RI = dyn_cast<ResumeInst>(II))
-        Resumes.push_back(RI);
+  for (Function::iterator I = F->begin(), E = F->end(); I != E; ++I) {
+    TerminatorInst *TI = I->getTerminator();
+    if (ResumeInst *RI = dyn_cast<ResumeInst>(TI))
+      Resumes.push_back(RI);
+    else if (InvokeInst *II = dyn_cast<InvokeInst>(TI))
+      UsesNewEH = II->getUnwindDest()->isLandingPad();
+  }
 
   if (Resumes.empty())
-    return false;
+    return UsesNewEH;
 
   // Find the rewind function if we didn't already.
   if (!RewindFunction) {
@@ -689,6 +693,7 @@ bool DwarfEHPrepare::InsertUnwindResumeCalls() {
 
   // Extract the exception object from the ResumeInst and add it to the PHI node
   // that feeds the _Unwind_Resume call.
+  BasicBlock *UnwindBBDom = Resumes[0]->getParent();
   for (SmallVectorImpl<ResumeInst*>::iterator
          I = Resumes.begin(), E = Resumes.end(); I != E; ++I) {
     ResumeInst *RI = *I;
@@ -696,6 +701,7 @@ bool DwarfEHPrepare::InsertUnwindResumeCalls() {
     ExtractValueInst *ExnObj = ExtractValueInst::Create(RI->getOperand(0),
                                                         0, "exn.obj", RI);
     PN->addIncoming(ExnObj, RI->getParent());
+    UnwindBBDom = DT->findNearestCommonDominator(RI->getParent(), UnwindBBDom);
     RI->eraseFromParent();
   }
 
@@ -705,6 +711,9 @@ bool DwarfEHPrepare::InsertUnwindResumeCalls() {
 
   // We never expect _Unwind_Resume to return.
   new UnreachableInst(Ctx, UnwindBB);
+
+  // Now update DominatorTree analysis information.
+  DT->addNewBlock(UnwindBB, UnwindBBDom);
   return true;
 }
 
