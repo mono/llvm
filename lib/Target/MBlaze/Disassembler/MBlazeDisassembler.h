@@ -17,8 +17,6 @@
 
 #include "llvm/MC/MCDisassembler.h"
 
-struct InternalInstruction;
-
 namespace llvm {
   
 class MCInst;
@@ -44,7 +42,8 @@ public:
                       uint64_t &size,
                       const MemoryObject &region,
                       uint64_t address,
-                      raw_ostream &vStream) const;
+                      raw_ostream &vStream,
+                      raw_ostream &cStream) const;
 
   /// getEDInfo - See MCDisassembler.
   EDInstInfo *getEDInfo() const;

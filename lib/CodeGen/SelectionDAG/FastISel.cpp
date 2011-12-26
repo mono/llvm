@@ -39,6 +39,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "isel"
 #include "llvm/Function.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/Instructions.h"
@@ -58,7 +59,14 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/ADT/Statistic.h"
 using namespace llvm;
+
+STATISTIC(NumFastIselSuccessIndependent, "Number of insts selected by "
+          "target-independent selector");
+STATISTIC(NumFastIselSuccessTarget, "Number of insts selected by "
+          "target-specific selector");
+STATISTIC(NumFastIselDead, "Number of dead insts removed on failure");
 
 /// startNewBlock - Set the current block to which generated machine
 /// instructions will be appended, and clear the local CSE map.
@@ -94,6 +102,11 @@ bool FastISel::hasTrivialKill(const Value *V) const {
   if (const CastInst *Cast = dyn_cast<CastInst>(I))
     if (Cast->isNoopCast(TD.getIntPtrType(Cast->getContext())) &&
         !hasTrivialKill(Cast->getOperand(0)))
+      return false;
+
+  // GEPs with all zero indices are trivially coalesced by fast-isel.
+  if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(I))
+    if (GEP->hasAllZeroIndices() && !hasTrivialKill(GEP->getOperand(0)))
       return false;
 
   // Only instructions with a single use in the same basic block are considered
@@ -297,6 +310,18 @@ void FastISel::recomputeInsertPt() {
     ++FuncInfo.InsertPt;
 }
 
+void FastISel::removeDeadCode(MachineBasicBlock::iterator I,
+                              MachineBasicBlock::iterator E) {
+  assert (I && E && std::distance(I, E) > 0 && "Invalid iterator!");
+  while (I != E) {
+    MachineInstr *Dead = &*I;
+    ++I;
+    Dead->eraseFromParent();
+    ++NumFastIselDead;
+  }
+  recomputeInsertPt();
+}
+
 FastISel::SavePoint FastISel::enterLocalValueArea() {
   MachineBasicBlock::iterator OldInsertPt = FuncInfo.InsertPt;
   DebugLoc OldDL = DL;
@@ -427,6 +452,11 @@ bool FastISel::SelectGetElementPtr(const User *I) {
 
   bool NIsKill = hasTrivialKill(I->getOperand(0));
 
+  // Keep a running tab of the total offset to coalesce multiple N = N + Offset
+  // into a single N = N + TotalOffset.
+  uint64_t TotalOffs = 0;
+  // FIXME: What's a good SWAG number for MaxOffs?
+  uint64_t MaxOffs = 2048;
   Type *Ty = I->getOperand(0)->getType();
   MVT VT = TLI.getPointerTy();
   for (GetElementPtrInst::const_op_iterator OI = I->op_begin()+1,
@@ -436,14 +466,15 @@ bool FastISel::SelectGetElementPtr(const User *I) {
       unsigned Field = cast<ConstantInt>(Idx)->getZExtValue();
       if (Field) {
         // N = N + Offset
-        uint64_t Offs = TD.getStructLayout(StTy)->getElementOffset(Field);
-        // FIXME: This can be optimized by combining the add with a
-        // subsequent one.
-        N = FastEmit_ri_(VT, ISD::ADD, N, NIsKill, Offs, VT);
-        if (N == 0)
-          // Unhandled operand. Halt "fast" selection and bail.
-          return false;
-        NIsKill = true;
+        TotalOffs += TD.getStructLayout(StTy)->getElementOffset(Field);
+        if (TotalOffs >= MaxOffs) {
+          N = FastEmit_ri_(VT, ISD::ADD, N, NIsKill, TotalOffs, VT);
+          if (N == 0)
+            // Unhandled operand. Halt "fast" selection and bail.
+            return false;
+          NIsKill = true;
+          TotalOffs = 0;
+        }
       }
       Ty = StTy->getElementType(Field);
     } else {
@@ -452,14 +483,26 @@ bool FastISel::SelectGetElementPtr(const User *I) {
       // If this is a constant subscript, handle it quickly.
       if (const ConstantInt *CI = dyn_cast<ConstantInt>(Idx)) {
         if (CI->isZero()) continue;
-        uint64_t Offs =
+        // N = N + Offset
+        TotalOffs += 
           TD.getTypeAllocSize(Ty)*cast<ConstantInt>(CI)->getSExtValue();
-        N = FastEmit_ri_(VT, ISD::ADD, N, NIsKill, Offs, VT);
+        if (TotalOffs >= MaxOffs) {
+          N = FastEmit_ri_(VT, ISD::ADD, N, NIsKill, TotalOffs, VT);
+          if (N == 0)
+            // Unhandled operand. Halt "fast" selection and bail.
+            return false;
+          NIsKill = true;
+          TotalOffs = 0;
+        }
+        continue;
+      }
+      if (TotalOffs) {
+        N = FastEmit_ri_(VT, ISD::ADD, N, NIsKill, TotalOffs, VT);
         if (N == 0)
           // Unhandled operand. Halt "fast" selection and bail.
           return false;
         NIsKill = true;
-        continue;
+        TotalOffs = 0;
       }
 
       // N = N + Idx * ElementSize;
@@ -484,6 +527,12 @@ bool FastISel::SelectGetElementPtr(const User *I) {
         return false;
     }
   }
+  if (TotalOffs) {
+    N = FastEmit_ri_(VT, ISD::ADD, N, NIsKill, TotalOffs, VT);
+    if (N == 0)
+      // Unhandled operand. Halt "fast" selection and bail.
+      return false;
+  }
 
   // We successfully emitted code for the given LLVM Instruction.
   UpdateValueMap(I, N);
@@ -494,7 +543,7 @@ bool FastISel::SelectCall(const User *I) {
   const CallInst *Call = cast<CallInst>(I);
 
   // Handle simple inline asms.
-  if (const InlineAsm *IA = dyn_cast<InlineAsm>(Call->getArgOperand(0))) {
+  if (const InlineAsm *IA = dyn_cast<InlineAsm>(Call->getCalledValue())) {
     // Don't attempt to handle constraints.
     if (!IA->getConstraintString().empty())
       return false;
@@ -758,17 +807,33 @@ FastISel::SelectInstruction(const Instruction *I) {
 
   DL = I->getDebugLoc();
 
+  MachineBasicBlock::iterator SavedInsertPt = FuncInfo.InsertPt;
+
   // First, try doing target-independent selection.
   if (SelectOperator(I, I->getOpcode())) {
+    ++NumFastIselSuccessIndependent;
     DL = DebugLoc();
     return true;
+  }
+  // Remove dead code.  However, ignore call instructions since we've flushed 
+  // the local value map and recomputed the insert point.
+  if (!isa<CallInst>(I)) {
+    recomputeInsertPt();
+    if (SavedInsertPt != FuncInfo.InsertPt)
+      removeDeadCode(FuncInfo.InsertPt, SavedInsertPt);
   }
 
   // Next, try calling the target to attempt to handle the instruction.
+  SavedInsertPt = FuncInfo.InsertPt;
   if (TargetSelectInstruction(I)) {
+    ++NumFastIselSuccessTarget;
     DL = DebugLoc();
     return true;
   }
+  // Check for dead code and remove as necessary.
+  recomputeInsertPt();
+  if (SavedInsertPt != FuncInfo.InsertPt)
+    removeDeadCode(FuncInfo.InsertPt, SavedInsertPt);
 
   DL = DebugLoc();
   return false;

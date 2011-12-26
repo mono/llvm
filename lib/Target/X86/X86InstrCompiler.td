@@ -112,14 +112,14 @@ let Defs = [EAX, ESP, EFLAGS], Uses = [ESP] in
 // allocated by bumping the stack pointer. Otherwise memory is allocated from 
 // the heap.
 
-let Defs = [EAX, ESP, EFLAGS], Uses = [ESP, EAX] in
+let Defs = [EAX, ESP, EFLAGS], Uses = [ESP] in
 def SEG_ALLOCA_32 : I<0, Pseudo, (outs GR32:$dst), (ins GR32:$size),
                       "# variable sized alloca for segmented stacks",
                       [(set GR32:$dst,
                          (X86SegAlloca GR32:$size))]>,
                     Requires<[In32BitMode]>;
 
-let Defs = [RAX, RSP, EFLAGS], Uses = [RSP, RAX] in
+let Defs = [RAX, RSP, EFLAGS], Uses = [RSP] in
 def SEG_ALLOCA_64 : I<0, Pseudo, (outs GR64:$dst), (ins GR64:$size),
                       "# variable sized alloca for segmented stacks",
                       [(set GR64:$dst,
@@ -147,6 +147,24 @@ def EH_RETURN64   : I<0xC3, RawFrm, (outs), (ins GR64:$addr),
                      "ret\t#eh_return, addr: $addr",
                      [(X86ehret GR64:$addr)]>;
 
+}
+
+//===----------------------------------------------------------------------===//
+// Pseudo instructions used by segmented stacks.
+//
+
+// This is lowered into a RET instruction by MCInstLower.  We need
+// this so that we don't have to have a MachineBasicBlock which ends
+// with a RET and also has successors.
+let isPseudo = 1 in {
+def MORESTACK_RET: I<0, Pseudo, (outs), (ins),
+                          "", []>;
+
+// This instruction is lowered to a RET followed by a MOV.  The two
+// instructions are not generated on a higher level since then the
+// verifier sees a MachineBasicBlock ending with a non-terminator.
+def MORESTACK_RET_RESTORE_R10 : I<0, Pseudo, (outs), (ins),
+                                  "", []>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -713,7 +731,7 @@ def LCMPXCHG32 : I<0xB1, MRMDestMem, (outs), (ins i32mem:$ptr, GR32:$swap),
 let Defs = [RAX, EFLAGS], Uses = [RAX], isCodeGenOnly = 1 in {
 def LCMPXCHG64 : RI<0xB1, MRMDestMem, (outs), (ins i64mem:$ptr, GR64:$swap),
                "lock\n\t"
-               "cmpxchgq\t$swap,$ptr",
+               "cmpxchg{q}\t{$swap, $ptr|$ptr, $swap}",
                [(X86cas addr:$ptr, GR64:$swap, 8)]>, TB, LOCK;
 }
 
@@ -736,7 +754,7 @@ def LXADD32 : I<0xC1, MRMSrcMem, (outs GR32:$dst), (ins GR32:$val, i32mem:$ptr),
                 TB, LOCK;
 def LXADD64 : RI<0xC1, MRMSrcMem, (outs GR64:$dst), (ins GR64:$val,i64mem:$ptr),
                "lock\n\t"
-               "xadd\t$val, $ptr",
+               "xadd{q}\t{$val, $ptr|$ptr, $val}",
                [(set GR64:$dst, (atomic_load_add_64 addr:$ptr, GR64:$val))]>,
                 TB, LOCK;
 }
@@ -1735,3 +1753,11 @@ def : Pat<(and GR64:$src1, i64immSExt8:$src2),
           (AND64ri8 GR64:$src1, i64immSExt8:$src2)>;
 def : Pat<(and GR64:$src1, i64immSExt32:$src2),
           (AND64ri32 GR64:$src1, i64immSExt32:$src2)>;
+
+// Bit scan instruction patterns to match explicit zero-undef behavior.
+def : Pat<(cttz_zero_undef GR16:$src), (BSF16rr GR16:$src)>;
+def : Pat<(cttz_zero_undef GR32:$src), (BSF32rr GR32:$src)>;
+def : Pat<(cttz_zero_undef GR64:$src), (BSF64rr GR64:$src)>;
+def : Pat<(cttz_zero_undef (loadi16 addr:$src)), (BSF16rm addr:$src)>;
+def : Pat<(cttz_zero_undef (loadi32 addr:$src)), (BSF32rm addr:$src)>;
+def : Pat<(cttz_zero_undef (loadi64 addr:$src)), (BSF64rm addr:$src)>;

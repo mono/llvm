@@ -20,8 +20,8 @@
 #include "X86DisassemblerTables.h"
 
 #include "CodeGenTarget.h"
-#include "Record.h"
 
+#include "llvm/TableGen/Record.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -56,17 +56,23 @@ private:
   bool HasVEXPrefix;
   /// The hasVEX_4VPrefix field from the record
   bool HasVEX_4VPrefix;
+  /// The hasVEX_4VOp3Prefix field from the record
+  bool HasVEX_4VOp3Prefix;
   /// The hasVEX_WPrefix field from the record
   bool HasVEX_WPrefix;
   /// Inferred from the operands; indicates whether the L bit in the VEX prefix is set
   bool HasVEX_LPrefix;
+  // The ignoreVEX_L field from the record
+  bool IgnoresVEX_L;
   /// The hasLockPrefix field from the record
   bool HasLockPrefix;
   /// The isCodeGenOnly filed from the record
   bool IsCodeGenOnly;
-  // Whether the instruction has the predicate "Mode64Bit"
+  // Whether the instruction has the predicate "In64BitMode"
   bool Is64Bit;
-  
+  // Whether the instruction has the predicate "In32BitMode"
+  bool Is32Bit;
+
   /// The instruction name as listed in the tables
   std::string Name;
   /// The AT&T AsmString for the instruction

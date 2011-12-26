@@ -325,8 +325,7 @@ Value *InstCombiner::SimplifyDemandedUseBits(Value *V, APInt DemandedMask,
       if ((RHSKnownOne & LHSKnownOne) == RHSKnownOne) {
         Constant *AndC = Constant::getIntegerValue(VTy,
                                                    ~RHSKnownOne & DemandedMask);
-        Instruction *And = 
-          BinaryOperator::CreateAnd(I->getOperand(0), AndC, "tmp");
+        Instruction *And = BinaryOperator::CreateAnd(I->getOperand(0), AndC);
         return InsertNewInstWith(And, *I);
       }
     }
@@ -351,14 +350,12 @@ Value *InstCombiner::SimplifyDemandedUseBits(Value *V, APInt DemandedMask,
         
         Constant *AndC =
           ConstantInt::get(I->getType(), NewMask & AndRHS->getValue());
-        Instruction *NewAnd = 
-          BinaryOperator::CreateAnd(I->getOperand(0), AndC, "tmp");
+        Instruction *NewAnd = BinaryOperator::CreateAnd(I->getOperand(0), AndC);
         InsertNewInstWith(NewAnd, *I);
         
         Constant *XorC =
           ConstantInt::get(I->getType(), NewMask & XorRHS->getValue());
-        Instruction *NewXor =
-          BinaryOperator::CreateXor(NewAnd, XorC, "tmp");
+        Instruction *NewXor = BinaryOperator::CreateXor(NewAnd, XorC);
         return InsertNewInstWith(NewXor, *I);
       }
 
@@ -570,9 +567,20 @@ Value *InstCombiner::SimplifyDemandedUseBits(Value *V, APInt DemandedMask,
                                LHSKnownZero, LHSKnownOne, Depth+1))
         return I;
     }
+
     // Otherwise just hand the sub off to ComputeMaskedBits to fill in
     // the known zeros and ones.
     ComputeMaskedBits(V, DemandedMask, KnownZero, KnownOne, Depth);
+
+    // Turn this into a xor if LHS is 2^n-1 and the remaining bits are known
+    // zero.
+    if (ConstantInt *C0 = dyn_cast<ConstantInt>(I->getOperand(0))) {
+      APInt I0 = C0->getValue();
+      if ((I0 + 1).isPowerOf2() && (I0 | KnownZero).isAllOnesValue()) {
+        Instruction *Xor = BinaryOperator::CreateXor(I->getOperand(1), C0);
+        return InsertNewInstWith(Xor, *I);
+      }
+    }
     break;
   case Instruction::Shl:
     if (ConstantInt *SA = dyn_cast<ConstantInt>(I->getOperand(1))) {
@@ -961,6 +969,9 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
     for (unsigned i = 0; i < VWidth; i++) {
       unsigned MaskVal = Shuffle->getMaskValue(i);
       if (MaskVal == -1u) {
+        UndefElts.setBit(i);
+      } else if (!DemandedElts[i]) {
+        NewUndefElts = true;
         UndefElts.setBit(i);
       } else if (MaskVal < LHSVWidth) {
         if (UndefElts4[MaskVal]) {

@@ -19,7 +19,7 @@
 //===          independent code.
 //===----------------------------------------------------------------------===//
 
-#if !defined(ENABLE_THREADS) || ENABLE_THREADS == 0
+#if !defined(LLVM_ENABLE_THREADS) || LLVM_ENABLE_THREADS == 0
 // Define all methods as no-ops if threading is explicitly disabled
 namespace llvm {
 using namespace sys;
@@ -79,6 +79,6 @@ void ThreadLocalImpl::removeInstance() {
 #elif defined( LLVM_ON_WIN32)
 #include "Windows/ThreadLocal.inc"
 #else
-#warning Neither LLVM_ON_UNIX nor LLVM_ON_WIN32 was set in System/ThreadLocal.cpp
+#warning Neither LLVM_ON_UNIX nor LLVM_ON_WIN32 set in Support/ThreadLocal.cpp
 #endif
 #endif

@@ -30,9 +30,7 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/system_error.h"
-#include "llvm/Target/Mangler.h"
 #include "llvm/MC/MCAsmInfo.h"
-#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCParser/MCAsmParser.h"
@@ -63,7 +61,6 @@ bool LTOModule::isBitcodeFileForTarget(const void *mem, size_t length,
   return isTargetMatch(buffer, triplePrefix);
 }
 
-
 bool LTOModule::isBitcodeFileForTarget(const char *path,
                                        const char *triplePrefix) {
   OwningPtr<MemoryBuffer> buffer;
@@ -76,13 +73,14 @@ bool LTOModule::isBitcodeFileForTarget(const char *path,
 bool LTOModule::isTargetMatch(MemoryBuffer *buffer, const char *triplePrefix) {
   std::string Triple = getBitcodeTargetTriple(buffer, getGlobalContext());
   delete buffer;
-  return (strncmp(Triple.c_str(), triplePrefix,
- 		  strlen(triplePrefix)) == 0);
+  return strncmp(Triple.c_str(), triplePrefix, strlen(triplePrefix)) == 0;
 }
 
 
 LTOModule::LTOModule(Module *m, TargetMachine *t)
-  : _module(m), _target(t)
+  : _module(m), _target(t),
+    _context(*_target->getMCAsmInfo(), *_target->getRegisterInfo(), NULL),
+    _mangler(_context, *_target->getTargetData())
 {
 }
 
@@ -97,8 +95,7 @@ LTOModule *LTOModule::makeLTOModule(const char *path,
 }
 
 LTOModule *LTOModule::makeLTOModule(int fd, const char *path,
-                                    size_t size,
-                                    std::string &errMsg) {
+                                    size_t size, std::string &errMsg) {
   return makeLTOModule(fd, path, size, size, 0, errMsg);
 }
 
@@ -121,7 +118,6 @@ MemoryBuffer *LTOModule::makeBuffer(const void *mem, size_t length) {
   const char *startPtr = (char*)mem;
   return MemoryBuffer::getMemBuffer(StringRef(startPtr, length), "", false);
 }
-
 
 LTOModule *LTOModule::makeLTOModule(const void *mem, size_t length,
                                     std::string &errMsg) {
@@ -151,7 +147,7 @@ LTOModule *LTOModule::makeLTOModule(MemoryBuffer *buffer,
 
   std::string Triple = m->getTargetTriple();
   if (Triple.empty())
-    Triple = sys::getHostTriple();
+    Triple = sys::getDefaultTargetTriple();
 
   // find machine architecture for this module
   const Target *march = TargetRegistry::lookupTarget(Triple, errMsg);
@@ -163,16 +159,17 @@ LTOModule *LTOModule::makeLTOModule(MemoryBuffer *buffer,
   Features.getDefaultSubtargetFeatures(llvm::Triple(Triple));
   std::string FeatureStr = Features.getString();
   std::string CPU;
-  TargetMachine *target = march->createTargetMachine(Triple, CPU, FeatureStr);
+  TargetOptions Options;
+  TargetMachine *target = march->createTargetMachine(Triple, CPU, FeatureStr,
+                                                     Options);
   LTOModule *Ret = new LTOModule(m.take(), target);
-  bool Err = Ret->ParseSymbols(errMsg);
-  if (Err) {
+  if (Ret->ParseSymbols(errMsg)) {
     delete Ret;
     return NULL;
   }
+
   return Ret;
 }
-
 
 const char *LTOModule::getTargetTriple() {
   return _module->getTargetTriple().c_str();
@@ -182,9 +179,9 @@ void LTOModule::setTargetTriple(const char *triple) {
   _module->setTargetTriple(triple);
 }
 
-void LTOModule::addDefinedFunctionSymbol(Function *f, Mangler &mangler) {
+void LTOModule::addDefinedFunctionSymbol(Function *f) {
   // add to list of defined symbols
-  addDefinedSymbol(f, mangler, true);
+  addDefinedSymbol(f, true);
 }
 
 // Get string that data pointer points to.
@@ -206,83 +203,84 @@ bool LTOModule::objcClassNameFromExpression(Constant *c, std::string &name) {
 
 // Parse i386/ppc ObjC class data structure.
 void LTOModule::addObjCClass(GlobalVariable *clgv) {
-  if (ConstantStruct *c = dyn_cast<ConstantStruct>(clgv->getInitializer())) {
-    // second slot in __OBJC,__class is pointer to superclass name
-    std::string superclassName;
-    if (objcClassNameFromExpression(c->getOperand(1), superclassName)) {
-      NameAndAttributes info;
-      StringMap<NameAndAttributes>::value_type &entry =
-        _undefines.GetOrCreateValue(superclassName);
-      if (!entry.getValue().name) {
-        const char *symbolName = entry.getKey().data();
-        info.name = symbolName;
-        info.attributes = LTO_SYMBOL_DEFINITION_UNDEFINED;
-        entry.setValue(info);
-      }
-    }
-    // third slot in __OBJC,__class is pointer to class name
-    std::string className;
-    if (objcClassNameFromExpression(c->getOperand(2), className)) {
-      StringSet::value_type &entry =
-        _defines.GetOrCreateValue(className);
-      entry.setValue(1);
-      NameAndAttributes info;
-      info.name = entry.getKey().data();
-      info.attributes = (lto_symbol_attributes)
-        (LTO_SYMBOL_PERMISSIONS_DATA |
-         LTO_SYMBOL_DEFINITION_REGULAR |
-         LTO_SYMBOL_SCOPE_DEFAULT);
-      _symbols.push_back(info);
-    }
-  }
-}
+  ConstantStruct *c = dyn_cast<ConstantStruct>(clgv->getInitializer());
+  if (!c) return;
 
-
-// Parse i386/ppc ObjC category data structure.
-void LTOModule::addObjCCategory(GlobalVariable *clgv) {
-  if (ConstantStruct *c = dyn_cast<ConstantStruct>(clgv->getInitializer())) {
-    // second slot in __OBJC,__category is pointer to target class name
-    std::string targetclassName;
-    if (objcClassNameFromExpression(c->getOperand(1), targetclassName)) {
-      NameAndAttributes info;
-
-      StringMap<NameAndAttributes>::value_type &entry =
-        _undefines.GetOrCreateValue(targetclassName);
-
-      if (entry.getValue().name)
-        return;
-
+  // second slot in __OBJC,__class is pointer to superclass name
+  std::string superclassName;
+  if (objcClassNameFromExpression(c->getOperand(1), superclassName)) {
+    NameAndAttributes info;
+    StringMap<NameAndAttributes>::value_type &entry =
+      _undefines.GetOrCreateValue(superclassName);
+    if (!entry.getValue().name) {
       const char *symbolName = entry.getKey().data();
       info.name = symbolName;
       info.attributes = LTO_SYMBOL_DEFINITION_UNDEFINED;
       entry.setValue(info);
     }
   }
+
+  // third slot in __OBJC,__class is pointer to class name
+  std::string className;
+  if (objcClassNameFromExpression(c->getOperand(2), className)) {
+    StringSet::value_type &entry = _defines.GetOrCreateValue(className);
+    entry.setValue(1);
+    NameAndAttributes info;
+    info.name = entry.getKey().data();
+    info.attributes = lto_symbol_attributes(LTO_SYMBOL_PERMISSIONS_DATA |
+                                            LTO_SYMBOL_DEFINITION_REGULAR |
+                                            LTO_SYMBOL_SCOPE_DEFAULT);
+    _symbols.push_back(info);
+  }
+}
+
+
+// Parse i386/ppc ObjC category data structure.
+void LTOModule::addObjCCategory(GlobalVariable *clgv) {
+  ConstantStruct *c = dyn_cast<ConstantStruct>(clgv->getInitializer());
+  if (!c) return;
+
+  // second slot in __OBJC,__category is pointer to target class name
+  std::string targetclassName;
+  if (!objcClassNameFromExpression(c->getOperand(1), targetclassName))
+    return;
+
+  NameAndAttributes info;
+  StringMap<NameAndAttributes>::value_type &entry =
+    _undefines.GetOrCreateValue(targetclassName);
+
+  if (entry.getValue().name)
+    return;
+
+  const char *symbolName = entry.getKey().data();
+  info.name = symbolName;
+  info.attributes = LTO_SYMBOL_DEFINITION_UNDEFINED;
+  entry.setValue(info);
 }
 
 
 // Parse i386/ppc ObjC class list data structure.
 void LTOModule::addObjCClassRef(GlobalVariable *clgv) {
   std::string targetclassName;
-  if (objcClassNameFromExpression(clgv->getInitializer(), targetclassName)) {
-    NameAndAttributes info;
+  if (!objcClassNameFromExpression(clgv->getInitializer(), targetclassName))
+    return;
 
-    StringMap<NameAndAttributes>::value_type &entry =
-      _undefines.GetOrCreateValue(targetclassName);
-    if (entry.getValue().name)
-      return;
+  NameAndAttributes info;
+  StringMap<NameAndAttributes>::value_type &entry =
+    _undefines.GetOrCreateValue(targetclassName);
+  if (entry.getValue().name)
+    return;
 
-    const char *symbolName = entry.getKey().data();
-    info.name = symbolName;
-    info.attributes = LTO_SYMBOL_DEFINITION_UNDEFINED;
-    entry.setValue(info);
-  }
+  const char *symbolName = entry.getKey().data();
+  info.name = symbolName;
+  info.attributes = LTO_SYMBOL_DEFINITION_UNDEFINED;
+  entry.setValue(info);
 }
 
 
-void LTOModule::addDefinedDataSymbol(GlobalValue *v, Mangler &mangler) {
+void LTOModule::addDefinedDataSymbol(GlobalValue *v) {
   // Add to list of defined symbols.
-  addDefinedSymbol(v, mangler, false);
+  addDefinedSymbol(v, false);
 
   // Special case i386/ppc ObjC data structures in magic sections:
   // The issue is that the old ObjC object format did some strange
@@ -327,16 +325,14 @@ void LTOModule::addDefinedDataSymbol(GlobalValue *v, Mangler &mangler) {
   }
 }
 
-
-void LTOModule::addDefinedSymbol(GlobalValue *def, Mangler &mangler,
-                                 bool isFunction) {
+void LTOModule::addDefinedSymbol(GlobalValue *def, bool isFunction) {
   // ignore all llvm.* symbols
   if (def->getName().startswith("llvm."))
     return;
 
   // string is owned by _defines
   SmallString<64> Buffer;
-  mangler.getNameWithPrefix(Buffer, def, false);
+  _mangler.getNameWithPrefix(Buffer, def, false);
 
   // set alignment part log2() can have rounding errors
   uint32_t align = def->getAlignment();
@@ -426,8 +422,7 @@ void LTOModule::addAsmGlobalSymbolUndef(const char *name) {
   entry.setValue(info);
 }
 
-void LTOModule::addPotentialUndefinedSymbol(GlobalValue *decl,
-                                            Mangler &mangler) {
+void LTOModule::addPotentialUndefinedSymbol(GlobalValue *decl) {
   // ignore all llvm.* symbols
   if (decl->getName().startswith("llvm."))
     return;
@@ -437,7 +432,7 @@ void LTOModule::addPotentialUndefinedSymbol(GlobalValue *decl,
     return;
 
   SmallString<64> name;
-  mangler.getNameWithPrefix(name, decl, false);
+  _mangler.getNameWithPrefix(name, decl, false);
 
   StringMap<NameAndAttributes>::value_type &entry =
     _undefines.GetOrCreateValue(name);
@@ -456,7 +451,6 @@ void LTOModule::addPotentialUndefinedSymbol(GlobalValue *decl,
 
   entry.setValue(info);
 }
-
 
 namespace {
   class RecordStreamer : public MCStreamer {
@@ -613,17 +607,17 @@ namespace {
   };
 }
 
-bool LTOModule::addAsmGlobalSymbols(MCContext &Context, std::string &errMsg) {
+bool LTOModule::addAsmGlobalSymbols(std::string &errMsg) {
   const std::string &inlineAsm = _module->getModuleInlineAsm();
   if (inlineAsm.empty())
     return false;
 
-  OwningPtr<RecordStreamer> Streamer(new RecordStreamer(Context));
+  OwningPtr<RecordStreamer> Streamer(new RecordStreamer(_context));
   MemoryBuffer *Buffer = MemoryBuffer::getMemBuffer(inlineAsm);
   SourceMgr SrcMgr;
   SrcMgr.AddNewSourceBuffer(Buffer, SMLoc());
   OwningPtr<MCAsmParser> Parser(createMCAsmParser(SrcMgr,
-                                                  Context, *Streamer,
+                                                  _context, *Streamer,
                                                   *_target->getMCAsmInfo()));
   OwningPtr<MCSubtargetInfo> STI(_target->getTarget().
                       createMCSubtargetInfo(_target->getTargetTriple(),
@@ -670,38 +664,34 @@ static bool isAliasToDeclaration(const GlobalAlias &V) {
 }
 
 bool LTOModule::ParseSymbols(std::string &errMsg) {
-  // Use mangler to add GlobalPrefix to names to match linker names.
-  MCContext Context(*_target->getMCAsmInfo(), *_target->getRegisterInfo(),NULL);
-  Mangler mangler(Context, *_target->getTargetData());
-
   // add functions
   for (Module::iterator f = _module->begin(); f != _module->end(); ++f) {
     if (isDeclaration(*f))
-      addPotentialUndefinedSymbol(f, mangler);
+      addPotentialUndefinedSymbol(f);
     else
-      addDefinedFunctionSymbol(f, mangler);
+      addDefinedFunctionSymbol(f);
   }
 
   // add data
   for (Module::global_iterator v = _module->global_begin(),
          e = _module->global_end(); v !=  e; ++v) {
     if (isDeclaration(*v))
-      addPotentialUndefinedSymbol(v, mangler);
+      addPotentialUndefinedSymbol(v);
     else
-      addDefinedDataSymbol(v, mangler);
+      addDefinedDataSymbol(v);
   }
 
   // add asm globals
-  if (addAsmGlobalSymbols(Context, errMsg))
+  if (addAsmGlobalSymbols(errMsg))
     return true;
 
   // add aliases
   for (Module::alias_iterator i = _module->alias_begin(),
          e = _module->alias_end(); i != e; ++i) {
     if (isAliasToDeclaration(*i))
-      addPotentialUndefinedSymbol(i, mangler);
+      addPotentialUndefinedSymbol(i);
     else
-      addDefinedDataSymbol(i, mangler);
+      addDefinedDataSymbol(i);
   }
 
   // make symbols for all undefines
@@ -717,11 +707,9 @@ bool LTOModule::ParseSymbols(std::string &errMsg) {
   return false;
 }
 
-
 uint32_t LTOModule::getSymbolCount() {
   return _symbols.size();
 }
-
 
 lto_symbol_attributes LTOModule::getSymbolAttributes(uint32_t index) {
   if (index < _symbols.size())

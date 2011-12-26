@@ -48,6 +48,8 @@ static const char *const arm_asm_table[] = {
   0,0
 };
 
+void ARMMCAsmInfoDarwin::anchor() { }
+
 ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
   AsmTransCBE = arm_asm_table;
   Data64bitsDirective = 0;
@@ -57,6 +59,8 @@ ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
 
   SupportsDebugInformation = true;
 }
+
+void ARMELFMCAsmInfo::anchor() { }
 
 ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
   // ".comm align is in bytes but .align is pow-2."

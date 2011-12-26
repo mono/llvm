@@ -7,13 +7,13 @@
 # 
 ##===----------------------------------------------------------------------===##
 
-LEVEL = ../..
+LEVEL := ../..
 
 LIBRARYNAME = LLVM-$(LLVMVersion)
 
-NO_BUILD_ARCHIVE = 1
-LINK_LIBS_IN_SHARED = 1
-SHARED_LIBRARY = 1
+NO_BUILD_ARCHIVE := 1
+LINK_LIBS_IN_SHARED := 1
+SHARED_LIBRARY := 1
 
 include $(LEVEL)/Makefile.config
 
@@ -30,10 +30,11 @@ endif
 include $(LEVEL)/Makefile.common
 
 # Include all archives in libLLVM.(so|dylib) except the ones that have
-# their own dynamic libraries.
+# their own dynamic libraries and TableGen.
 Archives := $(wildcard $(LibDir)/libLLVM*.a)
 SharedLibraries := $(wildcard $(LibDir)/libLLVM*$(SHLIBEXT))
-IncludeInLibLlvm := $(filter-out $(basename $(SharedLibraries)).a, $(Archives))
+ExcludeFromLibLlvm := $(basename $(SharedLibraries)).a %/libLLVMTableGen.a
+IncludeInLibLlvm := $(filter-out $(ExcludeFromLibLlvm), $(Archives))
 LLVMLibsOptions := $(IncludeInLibLlvm:$(LibDir)/lib%.a=-l%)
 LLVMLibsPaths   := $(IncludeInLibLlvm)
 

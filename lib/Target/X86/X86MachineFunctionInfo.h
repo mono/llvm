@@ -21,6 +21,8 @@ namespace llvm {
 /// X86MachineFunctionInfo - This class is derived from MachineFunction and
 /// contains private X86 target-specific information for each MachineFunction.
 class X86MachineFunctionInfo : public MachineFunctionInfo {
+  virtual void anchor();
+
   /// ForceFramePointer - True if the function is required to use of frame
   /// pointer for reasons other than it containing dynamic allocation or 
   /// that FP eliminatation is turned off. For example, Cygwin main function
@@ -52,10 +54,6 @@ class X86MachineFunctionInfo : public MachineFunctionInfo {
   /// use as the global base register. This is used for PIC in some PIC
   /// relocation models.
   unsigned GlobalBaseReg;
-
-  /// ReserveFP - whether the function should reserve the frame pointer
-  /// when allocating, even if there may not actually be a frame pointer used.
-  bool ReserveFP;
 
   /// VarArgsFrameIndex - FrameIndex for start of varargs area.
   int VarArgsFrameIndex;
@@ -91,7 +89,6 @@ public:
       TailCallReturnAddrDelta(0),
       SRetReturnReg(0),
       GlobalBaseReg(0),
-      ReserveFP(false),
       VarArgsFrameIndex(0),
       RegSaveFrameIndex(0),
       VarArgsGPOffset(0),
@@ -118,9 +115,6 @@ public:
 
   unsigned getGlobalBaseReg() const { return GlobalBaseReg; }
   void setGlobalBaseReg(unsigned Reg) { GlobalBaseReg = Reg; }
-
-  bool getReserveFP() const { return ReserveFP; }
-  void setReserveFP(bool reserveFP) { ReserveFP = reserveFP; }
 
   int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
   void setVarArgsFrameIndex(int Idx) { VarArgsFrameIndex = Idx; }

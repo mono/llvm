@@ -28,9 +28,11 @@ extern "C" void LLVMInitializePowerPCTarget() {
 
 PPCTargetMachine::PPCTargetMachine(const Target &T, StringRef TT,
                                    StringRef CPU, StringRef FS,
+                                   const TargetOptions &Options,
                                    Reloc::Model RM, CodeModel::Model CM,
+                                   CodeGenOpt::Level OL,
                                    bool is64Bit)
-  : LLVMTargetMachine(T, TT, CPU, FS, RM, CM),
+  : LLVMTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL),
     Subtarget(TT, CPU, FS, is64Bit),
     DataLayout(Subtarget.getTargetDataString()), InstrInfo(*this),
     FrameLowering(Subtarget), JITInfo(*this, is64Bit),
@@ -42,17 +44,24 @@ PPCTargetMachine::PPCTargetMachine(const Target &T, StringRef TT,
 /// groups, which typically degrades performance.
 bool PPCTargetMachine::getEnableTailMergeDefault() const { return false; }
 
+void PPC32TargetMachine::anchor() { }
+
 PPC32TargetMachine::PPC32TargetMachine(const Target &T, StringRef TT, 
                                        StringRef CPU, StringRef FS,
-                                       Reloc::Model RM, CodeModel::Model CM) 
-  : PPCTargetMachine(T, TT, CPU, FS, RM, CM, false) {
+                                       const TargetOptions &Options,
+                                       Reloc::Model RM, CodeModel::Model CM,
+                                       CodeGenOpt::Level OL)
+  : PPCTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, false) {
 }
 
+void PPC64TargetMachine::anchor() { }
 
 PPC64TargetMachine::PPC64TargetMachine(const Target &T, StringRef TT, 
                                        StringRef CPU,  StringRef FS,
-                                       Reloc::Model RM, CodeModel::Model CM)
-  : PPCTargetMachine(T, TT, CPU, FS, RM, CM, true) {
+                                       const TargetOptions &Options,
+                                       Reloc::Model RM, CodeModel::Model CM,
+                                       CodeGenOpt::Level OL)
+  : PPCTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, true) {
 }
 
 
@@ -60,28 +69,25 @@ PPC64TargetMachine::PPC64TargetMachine(const Target &T, StringRef TT,
 // Pass Pipeline Configuration
 //===----------------------------------------------------------------------===//
 
-bool PPCTargetMachine::addInstSelector(PassManagerBase &PM,
-                                       CodeGenOpt::Level OptLevel) {
+bool PPCTargetMachine::addInstSelector(PassManagerBase &PM) {
   // Install an instruction selector.
   PM.add(createPPCISelDag(*this));
   return false;
 }
 
-bool PPCTargetMachine::addPreEmitPass(PassManagerBase &PM,
-                                      CodeGenOpt::Level OptLevel) {
+bool PPCTargetMachine::addPreEmitPass(PassManagerBase &PM) {
   // Must run branch selection immediately preceding the asm printer.
   PM.add(createPPCBranchSelectionPass());
   return false;
 }
 
 bool PPCTargetMachine::addCodeEmitter(PassManagerBase &PM,
-                                      CodeGenOpt::Level OptLevel,
                                       JITCodeEmitter &JCE) {
   // FIXME: This should be moved to TargetJITInfo!!
   if (Subtarget.isPPC64())
     // Temporary workaround for the inability of PPC64 JIT to handle jump
     // tables.
-    DisableJumpTables = true;      
+    Options.DisableJumpTables = true;      
   
   // Inform the subtarget that we are in JIT mode.  FIXME: does this break macho
   // writing?

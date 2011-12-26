@@ -22,6 +22,7 @@ namespace llvm {
 
 class Value;
 class FoldingSetNodeID;
+class MDNode;
 class raw_ostream;
 
 /// MachinePointerInfo - This class contains a discriminated union of
@@ -95,8 +96,10 @@ public:
     MOVolatile = 4,
     /// The memory access is non-temporal.
     MONonTemporal = 8,
+    /// The memory access is invariant.
+    MOInvariant = 16,
     // This is the number of bits we need to represent flags.
-    MOMaxBits = 4
+    MOMaxBits = 5
   };
 
   /// MachineMemOperand - Construct an MachineMemOperand object with the
@@ -141,6 +144,7 @@ public:
   bool isStore() const { return Flags & MOStore; }
   bool isVolatile() const { return Flags & MOVolatile; }
   bool isNonTemporal() const { return Flags & MONonTemporal; }
+  bool isInvariant() const { return Flags & MOInvariant; }
 
   /// refineAlignment - Update this MachineMemOperand to reflect the alignment
   /// of MMO, if it has a greater alignment. This must only be used when the

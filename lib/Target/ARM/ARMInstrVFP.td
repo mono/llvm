@@ -31,22 +31,52 @@ def arm_fmdrr  : SDNode<"ARMISD::VMOVDRR", SDT_VMOVDRR>;
 // Operand Definitions.
 //
 
+// 8-bit floating-point immediate encodings.
+def FPImmOperand : AsmOperandClass {
+  let Name = "FPImm";
+  let ParserMethod = "parseFPImm";
+}
+
 def vfp_f32imm : Operand<f32>,
                  PatLeaf<(f32 fpimm), [{
-      return ARM::getVFPf32Imm(N->getValueAPF()) != -1;
-    }]> {
-  let PrintMethod = "printVFPf32ImmOperand";
-  let DecoderMethod = "DecodeVFPfpImm";
+      return ARM_AM::getFP32Imm(N->getValueAPF()) != -1;
+    }], SDNodeXForm<fpimm, [{
+      APFloat InVal = N->getValueAPF();
+      uint32_t enc = ARM_AM::getFP32Imm(InVal);
+      return CurDAG->getTargetConstant(enc, MVT::i32);
+    }]>> {
+  let PrintMethod = "printFPImmOperand";
+  let ParserMatchClass = FPImmOperand;
 }
 
 def vfp_f64imm : Operand<f64>,
                  PatLeaf<(f64 fpimm), [{
-      return ARM::getVFPf64Imm(N->getValueAPF()) != -1;
-    }]> {
-  let PrintMethod = "printVFPf64ImmOperand";
-  let DecoderMethod = "DecodeVFPfpImm";
+      return ARM_AM::getFP64Imm(N->getValueAPF()) != -1;
+    }], SDNodeXForm<fpimm, [{
+      APFloat InVal = N->getValueAPF();
+      uint32_t enc = ARM_AM::getFP64Imm(InVal);
+      return CurDAG->getTargetConstant(enc, MVT::i32);
+    }]>> {
+  let PrintMethod = "printFPImmOperand";
+  let ParserMatchClass = FPImmOperand;
 }
 
+// The VCVT to/from fixed-point instructions encode the 'fbits' operand
+// (the number of fixed bits) differently than it appears in the assembly
+// source. It's encoded as "Size - fbits" where Size is the size of the
+// fixed-point representation (32 or 16) and fbits is the value appearing
+// in the assembly source, an integer in [0,16] or (0,32], depending on size.
+def fbits32_asm_operand : AsmOperandClass { let Name = "FBits32"; }
+def fbits32 : Operand<i32> {
+  let PrintMethod = "printFBits32";
+  let ParserMatchClass = fbits32_asm_operand;
+}
+
+def fbits16_asm_operand : AsmOperandClass { let Name = "FBits16"; }
+def fbits16 : Operand<i32> {
+  let PrintMethod = "printFBits16";
+  let ParserMatchClass = fbits16_asm_operand;
+}
 
 //===----------------------------------------------------------------------===//
 //  Load / store Instructions.
@@ -55,11 +85,11 @@ def vfp_f64imm : Operand<f64>,
 let canFoldAsLoad = 1, isReMaterializable = 1 in {
 
 def VLDRD : ADI5<0b1101, 0b01, (outs DPR:$Dd), (ins addrmode5:$addr),
-                 IIC_fpLoad64, "vldr", ".64\t$Dd, $addr",
+                 IIC_fpLoad64, "vldr", "\t$Dd, $addr",
                  [(set DPR:$Dd, (f64 (load addrmode5:$addr)))]>;
 
 def VLDRS : ASI5<0b1101, 0b01, (outs SPR:$Sd), (ins addrmode5:$addr),
-                 IIC_fpLoad32, "vldr", ".32\t$Sd, $addr",
+                 IIC_fpLoad32, "vldr", "\t$Sd, $addr",
                  [(set SPR:$Sd, (load addrmode5:$addr))]> {
   // Some single precision VFP instructions may be executed on both NEON and VFP
   // pipelines.
@@ -69,11 +99,11 @@ def VLDRS : ASI5<0b1101, 0b01, (outs SPR:$Sd), (ins addrmode5:$addr),
 } // End of 'let canFoldAsLoad = 1, isReMaterializable = 1 in'
 
 def VSTRD : ADI5<0b1101, 0b00, (outs), (ins DPR:$Dd, addrmode5:$addr),
-                 IIC_fpStore64, "vstr", ".64\t$Dd, $addr",
+                 IIC_fpStore64, "vstr", "\t$Dd, $addr",
                  [(store (f64 DPR:$Dd), addrmode5:$addr)]>;
 
 def VSTRS : ASI5<0b1101, 0b00, (outs), (ins SPR:$Sd, addrmode5:$addr),
-                 IIC_fpStore32, "vstr", ".32\t$Sd, $addr",
+                 IIC_fpStore32, "vstr", "\t$Sd, $addr",
                  [(store SPR:$Sd, addrmode5:$addr)]> {
   // Some single precision VFP instructions may be executed on both NEON and VFP
   // pipelines.
@@ -776,127 +806,109 @@ def VTOUIRS : AVConv1InsS_Encode<0b11101, 0b11, 0b1100, 0b1010,
 //   S32 (U=0, sx=1) -> SL
 //   U32 (U=1, sx=1) -> UL
 
-// FIXME: Marking these as codegen only seems wrong. They are real
-//        instructions(?)
-let Constraints = "$a = $dst", isCodeGenOnly = 1 in {
+let Constraints = "$a = $dst" in {
 
 // FP to Fixed-Point:
 
 def VTOSHS : AVConv1XI<0b11101, 0b11, 0b1110, 0b1010, 0,
-                       (outs SPR:$dst), (ins SPR:$a, i32imm:$fbits),
-                 IIC_fpCVTSI, "vcvt", ".s16.f32\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]> {
+                       (outs SPR:$dst), (ins SPR:$a, fbits16:$fbits),
+                 IIC_fpCVTSI, "vcvt", ".s16.f32\t$dst, $a, $fbits", []> {
   // Some single precision VFP instructions may be executed on both NEON and
   // VFP pipelines on A8.
   let D = VFPNeonA8Domain;
 }
 
 def VTOUHS : AVConv1XI<0b11101, 0b11, 0b1111, 0b1010, 0,
-                       (outs SPR:$dst), (ins SPR:$a, i32imm:$fbits),
-                 IIC_fpCVTSI, "vcvt", ".u16.f32\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]> {
+                       (outs SPR:$dst), (ins SPR:$a, fbits16:$fbits),
+                 IIC_fpCVTSI, "vcvt", ".u16.f32\t$dst, $a, $fbits", []> {
   // Some single precision VFP instructions may be executed on both NEON and
   // VFP pipelines on A8.
   let D = VFPNeonA8Domain;
 }
 
 def VTOSLS : AVConv1XI<0b11101, 0b11, 0b1110, 0b1010, 1,
-                       (outs SPR:$dst), (ins SPR:$a, i32imm:$fbits),
-                 IIC_fpCVTSI, "vcvt", ".s32.f32\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]> {
+                       (outs SPR:$dst), (ins SPR:$a, fbits32:$fbits),
+                 IIC_fpCVTSI, "vcvt", ".s32.f32\t$dst, $a, $fbits", []> {
   // Some single precision VFP instructions may be executed on both NEON and
   // VFP pipelines on A8.
   let D = VFPNeonA8Domain;
 }
 
 def VTOULS : AVConv1XI<0b11101, 0b11, 0b1111, 0b1010, 1,
-                       (outs SPR:$dst), (ins SPR:$a, i32imm:$fbits),
-                 IIC_fpCVTSI, "vcvt", ".u32.f32\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]> {
+                       (outs SPR:$dst), (ins SPR:$a, fbits32:$fbits),
+                 IIC_fpCVTSI, "vcvt", ".u32.f32\t$dst, $a, $fbits", []> {
   // Some single precision VFP instructions may be executed on both NEON and
   // VFP pipelines on A8.
   let D = VFPNeonA8Domain;
 }
 
 def VTOSHD : AVConv1XI<0b11101, 0b11, 0b1110, 0b1011, 0,
-                       (outs DPR:$dst), (ins DPR:$a, i32imm:$fbits),
-                 IIC_fpCVTDI, "vcvt", ".s16.f64\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]>;
+                       (outs DPR:$dst), (ins DPR:$a, fbits16:$fbits),
+                 IIC_fpCVTDI, "vcvt", ".s16.f64\t$dst, $a, $fbits", []>;
 
 def VTOUHD : AVConv1XI<0b11101, 0b11, 0b1111, 0b1011, 0,
-                       (outs DPR:$dst), (ins DPR:$a, i32imm:$fbits),
-                 IIC_fpCVTDI, "vcvt", ".u16.f64\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]>;
+                       (outs DPR:$dst), (ins DPR:$a, fbits16:$fbits),
+                 IIC_fpCVTDI, "vcvt", ".u16.f64\t$dst, $a, $fbits", []>;
 
 def VTOSLD : AVConv1XI<0b11101, 0b11, 0b1110, 0b1011, 1,
-                       (outs DPR:$dst), (ins DPR:$a, i32imm:$fbits),
-                 IIC_fpCVTDI, "vcvt", ".s32.f64\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]>;
+                       (outs DPR:$dst), (ins DPR:$a, fbits32:$fbits),
+                 IIC_fpCVTDI, "vcvt", ".s32.f64\t$dst, $a, $fbits", []>;
 
 def VTOULD : AVConv1XI<0b11101, 0b11, 0b1111, 0b1011, 1,
-                       (outs DPR:$dst), (ins DPR:$a, i32imm:$fbits),
-                 IIC_fpCVTDI, "vcvt", ".u32.f64\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]>;
+                       (outs DPR:$dst), (ins DPR:$a, fbits32:$fbits),
+                 IIC_fpCVTDI, "vcvt", ".u32.f64\t$dst, $a, $fbits", []>;
 
 // Fixed-Point to FP:
 
 def VSHTOS : AVConv1XI<0b11101, 0b11, 0b1010, 0b1010, 0,
-                       (outs SPR:$dst), (ins SPR:$a, i32imm:$fbits),
-                 IIC_fpCVTIS, "vcvt", ".f32.s16\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]> {
+                       (outs SPR:$dst), (ins SPR:$a, fbits16:$fbits),
+                 IIC_fpCVTIS, "vcvt", ".f32.s16\t$dst, $a, $fbits", []> {
   // Some single precision VFP instructions may be executed on both NEON and
   // VFP pipelines on A8.
   let D = VFPNeonA8Domain;
 }
 
 def VUHTOS : AVConv1XI<0b11101, 0b11, 0b1011, 0b1010, 0,
-                       (outs SPR:$dst), (ins SPR:$a, i32imm:$fbits),
-                 IIC_fpCVTIS, "vcvt", ".f32.u16\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]> {
+                       (outs SPR:$dst), (ins SPR:$a, fbits16:$fbits),
+                 IIC_fpCVTIS, "vcvt", ".f32.u16\t$dst, $a, $fbits", []> {
   // Some single precision VFP instructions may be executed on both NEON and
   // VFP pipelines on A8.
   let D = VFPNeonA8Domain;
 }
 
 def VSLTOS : AVConv1XI<0b11101, 0b11, 0b1010, 0b1010, 1,
-                       (outs SPR:$dst), (ins SPR:$a, i32imm:$fbits),
-                 IIC_fpCVTIS, "vcvt", ".f32.s32\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]> {
+                       (outs SPR:$dst), (ins SPR:$a, fbits32:$fbits),
+                 IIC_fpCVTIS, "vcvt", ".f32.s32\t$dst, $a, $fbits", []> {
   // Some single precision VFP instructions may be executed on both NEON and
   // VFP pipelines on A8.
   let D = VFPNeonA8Domain;
 }
 
 def VULTOS : AVConv1XI<0b11101, 0b11, 0b1011, 0b1010, 1,
-                       (outs SPR:$dst), (ins SPR:$a, i32imm:$fbits),
-                 IIC_fpCVTIS, "vcvt", ".f32.u32\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]> {
+                       (outs SPR:$dst), (ins SPR:$a, fbits32:$fbits),
+                 IIC_fpCVTIS, "vcvt", ".f32.u32\t$dst, $a, $fbits", []> {
   // Some single precision VFP instructions may be executed on both NEON and
   // VFP pipelines on A8.
   let D = VFPNeonA8Domain;
 }
 
 def VSHTOD : AVConv1XI<0b11101, 0b11, 0b1010, 0b1011, 0,
-                       (outs DPR:$dst), (ins DPR:$a, i32imm:$fbits),
-                 IIC_fpCVTID, "vcvt", ".f64.s16\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]>;
+                       (outs DPR:$dst), (ins DPR:$a, fbits16:$fbits),
+                 IIC_fpCVTID, "vcvt", ".f64.s16\t$dst, $a, $fbits", []>;
 
 def VUHTOD : AVConv1XI<0b11101, 0b11, 0b1011, 0b1011, 0,
-                       (outs DPR:$dst), (ins DPR:$a, i32imm:$fbits),
-                 IIC_fpCVTID, "vcvt", ".f64.u16\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]>;
+                       (outs DPR:$dst), (ins DPR:$a, fbits16:$fbits),
+                 IIC_fpCVTID, "vcvt", ".f64.u16\t$dst, $a, $fbits", []>;
 
 def VSLTOD : AVConv1XI<0b11101, 0b11, 0b1010, 0b1011, 1,
-                       (outs DPR:$dst), (ins DPR:$a, i32imm:$fbits),
-                 IIC_fpCVTID, "vcvt", ".f64.s32\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]>;
+                       (outs DPR:$dst), (ins DPR:$a, fbits32:$fbits),
+                 IIC_fpCVTID, "vcvt", ".f64.s32\t$dst, $a, $fbits", []>;
 
 def VULTOD : AVConv1XI<0b11101, 0b11, 0b1011, 0b1011, 1,
-                       (outs DPR:$dst), (ins DPR:$a, i32imm:$fbits),
-                 IIC_fpCVTID, "vcvt", ".f64.u32\t$dst, $a, $fbits",
-                 [/* For disassembly only; pattern left blank */]>;
+                       (outs DPR:$dst), (ins DPR:$a, fbits32:$fbits),
+                 IIC_fpCVTID, "vcvt", ".f64.u32\t$dst, $a, $fbits", []>;
 
-} // End of 'let Constraints = "$a = $dst", isCodeGenOnly = 1 in'
+} // End of 'let Constraints = "$a = $dst" in'
 
 //===----------------------------------------------------------------------===//
 // FP Multiply-Accumulate Operations.
@@ -1110,45 +1122,144 @@ def FCONSTD : VFPAI<(outs DPR:$Dd), (ins vfp_f64imm:$imm),
                     VFPMiscFrm, IIC_fpUNA64,
                     "vmov", ".f64\t$Dd, $imm",
                     [(set DPR:$Dd, vfp_f64imm:$imm)]>, Requires<[HasVFP3]> {
-  // Instruction operands.
-  bits<5>  Dd;
-  bits<32> imm;
+  bits<5> Dd;
+  bits<8> imm;
 
-  // Encode instruction operands.
-  let Inst{15-12} = Dd{3-0};
-  let Inst{22}    = Dd{4};
-  let Inst{19}    = imm{31};    // The immediate is handled as a float.
-  let Inst{18-16} = imm{25-23};
-  let Inst{3-0}   = imm{22-19};
-
-  // Encode remaining instruction bits.
   let Inst{27-23} = 0b11101;
+  let Inst{22}    = Dd{4};
   let Inst{21-20} = 0b11;
+  let Inst{19-16} = imm{7-4};
+  let Inst{15-12} = Dd{3-0};
   let Inst{11-9}  = 0b101;
   let Inst{8}     = 1;          // Double precision.
   let Inst{7-4}   = 0b0000;
+  let Inst{3-0}   = imm{3-0};
 }
 
 def FCONSTS : VFPAI<(outs SPR:$Sd), (ins vfp_f32imm:$imm),
                      VFPMiscFrm, IIC_fpUNA32,
                      "vmov", ".f32\t$Sd, $imm",
                      [(set SPR:$Sd, vfp_f32imm:$imm)]>, Requires<[HasVFP3]> {
-  // Instruction operands.
-  bits<5>  Sd;
-  bits<32> imm;
+  bits<5> Sd;
+  bits<8> imm;
 
-  // Encode instruction operands.
-  let Inst{15-12} = Sd{4-1};
-  let Inst{22}    = Sd{0};
-  let Inst{19}    = imm{31};    // The immediate is handled as a float.
-  let Inst{18-16} = imm{25-23};
-  let Inst{3-0}   = imm{22-19};
-
-  // Encode remaining instruction bits.
   let Inst{27-23} = 0b11101;
+  let Inst{22}    = Sd{0};
   let Inst{21-20} = 0b11;
+  let Inst{19-16} = imm{7-4};
+  let Inst{15-12} = Sd{4-1};
   let Inst{11-9}  = 0b101;
   let Inst{8}     = 0;          // Single precision.
   let Inst{7-4}   = 0b0000;
+  let Inst{3-0}   = imm{3-0};
 }
 }
+
+//===----------------------------------------------------------------------===//
+// Assembler aliases.
+//
+// A few mnemnoic aliases for pre-unifixed syntax. We don't guarantee to
+// support them all, but supporting at least some of the basics is
+// good to be friendly.
+def : VFP2MnemonicAlias<"flds", "vldr">;
+def : VFP2MnemonicAlias<"fldd", "vldr">;
+def : VFP2MnemonicAlias<"fmrs", "vmov">;
+def : VFP2MnemonicAlias<"fmsr", "vmov">;
+def : VFP2MnemonicAlias<"fsqrts", "vsqrt">;
+def : VFP2MnemonicAlias<"fsqrtd", "vsqrt">;
+def : VFP2MnemonicAlias<"fadds", "vadd.f32">;
+def : VFP2MnemonicAlias<"faddd", "vadd.f64">;
+def : VFP2MnemonicAlias<"fmrdd", "vmov">;
+def : VFP2MnemonicAlias<"fmrds", "vmov">;
+def : VFP2MnemonicAlias<"fmrrd", "vmov">;
+def : VFP2MnemonicAlias<"fmdrr", "vmov">;
+def : VFP2MnemonicAlias<"fmuls", "vmul.f32">;
+def : VFP2MnemonicAlias<"fmuld", "vmul.f64">;
+def : VFP2MnemonicAlias<"fnegs", "vneg.f32">;
+def : VFP2MnemonicAlias<"fnegd", "vneg.f64">;
+def : VFP2MnemonicAlias<"ftosizd", "vcvt.s32.f64">;
+def : VFP2MnemonicAlias<"ftosid", "vcvtr.s32.f64">;
+def : VFP2MnemonicAlias<"ftosizs", "vcvt.s32.f32">;
+def : VFP2MnemonicAlias<"ftosis", "vcvtr.s32.f32">;
+def : VFP2MnemonicAlias<"ftouizd", "vcvt.u32.f64">;
+def : VFP2MnemonicAlias<"ftouid", "vcvtr.u32.f64">;
+def : VFP2MnemonicAlias<"ftouizs", "vcvt.u32.f32">;
+def : VFP2MnemonicAlias<"ftouis", "vcvtr.u32.f32">;
+def : VFP2MnemonicAlias<"fsitod", "vcvt.f64.s32">;
+def : VFP2MnemonicAlias<"fsitos", "vcvt.f32.s32">;
+def : VFP2MnemonicAlias<"fuitod", "vcvt.f64.u32">;
+def : VFP2MnemonicAlias<"fuitos", "vcvt.f32.u32">;
+def : VFP2MnemonicAlias<"fsts", "vstr">;
+def : VFP2MnemonicAlias<"fstd", "vstr">;
+def : VFP2MnemonicAlias<"fmacd", "vmla.f64">;
+def : VFP2MnemonicAlias<"fmacs", "vmla.f32">;
+def : VFP2MnemonicAlias<"fcpys", "vmov.f32">;
+def : VFP2MnemonicAlias<"fcpyd", "vmov.f64">;
+def : VFP2MnemonicAlias<"fcmps", "vcmp.f32">;
+def : VFP2MnemonicAlias<"fcmpd", "vcmp.f64">;
+def : VFP2MnemonicAlias<"fdivs", "vdiv.f32">;
+def : VFP2MnemonicAlias<"fdivd", "vdiv.f64">;
+
+def : VFP2InstAlias<"fmstat${p}", (FMSTAT pred:$p)>;
+def : VFP2InstAlias<"fadds${p} $Sd, $Sn, $Sm",
+                    (VADDS SPR:$Sd, SPR:$Sn, SPR:$Sm, pred:$p)>;
+def : VFP2InstAlias<"faddd${p} $Dd, $Dn, $Dm",
+                    (VADDD DPR:$Dd, DPR:$Dn, DPR:$Dm, pred:$p)>;
+def : VFP2InstAlias<"fsubs${p} $Sd, $Sn, $Sm",
+                    (VSUBS SPR:$Sd, SPR:$Sn, SPR:$Sm, pred:$p)>;
+def : VFP2InstAlias<"fsubd${p} $Dd, $Dn, $Dm",
+                    (VSUBD DPR:$Dd, DPR:$Dn, DPR:$Dm, pred:$p)>;
+
+// No need for the size suffix on VSQRT. It's implied by the register classes.
+def : VFP2InstAlias<"vsqrt${p} $Sd, $Sm", (VSQRTS SPR:$Sd, SPR:$Sm, pred:$p)>;
+def : VFP2InstAlias<"vsqrt${p} $Dd, $Dm", (VSQRTD DPR:$Dd, DPR:$Dm, pred:$p)>;
+
+// VLDR/VSTR accept an optional type suffix.
+def : VFP2InstAlias<"vldr${p}.32 $Sd, $addr",
+                    (VLDRS SPR:$Sd, addrmode5:$addr, pred:$p)>;
+def : VFP2InstAlias<"vstr${p}.32 $Sd, $addr",
+                    (VSTRS SPR:$Sd, addrmode5:$addr, pred:$p)>;
+def : VFP2InstAlias<"vldr${p}.64 $Dd, $addr",
+                    (VLDRD DPR:$Dd, addrmode5:$addr, pred:$p)>;
+def : VFP2InstAlias<"vstr${p}.64 $Dd, $addr",
+                    (VSTRD DPR:$Dd, addrmode5:$addr, pred:$p)>;
+
+// VMUL has a two-operand form (implied destination operand)
+def : VFP2InstAlias<"vmul${p}.f64 $Dn, $Dm",
+                    (VMULD DPR:$Dn, DPR:$Dn, DPR:$Dm, pred:$p)>;
+def : VFP2InstAlias<"vmul${p}.f32 $Sn, $Sm",
+                    (VMULS SPR:$Sn, SPR:$Sn, SPR:$Sm, pred:$p)>;
+// VADD has a two-operand form (implied destination operand)
+def : VFP2InstAlias<"vadd${p}.f64 $Dn, $Dm",
+                    (VADDD DPR:$Dn, DPR:$Dn, DPR:$Dm, pred:$p)>;
+def : VFP2InstAlias<"vadd${p}.f32 $Sn, $Sm",
+                    (VADDS SPR:$Sn, SPR:$Sn, SPR:$Sm, pred:$p)>;
+// VSUB has a two-operand form (implied destination operand)
+def : VFP2InstAlias<"vsub${p}.f64 $Dn, $Dm",
+                    (VSUBD DPR:$Dn, DPR:$Dn, DPR:$Dm, pred:$p)>;
+def : VFP2InstAlias<"vsub${p}.f32 $Sn, $Sm",
+                    (VSUBS SPR:$Sn, SPR:$Sn, SPR:$Sm, pred:$p)>;
+
+// VMOV can accept optional 32-bit or less data type suffix suffix.
+def : VFP2InstAlias<"vmov${p}.8 $Rt, $Sn",
+                    (VMOVRS GPR:$Rt, SPR:$Sn, pred:$p)>;
+def : VFP2InstAlias<"vmov${p}.16 $Rt, $Sn",
+                    (VMOVRS GPR:$Rt, SPR:$Sn, pred:$p)>;
+def : VFP2InstAlias<"vmov${p}.32 $Rt, $Sn",
+                    (VMOVRS GPR:$Rt, SPR:$Sn, pred:$p)>;
+def : VFP2InstAlias<"vmov${p}.8 $Sn, $Rt",
+                    (VMOVSR SPR:$Sn, GPR:$Rt, pred:$p)>;
+def : VFP2InstAlias<"vmov${p}.16 $Sn, $Rt",
+                    (VMOVSR SPR:$Sn, GPR:$Rt, pred:$p)>;
+def : VFP2InstAlias<"vmov${p}.32 $Sn, $Rt",
+                    (VMOVSR SPR:$Sn, GPR:$Rt, pred:$p)>;
+
+def : VFP2InstAlias<"vmov${p}.f64 $Rt, $Rt2, $Dn",
+                    (VMOVRRD GPR:$Rt, GPR:$Rt2, DPR:$Dn, pred:$p)>;
+def : VFP2InstAlias<"vmov${p}.f64 $Dn, $Rt, $Rt2",
+                    (VMOVDRR DPR:$Dn, GPR:$Rt, GPR:$Rt2, pred:$p)>;
+
+// VMOVS doesn't need the .f32 to disambiguate from the NEON encoding the way
+// VMOVD does.
+def : VFP2InstAlias<"vmov${p} $Sd, $Sm",
+                    (VMOVS SPR:$Sd, SPR:$Sm, pred:$p)>;

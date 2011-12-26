@@ -33,8 +33,9 @@ class XCoreTargetMachine : public LLVMTargetMachine {
   XCoreSelectionDAGInfo TSInfo;
 public:
   XCoreTargetMachine(const Target &T, StringRef TT,
-                     StringRef CPU, StringRef FS,
-                     Reloc::Model RM, CodeModel::Model CM);
+                     StringRef CPU, StringRef FS, const TargetOptions &Options,
+                     Reloc::Model RM, CodeModel::Model CM,
+                     CodeGenOpt::Level OL);
 
   virtual const XCoreInstrInfo *getInstrInfo() const { return &InstrInfo; }
   virtual const XCoreFrameLowering *getFrameLowering() const {
@@ -55,7 +56,7 @@ public:
   virtual const TargetData       *getTargetData() const { return &DataLayout; }
 
   // Pass Pipeline Configuration
-  virtual bool addInstSelector(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
+  virtual bool addInstSelector(PassManagerBase &PM);
 };
 
 } // end namespace llvm

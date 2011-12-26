@@ -5,9 +5,9 @@ define void @fred(i32 %three_by_three, i8* %in, double %dt1, i32 %x_size, i32 %y
 entry:
 ; -- The loop following the load should only use a single add-literation
 ;    instruction.
-; CHECK: ldr.64
-; CHECK: adds r{{[0-9]+}}, r{{[0-9]+}}, #1
-; CHECK-NOT: adds r{{[0-9]+}}, r{{[0-9]+}}, #1
+; CHECK: vldr
+; CHECK: adds r{{[0-9]+.*}}#1
+; CHECK-NOT: adds
 ; CHECK: subsections_via_symbols
 
 

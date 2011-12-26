@@ -26,11 +26,11 @@
 #include "llvm/ADT/UniqueVector.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/DebugLoc.h"
+#include <map>
 
 namespace llvm {
 
 class CompileUnit;
-class DbgConcreteScope;
 class DbgVariable;
 class MachineFrameInfo;
 class MachineModuleInfo;
@@ -207,17 +207,15 @@ class DwarfDebug {
   ///
   std::vector<DIEAbbrev *> Abbreviations;
 
-  /// SourceIdMap - Source id map, i.e. pair of directory id and source file
-  /// id mapped to a unique id.
-  StringMap<unsigned> SourceIdMap;
+  /// SourceIdMap - Source id map, i.e. pair of source filename and directory
+  /// mapped to a unique id.
+  std::map<std::pair<std::string, std::string>, unsigned> SourceIdMap;
 
   /// StringPool - A String->Symbol mapping of strings used by indirect
   /// references.
   StringMap<std::pair<MCSymbol*, unsigned> > StringPool;
   unsigned NextStringPoolNumber;
   
-  MCSymbol *getStringPoolEntry(StringRef Str);
-
   /// SectionMap - Provides a unique id per text section.
   ///
   UniqueVector<const MCSection*> SectionMap;
@@ -239,7 +237,7 @@ class DwarfDebug {
   /// DotDebugLocEntries - Collection of DotDebugLocEntry.
   SmallVector<DotDebugLocEntry, 4> DotDebugLocEntries;
 
-  /// InliendSubprogramDIEs - Collection of subprgram DIEs that are marked
+  /// InlinedSubprogramDIEs - Collection of subprogram DIEs that are marked
   /// (at the end of the module) as DW_AT_inline.
   SmallPtrSet<DIE *, 4> InlinedSubprogramDIEs;
 
@@ -304,6 +302,10 @@ class DwarfDebug {
   MCSymbol *DwarfDebugLocSectionSym;
   MCSymbol *FunctionBeginSym, *FunctionEndSym;
 
+  // As an optimization, there is no need to emit an entry in the directory
+  // table for the same directory as DW_at_comp_dir.
+  StringRef CompilationDir;
+
 private:
 
   /// assignAbbrevNumber - Define a unique number for the abbreviation.
@@ -340,7 +342,7 @@ private:
   /// the start of each one.
   void EmitSectionLabels();
 
-  /// emitDIE - Recusively Emits a debug information entry.
+  /// emitDIE - Recursively Emits a debug information entry.
   ///
   void emitDIE(DIE *Die);
 
@@ -365,10 +367,22 @@ private:
   ///
   void emitEndOfLineMatrix(unsigned SectionEnd);
 
-  /// emitDebugPubNames - Emit visible names into a debug pubnames section.
-  ///
-  void emitDebugPubNames();
+  /// emitAccelNames - Emit visible names into a hashed accelerator table
+  /// section.
+  void emitAccelNames();
+  
+  /// emitAccelObjC - Emit objective C classes and categories into a hashed
+  /// accelerator table section.
+  void emitAccelObjC();
 
+  /// emitAccelNamespace - Emit namespace dies into a hashed accelerator
+  /// table.
+  void emitAccelNamespaces();
+
+  /// emitAccelTypes() - Emit type dies into a hashed accelerator table.
+  ///
+  void emitAccelTypes();
+  
   /// emitDebugPubTypes - Emit visible types into a debug pubtypes section.
   ///
   void emitDebugPubTypes();
@@ -407,10 +421,10 @@ private:
   /// 3. an unsigned LEB128 number indicating the number of distinct inlining 
   /// instances for the function.
   /// 
-  /// The rest of the entry consists of a {die_offset, low_pc}  pair for each 
+  /// The rest of the entry consists of a {die_offset, low_pc} pair for each 
   /// inlined instance; the die_offset points to the inlined_subroutine die in
-  /// the __debug_info section, and the low_pc is the starting address  for the
-  ///  inlining instance.
+  /// the __debug_info section, and the low_pc is the starting address for the
+  /// inlining instance.
   void emitDebugInlineInfo();
 
   /// constructCompileUnit - Create new CompileUnit for the given 
@@ -426,8 +440,8 @@ private:
   void recordSourceLine(unsigned Line, unsigned Col, const MDNode *Scope,
                         unsigned Flags);
   
-  /// identifyScopeMarkers() - Indentify instructions that are marking
-  /// beginning of or end of a scope.
+  /// identifyScopeMarkers() - Indentify instructions that are marking the
+  /// beginning of or ending of a scope.
   void identifyScopeMarkers();
 
   /// addCurrentFnArgument - If Var is an current function argument that add
@@ -472,7 +486,7 @@ public:
   void collectInfoFromNamedMDNodes(Module *M);
 
   /// collectLegacyDebugInfo - Collect debug info using DebugInfoFinder.
-  /// FIXME - Remove this when dragon-egg and llvm-gcc switch to DIBuilder.
+  /// FIXME - Remove this when DragonEgg switches to DIBuilder.
   bool collectLegacyDebugInfo(Module *M);
 
   /// beginModule - Emit all Dwarf sections that should come prior to the
@@ -504,6 +518,13 @@ public:
 
   /// createSubprogramDIE - Create new DIE using SP.
   DIE *createSubprogramDIE(DISubprogram SP);
+
+  /// getStringPool - returns the entry into the start of the pool.
+  MCSymbol *getStringPool();
+
+  /// getStringPoolEntry - returns an entry into the string pool with the given
+  /// string text.
+  MCSymbol *getStringPoolEntry(StringRef Str);
 };
 } // End of namespace llvm
 

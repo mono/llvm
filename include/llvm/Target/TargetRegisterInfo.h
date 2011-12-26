@@ -38,20 +38,19 @@ public:
   typedef const EVT* vt_iterator;
   typedef const TargetRegisterClass* const * sc_iterator;
 private:
+  virtual void anchor();
   const MCRegisterClass *MC;
   const vt_iterator VTs;
-  const sc_iterator SubClasses;
+  const unsigned *SubClassMask;
   const sc_iterator SuperClasses;
-  const sc_iterator SubRegClasses;
   const sc_iterator SuperRegClasses;
 public:
   TargetRegisterClass(const MCRegisterClass *MC, const EVT *vts,
-                      const TargetRegisterClass * const *subcs,
+                      const unsigned *subcm,
                       const TargetRegisterClass * const *supcs,
-                      const TargetRegisterClass * const *subregcs,
                       const TargetRegisterClass * const *superregcs)
-    : MC(MC), VTs(vts), SubClasses(subcs), SuperClasses(supcs),
-      SubRegClasses(subregcs), SuperRegClasses(superregcs) {}
+    : MC(MC), VTs(vts), SubClassMask(subcm), SuperClasses(supcs),
+      SuperRegClasses(superregcs) {}
 
   virtual ~TargetRegisterClass() {}     // Allow subclasses
 
@@ -127,25 +126,6 @@ public:
     return I;
   }
 
-  /// subregclasses_begin / subregclasses_end - Loop over all of
-  /// the subreg register classes of this register class.
-  sc_iterator subregclasses_begin() const {
-    return SubRegClasses;
-  }
-
-  sc_iterator subregclasses_end() const {
-    sc_iterator I = SubRegClasses;
-    while (*I != NULL) ++I;
-    return I;
-  }
-
-  /// getSubRegisterRegClass - Return the register class of subregisters with
-  /// index SubIdx, or NULL if no such class exists.
-  const TargetRegisterClass* getSubRegisterRegClass(unsigned SubIdx) const {
-    assert(SubIdx>0 && "Invalid subregister index");
-    return SubRegClasses[SubIdx-1];
-  }
-
   /// superregclasses_begin / superregclasses_end - Loop over all of
   /// the superreg register classes of this register class.
   sc_iterator superregclasses_begin() const {
@@ -159,57 +139,42 @@ public:
   }
 
   /// hasSubClass - return true if the specified TargetRegisterClass
-  /// is a proper subset of this TargetRegisterClass.
-  bool hasSubClass(const TargetRegisterClass *cs) const {
-    for (int i = 0; SubClasses[i] != NULL; ++i)
-      if (SubClasses[i] == cs)
-        return true;
-    return false;
+  /// is a proper sub-class of this TargetRegisterClass.
+  bool hasSubClass(const TargetRegisterClass *RC) const {
+    return RC != this && hasSubClassEq(RC);
   }
 
-  /// hasSubClassEq - Returns true if RC is a subclass of or equal to this
+  /// hasSubClassEq - Returns true if RC is a sub-class of or equal to this
   /// class.
   bool hasSubClassEq(const TargetRegisterClass *RC) const {
-    return RC == this || hasSubClass(RC);
-  }
-
-  /// subclasses_begin / subclasses_end - Loop over all of the classes
-  /// that are proper subsets of this register class.
-  sc_iterator subclasses_begin() const {
-    return SubClasses;
-  }
-
-  sc_iterator subclasses_end() const {
-    sc_iterator I = SubClasses;
-    while (*I != NULL) ++I;
-    return I;
+    unsigned ID = RC->getID();
+    return (SubClassMask[ID / 32] >> (ID % 32)) & 1;
   }
 
   /// hasSuperClass - return true if the specified TargetRegisterClass is a
-  /// proper superset of this TargetRegisterClass.
-  bool hasSuperClass(const TargetRegisterClass *cs) const {
-    for (int i = 0; SuperClasses[i] != NULL; ++i)
-      if (SuperClasses[i] == cs)
-        return true;
-    return false;
+  /// proper super-class of this TargetRegisterClass.
+  bool hasSuperClass(const TargetRegisterClass *RC) const {
+    return RC->hasSubClass(this);
   }
 
-  /// hasSuperClassEq - Returns true if RC is a superclass of or equal to this
+  /// hasSuperClassEq - Returns true if RC is a super-class of or equal to this
   /// class.
   bool hasSuperClassEq(const TargetRegisterClass *RC) const {
-    return RC == this || hasSuperClass(RC);
+    return RC->hasSubClassEq(this);
   }
 
-  /// superclasses_begin / superclasses_end - Loop over all of the classes
-  /// that are proper supersets of this register class.
-  sc_iterator superclasses_begin() const {
+  /// getSubClassMask - Returns a bit vector of subclasses, including this one.
+  /// The vector is indexed by class IDs, see hasSubClassEq() above for how to
+  /// use it.
+  const unsigned *getSubClassMask() const {
+    return SubClassMask;
+  }
+
+  /// getSuperClasses - Returns a NULL terminated list of super-classes.  The
+  /// classes are ordered by ID which is also a topological ordering from large
+  /// to small classes.  The list does NOT include the current class.
+  sc_iterator getSuperClasses() const {
     return SuperClasses;
-  }
-
-  sc_iterator superclasses_end() const {
-    sc_iterator I = SuperClasses;
-    while (*I != NULL) ++I;
-    return I;
   }
 
   /// isASubClass - return true if this TargetRegisterClass is a subset
@@ -438,11 +403,26 @@ public:
   /// getMatchingSuperRegClass - Return a subclass of the specified register
   /// class A so that each register in it has a sub-register of the
   /// specified sub-register index which is in the specified register class B.
+  ///
+  /// TableGen will synthesize missing A sub-classes.
   virtual const TargetRegisterClass *
   getMatchingSuperRegClass(const TargetRegisterClass *A,
-                           const TargetRegisterClass *B, unsigned Idx) const {
-    return 0;
-  }
+                           const TargetRegisterClass *B, unsigned Idx) const =0;
+
+  /// getSubClassWithSubReg - Returns the largest legal sub-class of RC that
+  /// supports the sub-register index Idx.
+  /// If no such sub-class exists, return NULL.
+  /// If all registers in RC already have an Idx sub-register, return RC.
+  ///
+  /// TableGen generates a version of this function that is good enough in most
+  /// cases.  Targets can override if they have constraints that TableGen
+  /// doesn't understand.  For example, the x86 sub_8bit sub-register index is
+  /// supported by the full GR32 register class in 64-bit mode, but only by the
+  /// GR32_ABCD regiister class in 32-bit mode.
+  ///
+  /// TableGen will synthesize missing RC sub-classes.
+  virtual const TargetRegisterClass *
+  getSubClassWithSubReg(const TargetRegisterClass *RC, unsigned Idx) const =0;
 
   /// composeSubRegIndices - Return the subregister index you get from composing
   /// two subregister indices.
@@ -480,6 +460,12 @@ public:
     assert(i < getNumRegClasses() && "Register Class ID out of range");
     return RegClassBegin[i];
   }
+
+  /// getCommonSubClass - find the largest common subclass of A and B. Return
+  /// NULL if there is no common subclass.
+  const TargetRegisterClass *
+  getCommonSubClass(const TargetRegisterClass *A,
+                    const TargetRegisterClass *B) const;
 
   /// getPointerRegClass - Returns a TargetRegisterClass used for pointer
   /// values.  If a target supports multiple different pointer register classes,
@@ -700,11 +686,6 @@ struct VirtReg2IndexFunctor : public std::unary_function<unsigned, unsigned> {
     return TargetRegisterInfo::virtReg2Index(Reg);
   }
 };
-
-/// getCommonSubClass - find the largest common subclass of A and B. Return NULL
-/// if there is no common subclass.
-const TargetRegisterClass *getCommonSubClass(const TargetRegisterClass *A,
-                                             const TargetRegisterClass *B);
 
 /// PrintReg - Helper class for printing registers on a raw_ostream.
 /// Prints virtual and physical registers with or without a TRI instance.

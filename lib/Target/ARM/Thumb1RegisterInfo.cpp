@@ -454,6 +454,7 @@ rewriteFrameIndex(MachineBasicBlock::iterator II, unsigned FrameRegIdx,
       // r0 = add sp, 255*4
       // r0 = add r0, (imm - 255*4)
       if (Opcode == ARM::tADDi3) {
+        MI.setDesc(TII.get(Opcode));
         removeOperands(MI, FrameRegIdx);
         MachineInstrBuilder MIB(&MI);
         AddDefaultPred(AddDefaultT1CC(MIB).addReg(FrameReg).addImm(Mask));
@@ -642,14 +643,13 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   assert(Offset && "This code isn't needed if offset already handled!");
 
   unsigned Opcode = MI.getOpcode();
-  const MCInstrDesc &Desc = MI.getDesc();
 
   // Remove predicate first.
   int PIdx = MI.findFirstPredOperandIdx();
   if (PIdx != -1)
     removeOperands(MI, PIdx);
 
-  if (Desc.mayLoad()) {
+  if (MI.mayLoad()) {
     // Use the destination register to materialize sp + offset.
     unsigned TmpReg = MI.getOperand(0).getReg();
     bool UseRR = false;
@@ -672,7 +672,7 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
       // Use [reg, reg] addrmode. Replace the immediate operand w/ the frame
       // register. The offset is already handled in the vreg value.
       MI.getOperand(i+1).ChangeToRegister(FrameReg, false, false, false);
-  } else if (Desc.mayStore()) {
+  } else if (MI.mayStore()) {
       VReg = MF.getRegInfo().createVirtualRegister(ARM::tGPRRegisterClass);
       bool UseRR = false;
 
@@ -698,7 +698,7 @@ Thumb1RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   }
 
   // Add predicate back if it's needed.
-  if (MI.getDesc().isPredicable()) {
+  if (MI.isPredicable()) {
     MachineInstrBuilder MIB(&MI);
     AddDefaultPred(MIB);
   }

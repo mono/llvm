@@ -1,5 +1,5 @@
-; RUN: llc < %s -mtriple=armv7-apple-darwin10 -verify-machineinstrs | FileCheck %s
-; RUN: llc < %s -mtriple=thumbv7-apple-darwin10 -verify-machineinstrs | FileCheck %s
+; RUN: llc < %s -mtriple=armv7-apple-ios -verify-machineinstrs | FileCheck %s
+; RUN: llc < %s -mtriple=thumbv7-apple-ios -verify-machineinstrs | FileCheck %s
 
 define void @func(i32 %argc, i8** %argv) nounwind {
 entry:
@@ -24,80 +24,138 @@ entry:
   ; CHECK: ldrex
   ; CHECK: add
   ; CHECK: strex
-	call i32 @llvm.atomic.load.add.i32.p0i32( i32* %val1, i32 %tmp )		; <i32>:0 [#uses=1]
+  %0 = atomicrmw add i32* %val1, i32 %tmp monotonic
 	store i32 %0, i32* %old
   ; CHECK: ldrex
   ; CHECK: sub
   ; CHECK: strex
-	call i32 @llvm.atomic.load.sub.i32.p0i32( i32* %val2, i32 30 )		; <i32>:1 [#uses=1]
+  %1 = atomicrmw sub i32* %val2, i32 30 monotonic
 	store i32 %1, i32* %old
   ; CHECK: ldrex
   ; CHECK: add
   ; CHECK: strex
-	call i32 @llvm.atomic.load.add.i32.p0i32( i32* %val2, i32 1 )		; <i32>:2 [#uses=1]
+  %2 = atomicrmw add i32* %val2, i32 1 monotonic
 	store i32 %2, i32* %old
   ; CHECK: ldrex
   ; CHECK: sub
   ; CHECK: strex
-	call i32 @llvm.atomic.load.sub.i32.p0i32( i32* %val2, i32 1 )		; <i32>:3 [#uses=1]
+  %3 = atomicrmw sub i32* %val2, i32 1 monotonic
 	store i32 %3, i32* %old
   ; CHECK: ldrex
   ; CHECK: and
   ; CHECK: strex
-	call i32 @llvm.atomic.load.and.i32.p0i32( i32* %andt, i32 4080 )		; <i32>:4 [#uses=1]
+  %4 = atomicrmw and i32* %andt, i32 4080 monotonic
 	store i32 %4, i32* %old
   ; CHECK: ldrex
   ; CHECK: or
   ; CHECK: strex
-	call i32 @llvm.atomic.load.or.i32.p0i32( i32* %ort, i32 4080 )		; <i32>:5 [#uses=1]
+  %5 = atomicrmw or i32* %ort, i32 4080 monotonic
 	store i32 %5, i32* %old
   ; CHECK: ldrex
   ; CHECK: eor
   ; CHECK: strex
-	call i32 @llvm.atomic.load.xor.i32.p0i32( i32* %xort, i32 4080 )		; <i32>:6 [#uses=1]
+  %6 = atomicrmw xor i32* %xort, i32 4080 monotonic
 	store i32 %6, i32* %old
   ; CHECK: ldrex
   ; CHECK: cmp
   ; CHECK: strex
-	call i32 @llvm.atomic.load.min.i32.p0i32( i32* %val2, i32 16 )		; <i32>:7 [#uses=1]
+  %7 = atomicrmw min i32* %val2, i32 16 monotonic
 	store i32 %7, i32* %old
-	%neg = sub i32 0, 1		; <i32> [#uses=1]
+	%neg = sub i32 0, 1
   ; CHECK: ldrex
   ; CHECK: cmp
   ; CHECK: strex
-	call i32 @llvm.atomic.load.min.i32.p0i32( i32* %val2, i32 %neg )		; <i32>:8 [#uses=1]
+  %8 = atomicrmw min i32* %val2, i32 %neg monotonic
 	store i32 %8, i32* %old
   ; CHECK: ldrex
   ; CHECK: cmp
   ; CHECK: strex
-	call i32 @llvm.atomic.load.max.i32.p0i32( i32* %val2, i32 1 )		; <i32>:9 [#uses=1]
+  %9 = atomicrmw max i32* %val2, i32 1 monotonic
 	store i32 %9, i32* %old
   ; CHECK: ldrex
   ; CHECK: cmp
   ; CHECK: strex
-	call i32 @llvm.atomic.load.max.i32.p0i32( i32* %val2, i32 0 )		; <i32>:10 [#uses=1]
+  %10 = atomicrmw max i32* %val2, i32 0 monotonic
 	store i32 %10, i32* %old
-	ret void
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %11 = atomicrmw umin i32* %val2, i32 16 monotonic
+	store i32 %11, i32* %old
+	%uneg = sub i32 0, 1
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %12 = atomicrmw umin i32* %val2, i32 %uneg monotonic
+	store i32 %12, i32* %old
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %13 = atomicrmw umax i32* %val2, i32 1 monotonic
+	store i32 %13, i32* %old
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %14 = atomicrmw umax i32* %val2, i32 0 monotonic
+	store i32 %14, i32* %old
+
+  ret void
 }
 
-declare i32 @llvm.atomic.load.add.i32.p0i32(i32*, i32) nounwind 
+define void @func2() nounwind {
+entry:
+  %val = alloca i16
+  %old = alloca i16
+  store i16 31, i16* %val
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %0 = atomicrmw umin i16* %val, i16 16 monotonic
+  store i16 %0, i16* %old
+  %uneg = sub i16 0, 1
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %1 = atomicrmw umin i16* %val, i16 %uneg monotonic
+  store i16 %1, i16* %old
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %2 = atomicrmw umax i16* %val, i16 1 monotonic
+  store i16 %2, i16* %old
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %3 = atomicrmw umax i16* %val, i16 0 monotonic
+  store i16 %3, i16* %old
+  ret void
+}
 
-declare i32 @llvm.atomic.load.sub.i32.p0i32(i32*, i32) nounwind 
-
-declare i32 @llvm.atomic.load.and.i32.p0i32(i32*, i32) nounwind 
-
-declare i32 @llvm.atomic.load.or.i32.p0i32(i32*, i32) nounwind 
-
-declare i32 @llvm.atomic.load.xor.i32.p0i32(i32*, i32) nounwind 
-
-declare i32 @llvm.atomic.load.min.i32.p0i32(i32*, i32) nounwind 
-
-declare i32 @llvm.atomic.load.max.i32.p0i32(i32*, i32) nounwind 
-
-declare i32 @llvm.atomic.load.umax.i32.p0i32(i32*, i32) nounwind 
-
-declare i32 @llvm.atomic.load.umin.i32.p0i32(i32*, i32) nounwind 
-
-declare i32 @llvm.atomic.swap.i32.p0i32(i32*, i32) nounwind 
-
-declare i32 @llvm.atomic.cmp.swap.i32.p0i32(i32*, i32, i32) nounwind 
+define void @func3() nounwind {
+entry:
+  %val = alloca i8
+  %old = alloca i8
+  store i8 31, i8* %val
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %0 = atomicrmw umin i8* %val, i8 16 monotonic
+  store i8 %0, i8* %old
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %uneg = sub i8 0, 1
+  %1 = atomicrmw umin i8* %val, i8 %uneg monotonic
+  store i8 %1, i8* %old
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %2 = atomicrmw umax i8* %val, i8 1 monotonic
+  store i8 %2, i8* %old
+  ; CHECK: ldrex
+  ; CHECK: cmp
+  ; CHECK: strex
+  %3 = atomicrmw umax i8* %val, i8 0 monotonic
+  store i8 %3, i8* %old
+  ret void
+}

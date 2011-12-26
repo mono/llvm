@@ -47,7 +47,6 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -86,12 +85,12 @@ namespace {
     void EmitTextAttribute(unsigned Attribute, StringRef String) {
       switch (Attribute) {
       case ARMBuildAttrs::CPU_name:
-        Streamer.EmitRawText(StringRef("\t.cpu ") + LowercaseString(String));
+        Streamer.EmitRawText(StringRef("\t.cpu ") + String.lower());
         break;
       /* GAS requires .fpu to be emitted regardless of EABI attribute */
       case ARMBuildAttrs::Advanced_SIMD_arch:
       case ARMBuildAttrs::VFP_arch:
-        Streamer.EmitRawText(StringRef("\t.fpu ") + LowercaseString(String));
+        Streamer.EmitRawText(StringRef("\t.fpu ") + String.lower());
         break;
       default: assert(0 && "Unsupported Text attribute in ASM Mode"); break;
       }
@@ -201,7 +200,7 @@ namespace {
           Streamer.EmitULEB128IntValue(item.IntValue, 0);
           break;
         case AttributeItemType::TextAttribute:
-          Streamer.EmitBytes(UppercaseString(item.StringValue), 0);
+          Streamer.EmitBytes(item.StringValue.upper(), 0);
           Streamer.EmitIntValue(0, 1); // '\0'
           break;
         default:
@@ -290,6 +289,8 @@ void ARMAsmPrinter::EmitDwarfRegOp(const MachineLocation &MLoc) const {
 }
 
 void ARMAsmPrinter::EmitFunctionEntryLabel() {
+  OutStreamer.ForceCodeRegion();
+
   if (AFI->isThumbFunction()) {
     OutStreamer.EmitAssemblerFlag(MCAF_Code16);
     OutStreamer.EmitThumbFunc(CurrentFnSym);
@@ -492,11 +493,21 @@ bool ARMAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNum,
       return false;
     }
 
-    // These modifiers are not yet supported.
-    case 'p': // The high single-precision register of a VFP double-precision
-              // register.
     case 'e': // The low doubleword register of a NEON quad register.
-    case 'f': // The high doubleword register of a NEON quad register.
+    case 'f': { // The high doubleword register of a NEON quad register.
+      if (!MI->getOperand(OpNum).isReg())
+        return true;
+      unsigned Reg = MI->getOperand(OpNum).getReg();
+      if (!ARM::QPRRegClass.contains(Reg))
+        return true;
+      const TargetRegisterInfo *TRI = MF->getTarget().getRegisterInfo();
+      unsigned SubReg = TRI->getSubReg(Reg, ExtraCode[0] == 'e' ?
+                                       ARM::dsub_0 : ARM::dsub_1);
+      O << ARMInstPrinter::getRegisterName(SubReg);
+      return false;
+    }
+
+    // These modifiers are not yet supported.
     case 'h': // A range of VFP/NEON registers suitable for VLD1/VST1.
     case 'H': // The highest-numbered register of a pair.
       return true;
@@ -759,14 +770,14 @@ void ARMAsmPrinter::emitAttributes() {
   }
 
   // Signal various FP modes.
-  if (!UnsafeFPMath) {
+  if (!TM.Options.UnsafeFPMath) {
     AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_denormal,
                                ARMBuildAttrs::Allowed);
     AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_exceptions,
                                ARMBuildAttrs::Allowed);
   }
 
-  if (NoInfsFPMath && NoNaNsFPMath)
+  if (TM.Options.NoInfsFPMath && TM.Options.NoNaNsFPMath)
     AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_FP_number_model,
                                ARMBuildAttrs::Allowed);
   else
@@ -779,7 +790,7 @@ void ARMAsmPrinter::emitAttributes() {
   AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_align8_preserved, 1);
 
   // Hard float.  Use both S and D registers and conform to AAPCS-VFP.
-  if (Subtarget->isAAPCS_ABI() && FloatABIType == FloatABI::Hard) {
+  if (Subtarget->isAAPCS_ABI() && TM.Options.FloatABIType == FloatABI::Hard) {
     AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_HardFP_use, 3);
     AttrEmitter->EmitAttribute(ARMBuildAttrs::ABI_VFP_args, 1);
   }
@@ -870,13 +881,19 @@ EmitMachineConstantPoolValue(MachineConstantPoolValue *MCPV) {
     OS << MAI->getPrivateGlobalPrefix() << "_LSDA_" << getFunctionNumber();
     MCSym = OutContext.GetOrCreateSymbol(OS.str());
   } else if (ACPV->isBlockAddress()) {
-    MCSym = GetBlockAddressSymbol(ACPV->getBlockAddress());
+    const BlockAddress *BA =
+      cast<ARMConstantPoolConstant>(ACPV)->getBlockAddress();
+    MCSym = GetBlockAddressSymbol(BA);
   } else if (ACPV->isGlobalValue()) {
-    const GlobalValue *GV = ACPV->getGV();
+    const GlobalValue *GV = cast<ARMConstantPoolConstant>(ACPV)->getGV();
     MCSym = GetARMGVSymbol(GV);
+  } else if (ACPV->isMachineBasicBlock()) {
+    const MachineBasicBlock *MBB = cast<ARMConstantPoolMBB>(ACPV)->getMBB();
+    MCSym = MBB->getSymbol();
   } else {
     assert(ACPV->isExtSymbol() && "unrecognized constant pool value");
-    MCSym = GetExternalSymbolSymbol(ACPV->getSymbol());
+    const char *Sym = cast<ARMConstantPoolSymbol>(ACPV)->getSymbol();
+    MCSym = GetExternalSymbolSymbol(Sym);
   }
 
   // Create an MCSymbol for the reference.
@@ -920,6 +937,9 @@ void ARMAsmPrinter::EmitJumpTable(const MachineInstr *MI) {
   const MachineOperand &MO2 = MI->getOperand(OpNum+1); // Unique Id
   unsigned JTI = MO1.getIndex();
 
+  // Tag the jump table appropriately for precise disassembly.
+  OutStreamer.EmitJumpTable32Region();
+
   // Emit a label for the jump table.
   MCSymbol *JTISymbol = GetARMJTIPICJumpTableLabel2(JTI, MO2.getImm());
   OutStreamer.EmitLabel(JTISymbol);
@@ -962,6 +982,14 @@ void ARMAsmPrinter::EmitJump2Table(const MachineInstr *MI) {
   unsigned JTI = MO1.getIndex();
 
   // Emit a label for the jump table.
+  if (MI->getOpcode() == ARM::t2TBB_JT) {
+    OutStreamer.EmitJumpTable8Region();
+  } else if (MI->getOpcode() == ARM::t2TBH_JT) {
+    OutStreamer.EmitJumpTable16Region();
+  } else {
+    OutStreamer.EmitJumpTable32Region();
+  }
+
   MCSymbol *JTISymbol = GetARMJTIPICJumpTableLabel2(JTI, MO2.getImm());
   OutStreamer.EmitLabel(JTISymbol);
 
@@ -984,6 +1012,8 @@ void ARMAsmPrinter::EmitJump2Table(const MachineInstr *MI) {
       MCInst BrInst;
       BrInst.setOpcode(ARM::t2B);
       BrInst.addOperand(MCOperand::CreateExpr(MBBSymbolExpr));
+      BrInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+      BrInst.addOperand(MCOperand::CreateReg(0));
       OutStreamer.EmitInstruction(BrInst);
       continue;
     }
@@ -1070,7 +1100,7 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
   }
 
   // Try to figure out the unwinding opcode out of src / dst regs.
-  if (MI->getDesc().mayStore()) {
+  if (MI->mayStore()) {
     // Register saves.
     assert(DstReg == ARM::SP &&
            "Only stack pointer as a destination reg is supported");
@@ -1178,6 +1208,9 @@ extern cl::opt<bool> EnableARMEHABI;
 #include "ARMGenMCPseudoLowering.inc"
 
 void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
+  if (MI->getOpcode() != ARM::CONSTPOOL_ENTRY)
+    OutStreamer.EmitCodeRegion();
+
   // Emit unwinding stuff for frame-related instructions
   if (EnableARMEHABI && MI->getFlag(MachineInstr::FrameSetup))
     EmitUnwindingInstruction(MI);
@@ -1185,6 +1218,9 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   // Do any auto-generated pseudo lowerings.
   if (emitPseudoExpansionLowering(OutStreamer, MI))
     return;
+
+  assert(!convertAddSubFlagsOpcode(MI->getOpcode()) &&
+         "Pseudo flag setting opcode should be expanded early");
 
   // Check for manual lowerings.
   unsigned Opc = MI->getOpcode();
@@ -1476,10 +1512,13 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
     /// in the function.  The first operand is the ID# for this instruction, the
     /// second is the index into the MachineConstantPool that this is, the third
     /// is the size in bytes of this constant pool entry.
+    /// The required alignment is specified on the basic block holding this MI.
     unsigned LabelId = (unsigned)MI->getOperand(0).getImm();
     unsigned CPIdx   = (unsigned)MI->getOperand(1).getIndex();
 
-    EmitAlignment(2);
+    // Mark the constant pool entry as data if we're not already in a data
+    // region.
+    OutStreamer.EmitDataRegion();
     OutStreamer.EmitLabel(GetCPISymbol(LabelId));
 
     const MachineConstantPoolEntry &MCPE = MCP->getConstants()[CPIdx];
@@ -1487,7 +1526,6 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
       EmitMachineConstantPoolValue(MCPE.Val.MachineCPVal);
     else
       EmitGlobalConstant(MCPE.Val.ConstVal);
-
     return;
   }
   case ARM::t2BR_JT: {
@@ -1698,6 +1736,8 @@ void ARMAsmPrinter::EmitInstruction(const MachineInstr *MI) {
       MCInst TmpInst;
       TmpInst.setOpcode(ARM::tB);
       TmpInst.addOperand(MCOperand::CreateExpr(SymbolExpr));
+      TmpInst.addOperand(MCOperand::CreateImm(ARMCC::AL));
+      TmpInst.addOperand(MCOperand::CreateReg(0));
       OutStreamer.EmitInstruction(TmpInst);
     }
     {
@@ -1924,4 +1964,3 @@ extern "C" void LLVMInitializeARMAsmPrinter() {
   RegisterAsmPrinter<ARMAsmPrinter> X(TheARMTarget);
   RegisterAsmPrinter<ARMAsmPrinter> Y(TheThumbTarget);
 }
-

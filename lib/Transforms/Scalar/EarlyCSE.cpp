@@ -19,6 +19,7 @@
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Target/TargetData.h"
+#include "llvm/Target/TargetLibraryInfo.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/RecyclingAllocator.h"
@@ -92,7 +93,7 @@ unsigned DenseMapInfo<SimpleValue>::getHashValue(SimpleValue Val) {
   // Hash in all of the operands as pointers.
   unsigned Res = 0;
   for (unsigned i = 0, e = Inst->getNumOperands(); i != e; ++i)
-    Res ^= getHash(Inst->getOperand(i)) << i;
+    Res ^= getHash(Inst->getOperand(i)) << (i & 0xF);
 
   if (CastInst *CI = dyn_cast<CastInst>(Inst))
     Res ^= getHash(CI->getType());
@@ -185,7 +186,7 @@ unsigned DenseMapInfo<CallValue>::getHashValue(CallValue Val) {
   for (unsigned i = 0, e = Inst->getNumOperands(); i != e; ++i) {
     assert(!Inst->getOperand(i)->getType()->isMetadataTy() &&
            "Cannot value number calls with metadata operands");
-    Res ^= getHash(Inst->getOperand(i)) << i;
+    Res ^= getHash(Inst->getOperand(i)) << (i & 0xF);
   }
   
   // Mix in the opcode.
@@ -215,6 +216,7 @@ namespace {
 class EarlyCSE : public FunctionPass {
 public:
   const TargetData *TD;
+  const TargetLibraryInfo *TLI;
   DominatorTree *DT;
   typedef RecyclingAllocator<BumpPtrAllocator,
                       ScopedHashTableVal<SimpleValue, Value*> > AllocatorTy;
@@ -263,6 +265,7 @@ private:
   // This transformation requires dominator postdominator info
   virtual void getAnalysisUsage(AnalysisUsage &AU) const {
     AU.addRequired<DominatorTree>();
+    AU.addRequired<TargetLibraryInfo>();
     AU.setPreservesCFG();
   }
 };
@@ -277,6 +280,7 @@ FunctionPass *llvm::createEarlyCSEPass() {
 
 INITIALIZE_PASS_BEGIN(EarlyCSE, "early-cse", "Early CSE", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTree)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfo)
 INITIALIZE_PASS_END(EarlyCSE, "early-cse", "Early CSE", false, false)
 
 bool EarlyCSE::processNode(DomTreeNode *Node) {
@@ -328,7 +332,7 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
     
     // If the instruction can be simplified (e.g. X+0 = X) then replace it with
     // its simpler value.
-    if (Value *V = SimplifyInstruction(Inst, TD, DT)) {
+    if (Value *V = SimplifyInstruction(Inst, TD, TLI, DT)) {
       DEBUG(dbgs() << "EarlyCSE Simplify: " << *Inst << "  to: " << *V << '\n');
       Inst->replaceAllUsesWith(V);
       Inst->eraseFromParent();
@@ -357,7 +361,7 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
     // If this is a non-volatile load, process it.
     if (LoadInst *LI = dyn_cast<LoadInst>(Inst)) {
       // Ignore volatile loads.
-      if (LI->isVolatile()) {
+      if (!LI->isSimple()) {
         LastStore = 0;
         continue;
       }
@@ -437,7 +441,7 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
          std::pair<Value*, unsigned>(SI->getValueOperand(), CurrentGeneration));
         
         // Remember that this was the last store we saw for DSE.
-        if (!SI->isVolatile())
+        if (SI->isSimple())
           LastStore = SI;
       }
     }
@@ -455,6 +459,7 @@ bool EarlyCSE::processNode(DomTreeNode *Node) {
 
 bool EarlyCSE::runOnFunction(Function &F) {
   TD = getAnalysisIfAvailable<TargetData>();
+  TLI = &getAnalysis<TargetLibraryInfo>();
   DT = &getAnalysis<DominatorTree>();
   
   // Tables that the pass uses when walking the domtree.

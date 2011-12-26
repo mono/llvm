@@ -55,6 +55,7 @@ namespace {
     virtual void EmitCOFFSymbolStorageClass(int StorageClass) {}
     virtual void EmitCOFFSymbolType(int Type) {}
     virtual void EndCOFFSymbolDef() {}
+    virtual void EmitCOFFSecRel32(MCSymbol const *Symbol) {}
 
     virtual void EmitELFSize(MCSymbol *Symbol, const MCExpr *Value) {}
     virtual void EmitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
@@ -83,7 +84,8 @@ namespace {
                                    unsigned char Value = 0) {}
     
     virtual void EmitFileDirective(StringRef Filename) {}
-    virtual bool EmitDwarfFileDirective(unsigned FileNo,StringRef Filename) {
+    virtual bool EmitDwarfFileDirective(unsigned FileNo, StringRef Directory,
+                                        StringRef Filename) {
       return false;
     }
     virtual void EmitDwarfLocDirective(unsigned FileNo, unsigned Line,

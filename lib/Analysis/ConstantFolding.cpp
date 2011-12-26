@@ -26,6 +26,7 @@
 #include "llvm/Operator.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Target/TargetData.h"
+#include "llvm/Target/TargetLibraryInfo.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -542,8 +543,8 @@ static Constant *SymbolicallyEvaluateBinop(unsigned Opc, Constant *Op0,
 /// explicitly cast them so that they aren't implicitly casted by the
 /// getelementptr.
 static Constant *CastGEPIndices(ArrayRef<Constant *> Ops,
-                                Type *ResultTy,
-                                const TargetData *TD) {
+                                Type *ResultTy, const TargetData *TD,
+                                const TargetLibraryInfo *TLI) {
   if (!TD) return 0;
   Type *IntPtrTy = TD->getIntPtrType(ResultTy->getContext());
 
@@ -568,7 +569,7 @@ static Constant *CastGEPIndices(ArrayRef<Constant *> Ops,
   Constant *C =
     ConstantExpr::getGetElementPtr(Ops[0], NewIdxs);
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(C))
-    if (Constant *Folded = ConstantFoldConstantExpression(CE, TD))
+    if (Constant *Folded = ConstantFoldConstantExpression(CE, TD, TLI))
       C = Folded;
   return C;
 }
@@ -576,10 +577,11 @@ static Constant *CastGEPIndices(ArrayRef<Constant *> Ops,
 /// SymbolicallyEvaluateGEP - If we can symbolically evaluate the specified GEP
 /// constant expression, do so.
 static Constant *SymbolicallyEvaluateGEP(ArrayRef<Constant *> Ops,
-                                         Type *ResultTy,
-                                         const TargetData *TD) {
+                                         Type *ResultTy, const TargetData *TD,
+                                         const TargetLibraryInfo *TLI) {
   Constant *Ptr = Ops[0];
-  if (!TD || !cast<PointerType>(Ptr->getType())->getElementType()->isSized())
+  if (!TD || !cast<PointerType>(Ptr->getType())->getElementType()->isSized() ||
+      !Ptr->getType()->isPointerTy())
     return 0;
   
   Type *IntPtrTy = TD->getIntPtrType(Ptr->getContext());
@@ -602,7 +604,7 @@ static Constant *SymbolicallyEvaluateGEP(ArrayRef<Constant *> Ops,
           Res = ConstantExpr::getSub(Res, CE->getOperand(1));
           Res = ConstantExpr::getIntToPtr(Res, ResultTy);
           if (ConstantExpr *ResCE = dyn_cast<ConstantExpr>(Res))
-            Res = ConstantFoldConstantExpression(ResCE, TD);
+            Res = ConstantFoldConstantExpression(ResCE, TD, TLI);
           return Res;
         }
       }
@@ -729,7 +731,9 @@ static Constant *SymbolicallyEvaluateGEP(ArrayRef<Constant *> Ops,
 /// Note that this fails if not all of the operands are constant.  Otherwise,
 /// this function can only fail when attempting to fold instructions like loads
 /// and stores, which have no constant expression form.
-Constant *llvm::ConstantFoldInstruction(Instruction *I, const TargetData *TD) {
+Constant *llvm::ConstantFoldInstruction(Instruction *I,
+                                        const TargetData *TD,
+                                        const TargetLibraryInfo *TLI) {
   // Handle PHI nodes quickly here...
   if (PHINode *PN = dyn_cast<PHINode>(I)) {
     Constant *CommonValue = 0;
@@ -765,7 +769,7 @@ Constant *llvm::ConstantFoldInstruction(Instruction *I, const TargetData *TD) {
 
   if (const CmpInst *CI = dyn_cast<CmpInst>(I))
     return ConstantFoldCompareInstOperands(CI->getPredicate(), Ops[0], Ops[1],
-                                           TD);
+                                           TD, TLI);
   
   if (const LoadInst *LI = dyn_cast<LoadInst>(I))
     return ConstantFoldLoadInst(LI, TD);
@@ -781,28 +785,29 @@ Constant *llvm::ConstantFoldInstruction(Instruction *I, const TargetData *TD) {
                                     cast<Constant>(EVI->getAggregateOperand()),
                                     EVI->getIndices());
 
-  return ConstantFoldInstOperands(I->getOpcode(), I->getType(), Ops, TD);
+  return ConstantFoldInstOperands(I->getOpcode(), I->getType(), Ops, TD, TLI);
 }
 
 /// ConstantFoldConstantExpression - Attempt to fold the constant expression
 /// using the specified TargetData.  If successful, the constant result is
 /// result is returned, if not, null is returned.
 Constant *llvm::ConstantFoldConstantExpression(const ConstantExpr *CE,
-                                               const TargetData *TD) {
+                                               const TargetData *TD,
+                                               const TargetLibraryInfo *TLI) {
   SmallVector<Constant*, 8> Ops;
   for (User::const_op_iterator i = CE->op_begin(), e = CE->op_end();
        i != e; ++i) {
     Constant *NewC = cast<Constant>(*i);
     // Recursively fold the ConstantExpr's operands.
     if (ConstantExpr *NewCE = dyn_cast<ConstantExpr>(NewC))
-      NewC = ConstantFoldConstantExpression(NewCE, TD);
+      NewC = ConstantFoldConstantExpression(NewCE, TD, TLI);
     Ops.push_back(NewC);
   }
 
   if (CE->isCompare())
     return ConstantFoldCompareInstOperands(CE->getPredicate(), Ops[0], Ops[1],
-                                           TD);
-  return ConstantFoldInstOperands(CE->getOpcode(), CE->getType(), Ops, TD);
+                                           TD, TLI);
+  return ConstantFoldInstOperands(CE->getOpcode(), CE->getType(), Ops, TD, TLI);
 }
 
 /// ConstantFoldInstOperands - Attempt to constant fold an instruction with the
@@ -817,7 +822,8 @@ Constant *llvm::ConstantFoldConstantExpression(const ConstantExpr *CE,
 ///
 Constant *llvm::ConstantFoldInstOperands(unsigned Opcode, Type *DestTy, 
                                          ArrayRef<Constant *> Ops,
-                                         const TargetData *TD) {
+                                         const TargetData *TD,
+                                         const TargetLibraryInfo *TLI) {                                         
   // Handle easy binops first.
   if (Instruction::isBinaryOp(Opcode)) {
     if (isa<ConstantExpr>(Ops[0]) || isa<ConstantExpr>(Ops[1]))
@@ -834,7 +840,7 @@ Constant *llvm::ConstantFoldInstOperands(unsigned Opcode, Type *DestTy,
   case Instruction::Call:
     if (Function *F = dyn_cast<Function>(Ops.back()))
       if (canConstantFoldCallTo(F))
-        return ConstantFoldCall(F, Ops.slice(0, Ops.size() - 1));
+        return ConstantFoldCall(F, Ops.slice(0, Ops.size() - 1), TLI);
     return 0;
   case Instruction::PtrToInt:
     // If the input is a inttoptr, eliminate the pair.  This requires knowing
@@ -888,9 +894,9 @@ Constant *llvm::ConstantFoldInstOperands(unsigned Opcode, Type *DestTy,
   case Instruction::ShuffleVector:
     return ConstantExpr::getShuffleVector(Ops[0], Ops[1], Ops[2]);
   case Instruction::GetElementPtr:
-    if (Constant *C = CastGEPIndices(Ops, DestTy, TD))
+    if (Constant *C = CastGEPIndices(Ops, DestTy, TD, TLI))
       return C;
-    if (Constant *C = SymbolicallyEvaluateGEP(Ops, DestTy, TD))
+    if (Constant *C = SymbolicallyEvaluateGEP(Ops, DestTy, TD, TLI))
       return C;
     
     return ConstantExpr::getGetElementPtr(Ops[0], Ops.slice(1));
@@ -903,7 +909,8 @@ Constant *llvm::ConstantFoldInstOperands(unsigned Opcode, Type *DestTy,
 ///
 Constant *llvm::ConstantFoldCompareInstOperands(unsigned Predicate,
                                                 Constant *Ops0, Constant *Ops1, 
-                                                const TargetData *TD) {
+                                                const TargetData *TD,
+                                                const TargetLibraryInfo *TLI) {
   // fold: icmp (inttoptr x), null         -> icmp x, 0
   // fold: icmp (ptrtoint x), 0            -> icmp x, null
   // fold: icmp (inttoptr x), (inttoptr y) -> icmp trunc/zext x, trunc/zext y
@@ -920,7 +927,7 @@ Constant *llvm::ConstantFoldCompareInstOperands(unsigned Predicate,
         Constant *C = ConstantExpr::getIntegerCast(CE0->getOperand(0),
                                                    IntPtrTy, false);
         Constant *Null = Constant::getNullValue(C->getType());
-        return ConstantFoldCompareInstOperands(Predicate, C, Null, TD);
+        return ConstantFoldCompareInstOperands(Predicate, C, Null, TD, TLI);
       }
       
       // Only do this transformation if the int is intptrty in size, otherwise
@@ -929,7 +936,7 @@ Constant *llvm::ConstantFoldCompareInstOperands(unsigned Predicate,
           CE0->getType() == IntPtrTy) {
         Constant *C = CE0->getOperand(0);
         Constant *Null = Constant::getNullValue(C->getType());
-        return ConstantFoldCompareInstOperands(Predicate, C, Null, TD);
+        return ConstantFoldCompareInstOperands(Predicate, C, Null, TD, TLI);
       }
     }
     
@@ -944,7 +951,7 @@ Constant *llvm::ConstantFoldCompareInstOperands(unsigned Predicate,
                                                       IntPtrTy, false);
           Constant *C1 = ConstantExpr::getIntegerCast(CE1->getOperand(0),
                                                       IntPtrTy, false);
-          return ConstantFoldCompareInstOperands(Predicate, C0, C1, TD);
+          return ConstantFoldCompareInstOperands(Predicate, C0, C1, TD, TLI);
         }
 
         // Only do this transformation if the int is intptrty in size, otherwise
@@ -953,7 +960,7 @@ Constant *llvm::ConstantFoldCompareInstOperands(unsigned Predicate,
              CE0->getType() == IntPtrTy &&
              CE0->getOperand(0)->getType() == CE1->getOperand(0)->getType()))
           return ConstantFoldCompareInstOperands(Predicate, CE0->getOperand(0),
-                                                 CE1->getOperand(0), TD);
+                                                 CE1->getOperand(0), TD, TLI);
       }
     }
     
@@ -962,13 +969,15 @@ Constant *llvm::ConstantFoldCompareInstOperands(unsigned Predicate,
     if ((Predicate == ICmpInst::ICMP_EQ || Predicate == ICmpInst::ICMP_NE) &&
         CE0->getOpcode() == Instruction::Or && Ops1->isNullValue()) {
       Constant *LHS = 
-        ConstantFoldCompareInstOperands(Predicate, CE0->getOperand(0), Ops1,TD);
+        ConstantFoldCompareInstOperands(Predicate, CE0->getOperand(0), Ops1,
+                                        TD, TLI);
       Constant *RHS = 
-        ConstantFoldCompareInstOperands(Predicate, CE0->getOperand(1), Ops1,TD);
+        ConstantFoldCompareInstOperands(Predicate, CE0->getOperand(1), Ops1,
+                                        TD, TLI);
       unsigned OpC = 
         Predicate == ICmpInst::ICMP_EQ ? Instruction::And : Instruction::Or;
       Constant *Ops[] = { LHS, RHS };
-      return ConstantFoldInstOperands(OpC, LHS->getType(), Ops, TD);
+      return ConstantFoldInstOperands(OpC, LHS->getType(), Ops, TD, TLI);
     }
   }
   
@@ -1045,6 +1054,7 @@ bool
 llvm::canConstantFoldCallTo(const Function *F) {
   switch (F->getIntrinsicID()) {
   case Intrinsic::sqrt:
+  case Intrinsic::pow:
   case Intrinsic::powi:
   case Intrinsic::bswap:
   case Intrinsic::ctpop:
@@ -1168,7 +1178,8 @@ static Constant *ConstantFoldConvertToInt(ConstantFP *Op, bool roundTowardZero,
 /// ConstantFoldCall - Attempt to constant fold a call to the specified function
 /// with the specified arguments, returning null if unsuccessful.
 Constant *
-llvm::ConstantFoldCall(Function *F, ArrayRef<Constant *> Operands) {
+llvm::ConstantFoldCall(Function *F, ArrayRef<Constant *> Operands,
+                       const TargetLibraryInfo *TLI) {
   if (!F->hasName()) return 0;
   StringRef Name = F->getName();
 
@@ -1183,6 +1194,8 @@ llvm::ConstantFoldCall(Function *F, ArrayRef<Constant *> Operands) {
 
         return ConstantInt::get(F->getContext(), Val.bitcastToAPInt());
       }
+      if (!TLI)
+        return 0;
 
       if (!Ty->isFloatTy() && !Ty->isDoubleTy())
         return 0;
@@ -1201,43 +1214,43 @@ llvm::ConstantFoldCall(Function *F, ArrayRef<Constant *> Operands) {
                                      Op->getValueAPF().convertToDouble();
       switch (Name[0]) {
       case 'a':
-        if (Name == "acos")
+        if (Name == "acos" && TLI->has(LibFunc::acos))
           return ConstantFoldFP(acos, V, Ty);
-        else if (Name == "asin")
+        else if (Name == "asin" && TLI->has(LibFunc::asin))
           return ConstantFoldFP(asin, V, Ty);
-        else if (Name == "atan")
+        else if (Name == "atan" && TLI->has(LibFunc::atan))
           return ConstantFoldFP(atan, V, Ty);
         break;
       case 'c':
-        if (Name == "ceil")
+        if (Name == "ceil" && TLI->has(LibFunc::ceil))
           return ConstantFoldFP(ceil, V, Ty);
-        else if (Name == "cos")
+        else if (Name == "cos" && TLI->has(LibFunc::cos))
           return ConstantFoldFP(cos, V, Ty);
-        else if (Name == "cosh")
+        else if (Name == "cosh" && TLI->has(LibFunc::cosh))
           return ConstantFoldFP(cosh, V, Ty);
-        else if (Name == "cosf")
+        else if (Name == "cosf" && TLI->has(LibFunc::cosf))
           return ConstantFoldFP(cos, V, Ty);
         break;
       case 'e':
-        if (Name == "exp")
+        if (Name == "exp" && TLI->has(LibFunc::exp))
           return ConstantFoldFP(exp, V, Ty);
   
-        if (Name == "exp2") {
+        if (Name == "exp2" && TLI->has(LibFunc::exp2)) {
           // Constant fold exp2(x) as pow(2,x) in case the host doesn't have a
           // C99 library.
           return ConstantFoldBinaryFP(pow, 2.0, V, Ty);
         }
         break;
       case 'f':
-        if (Name == "fabs")
+        if (Name == "fabs" && TLI->has(LibFunc::fabs))
           return ConstantFoldFP(fabs, V, Ty);
-        else if (Name == "floor")
+        else if (Name == "floor" && TLI->has(LibFunc::floor))
           return ConstantFoldFP(floor, V, Ty);
         break;
       case 'l':
-        if (Name == "log" && V > 0)
+        if (Name == "log" && V > 0 && TLI->has(LibFunc::log))
           return ConstantFoldFP(log, V, Ty);
-        else if (Name == "log10" && V > 0)
+        else if (Name == "log10" && V > 0 && TLI->has(LibFunc::log10))
           return ConstantFoldFP(log10, V, Ty);
         else if (F->getIntrinsicID() == Intrinsic::sqrt &&
                  (Ty->isFloatTy() || Ty->isDoubleTy())) {
@@ -1248,21 +1261,21 @@ llvm::ConstantFoldCall(Function *F, ArrayRef<Constant *> Operands) {
         }
         break;
       case 's':
-        if (Name == "sin")
+        if (Name == "sin" && TLI->has(LibFunc::sin))
           return ConstantFoldFP(sin, V, Ty);
-        else if (Name == "sinh")
+        else if (Name == "sinh" && TLI->has(LibFunc::sinh))
           return ConstantFoldFP(sinh, V, Ty);
-        else if (Name == "sqrt" && V >= 0)
+        else if (Name == "sqrt" && V >= 0 && TLI->has(LibFunc::sqrt))
           return ConstantFoldFP(sqrt, V, Ty);
-        else if (Name == "sqrtf" && V >= 0)
+        else if (Name == "sqrtf" && V >= 0 && TLI->has(LibFunc::sqrtf))
           return ConstantFoldFP(sqrt, V, Ty);
-        else if (Name == "sinf")
+        else if (Name == "sinf" && TLI->has(LibFunc::sinf))
           return ConstantFoldFP(sin, V, Ty);
         break;
       case 't':
-        if (Name == "tan")
+        if (Name == "tan" && TLI->has(LibFunc::tan))
           return ConstantFoldFP(tan, V, Ty);
-        else if (Name == "tanh")
+        else if (Name == "tanh" && TLI->has(LibFunc::tanh))
           return ConstantFoldFP(tanh, V, Ty);
         break;
       default:
@@ -1277,10 +1290,6 @@ llvm::ConstantFoldCall(Function *F, ArrayRef<Constant *> Operands) {
         return ConstantInt::get(F->getContext(), Op->getValue().byteSwap());
       case Intrinsic::ctpop:
         return ConstantInt::get(Ty, Op->getValue().countPopulation());
-      case Intrinsic::cttz:
-        return ConstantInt::get(Ty, Op->getValue().countTrailingZeros());
-      case Intrinsic::ctlz:
-        return ConstantInt::get(Ty, Op->getValue().countLeadingZeros());
       case Intrinsic::convert_from_fp16: {
         APFloat Val(Op->getValue());
 
@@ -1337,16 +1346,21 @@ llvm::ConstantFoldCall(Function *F, ArrayRef<Constant *> Operands) {
       if (ConstantFP *Op2 = dyn_cast<ConstantFP>(Operands[1])) {
         if (Op2->getType() != Op1->getType())
           return 0;
-        
+
         double Op2V = Ty->isFloatTy() ? 
                       (double)Op2->getValueAPF().convertToFloat():
                       Op2->getValueAPF().convertToDouble();
 
-        if (Name == "pow")
+        if (F->getIntrinsicID() == Intrinsic::pow) {
           return ConstantFoldBinaryFP(pow, Op1V, Op2V, Ty);
-        if (Name == "fmod")
+        }
+        if (!TLI)
+          return 0;
+        if (Name == "pow" && TLI->has(LibFunc::pow))
+          return ConstantFoldBinaryFP(pow, Op1V, Op2V, Ty);
+        if (Name == "fmod" && TLI->has(LibFunc::fmod))
           return ConstantFoldBinaryFP(fmod, Op1V, Op2V, Ty);
-        if (Name == "atan2")
+        if (Name == "atan2" && TLI->has(LibFunc::atan2))
           return ConstantFoldBinaryFP(atan2, Op1V, Op2V, Ty);
       } else if (ConstantInt *Op2C = dyn_cast<ConstantInt>(Operands[1])) {
         if (F->getIntrinsicID() == Intrinsic::powi && Ty->isFloatTy())
@@ -1360,7 +1374,6 @@ llvm::ConstantFoldCall(Function *F, ArrayRef<Constant *> Operands) {
       }
       return 0;
     }
-    
     
     if (ConstantInt *Op1 = dyn_cast<ConstantInt>(Operands[0])) {
       if (ConstantInt *Op2 = dyn_cast<ConstantInt>(Operands[1])) {
@@ -1401,6 +1414,14 @@ llvm::ConstantFoldCall(Function *F, ArrayRef<Constant *> Operands) {
           };
           return ConstantStruct::get(cast<StructType>(F->getReturnType()), Ops);
         }
+        case Intrinsic::cttz:
+          // FIXME: This should check for Op2 == 1, and become unreachable if
+          // Op1 == 0.
+          return ConstantInt::get(Ty, Op1->getValue().countTrailingZeros());
+        case Intrinsic::ctlz:
+          // FIXME: This should check for Op2 == 1, and become unreachable if
+          // Op1 == 0.
+          return ConstantInt::get(Ty, Op1->getValue().countLeadingZeros());
         }
       }
       

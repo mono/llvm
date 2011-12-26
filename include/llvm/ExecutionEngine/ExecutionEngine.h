@@ -26,6 +26,7 @@
 #include "llvm/Support/ValueHandle.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
 
 namespace llvm {
 
@@ -41,6 +42,7 @@ class MachineCodeInfo;
 class Module;
 class MutexGuard;
 class TargetData;
+class Triple;
 class Type;
 
 /// \brief Helper class for helping synchronize access to the global address map
@@ -120,9 +122,7 @@ protected:
   /// optimize for the case where there is only one module.
   SmallVector<Module*, 1> Modules;
 
-  void setTargetData(const TargetData *td) {
-    TD = td;
-  }
+  void setTargetData(const TargetData *td) { TD = td; }
 
   /// getMemoryforGV - Allocate memory for a global variable.
   virtual char *getMemoryForGV(const GlobalVariable *GV);
@@ -134,18 +134,15 @@ protected:
     Module *M,
     std::string *ErrorStr,
     JITMemoryManager *JMM,
-    CodeGenOpt::Level OptLevel,
     bool GVsWithCode,
     TargetMachine *TM);
   static ExecutionEngine *(*MCJITCtor)(
     Module *M,
     std::string *ErrorStr,
     JITMemoryManager *JMM,
-    CodeGenOpt::Level OptLevel,
     bool GVsWithCode,
     TargetMachine *TM);
-  static ExecutionEngine *(*InterpCtor)(Module *M,
-                                        std::string *ErrorStr);
+  static ExecutionEngine *(*InterpCtor)(Module *M, std::string *ErrorStr);
 
   /// LazyFunctionCreator - If an unknown function is needed, this function
   /// pointer is invoked to create it.  If this returns null, the JIT will
@@ -187,7 +184,7 @@ public:
                                  bool ForceInterpreter = false,
                                  std::string *ErrorStr = 0,
                                  CodeGenOpt::Level OptLevel =
-                                   CodeGenOpt::Default,
+                                 CodeGenOpt::Default,
                                  bool GVsWithCode = true);
 
   /// createJIT - This is the factory method for creating a JIT for the current
@@ -200,11 +197,11 @@ public:
                                     std::string *ErrorStr = 0,
                                     JITMemoryManager *JMM = 0,
                                     CodeGenOpt::Level OptLevel =
-                                      CodeGenOpt::Default,
+                                    CodeGenOpt::Default,
                                     bool GVsWithCode = true,
                                     Reloc::Model RM = Reloc::Default,
                                     CodeModel::Model CMM =
-                                      CodeModel::JITDefault);
+                                    CodeModel::JITDefault);
 
   /// addModule - Add a Module to the list of modules that we can JIT from.
   /// Note that this takes ownership of the Module: when the ExecutionEngine is
@@ -465,6 +462,7 @@ private:
   CodeGenOpt::Level OptLevel;
   JITMemoryManager *JMM;
   bool AllocateGVsWithCode;
+  TargetOptions Options;
   Reloc::Model RelocModel;
   CodeModel::Model CMModel;
   std::string MArch;
@@ -478,6 +476,7 @@ private:
     ErrorStr = NULL;
     OptLevel = CodeGenOpt::Default;
     JMM = NULL;
+    Options = TargetOptions();
     AllocateGVsWithCode = false;
     RelocModel = Reloc::Default;
     CMModel = CodeModel::JITDefault;
@@ -518,6 +517,13 @@ public:
   /// defaults to CodeGenOpt::Default.
   EngineBuilder &setOptLevel(CodeGenOpt::Level l) {
     OptLevel = l;
+    return *this;
+  }
+
+  /// setTargetOptions - Set the target options that the ExecutionEngine
+  /// target is using. Defaults to TargetOptions().
+  EngineBuilder &setTargetOptions(const TargetOptions &Opts) {
+    Options = Opts;
     return *this;
   }
 
@@ -577,12 +583,14 @@ public:
 
   /// selectTarget - Pick a target either via -march or by guessing the native
   /// arch.  Add any CPU features specified via -mcpu or -mattr.
-  static TargetMachine *selectTarget(Module *M,
+  static TargetMachine *selectTarget(const Triple &TargetTriple,
                                      StringRef MArch,
                                      StringRef MCPU,
                                      const SmallVectorImpl<std::string>& MAttrs,
+                                     const TargetOptions &Options,
                                      Reloc::Model RM,
                                      CodeModel::Model CM,
+                                     CodeGenOpt::Level OL,
                                      std::string *Err);
 
   ExecutionEngine *create();

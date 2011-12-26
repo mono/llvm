@@ -115,10 +115,10 @@ std::string JITDebugRegisterer::MakeELF(const Function *F, DebugInfo &I) {
   // When trying to debug why GDB isn't getting the debug info right, it's
   // awfully helpful to write the object file to disk so that it can be
   // inspected with readelf and objdump.
-  if (JITEmitDebugInfoToDisk) {
+  if (TM.Options.JITEmitDebugInfoToDisk) {
     std::string Filename;
     raw_string_ostream O2(Filename);
-    O2 << "/tmp/llvm_function_" << I.FnStart << "_" << F->getNameStr() << ".o";
+    O2 << "/tmp/llvm_function_" << I.FnStart << "_" << F->getName() << ".o";
     O2.flush();
     std::string Errors;
     raw_fd_ostream O3(Filename.c_str(), Errors);

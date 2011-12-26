@@ -14,7 +14,7 @@
 
 #include "InstrInfoEmitter.h"
 #include "CodeGenTarget.h"
-#include "Record.h"
+#include "llvm/TableGen/Record.h"
 #include "llvm/ADT/StringExtras.h"
 #include <algorithm>
 using namespace llvm;
@@ -203,7 +203,7 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
 
   // Emit all of the MCInstrDesc records in their ENUM ordering.
   //
-  OS << "\nMCInstrDesc " << TargetName << "Insts[] = {\n";
+  OS << "\nextern const MCInstrDesc " << TargetName << "Insts[] = {\n";
   const std::vector<const CodeGenInstruction*> &NumberedInstructions =
     Target.getInstructionsByEnumValue();
 
@@ -239,7 +239,7 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
   OS << "#undef GET_INSTRINFO_CTOR\n";
 
   OS << "namespace llvm {\n";
-  OS << "extern MCInstrDesc " << TargetName << "Insts[];\n";
+  OS << "extern const MCInstrDesc " << TargetName << "Insts[];\n";
   OS << ClassName << "::" << ClassName << "(int SO, int DO)\n"
      << "  : TargetInstrInfoImpl(SO, DO) {\n"
      << "  InitMCInstrInfo(" << TargetName << "Insts, "
@@ -268,6 +268,7 @@ void InstrInfoEmitter::emitRecord(const CodeGenInstruction &Inst, unsigned Num,
      << Inst.TheDef->getName() << "\", 0";
 
   // Emit all of the target indepedent flags...
+  if (Inst.isPseudo)           OS << "|(1<<MCID::Pseudo)";
   if (Inst.isReturn)           OS << "|(1<<MCID::Return)";
   if (Inst.isBranch)           OS << "|(1<<MCID::Branch)";
   if (Inst.isIndirectBranch)   OS << "|(1<<MCID::IndirectBranch)";

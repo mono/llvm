@@ -1,4 +1,4 @@
-//===-- MipsMCInstLower.h - Lower MachineInstr to MCInst -------------------===//
+//===-- MipsMCInstLower.h - Lower MachineInstr to MCInst -------------------==//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -35,13 +35,14 @@ public:
   MipsMCInstLower(Mangler *mang, const MachineFunction &MF,
                   MipsAsmPrinter &asmprinter);  
   void Lower(const MachineInstr *MI, MCInst &OutMI) const;
-  void LowerMips1F64LoadStore(const MachineInstr *MI, unsigned Opc,
-                              SmallVector<MCInst, 4>& MCInsts,
-                              bool isLittle, const unsigned *SubReg) const;
+  void LowerCPLOAD(const MachineInstr *MI, SmallVector<MCInst, 4>& MCInsts);
+  void LowerCPRESTORE(const MachineInstr *MI, SmallVector<MCInst, 4>& MCInsts); 
+  void LowerUnalignedLoadStore(const MachineInstr *MI,
+		                           SmallVector<MCInst, 4>& MCInsts);
 private:
   MCOperand LowerSymbolOperand(const MachineOperand &MO,
                                MachineOperandType MOTy, unsigned Offset) const;
-  MCOperand LowerOperand(const MachineOperand& MO) const;
+  MCOperand LowerOperand(const MachineOperand& MO, unsigned offset = 0) const;
 };
 }
 

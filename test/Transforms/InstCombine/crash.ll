@@ -165,20 +165,19 @@ entry:
   br i1 %tobool, label %cond.end, label %cond.false
 
 terminate.handler:                                ; preds = %ehcleanup
-  %exc = call i8* @llvm.eh.exception()            ; <i8*> [#uses=1]
-  %0 = call i32 (i8*, i8*, ...)* @llvm.eh.selector(i8* %exc, i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*), i32 1) ; <i32> [#uses=0]
+  %exc = landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*)
+           cleanup
   call void @_ZSt9terminatev() noreturn nounwind
   unreachable
 
 ehcleanup:                                        ; preds = %cond.false
-  %exc1 = call i8* @llvm.eh.exception()           ; <i8*> [#uses=2]
-  %1 = call i32 (i8*, i8*, ...)* @llvm.eh.selector(i8* %exc1, i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*), i8* null) ; <i32> [#uses=0]
+  %exc1 = landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*)
+           catch i8* null
   invoke void @_ZN6UStackD1Ev(%class.UStack* %breaks)
           to label %cont unwind label %terminate.handler
 
 cont:                                             ; preds = %ehcleanup
-  call void @_Unwind_Resume_or_Rethrow(i8* %exc1)
-  unreachable
+  resume { i8*, i32 } %exc1
 
 cond.false:                                       ; preds = %entry
   %tmp4 = getelementptr inbounds %class.RuleBasedBreakIterator* %this, i32 0, i32 0 ; <i64 ()**> [#uses=1]
@@ -198,10 +197,6 @@ declare void @_ZN6UStackC1Ei(%class.UStack*, i32)
 declare void @_ZN6UStackD1Ev(%class.UStack*)
 
 declare i32 @__gxx_personality_v0(...)
-
-declare i8* @llvm.eh.exception() nounwind readonly
-
-declare i32 @llvm.eh.selector(i8*, i8*, ...) nounwind
 
 declare void @_ZSt9terminatev()
 
@@ -373,4 +368,29 @@ for.inc:                                          ; preds = %for.cond
 
 return:                                           ; No predecessors!
   ret void
+}
+
+; PR11275
+declare void @test18b() noreturn
+declare void @test18foo(double**)
+declare void @test18a() noreturn
+define fastcc void @test18x(i8* %t0, i1 %b) uwtable align 2 {
+entry:
+  br i1 %b, label %e1, label %e2
+e1:
+  %t2 = bitcast i8* %t0 to double**
+  invoke void @test18b() noreturn
+          to label %u unwind label %lpad
+e2:
+  %t4 = bitcast i8* %t0 to double**
+  invoke void @test18a() noreturn
+          to label %u unwind label %lpad
+lpad:
+  %t5 = phi double** [ %t2, %e1 ], [ %t4, %e2 ]
+  %lpad.nonloopexit262 = landingpad { i8*, i32 } personality i32 (...)* @__gxx_personality_v0
+          cleanup
+  call void @test18foo(double** %t5)
+  unreachable
+u:
+  unreachable
 }

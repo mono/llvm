@@ -862,7 +862,7 @@ define float @bar(float %x) nounwind {
 
 This IR (from PR6194):
 
-target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v64:64:64-v128:128:128-a0:0:64-s0:64:64-f80:128:128-n8:16:32:64"
+target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v64:64:64-v128:128:128-a0:0:64-s0:64:64-f80:128:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-darwin10.0.0"
 
 %0 = type { double, double }
@@ -920,18 +920,5 @@ _test2:                                 ## @test2
 	ret
 
 The insertps's of $0 are pointless complex copies.
-
-//===---------------------------------------------------------------------===//
-
-If SSE4.1 is available we should inline rounding functions instead of emitting
-a libcall.
-
-floor: roundsd $0x01, %xmm, %xmm
-ceil:  roundsd $0x02, %xmm, %xmm
-
-and likewise for the single precision versions.
-
-Currently, SelectionDAGBuilder doesn't turn calls to these functions into the
-corresponding nodes and some targets (including X86) aren't ready for them.
 
 //===---------------------------------------------------------------------===//

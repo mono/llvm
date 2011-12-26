@@ -36,7 +36,7 @@ ScheduleDAGInstrs::ScheduleDAGInstrs(MachineFunction &mf,
                                      const MachineDominatorTree &mdt)
   : ScheduleDAG(mf), MLI(mli), MDT(mdt), MFI(mf.getFrameInfo()),
     InstrItins(mf.getTarget().getInstrItineraryData()),
-    Defs(TRI->getNumRegs()), Uses(TRI->getNumRegs()), 
+    Defs(TRI->getNumRegs()), Uses(TRI->getNumRegs()),
     LoopRegs(MLI, MDT), FirstDbgValue(0) {
   DbgValues.clear();
 }
@@ -134,6 +134,7 @@ static const Value *getUnderlyingObjectForInstr(const MachineInstr *MI,
 }
 
 void ScheduleDAGInstrs::StartBlock(MachineBasicBlock *BB) {
+  LoopRegs.Deps.clear();
   if (MachineLoop *ML = MLI.getLoopFor(BB))
     if (BB == ML->getLoopLatch()) {
       MachineBasicBlock *Header = ML->getHeader();
@@ -156,7 +157,7 @@ void ScheduleDAGInstrs::AddSchedBarrierDeps() {
   MachineInstr *ExitMI = InsertPos != BB->end() ? &*InsertPos : 0;
   ExitSU.setInstr(ExitMI);
   bool AllDepKnown = ExitMI &&
-    (ExitMI->getDesc().isCall() || ExitMI->getDesc().isBarrier());
+    (ExitMI->isCall() || ExitMI->isBarrier());
   if (ExitMI && AllDepKnown) {
     // If it's a call or a barrier, add dependencies on the defs and uses of
     // instruction.
@@ -237,13 +238,12 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
       continue;
     }
 
-    const MCInstrDesc &MCID = MI->getDesc();
-    assert(!MCID.isTerminator() && !MI->isLabel() &&
+    assert(!MI->isTerminator() && !MI->isLabel() &&
            "Cannot schedule terminators or labels!");
     // Create the SUnit for this MI.
     SUnit *SU = NewSUnit(MI);
-    SU->isCall = MCID.isCall();
-    SU->isCommutable = MCID.isCommutable();
+    SU->isCall = MI->isCall();
+    SU->isCommutable = MI->isCommutable();
 
     // Assign the Latency field of SU using target-provided information.
     if (UnitLatencies)
@@ -277,8 +277,15 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
           continue;
         if (DefSU != SU &&
             (Kind != SDep::Output || !MO.isDead() ||
-             !DefSU->getInstr()->registerDefIsDead(Reg)))
-          DefSU->addPred(SDep(SU, Kind, AOLatency, /*Reg=*/Reg));
+             !DefSU->getInstr()->registerDefIsDead(Reg))) {
+          if (Kind == SDep::Anti)
+            DefSU->addPred(SDep(SU, Kind, 0, /*Reg=*/Reg));
+          else {
+            unsigned AOLat = TII->getOutputLatency(InstrItins, MI, j,
+                                                   DefSU->getInstr());
+            DefSU->addPred(SDep(SU, Kind, AOLat, /*Reg=*/Reg));
+          }
+        }
       }
       for (const unsigned *Alias = TRI->getAliasSet(Reg); *Alias; ++Alias) {
         std::vector<SUnit *> &MemDefList = Defs[*Alias];
@@ -314,7 +321,7 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
             int RegUseIndex = UseMI->findRegisterUseOperandIdx(Reg);
             assert(RegUseIndex >= 0 && "UseMI doesn's use register!");
             if (RegUseIndex >= 0 &&
-                (UseMCID.mayLoad() || UseMCID.mayStore()) &&
+                (UseMI->mayLoad() || UseMI->mayStore()) &&
                 (unsigned)RegUseIndex < UseMCID.getNumOperands() &&
                 UseMCID.OpInfo[RegUseIndex].isLookupPtrRegClass())
               LDataLatency += SpecialAddressLatency;
@@ -418,9 +425,9 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
     // produce more precise dependence information.
 #define STORE_LOAD_LATENCY 1
     unsigned TrueMemOrderLatency = 0;
-    if (MCID.isCall() || MI->hasUnmodeledSideEffects() ||
+    if (MI->isCall() || MI->hasUnmodeledSideEffects() ||
         (MI->hasVolatileMemoryRef() &&
-         (!MCID.mayLoad() || !MI->isInvariantLoad(AA)))) {
+         (!MI->mayLoad() || !MI->isInvariantLoad(AA)))) {
       // Be conservative with these and add dependencies on all memory
       // references, even those that are known to not alias.
       for (std::map<const Value *, SUnit *>::iterator I =
@@ -459,7 +466,7 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
       PendingLoads.clear();
       AliasMemDefs.clear();
       AliasMemUses.clear();
-    } else if (MCID.mayStore()) {
+    } else if (MI->mayStore()) {
       bool MayAlias = true;
       TrueMemOrderLatency = STORE_LOAD_LATENCY;
       if (const Value *V = getUnderlyingObjectForInstr(MI, MFI, MayAlias)) {
@@ -515,7 +522,7 @@ void ScheduleDAGInstrs::BuildSchedGraph(AliasAnalysis *AA) {
                             /*Reg=*/0, /*isNormalMemory=*/false,
                             /*isMustAlias=*/false,
                             /*isArtificial=*/true));
-    } else if (MCID.mayLoad()) {
+    } else if (MI->mayLoad()) {
       bool MayAlias = true;
       TrueMemOrderLatency = 0;
       if (MI->isInvariantLoad(AA)) {
@@ -575,7 +582,7 @@ void ScheduleDAGInstrs::ComputeLatency(SUnit *SU) {
 
     // Simplistic target-independent heuristic: assume that loads take
     // extra time.
-    if (SU->getInstr()->getDesc().mayLoad())
+    if (SU->getInstr()->mayLoad())
       SU->Latency += 2;
   } else {
     SU->Latency = TII->getInstrLatency(InstrItins, SU->getInstr());
@@ -657,39 +664,33 @@ std::string ScheduleDAGInstrs::getGraphNodeLabel(const SUnit *SU) const {
 
 // EmitSchedule - Emit the machine code in scheduled order.
 MachineBasicBlock *ScheduleDAGInstrs::EmitSchedule() {
-  // For MachineInstr-based scheduling, we're rescheduling the instructions in
-  // the block, so start by removing them from the block.
-  while (Begin != InsertPos) {
-    MachineBasicBlock::iterator I = Begin;
-    ++Begin;
-    BB->remove(I);
-  }
+  Begin = InsertPos;
 
   // If first instruction was a DBG_VALUE then put it back.
   if (FirstDbgValue)
-    BB->insert(InsertPos, FirstDbgValue);
+    BB->splice(InsertPos, BB, FirstDbgValue);
 
   // Then re-insert them according to the given schedule.
   for (unsigned i = 0, e = Sequence.size(); i != e; i++) {
     if (SUnit *SU = Sequence[i])
-      BB->insert(InsertPos, SU->getInstr());
+      BB->splice(InsertPos, BB, SU->getInstr());
     else
       // Null SUnit* is a noop.
       EmitNoop();
-  }
 
-  // Update the Begin iterator, as the first instruction in the block
-  // may have been scheduled later.
-  if (!Sequence.empty())
-    Begin = Sequence[0]->getInstr();
+    // Update the Begin iterator, as the first instruction in the block
+    // may have been scheduled later.
+    if (i == 0)
+      Begin = prior(InsertPos);
+  }
 
   // Reinsert any remaining debug_values.
   for (std::vector<std::pair<MachineInstr *, MachineInstr *> >::iterator
          DI = DbgValues.end(), DE = DbgValues.begin(); DI != DE; --DI) {
     std::pair<MachineInstr *, MachineInstr *> P = *prior(DI);
     MachineInstr *DbgValue = P.first;
-    MachineInstr *OrigPrivMI = P.second;
-    BB->insertAfter(OrigPrivMI, DbgValue);
+    MachineBasicBlock::iterator OrigPrivMI = P.second;
+    BB->splice(++OrigPrivMI, BB, DbgValue);
   }
   DbgValues.clear();
   FirstDbgValue = NULL;

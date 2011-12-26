@@ -295,8 +295,20 @@ namespace X86II {
     T8 = 13 << Op0Shift,  TA = 14 << Op0Shift,
     A6 = 15 << Op0Shift,  A7 = 16 << Op0Shift,
 
-    // TF - Prefix before and after 0x0F
-    TF = 17 << Op0Shift,
+    // T8XD - Prefix before and after 0x0F. Combination of T8 and XD.
+    T8XD = 17 << Op0Shift,
+
+    // T8XS - Prefix before and after 0x0F. Combination of T8 and XS.
+    T8XS = 18 << Op0Shift,
+
+    // TAXD - Prefix before and after 0x0F. Combination of TA and XD.
+    TAXD = 19 << Op0Shift,
+
+    // XOP8 - Prefix to include use of imm byte.
+    XOP8 = 20 << Op0Shift,
+
+    // XOP9 - Prefix to exclude use of imm byte.
+    XOP9 = 21 << Op0Shift,
 
     //===------------------------------------------------------------------===//
     // REX_W - REX prefixes are instruction prefixes used in 64-bit mode.
@@ -387,16 +399,24 @@ namespace X86II {
     /// and the additional register is encoded in VEX_VVVV prefix.
     VEX_4V      = 1U << 2,
 
+    /// VEX_4VOp3 - Similar to VEX_4V, but used on instructions that encode
+    /// operand 3 with VEX.vvvv.
+    VEX_4VOp3   = 1U << 3,
+
     /// VEX_I8IMM - Specifies that the last register used in a AVX instruction,
     /// must be encoded in the i8 immediate field. This usually happens in
     /// instructions with 4 operands.
-    VEX_I8IMM   = 1U << 3,
+    VEX_I8IMM   = 1U << 4,
 
     /// VEX_L - Stands for a bit in the VEX opcode prefix meaning the current
     /// instruction uses 256-bit wide registers. This is usually auto detected
     /// if a VR256 register is used, but some AVX instructions also have this
     /// field marked when using a f256 memory references.
-    VEX_L       = 1U << 4,
+    VEX_L       = 1U << 5,
+
+    // VEX_LIG - Specifies that this instruction ignores the L-bit in the VEX
+    // prefix. Usually used for scalar instructions. Needed by disassembler.
+    VEX_LIG     = 1U << 6,
 
     /// Has3DNow0F0FOpcode - This flag indicates that the instruction uses the
     /// wacky 0x0F 0x0F prefix for 3DNow! instructions.  The manual documents
@@ -404,7 +424,16 @@ namespace X86II {
     /// storing a classifier in the imm8 field.  To simplify our implementation,
     /// we handle this by storeing the classifier in the opcode field and using
     /// this flag to indicate that the encoder should do the wacky 3DNow! thing.
-    Has3DNow0F0FOpcode = 1U << 5
+    Has3DNow0F0FOpcode = 1U << 7,
+
+    /// XOP_W - Same bit as VEX_W. Used to indicate swapping of
+    /// operand 3 and 4 to be encoded in ModRM or I8IMM. This is used
+    /// for FMA4 and XOP instructions.
+    XOP_W = 1U << 8,
+
+    /// XOP - Opcode prefix used by XOP instructions.
+    XOP = 1U << 9
+
   };
 
   // getBaseOpcodeFor - This function returns the "base" X86 opcode for the
@@ -458,7 +487,7 @@ namespace X86II {
   /// is duplicated in the MCInst (e.g. "EAX = addl EAX, [mem]") it is only
   /// counted as one operand.
   ///
-  static inline int getMemoryOperandNo(uint64_t TSFlags) {
+  static inline int getMemoryOperandNo(uint64_t TSFlags, unsigned Opcode) {
     switch (TSFlags & X86II::FormMask) {
     case X86II::MRMInitReg:  assert(0 && "FIXME: Remove this form");
     default: assert(0 && "Unknown FormMask value in getMemoryOperandNo!");
@@ -474,9 +503,12 @@ namespace X86II {
       return 0;
     case X86II::MRMSrcMem: {
       bool HasVEX_4V = (TSFlags >> X86II::VEXShift) & X86II::VEX_4V;
+      bool HasXOP_W = (TSFlags >> X86II::VEXShift) & X86II::XOP_W;
       unsigned FirstMemOp = 1;
       if (HasVEX_4V)
         ++FirstMemOp;// Skip the register source (which is encoded in VEX_VVVV).
+      if (HasXOP_W)
+        ++FirstMemOp;// Skip the register source (which is encoded in I8IMM).
 
       // FIXME: Maybe lea should have its own form?  This is a horrible hack.
       //if (Opcode == X86::LEA64r || Opcode == X86::LEA64_32r ||
@@ -491,8 +523,13 @@ namespace X86II {
     case X86II::MRM0m: case X86II::MRM1m:
     case X86II::MRM2m: case X86II::MRM3m:
     case X86II::MRM4m: case X86II::MRM5m:
-    case X86II::MRM6m: case X86II::MRM7m:
-      return 0;
+    case X86II::MRM6m: case X86II::MRM7m: {
+      bool HasVEX_4V = (TSFlags >> X86II::VEXShift) & X86II::VEX_4V;
+      unsigned FirstMemOp = 0;
+      if (HasVEX_4V)
+        ++FirstMemOp;// Skip the register dest (which is encoded in VEX_VVVV).
+      return FirstMemOp;
+    }
     case X86II::MRM_C1:
     case X86II::MRM_C2:
     case X86II::MRM_C3:

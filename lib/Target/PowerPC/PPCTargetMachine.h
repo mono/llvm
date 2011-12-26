@@ -41,8 +41,9 @@ class PPCTargetMachine : public LLVMTargetMachine {
 
 public:
   PPCTargetMachine(const Target &T, StringRef TT,
-                   StringRef CPU, StringRef FS,
-                   Reloc::Model RM, CodeModel::Model CM, bool is64Bit);
+                   StringRef CPU, StringRef FS, const TargetOptions &Options,
+                   Reloc::Model RM, CodeModel::Model CM,
+                   CodeGenOpt::Level OL, bool is64Bit);
 
   virtual const PPCInstrInfo      *getInstrInfo() const { return &InstrInfo; }
   virtual const PPCFrameLowering  *getFrameLowering() const {
@@ -66,9 +67,9 @@ public:
   }
 
   // Pass Pipeline Configuration
-  virtual bool addInstSelector(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
-  virtual bool addPreEmitPass(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
-  virtual bool addCodeEmitter(PassManagerBase &PM, CodeGenOpt::Level OptLevel,
+  virtual bool addInstSelector(PassManagerBase &PM);
+  virtual bool addPreEmitPass(PassManagerBase &PM);
+  virtual bool addCodeEmitter(PassManagerBase &PM,
                               JITCodeEmitter &JCE);
   virtual bool getEnableTailMergeDefault() const;
 };
@@ -76,19 +77,23 @@ public:
 /// PPC32TargetMachine - PowerPC 32-bit target machine.
 ///
 class PPC32TargetMachine : public PPCTargetMachine {
+  virtual void anchor();
 public:
   PPC32TargetMachine(const Target &T, StringRef TT,
-                     StringRef CPU, StringRef FS,
-                     Reloc::Model RM, CodeModel::Model CM);
+                     StringRef CPU, StringRef FS, const TargetOptions &Options,
+                     Reloc::Model RM, CodeModel::Model CM,
+                     CodeGenOpt::Level OL);
 };
 
 /// PPC64TargetMachine - PowerPC 64-bit target machine.
 ///
 class PPC64TargetMachine : public PPCTargetMachine {
+  virtual void anchor();
 public:
   PPC64TargetMachine(const Target &T, StringRef TT,
-                     StringRef CPU, StringRef FS,
-                     Reloc::Model RM, CodeModel::Model CM);
+                     StringRef CPU, StringRef FS, const TargetOptions &Options,
+                     Reloc::Model RM, CodeModel::Model CM,
+                     CodeGenOpt::Level OL);
 };
 
 } // end namespace llvm

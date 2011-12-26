@@ -31,8 +31,8 @@ using namespace llvm;
 namespace {
 class ARMELFObjectWriter : public MCELFObjectTargetWriter {
 public:
-  ARMELFObjectWriter(Triple::OSType OSType)
-    : MCELFObjectTargetWriter(/*Is64Bit*/ false, OSType, ELF::EM_ARM,
+  ARMELFObjectWriter(uint8_t OSABI)
+    : MCELFObjectTargetWriter(/*Is64Bit*/ false, OSABI, ELF::EM_ARM,
                               /*HasRelocationAddend*/ false) {}
 };
 
@@ -60,15 +60,16 @@ public:
 // ARMFixupKinds.h.
 //
 // Name                      Offset (bits) Size (bits)     Flags
-{ "fixup_arm_ldst_pcrel_12", 1,            24,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_ldst_pcrel_12", 0,            32,  MCFixupKindInfo::FKF_IsPCRel },
 { "fixup_t2_ldst_pcrel_12",  0,            32,  MCFixupKindInfo::FKF_IsPCRel |
                                    MCFixupKindInfo::FKF_IsAlignedDownTo32Bits},
-{ "fixup_arm_pcrel_10",      1,            24,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_pcrel_10_unscaled", 0,        32,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_pcrel_10",      0,            32,  MCFixupKindInfo::FKF_IsPCRel },
 { "fixup_t2_pcrel_10",       0,            32,  MCFixupKindInfo::FKF_IsPCRel |
                                    MCFixupKindInfo::FKF_IsAlignedDownTo32Bits},
 { "fixup_thumb_adr_pcrel_10",0,            8,   MCFixupKindInfo::FKF_IsPCRel |
                                    MCFixupKindInfo::FKF_IsAlignedDownTo32Bits},
-{ "fixup_arm_adr_pcrel_12",  1,            24,  MCFixupKindInfo::FKF_IsPCRel },
+{ "fixup_arm_adr_pcrel_12",  0,            32,  MCFixupKindInfo::FKF_IsPCRel },
 { "fixup_t2_adr_pcrel_12",   0,            32,  MCFixupKindInfo::FKF_IsPCRel |
                                    MCFixupKindInfo::FKF_IsAlignedDownTo32Bits},
 { "fixup_arm_condbranch",    0,            24,  MCFixupKindInfo::FKF_IsPCRel },
@@ -102,6 +103,11 @@ public:
 
   bool MayNeedRelaxation(const MCInst &Inst) const;
 
+  bool fixupNeedsRelaxation(const MCFixup &Fixup,
+                            uint64_t Value,
+                            const MCInstFragment *DF,
+                            const MCAsmLayout &Layout) const;
+
   void RelaxInstruction(const MCInst &Inst, MCInst &Res) const;
 
   bool WriteNopData(uint64_t Count, MCObjectWriter *OW) const;
@@ -124,21 +130,56 @@ public:
 };
 } // end anonymous namespace
 
+static unsigned getRelaxedOpcode(unsigned Op) {
+  switch (Op) {
+  default: return Op;
+  case ARM::tBcc: return ARM::t2Bcc;
+  }
+}
+
 bool ARMAsmBackend::MayNeedRelaxation(const MCInst &Inst) const {
-  // FIXME: Thumb targets, different move constant targets..
+  if (getRelaxedOpcode(Inst.getOpcode()) != Inst.getOpcode())
+    return true;
   return false;
 }
 
+bool ARMAsmBackend::fixupNeedsRelaxation(const MCFixup &Fixup,
+                                         uint64_t Value,
+                                         const MCInstFragment *DF,
+                                         const MCAsmLayout &Layout) const {
+  // Relaxing tBcc to t2Bcc. tBcc has a signed 9-bit displacement with the
+  // low bit being an implied zero. There's an implied +4 offset for the
+  // branch, so we adjust the other way here to determine what's
+  // encodable.
+  //
+  // Relax if the value is too big for a (signed) i8.
+  int64_t Offset = int64_t(Value) - 4;
+  return Offset > 254 || Offset < -256;
+}
+
 void ARMAsmBackend::RelaxInstruction(const MCInst &Inst, MCInst &Res) const {
-  assert(0 && "ARMAsmBackend::RelaxInstruction() unimplemented");
-  return;
+  unsigned RelaxedOp = getRelaxedOpcode(Inst.getOpcode());
+
+  // Sanity check w/ diagnostic if we get here w/ a bogus instruction.
+  if (RelaxedOp == Inst.getOpcode()) {
+    SmallString<256> Tmp;
+    raw_svector_ostream OS(Tmp);
+    Inst.dump_pretty(OS);
+    OS << "\n";
+    report_fatal_error("unexpected instruction to relax: " + OS.str());
+  }
+
+  // The instructions we're relaxing have (so far) the same operands.
+  // We just need to update to the proper opcode.
+  Res = Inst;
+  Res.setOpcode(RelaxedOp);
 }
 
 bool ARMAsmBackend::WriteNopData(uint64_t Count, MCObjectWriter *OW) const {
   const uint16_t Thumb1_16bitNopEncoding = 0x46c0; // using MOV r8,r8
   const uint16_t Thumb2_16bitNopEncoding = 0xbf00; // NOP
   const uint32_t ARMv4_NopEncoding = 0xe1a0000; // using MOV r0,r0
-  const uint32_t ARMv6T2_NopEncoding = 0xe3207800; // NOP
+  const uint32_t ARMv6T2_NopEncoding = 0xe320f000; // NOP
   if (isThumb()) {
     const uint16_t nopEncoding = hasNOP() ? Thumb2_16bitNopEncoding
                                           : Thumb1_16bitNopEncoding;
@@ -183,8 +224,6 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
   case ARM::fixup_arm_movw_lo16_pcrel: {
     unsigned Hi4 = (Value & 0xF000) >> 12;
     unsigned Lo12 = Value & 0x0FFF;
-    assert ((((int64_t)Value) >= -0x8000) && (((int64_t)Value) <= 0x7fff) &&
-            "Out of range pc-relative fixup value!");
     // inst{19-16} = Hi4;
     // inst{11-0} = Lo12;
     Value = (Hi4 << 16) | (Lo12);
@@ -205,10 +244,6 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
     // inst{26} = i;
     // inst{14-12} = Mid3;
     // inst{7-0} = Lo8;
-    // The value comes in as the whole thing, not just the portion required
-    // for this fixup, so we need to mask off the bits not handled by this
-    // portion (lo vs. hi).
-    Value &= 0xffff;
     Value = (Hi4 << 16) | (i << 26) | (Mid3 << 12) | (Lo8);
     uint64_t swapped = (Value & 0xFFFF0000) >> 16;
     swapped |= (Value & 0x0000FFFF) << 16;
@@ -365,6 +400,17 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
   case ARM::fixup_arm_thumb_bcc:
     // Offset by 4 and don't encode the lower bit, which is always 0.
     return ((Value - 4) >> 1) & 0xff;
+  case ARM::fixup_arm_pcrel_10_unscaled: {
+    Value = Value - 8; // ARM fixups offset by an additional word and don't
+                       // need to adjust for the half-word ordering.
+    bool isAdd = true;
+    if ((int64_t)Value < 0) {
+      Value = -Value;
+      isAdd = false;
+    }
+    assert ((Value < 256) && "Out of range pc-relative fixup value!");
+    return Value | (isAdd << 23);
+  }
   case ARM::fixup_arm_pcrel_10:
     Value = Value - 4; // ARM fixups offset by an additional word and don't
                        // need to adjust for the half-word ordering.
@@ -382,8 +428,8 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
     assert ((Value < 256) && "Out of range pc-relative fixup value!");
     Value |= isAdd << 23;
 
-    // Same addressing mode as fixup_arm_pcrel_10,
-    // but with 16-bit halfwords swapped.
+    // Same addressing mode as fixup_arm_pcrel_10, but with 16-bit halfwords
+    // swapped.
     if (Kind == ARM::fixup_t2_pcrel_10) {
       uint32_t swapped = (Value & 0xFFFF0000) >> 16;
       swapped |= (Value & 0x0000FFFF) << 16;
@@ -401,17 +447,16 @@ namespace {
 // ELF is an ELF of course...
 class ELFARMAsmBackend : public ARMAsmBackend {
 public:
-  Triple::OSType OSType;
+  uint8_t OSABI;
   ELFARMAsmBackend(const Target &T, const StringRef TT,
-                   Triple::OSType _OSType)
-    : ARMAsmBackend(T, TT), OSType(_OSType) { }
+                   uint8_t _OSABI)
+    : ARMAsmBackend(T, TT), OSABI(_OSABI) { }
 
   void ApplyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                   uint64_t Value) const;
 
   MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
-    return createELFObjectWriter(new ARMELFObjectWriter(OSType), OS,
-                              /*IsLittleEndian*/ true);
+    return createARMELFObjectWriter(OS, OSABI);
   }
 };
 
@@ -470,6 +515,7 @@ static unsigned getFixupKindNumBytes(unsigned Kind) {
   case ARM::fixup_arm_thumb_cb:
     return 2;
 
+  case ARM::fixup_arm_pcrel_10_unscaled:
   case ARM::fixup_arm_ldst_pcrel_12:
   case ARM::fixup_arm_pcrel_10:
   case ARM::fixup_arm_adr_pcrel_12:
@@ -533,5 +579,6 @@ MCAsmBackend *llvm::createARMAsmBackend(const Target &T, StringRef TT) {
   if (TheTriple.isOSWindows())
     assert(0 && "Windows not supported on ARM");
 
-  return new ELFARMAsmBackend(T, TT, Triple(TT).getOS());
+  uint8_t OSABI = MCELFObjectTargetWriter::getOSABI(Triple(TT).getOS());
+  return new ELFARMAsmBackend(T, TT, OSABI);
 }

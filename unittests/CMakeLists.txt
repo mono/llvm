@@ -73,6 +73,7 @@ add_llvm_unittest(ADT
   ADT/StringRefTest.cpp
   ADT/TripleTest.cpp
   ADT/TwineTest.cpp
+  ADT/VariadicFunctionTest.cpp
  )
 
 add_llvm_unittest(Analysis
@@ -96,7 +97,7 @@ endif()
 
 add_llvm_unittest(ExecutionEngine/JIT ${JITTestsSources})
 
-if(MINGW)
+if(MINGW OR CYGWIN)
   set_property(TARGET JITTests PROPERTY LINK_FLAGS -Wl,--export-all-symbols)
 endif()
 
@@ -132,6 +133,7 @@ add_llvm_unittest(Support
   Support/CommandLineTest.cpp
   Support/ConstantRangeTest.cpp
   Support/EndianTest.cpp
+  Support/JSONParserTest.cpp
   Support/LeakDetectorTest.cpp
   Support/MathExtrasTest.cpp
   Support/Path.cpp

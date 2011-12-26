@@ -44,6 +44,7 @@ enum AlignTypeEnum {
   AGGREGATE_ALIGN = 'a',             ///< Aggregate alignment
   STACK_ALIGN = 's'                  ///< Stack objects alignment
 };
+
 /// Target alignment element.
 ///
 /// Stores the alignment data associated with a given alignment type (pointer,
@@ -64,15 +65,22 @@ struct TargetAlignElem {
   bool operator==(const TargetAlignElem &rhs) const;
 };
 
+/// TargetData - This class holds a parsed version of the target data layout
+/// string in a module and provides methods for querying it.  The target data
+/// layout string is specified *by the target* - a frontend generating LLVM IR
+/// is required to generate the right target data for the target being codegen'd
+/// to.  If some measure of portability is desired, an empty string may be
+/// specified in the module.
 class TargetData : public ImmutablePass {
 private:
   bool          LittleEndian;          ///< Defaults to false
   unsigned      PointerMemSize;        ///< Pointer size in bytes
   unsigned      PointerABIAlign;       ///< Pointer ABI alignment
   unsigned      PointerPrefAlign;      ///< Pointer preferred alignment
+  unsigned      StackNaturalAlign;     ///< Stack natural alignment
 
   SmallVector<unsigned char, 8> LegalIntWidths; ///< Legal Integers.
-  
+
   /// Alignments- Where the primitive type alignment data is stored.
   ///
   /// @sa init().
@@ -80,7 +88,7 @@ private:
   /// pointers vs. 64-bit pointers by extending TargetAlignment, but for now,
   /// we don't.
   SmallVector<TargetAlignElem, 16> Alignments;
-  
+
   /// InvalidAlignmentElem - This member is a signal that a requested alignment
   /// type and bit width were not found in the SmallVector.
   static const TargetAlignElem InvalidAlignmentElem;
@@ -104,18 +112,29 @@ private:
     return &align != &InvalidAlignmentElem;
   }
 
+  /// Initialise a TargetData object with default values, ensure that the
+  /// target data pass is registered.
+  void init();
+
 public:
   /// Default ctor.
   ///
   /// @note This has to exist, because this is a pass, but it should never be
   /// used.
   TargetData();
-  
+
   /// Constructs a TargetData from a specification string. See init().
   explicit TargetData(StringRef TargetDescription)
     : ImmutablePass(ID) {
-    init(TargetDescription);
+    std::string errMsg = parseSpecifier(TargetDescription, this);
+    assert(errMsg == "" && "Invalid target data layout string.");
+    (void)errMsg;
   }
+
+  /// Parses a target data specification string. Returns an error message
+  /// if the string is malformed, or the empty string on success. Optionally
+  /// initialises a TargetData object if passed a non-null pointer.
+  static std::string parseSpecifier(StringRef TargetDescription, TargetData* td = 0);
 
   /// Initialize target data from properties stored in the module.
   explicit TargetData(const Module *M);
@@ -133,9 +152,6 @@ public:
 
   ~TargetData();  // Not virtual, do not subclass this class
 
-  //! Parse a target data layout string and initialize TargetData alignments.
-  void init(StringRef TargetDescription);
-
   /// Target endianness...
   bool isLittleEndian() const { return LittleEndian; }
   bool isBigEndian() const { return !LittleEndian; }
@@ -144,7 +160,7 @@ public:
   /// TargetData.  This representation is in the same format accepted by the
   /// string constructor above.
   std::string getStringRepresentation() const;
-  
+
   /// isLegalInteger - This function returns true if the specified type is
   /// known to be a native integer type supported by the CPU.  For example,
   /// i64 is not native on most 32-bit CPUs and i37 is not native on any known
@@ -158,9 +174,14 @@ public:
         return true;
     return false;
   }
-  
+
   bool isIllegalInteger(unsigned Width) const {
     return !isLegalInteger(Width);
+  }
+
+  /// Returns true if the given alignment exceeds the natural stack alignment.
+  bool exceedsNaturalStackAlignment(unsigned Align) const {
+    return (StackNaturalAlign != 0) && (Align > StackNaturalAlign);
   }
 
   /// fitsInLegalInteger - This function returns true if the specified type fits
@@ -238,11 +259,11 @@ public:
   /// getABITypeAlignment - Return the minimum ABI-required alignment for the
   /// specified type.
   unsigned getABITypeAlignment(Type *Ty) const;
-  
+
   /// getABIIntegerTypeAlignment - Return the minimum ABI-required alignment for
   /// an integer type of the specified bitwidth.
   unsigned getABIIntegerTypeAlignment(unsigned BitWidth) const;
-  
+
 
   /// getCallFrameTypeAlignment - Return the minimum ABI-required alignment
   /// for the specified type when it is part of a call frame.
@@ -292,7 +313,7 @@ public:
     assert((Alignment & (Alignment-1)) == 0 && "Alignment must be power of 2!");
     return (Val + (Alignment-1)) & ~UIntTy(Alignment-1);
   }
-  
+
   static char ID; // Pass identification, replacement for typeid
 };
 

@@ -2114,7 +2114,9 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
         HasNoSignedComparisonUses(Node))
       // Look past the truncate if CMP is the only use of it.
       N0 = N0.getOperand(0);
-    if (N0.getNode()->getOpcode() == ISD::AND && N0.getNode()->hasOneUse() &&
+    if ((N0.getNode()->getOpcode() == ISD::AND ||
+         (N0.getResNo() == 0 && N0.getNode()->getOpcode() == X86ISD::AND)) &&
+        N0.getNode()->hasOneUse() &&
         N0.getValueType() != MVT::i8 &&
         X86::isZeroNode(N1)) {
       ConstantSDNode *C = dyn_cast<ConstantSDNode>(N0.getNode()->getOperand(1));
@@ -2173,9 +2175,10 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
         SDValue Subreg = CurDAG->getTargetExtractSubreg(X86::sub_8bit_hi, dl,
                                                         MVT::i8, Reg);
 
-        // Emit a testb. No special NOREX tricks are needed since there's
-        // only one GPR operand!
-        return CurDAG->getMachineNode(X86::TEST8ri, dl, MVT::i32,
+        // Emit a testb.  The EXTRACT_SUBREG becomes a COPY that can only
+        // target GR8_NOREX registers, so make sure the register class is
+        // forced.
+        return CurDAG->getMachineNode(X86::TEST8ri_NOREX, dl, MVT::i32,
                                       Subreg, ShiftedImm);
       }
 
@@ -2212,6 +2215,75 @@ SDNode *X86DAGToDAGISel::Select(SDNode *Node) {
       }
     }
     break;
+  }
+  case ISD::STORE: {
+    // The DEC64m tablegen pattern is currently not able to match the case where
+    // the EFLAGS on the original DEC are used.
+    // we'll need to improve tablegen to allow flags to be transferred from a
+    // node in the pattern to the result node.  probably with a new keyword
+    // for example, we have this
+    // def DEC64m : RI<0xFF, MRM1m, (outs), (ins i64mem:$dst), "dec{q}\t$dst",
+    //  [(store (add (loadi64 addr:$dst), -1), addr:$dst),
+    //   (implicit EFLAGS)]>;
+    // but maybe need something like this
+    // def DEC64m : RI<0xFF, MRM1m, (outs), (ins i64mem:$dst), "dec{q}\t$dst",
+    //  [(store (add (loadi64 addr:$dst), -1), addr:$dst),
+    //   (transferrable EFLAGS)]>;
+    StoreSDNode *StoreNode = cast<StoreSDNode>(Node);
+    SDValue Chain = StoreNode->getOperand(0);
+    SDValue StoredVal = StoreNode->getOperand(1);
+    SDValue Address = StoreNode->getOperand(2);
+    SDValue Undef = StoreNode->getOperand(3);
+
+    if (StoreNode->getMemOperand()->getSize() != 8 ||
+        Undef->getOpcode() != ISD::UNDEF ||
+        Chain->getOpcode() != ISD::LOAD ||
+        StoredVal->getOpcode() != X86ISD::DEC ||
+        StoredVal.getResNo() != 0 ||
+        StoredVal->getOperand(0).getNode() != Chain.getNode())
+      break;
+
+    //OPC_CheckPredicate, 1, // Predicate_nontemporalstore
+    if (StoreNode->isNonTemporal())
+      break;
+
+    LoadSDNode *LoadNode = cast<LoadSDNode>(Chain.getNode());
+    if (LoadNode->getOperand(1) != Address ||
+        LoadNode->getOperand(2) != Undef)
+      break;
+
+    if (!ISD::isNormalLoad(LoadNode))
+      break;
+
+    if (!ISD::isNormalStore(StoreNode))
+      break;
+
+    // check load chain has only one use (from the store)
+    if (!Chain.hasOneUse())
+      break;
+
+    // Merge the input chains if they are not intra-pattern references.
+    SDValue InputChain = LoadNode->getOperand(0);
+
+    SDValue Base, Scale, Index, Disp, Segment;
+    if (!SelectAddr(LoadNode, LoadNode->getBasePtr(),
+                    Base, Scale, Index, Disp, Segment))
+      break;
+
+    MachineSDNode::mmo_iterator MemOp = MF->allocateMemRefsArray(2);
+    MemOp[0] = StoreNode->getMemOperand();
+    MemOp[1] = LoadNode->getMemOperand();
+    const SDValue Ops[] = { Base, Scale, Index, Disp, Segment, InputChain };
+    MachineSDNode *Result = CurDAG->getMachineNode(X86::DEC64m,
+                                                   Node->getDebugLoc(),
+                                                   MVT::i32, MVT::Other, Ops,
+                                                   array_lengthof(Ops));
+    Result->setMemRefs(MemOp, MemOp + 2);
+
+    ReplaceUses(SDValue(StoreNode, 0), SDValue(Result, 1));
+    ReplaceUses(SDValue(StoredVal.getNode(), 1), SDValue(Result, 0));
+
+    return Result;
   }
   }
 

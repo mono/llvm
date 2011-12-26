@@ -799,3 +799,33 @@ define i1 @test60(i32 %x, i1* %y) nounwind {
 ; CHECK: @test60
 ; CHECK: select
 }
+
+@glbl = constant i32 10
+define i32 @test61(i32* %ptr) {
+  %A = load i32* %ptr
+  %B = icmp eq i32* %ptr, @glbl
+  %C = select i1 %B, i32 %A, i32 10
+  ret i32 %C
+; CHECK: @test61
+; CHECK: ret i32 10
+}
+
+define i1 @test62(i1 %A, i1 %B) {
+        %not = xor i1 %A, true
+        %C = select i1 %A, i1 %not, i1 %B             
+        ret i1 %C
+; CHECK: @test62
+; CHECK: %not = xor i1 %A, true
+; CHECK: %C = and i1 %not, %B
+; CHECK: ret i1 %C
+}
+
+define i1 @test63(i1 %A, i1 %B) {
+        %not = xor i1 %A, true
+        %C = select i1 %A, i1 %B, i1 %not         
+        ret i1 %C
+; CHECK: @test63
+; CHECK: %not = xor i1 %A, true
+; CHECK: %C = or i1 %B, %not
+; CHECK: ret i1 %C
+}

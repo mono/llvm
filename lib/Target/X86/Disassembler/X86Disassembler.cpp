@@ -114,13 +114,18 @@ X86GenericDisassembler::getInstruction(MCInst &instr,
                                        uint64_t &size,
                                        const MemoryObject &region,
                                        uint64_t address,
-                                       raw_ostream &vStream) const {
+                                       raw_ostream &vStream,
+                                       raw_ostream &cStream) const {
   InternalInstruction internalInstr;
+
+  dlog_t loggerFn = logger;
+  if (&vStream == &nulls())
+    loggerFn = 0; // Disable logging completely if it's going to nulls().
   
   int ret = decodeInstruction(&internalInstr,
                               regionReader,
                               (void*)&region,
-                              logger,
+                              loggerFn,
                               (void*)&vStream,
                               address,
                               fMode);
@@ -221,6 +226,12 @@ static void translateImmediate(MCInst &mcInst, uint64_t immediate,
   }
 
   switch (type) {
+  case TYPE_XMM128:
+    mcInst.addOperand(MCOperand::CreateReg(X86::XMM0 + (immediate >> 4)));
+    return;
+  case TYPE_XMM256:
+    mcInst.addOperand(MCOperand::CreateReg(X86::YMM0 + (immediate >> 4)));
+    return;
   case TYPE_MOFFS8:
   case TYPE_REL8:
     if(immediate & 0x80)
@@ -580,11 +591,11 @@ static bool translateInstruction(MCInst &mcInst,
 }
 
 static MCDisassembler *createX86_32Disassembler(const Target &T, const MCSubtargetInfo &STI) {
-  return new X86Disassembler::X86_32Disassembler(STI);
+  return new X86Disassembler::X86GenericDisassembler(STI, MODE_32BIT);
 }
 
 static MCDisassembler *createX86_64Disassembler(const Target &T, const MCSubtargetInfo &STI) {
-  return new X86Disassembler::X86_64Disassembler(STI);
+  return new X86Disassembler::X86GenericDisassembler(STI, MODE_64BIT);
 }
 
 extern "C" void LLVMInitializeX86Disassembler() { 

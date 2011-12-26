@@ -20,7 +20,6 @@
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/SourceMgr.h"
@@ -41,7 +40,10 @@ private:
 
   MCAsmLexer &getLexer() const { return Parser.getLexer(); }
 
-  bool Error(SMLoc L, const Twine &Msg) { return Parser.Error(L, Msg); }
+  bool Error(SMLoc L, const Twine &Msg,
+             ArrayRef<SMRange> Ranges = ArrayRef<SMRange>()) {
+    return Parser.Error(L, Msg, Ranges);
+  }
 
   X86Operand *ParseOperand();
   X86Operand *ParseMemOperand(unsigned SegReg, SMLoc StartLoc);
@@ -145,6 +147,8 @@ struct X86Operand : public MCParsedAsmOperand {
   SMLoc getStartLoc() const { return StartLoc; }
   /// getEndLoc - Get the location of the last token of this operand.
   SMLoc getEndLoc() const { return EndLoc; }
+  
+  SMRange getLocRange() const { return SMRange(StartLoc, EndLoc); }
 
   virtual void print(raw_ostream &OS) const {}
 
@@ -317,7 +321,8 @@ struct X86Operand : public MCParsedAsmOperand {
   }
 
   static X86Operand *CreateToken(StringRef Str, SMLoc Loc) {
-    X86Operand *Res = new X86Operand(Token, Loc, Loc);
+    SMLoc EndLoc = SMLoc::getFromPointer(Loc.getPointer() + Str.size() - 1);
+    X86Operand *Res = new X86Operand(Token, Loc, EndLoc);
     Res->Tok.Data = Str.data();
     Res->Tok.Length = Str.size();
     return Res;
@@ -399,13 +404,14 @@ bool X86ATTAsmParser::ParseRegister(unsigned &RegNo,
 
   const AsmToken &Tok = Parser.getTok();
   if (Tok.isNot(AsmToken::Identifier))
-    return Error(Tok.getLoc(), "invalid register name");
+    return Error(StartLoc, "invalid register name",
+                 SMRange(StartLoc, Tok.getEndLoc()));
 
   RegNo = MatchRegisterName(Tok.getString());
 
   // If the match failed, try the register name as lowercase.
   if (RegNo == 0)
-    RegNo = MatchRegisterName(LowercaseString(Tok.getString()));
+    RegNo = MatchRegisterName(Tok.getString().lower());
 
   if (!is64BitMode()) {
     // FIXME: This should be done using Requires<In32BitMode> and
@@ -417,8 +423,9 @@ bool X86ATTAsmParser::ParseRegister(unsigned &RegNo,
         X86MCRegisterClasses[X86::GR64RegClassID].contains(RegNo) ||
         X86II::isX86_64NonExtLowByteReg(RegNo) ||
         X86II::isX86_64ExtendedReg(RegNo))
-      return Error(Tok.getLoc(), "register %"
-                   + Tok.getString() + " is only available in 64-bit mode");
+      return Error(StartLoc, "register %"
+                   + Tok.getString() + " is only available in 64-bit mode",
+                   SMRange(StartLoc, Tok.getEndLoc()));
   }
 
   // Parse "%st" as "%st(0)" and "%st(1)", which is multiple tokens.
@@ -479,9 +486,10 @@ bool X86ATTAsmParser::ParseRegister(unsigned &RegNo,
   }
 
   if (RegNo == 0)
-    return Error(Tok.getLoc(), "invalid register name");
+    return Error(StartLoc, "invalid register name",
+                 SMRange(StartLoc, Tok.getEndLoc()));
 
-  EndLoc = Tok.getLoc();
+  EndLoc = Tok.getEndLoc();
   Parser.Lex(); // Eat identifier token.
   return false;
 }
@@ -497,7 +505,8 @@ X86Operand *X86ATTAsmParser::ParseOperand() {
     SMLoc Start, End;
     if (ParseRegister(RegNo, Start, End)) return 0;
     if (RegNo == X86::EIZ || RegNo == X86::RIZ) {
-      Error(Start, "%eiz and %riz can only be used as index registers");
+      Error(Start, "%eiz and %riz can only be used as index registers",
+            SMRange(Start, End));
       return 0;
     }
 
@@ -581,10 +590,11 @@ X86Operand *X86ATTAsmParser::ParseMemOperand(unsigned SegReg, SMLoc MemStart) {
   unsigned BaseReg = 0, IndexReg = 0, Scale = 1;
 
   if (getLexer().is(AsmToken::Percent)) {
-    SMLoc L;
-    if (ParseRegister(BaseReg, L, L)) return 0;
+    SMLoc StartLoc, EndLoc;
+    if (ParseRegister(BaseReg, StartLoc, EndLoc)) return 0;
     if (BaseReg == X86::EIZ || BaseReg == X86::RIZ) {
-      Error(L, "eiz and riz can only be used as index registers");
+      Error(StartLoc, "eiz and riz can only be used as index registers",
+            SMRange(StartLoc, EndLoc));
       return 0;
     }
   }
@@ -1078,21 +1088,24 @@ MatchAndEmitInstruction(SMLoc IDLoc,
   if ((Match1 == Match_MnemonicFail) && (Match2 == Match_MnemonicFail) &&
       (Match3 == Match_MnemonicFail) && (Match4 == Match_MnemonicFail)) {
     if (!WasOriginallyInvalidOperand) {
-      Error(IDLoc, "invalid instruction mnemonic '" + Base + "'");
-      return true;
+      return Error(IDLoc, "invalid instruction mnemonic '" + Base + "'",
+                   Op->getLocRange());
     }
 
     // Recover location info for the operand if we know which was the problem.
-    SMLoc ErrorLoc = IDLoc;
     if (OrigErrorInfo != ~0U) {
       if (OrigErrorInfo >= Operands.size())
         return Error(IDLoc, "too few operands for instruction");
 
-      ErrorLoc = ((X86Operand*)Operands[OrigErrorInfo])->getStartLoc();
-      if (ErrorLoc == SMLoc()) ErrorLoc = IDLoc;
+      X86Operand *Operand = (X86Operand*)Operands[OrigErrorInfo];
+      if (Operand->getStartLoc().isValid()) {
+        SMRange OperandRange = Operand->getLocRange();
+        return Error(Operand->getStartLoc(), "invalid operand for instruction",
+                     OperandRange);
+      }
     }
 
-    return Error(ErrorLoc, "invalid operand for instruction");
+    return Error(IDLoc, "invalid operand for instruction");
   }
 
   // If one instruction matched with a missing feature, report this as a
@@ -1112,7 +1125,6 @@ MatchAndEmitInstruction(SMLoc IDLoc,
   }
 
   // If all of these were an outright failure, report it in a useless way.
-  // FIXME: We should give nicer diagnostics about the exact failure.
   Error(IDLoc, "unknown use of instruction mnemonic without a size suffix");
   return true;
 }

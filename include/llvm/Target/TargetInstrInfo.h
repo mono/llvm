@@ -49,7 +49,7 @@ public:
     : CallFrameSetupOpcode(CFSetupOpcode),
       CallFrameDestroyOpcode(CFDestroyOpcode) {
   }
-    
+
   virtual ~TargetInstrInfo();
 
   /// getRegClass - Givem a machine instruction descriptor, returns the register
@@ -353,6 +353,22 @@ public:
     return false;
   }
 
+  /// isProfitableToUnpredicate - Return true if it's profitable to unpredicate
+  /// one side of a 'diamond', i.e. two sides of if-else predicated on mutually
+  /// exclusive predicates.
+  /// e.g.
+  ///   subeq  r0, r1, #1
+  ///   addne  r0, r1, #1
+  /// =>
+  ///   sub    r0, r1, #1
+  ///   addne  r0, r1, #1
+  ///
+  /// This may be profitable is conditional instructions are always executed.
+  virtual bool isProfitableToUnpredicate(MachineBasicBlock &TMBB,
+                                         MachineBasicBlock &FMBB) const {
+    return false;
+  }
+
   /// copyPhysReg - Emit instructions to copy a pair of physical registers.
   virtual void copyPhysReg(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MI, DebugLoc DL,
@@ -384,6 +400,16 @@ public:
                                     const TargetRegisterClass *RC,
                                     const TargetRegisterInfo *TRI) const {
   assert(0 && "Target didn't implement TargetInstrInfo::loadRegFromStackSlot!");
+  }
+
+  /// expandPostRAPseudo - This function is called for all pseudo instructions
+  /// that remain after register allocation. Many pseudo instructions are
+  /// created to help register allocation. This is the place to convert them
+  /// into real instructions. The target can edit MI in place, or it can insert
+  /// new instructions and erase MI. The function should return true if
+  /// anything was changed.
+  virtual bool expandPostRAPseudo(MachineBasicBlock::iterator MI) const {
+    return false;
   }
 
   /// emitFrameIndexDebugValue - Emit a target-dependent form of
@@ -525,7 +551,7 @@ public:
 
   /// isUnpredicatedTerminator - Returns true if the instruction is a
   /// terminator instruction that has not been predicated.
-  virtual bool isUnpredicatedTerminator(const MachineInstr *MI) const;
+  virtual bool isUnpredicatedTerminator(const MachineInstr *MI) const = 0;
 
   /// PredicateInstruction - Convert the instruction into a predicated
   /// instruction. It returns true if the operation was successful.
@@ -636,7 +662,16 @@ public:
 
   virtual int getOperandLatency(const InstrItineraryData *ItinData,
                                 SDNode *DefNode, unsigned DefIdx,
-                                SDNode *UseNode, unsigned UseIdx) const;
+                                SDNode *UseNode, unsigned UseIdx) const = 0;
+
+  /// getOutputLatency - Compute and return the output dependency latency of a
+  /// a given pair of defs which both target the same register. This is usually
+  /// one.
+  virtual unsigned getOutputLatency(const InstrItineraryData *ItinData,
+                                    const MachineInstr *DefMI, unsigned DefIdx,
+                                    const MachineInstr *DepMI) const {
+    return 1;
+  }
 
   /// getInstrLatency - Compute the instruction latency of a given instruction.
   /// If the instruction has higher cost when predicated, it's returned via
@@ -646,7 +681,7 @@ public:
                               unsigned *PredCost = 0) const;
 
   virtual int getInstrLatency(const InstrItineraryData *ItinData,
-                              SDNode *Node) const;
+                              SDNode *Node) const = 0;
 
   /// isHighLatencyDef - Return true if this opcode has high latency to its
   /// result.
@@ -670,6 +705,111 @@ public:
   virtual
   bool hasLowDefLatency(const InstrItineraryData *ItinData,
                         const MachineInstr *DefMI, unsigned DefIdx) const;
+
+  /// verifyInstruction - Perform target specific instruction verification.
+  virtual
+  bool verifyInstruction(const MachineInstr *MI, StringRef &ErrInfo) const {
+    return true;
+  }
+
+  /// getExecutionDomain - Return the current execution domain and bit mask of
+  /// possible domains for instruction.
+  ///
+  /// Some micro-architectures have multiple execution domains, and multiple
+  /// opcodes that perform the same operation in different domains.  For
+  /// example, the x86 architecture provides the por, orps, and orpd
+  /// instructions that all do the same thing.  There is a latency penalty if a
+  /// register is written in one domain and read in another.
+  ///
+  /// This function returns a pair (domain, mask) containing the execution
+  /// domain of MI, and a bit mask of possible domains.  The setExecutionDomain
+  /// function can be used to change the opcode to one of the domains in the
+  /// bit mask.  Instructions whose execution domain can't be changed should
+  /// return a 0 mask.
+  ///
+  /// The execution domain numbers don't have any special meaning except domain
+  /// 0 is used for instructions that are not associated with any interesting
+  /// execution domain.
+  ///
+  virtual std::pair<uint16_t, uint16_t>
+  getExecutionDomain(const MachineInstr *MI) const {
+    return std::make_pair(0, 0);
+  }
+
+  /// setExecutionDomain - Change the opcode of MI to execute in Domain.
+  ///
+  /// The bit (1 << Domain) must be set in the mask returned from
+  /// getExecutionDomain(MI).
+  ///
+  virtual void setExecutionDomain(MachineInstr *MI, unsigned Domain) const {}
+
+
+  /// getPartialRegUpdateClearance - Returns the preferred minimum clearance
+  /// before an instruction with an unwanted partial register update.
+  ///
+  /// Some instructions only write part of a register, and implicitly need to
+  /// read the other parts of the register.  This may cause unwanted stalls
+  /// preventing otherwise unrelated instructions from executing in parallel in
+  /// an out-of-order CPU.
+  ///
+  /// For example, the x86 instruction cvtsi2ss writes its result to bits
+  /// [31:0] of the destination xmm register. Bits [127:32] are unaffected, so
+  /// the instruction needs to wait for the old value of the register to become
+  /// available:
+  ///
+  ///   addps %xmm1, %xmm0
+  ///   movaps %xmm0, (%rax)
+  ///   cvtsi2ss %rbx, %xmm0
+  ///
+  /// In the code above, the cvtsi2ss instruction needs to wait for the addps
+  /// instruction before it can issue, even though the high bits of %xmm0
+  /// probably aren't needed.
+  ///
+  /// This hook returns the preferred clearance before MI, measured in
+  /// instructions.  Other defs of MI's operand OpNum are avoided in the last N
+  /// instructions before MI.  It should only return a positive value for
+  /// unwanted dependencies.  If the old bits of the defined register have
+  /// useful values, or if MI is determined to otherwise read the dependency,
+  /// the hook should return 0.
+  ///
+  /// The unwanted dependency may be handled by:
+  ///
+  /// 1. Allocating the same register for an MI def and use.  That makes the
+  ///    unwanted dependency identical to a required dependency.
+  ///
+  /// 2. Allocating a register for the def that has no defs in the previous N
+  ///    instructions.
+  ///
+  /// 3. Calling breakPartialRegDependency() with the same arguments.  This
+  ///    allows the target to insert a dependency breaking instruction.
+  ///
+  virtual unsigned
+  getPartialRegUpdateClearance(const MachineInstr *MI, unsigned OpNum,
+                               const TargetRegisterInfo *TRI) const {
+    // The default implementation returns 0 for no partial register dependency.
+    return 0;
+  }
+
+  /// breakPartialRegDependency - Insert a dependency-breaking instruction
+  /// before MI to eliminate an unwanted dependency on OpNum.
+  ///
+  /// If it wasn't possible to avoid a def in the last N instructions before MI
+  /// (see getPartialRegUpdateClearance), this hook will be called to break the
+  /// unwanted dependency.
+  ///
+  /// On x86, an xorps instruction can be used as a dependency breaker:
+  ///
+  ///   addps %xmm1, %xmm0
+  ///   movaps %xmm0, (%rax)
+  ///   xorps %xmm0, %xmm0
+  ///   cvtsi2ss %rbx, %xmm0
+  ///
+  /// An <imp-kill> operand should be added to MI if an instruction was
+  /// inserted.  This ties the instructions together in the post-ra scheduler.
+  ///
+  virtual void
+  breakPartialRegDependency(MachineBasicBlock::iterator MI, unsigned OpNum,
+                            const TargetRegisterInfo *TRI) const {}
 
 private:
   int CallFrameSetupOpcode, CallFrameDestroyOpcode;
@@ -699,6 +839,7 @@ public:
   virtual bool hasStoreToStackSlot(const MachineInstr *MI,
                                    const MachineMemOperand *&MMO,
                                    int &FrameIndex) const;
+  virtual bool isUnpredicatedTerminator(const MachineInstr *MI) const;
   virtual bool PredicateInstruction(MachineInstr *MI,
                             const SmallVectorImpl<MachineOperand> &Pred) const;
   virtual void reMaterialize(MachineBasicBlock &MBB,
@@ -714,6 +855,13 @@ public:
   virtual bool isSchedulingBoundary(const MachineInstr *MI,
                                     const MachineBasicBlock *MBB,
                                     const MachineFunction &MF) const;
+  using TargetInstrInfo::getOperandLatency;
+  virtual int getOperandLatency(const InstrItineraryData *ItinData,
+                                SDNode *DefNode, unsigned DefIdx,
+                                SDNode *UseNode, unsigned UseIdx) const;
+  using TargetInstrInfo::getInstrLatency;
+  virtual int getInstrLatency(const InstrItineraryData *ItinData,
+                              SDNode *Node) const;
 
   bool usePreRAHazardRecognizer() const;
 

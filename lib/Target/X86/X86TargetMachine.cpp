@@ -28,29 +28,39 @@ extern "C" void LLVMInitializeX86Target() {
   RegisterTargetMachine<X86_64TargetMachine> Y(TheX86_64Target);
 }
 
+void X86_32TargetMachine::anchor() { }
 
 X86_32TargetMachine::X86_32TargetMachine(const Target &T, StringRef TT,
                                          StringRef CPU, StringRef FS,
-                                         Reloc::Model RM, CodeModel::Model CM)
-  : X86TargetMachine(T, TT, CPU, FS, RM, CM, false),
+                                         const TargetOptions &Options,
+                                         Reloc::Model RM, CodeModel::Model CM,
+                                         CodeGenOpt::Level OL)
+  : X86TargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, false),
     DataLayout(getSubtargetImpl()->isTargetDarwin() ?
-               "e-p:32:32-f64:32:64-i64:32:64-f80:128:128-f128:128:128-n8:16:32" :
+               "e-p:32:32-f64:32:64-i64:32:64-f80:128:128-f128:128:128-"
+               "n8:16:32-S128" :
                (getSubtargetImpl()->isTargetCygMing() ||
                 getSubtargetImpl()->isTargetWindows()) ?
-               "e-p:32:32-f64:64:64-i64:64:64-f80:32:32-f128:128:128-n8:16:32" :
-               "e-p:32:32-f64:32:64-i64:32:64-f80:32:32-f128:128:128-n8:16:32"),
+               "e-p:32:32-f64:64:64-i64:64:64-f80:32:32-f128:128:128-"
+               "n8:16:32-S32" :
+               "e-p:32:32-f64:32:64-i64:32:64-f80:32:32-f128:128:128-"
+               "n8:16:32-S128"),
     InstrInfo(*this),
     TSInfo(*this),
     TLInfo(*this),
     JITInfo(*this) {
 }
 
+void X86_64TargetMachine::anchor() { }
 
 X86_64TargetMachine::X86_64TargetMachine(const Target &T, StringRef TT,
                                          StringRef CPU, StringRef FS,
-                                         Reloc::Model RM, CodeModel::Model CM)
-  : X86TargetMachine(T, TT, CPU, FS, RM, CM, true),
-    DataLayout("e-p:64:64-s:64-f64:64:64-i64:64:64-f80:128:128-f128:128:128-n8:16:32:64"),
+                                         const TargetOptions &Options,
+                                         Reloc::Model RM, CodeModel::Model CM,
+                                         CodeGenOpt::Level OL)
+  : X86TargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, true),
+    DataLayout("e-p:64:64-s:64-f64:64:64-i64:64:64-f80:128:128-f128:128:128-"
+               "n8:16:32:64-S128"),
     InstrInfo(*this),
     TSInfo(*this),
     TLInfo(*this),
@@ -61,10 +71,12 @@ X86_64TargetMachine::X86_64TargetMachine(const Target &T, StringRef TT,
 ///
 X86TargetMachine::X86TargetMachine(const Target &T, StringRef TT,
                                    StringRef CPU, StringRef FS,
+                                   const TargetOptions &Options,
                                    Reloc::Model RM, CodeModel::Model CM,
+                                   CodeGenOpt::Level OL,
                                    bool is64Bit)
-  : LLVMTargetMachine(T, TT, CPU, FS, RM, CM),
-    Subtarget(TT, CPU, FS, StackAlignmentOverride, is64Bit),
+  : LLVMTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL),
+    Subtarget(TT, CPU, FS, Options.StackAlignmentOverride, is64Bit),
     FrameLowering(*this, Subtarget),
     ELFWriterInfo(is64Bit, true) {
   // Determine the PICStyle based on the target selected.
@@ -88,8 +100,11 @@ X86TargetMachine::X86TargetMachine(const Target &T, StringRef TT,
   }
 
   // default to hard float ABI
-  if (FloatABIType == FloatABI::Default)
-    FloatABIType = FloatABI::Hard;    
+  if (Options.FloatABIType == FloatABI::Default)
+    this->Options.FloatABIType = FloatABI::Hard;   
+
+  if (Options.EnableSegmentedStacks && !Subtarget.isTargetELF())
+    report_fatal_error("Segmented stacks are only implemented on ELF.");
 }
 
 //===----------------------------------------------------------------------===//
@@ -98,16 +113,15 @@ X86TargetMachine::X86TargetMachine(const Target &T, StringRef TT,
 static cl::opt<bool>
 UseVZeroUpper("x86-use-vzeroupper",
   cl::desc("Minimize AVX to SSE transition penalty"),
-  cl::init(false));
+  cl::init(true));
 
 //===----------------------------------------------------------------------===//
 // Pass Pipeline Configuration
 //===----------------------------------------------------------------------===//
 
-bool X86TargetMachine::addInstSelector(PassManagerBase &PM,
-                                       CodeGenOpt::Level OptLevel) {
+bool X86TargetMachine::addInstSelector(PassManagerBase &PM) {
   // Install an instruction selector.
-  PM.add(createX86ISelDag(*this, OptLevel));
+  PM.add(createX86ISelDag(*this, getOptLevel()));
 
   // For 32-bit, prepend instructions to set the "global base reg" for PIC.
   if (!Subtarget.is64Bit())
@@ -116,34 +130,32 @@ bool X86TargetMachine::addInstSelector(PassManagerBase &PM,
   return false;
 }
 
-bool X86TargetMachine::addPreRegAlloc(PassManagerBase &PM,
-                                      CodeGenOpt::Level OptLevel) {
+bool X86TargetMachine::addPreRegAlloc(PassManagerBase &PM) {
   PM.add(createX86MaxStackAlignmentHeuristicPass());
   return false;  // -print-machineinstr shouldn't print after this.
 }
 
-bool X86TargetMachine::addPostRegAlloc(PassManagerBase &PM,
-                                       CodeGenOpt::Level OptLevel) {
+bool X86TargetMachine::addPostRegAlloc(PassManagerBase &PM) {
   PM.add(createX86FloatingPointStackifierPass());
   return true;  // -print-machineinstr should print after this.
 }
 
-bool X86TargetMachine::addPreEmitPass(PassManagerBase &PM,
-                                      CodeGenOpt::Level OptLevel) {
-  if (OptLevel != CodeGenOpt::None && Subtarget.hasSSE2()) {
-    PM.add(createSSEDomainFixPass());
-    return true;
+bool X86TargetMachine::addPreEmitPass(PassManagerBase &PM) {
+  bool ShouldPrint = false;
+  if (getOptLevel() != CodeGenOpt::None && Subtarget.hasXMMInt()) {
+    PM.add(createExecutionDependencyFixPass(&X86::VR128RegClass));
+    ShouldPrint = true;
   }
 
   if (Subtarget.hasAVX() && UseVZeroUpper) {
     PM.add(createX86IssueVZeroUpperPass());
-    return true;
+    ShouldPrint = true;
   }
-  return false;
+
+  return ShouldPrint;
 }
 
 bool X86TargetMachine::addCodeEmitter(PassManagerBase &PM,
-                                      CodeGenOpt::Level OptLevel,
                                       JITCodeEmitter &JCE) {
   PM.add(createX86JITCodeEmitterPass(*this, JCE));
 

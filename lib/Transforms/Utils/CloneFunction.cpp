@@ -75,7 +75,8 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
                              ValueToValueMapTy &VMap,
                              bool ModuleLevelChanges,
                              SmallVectorImpl<ReturnInst*> &Returns,
-                             const char *NameSuffix, ClonedCodeInfo *CodeInfo) {
+                             const char *NameSuffix, ClonedCodeInfo *CodeInfo,
+                             ValueMapTypeRemapper *TypeMapper) {
   assert(NameSuffix && "NameSuffix cannot be null!");
 
 #ifndef NDEBUG
@@ -113,8 +114,23 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
 
     // Create a new basic block and copy instructions into it!
     BasicBlock *CBB = CloneBasicBlock(&BB, VMap, NameSuffix, NewFunc, CodeInfo);
-    VMap[&BB] = CBB;                       // Add basic block mapping.
 
+    // Add basic block mapping.
+    VMap[&BB] = CBB;
+
+    // It is only legal to clone a function if a block address within that
+    // function is never referenced outside of the function.  Given that, we
+    // want to map block addresses from the old function to block addresses in
+    // the clone. (This is different from the generic ValueMapper
+    // implementation, which generates an invalid blockaddress when
+    // cloning a function.)
+    if (BB.hasAddressTaken()) {
+      Constant *OldBBAddr = BlockAddress::get(const_cast<Function*>(OldFunc),
+                                              const_cast<BasicBlock*>(&BB));
+      VMap[OldBBAddr] = BlockAddress::get(NewFunc, CBB);                                         
+    }
+
+    // Note return instructions for the caller.
     if (ReturnInst *RI = dyn_cast<ReturnInst>(CBB->getTerminator()))
       Returns.push_back(RI);
   }
@@ -126,7 +142,8 @@ void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
     // Loop over all instructions, fixing each one as we find it...
     for (BasicBlock::iterator II = BB->begin(); II != BB->end(); ++II)
       RemapInstruction(II, VMap,
-                       ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges);
+                       ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
+                       TypeMapper);
 }
 
 /// CloneFunction - Return a copy of the specified function, but without
@@ -223,6 +240,22 @@ void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
   BasicBlock *NewBB;
   BBEntry = NewBB = BasicBlock::Create(BB->getContext());
   if (BB->hasName()) NewBB->setName(BB->getName()+NameSuffix);
+
+  // It is only legal to clone a function if a block address within that
+  // function is never referenced outside of the function.  Given that, we
+  // want to map block addresses from the old function to block addresses in
+  // the clone. (This is different from the generic ValueMapper
+  // implementation, which generates an invalid blockaddress when
+  // cloning a function.)
+  //
+  // Note that we don't need to fix the mapping for unreachable blocks;
+  // the default mapping there is safe.
+  if (BB->hasAddressTaken()) {
+    Constant *OldBBAddr = BlockAddress::get(const_cast<Function*>(OldFunc),
+                                            const_cast<BasicBlock*>(BB));
+    VMap[OldBBAddr] = BlockAddress::get(NewFunc, NewBB);
+  }
+    
 
   bool hasCalls = false, hasDynamicAllocas = false, hasStaticAllocas = false;
   
@@ -331,12 +364,8 @@ ConstantFoldMappedInstruction(const Instruction *I) {
                                            TD);
 
   if (const LoadInst *LI = dyn_cast<LoadInst>(I))
-    if (ConstantExpr *CE = dyn_cast<ConstantExpr>(Ops[0]))
-      if (!LI->isVolatile() && CE->getOpcode() == Instruction::GetElementPtr)
-        if (GlobalVariable *GV = dyn_cast<GlobalVariable>(CE->getOperand(0)))
-          if (GV->isConstant() && GV->hasDefinitiveInitializer())
-            return ConstantFoldLoadThroughGEPConstantExpr(GV->getInitializer(),
-                                                          CE);
+    if (!LI->isVolatile())
+      return ConstantFoldLoadFromConstPtr(Ops[0], TD);
 
   return ConstantFoldInstOperands(I->getOpcode(), I->getType(), Ops, TD);
 }

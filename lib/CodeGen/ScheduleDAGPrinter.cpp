@@ -25,7 +25,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Config/config.h"
 #include <fstream>
 using namespace llvm;
 
@@ -86,12 +85,12 @@ void ScheduleDAG::viewGraph() {
 // This code is only for debugging!
 #ifndef NDEBUG
   if (BB->getBasicBlock())
-    ViewGraph(this, "dag." + MF.getFunction()->getNameStr(), false,
-              "Scheduling-Units Graph for " + MF.getFunction()->getNameStr() + 
-              ":" + BB->getBasicBlock()->getNameStr());
+    ViewGraph(this, "dag." + MF.getFunction()->getName(), false,
+              "Scheduling-Units Graph for " + MF.getFunction()->getName() +
+              ":" + BB->getBasicBlock()->getName());
   else
-    ViewGraph(this, "dag." + MF.getFunction()->getNameStr(), false,
-              "Scheduling-Units Graph for " + MF.getFunction()->getNameStr());
+    ViewGraph(this, "dag." + MF.getFunction()->getName(), false,
+              "Scheduling-Units Graph for " + MF.getFunction()->getName());
 #else
   errs() << "ScheduleDAG::viewGraph is only available in debug builds on "
          << "systems with Graphviz or gv!\n";

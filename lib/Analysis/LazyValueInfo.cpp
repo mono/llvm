@@ -20,6 +20,7 @@
 #include "llvm/IntrinsicInst.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Target/TargetData.h"
+#include "llvm/Target/TargetLibraryInfo.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/ConstantRange.h"
 #include "llvm/Support/Debug.h"
@@ -33,7 +34,10 @@
 using namespace llvm;
 
 char LazyValueInfo::ID = 0;
-INITIALIZE_PASS(LazyValueInfo, "lazy-value-info",
+INITIALIZE_PASS_BEGIN(LazyValueInfo, "lazy-value-info",
+                "Lazy Value Information Analysis", false, true)
+INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfo)
+INITIALIZE_PASS_END(LazyValueInfo, "lazy-value-info",
                 "Lazy Value Information Analysis", false, true)
 
 namespace llvm {
@@ -61,10 +65,10 @@ class LVILatticeVal {
     constant,
     /// notconstant - This Value is known to not have the specified value.
     notconstant,
-    
+
     /// constantrange - The Value falls within this range.
     constantrange,
-    
+
     /// overdefined - This value is not known to be constant, and we know that
     /// it has a value.
     overdefined
@@ -207,7 +211,7 @@ public:
 
         // Unless we can prove that the two Constants are different, we must
         // move to overdefined.
-        // FIXME: use TargetData for smarter constant folding.
+        // FIXME: use TargetData/TargetLibraryInfo for smarter constant folding.
         if (ConstantInt *Res = dyn_cast<ConstantInt>(
                 ConstantFoldCompareInstOperands(CmpInst::ICMP_NE,
                                                 getConstant(),
@@ -233,7 +237,7 @@ public:
 
         // Unless we can prove that the two Constants are different, we must
         // move to overdefined.
-        // FIXME: use TargetData for smarter constant folding.
+        // FIXME: use TargetData/TargetLibraryInfo for smarter constant folding.
         if (ConstantInt *Res = dyn_cast<ConstantInt>(
                 ConstantFoldCompareInstOperands(CmpInst::ICMP_NE,
                                                 getNotConstant(),
@@ -367,7 +371,11 @@ namespace {
     /// for cache updating.
     typedef std::pair<AssertingVH<BasicBlock>, Value*> OverDefinedPairTy;
     DenseSet<OverDefinedPairTy> OverDefinedCache;
-    
+
+    /// SeenBlocks - Keep track of all blocks that we have ever seen, so we
+    /// don't spend time removing unused blocks from our caches.
+    DenseSet<AssertingVH<BasicBlock> > SeenBlocks;
+
     /// BlockValueStack - This stack holds the state of the value solver
     /// during a query.  It basically emulates the callstack of the naive
     /// recursive value lookup process.
@@ -438,6 +446,7 @@ namespace {
     
     /// clear - Empty the cache.
     void clear() {
+      SeenBlocks.clear();
       ValueCache.clear();
       OverDefinedCache.clear();
     }
@@ -466,6 +475,12 @@ void LVIValueHandle::deleted() {
 }
 
 void LazyValueInfoCache::eraseBlock(BasicBlock *BB) {
+  // Shortcut if we have never seen this block.
+  DenseSet<AssertingVH<BasicBlock> >::iterator I = SeenBlocks.find(BB);
+  if (I == SeenBlocks.end())
+    return;
+  SeenBlocks.erase(I);
+
   SmallVector<OverDefinedPairTy, 4> ToErase;
   for (DenseSet<OverDefinedPairTy>::iterator  I = OverDefinedCache.begin(),
        E = OverDefinedCache.end(); I != E; ++I) {
@@ -505,6 +520,7 @@ LVILatticeVal LazyValueInfoCache::getBlockValue(Value *Val, BasicBlock *BB) {
   if (Constant *VC = dyn_cast<Constant>(Val))
     return LVILatticeVal::get(VC);
 
+  SeenBlocks.insert(BB);
   return lookup(Val)[BB];
 }
 
@@ -513,6 +529,7 @@ bool LazyValueInfoCache::solveBlockValue(Value *Val, BasicBlock *BB) {
     return true;
 
   ValueCacheEntryTy &Cache = lookup(Val);
+  SeenBlocks.insert(BB);
   LVILatticeVal &BBLV = Cache[BB];
   
   // OverDefinedCacheUpdater is a helper object that will update
@@ -1007,10 +1024,17 @@ static LazyValueInfoCache &getCache(void *&PImpl) {
 bool LazyValueInfo::runOnFunction(Function &F) {
   if (PImpl)
     getCache(PImpl).clear();
-  
+
   TD = getAnalysisIfAvailable<TargetData>();
+  TLI = &getAnalysis<TargetLibraryInfo>();
+
   // Fully lazy.
   return false;
+}
+
+void LazyValueInfo::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.setPreservesAll();
+  AU.addRequired<TargetLibraryInfo>();
 }
 
 void LazyValueInfo::releaseMemory() {
@@ -1061,7 +1085,8 @@ LazyValueInfo::getPredicateOnEdge(unsigned Pred, Value *V, Constant *C,
   // If we know the value is a constant, evaluate the conditional.
   Constant *Res = 0;
   if (Result.isConstant()) {
-    Res = ConstantFoldCompareInstOperands(Pred, Result.getConstant(), C, TD);
+    Res = ConstantFoldCompareInstOperands(Pred, Result.getConstant(), C, TD,
+                                          TLI);
     if (ConstantInt *ResCI = dyn_cast<ConstantInt>(Res))
       return ResCI->isZero() ? False : True;
     return Unknown;
@@ -1102,13 +1127,15 @@ LazyValueInfo::getPredicateOnEdge(unsigned Pred, Value *V, Constant *C,
     if (Pred == ICmpInst::ICMP_EQ) {
       // !C1 == C -> false iff C1 == C.
       Res = ConstantFoldCompareInstOperands(ICmpInst::ICMP_NE,
-                                            Result.getNotConstant(), C, TD);
+                                            Result.getNotConstant(), C, TD,
+                                            TLI);
       if (Res->isNullValue())
         return False;
     } else if (Pred == ICmpInst::ICMP_NE) {
       // !C1 != C -> true iff C1 == C.
       Res = ConstantFoldCompareInstOperands(ICmpInst::ICMP_NE,
-                                            Result.getNotConstant(), C, TD);
+                                            Result.getNotConstant(), C, TD,
+                                            TLI);
       if (Res->isNullValue())
         return True;
     }

@@ -34,10 +34,8 @@
 #include "llvm/Support/MemoryObject.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetRegistry.h"
-#include "llvm/Support/TargetSelect.h"
 using namespace llvm;
 
-bool EDDisassembler::sInitialized = false;
 EDDisassembler::DisassemblerMap_t EDDisassembler::sDisassemblers;
 
 struct TripleMap {
@@ -97,20 +95,6 @@ static int getLLVMSyntaxVariant(Triple::ArchType arch,
       return -1;
   }
 }
-
-void EDDisassembler::initialize() {
-  if (sInitialized)
-    return;
-  
-  sInitialized = true;
-  
-  InitializeAllTargetInfos();
-  InitializeAllTargetMCs();
-  InitializeAllAsmParsers();
-  InitializeAllDisassemblers();
-}
-
-#undef BRINGUP_TARGET
 
 EDDisassembler *EDDisassembler::getDisassembler(Triple::ArchType arch,
                                                 AssemblySyntax syntax) {
@@ -246,7 +230,7 @@ EDInst *EDDisassembler::createInst(EDByteReaderCallback byteReader,
   
   MCDisassembler::DecodeStatus S;
   S = Disassembler->getInstruction(*inst, byteSize, memoryObject, address,
-                                   ErrorStream);
+                                   ErrorStream, nulls());
   switch (S) {
   case MCDisassembler::Fail:
   case MCDisassembler::SoftFail:
@@ -327,7 +311,7 @@ bool EDDisassembler::registerIsProgramCounter(unsigned registerID) {
 int EDDisassembler::printInst(std::string &str, MCInst &inst) {
   PrinterMutex.acquire();
   
-  InstPrinter->printInst(&inst, *InstStream);
+  InstPrinter->printInst(&inst, *InstStream, "");
   InstStream->flush();
   str = *InstString;
   InstString->clear();
@@ -337,13 +321,9 @@ int EDDisassembler::printInst(std::string &str, MCInst &inst) {
   return 0;
 }
 
-static void diag_handler(const SMDiagnostic &diag,
-                         void *context)
-{
-  if (context) {
-    EDDisassembler *disassembler = static_cast<EDDisassembler*>(context);
-    diag.Print("", disassembler->ErrorStream);
-  }
+static void diag_handler(const SMDiagnostic &diag, void *context) {
+  if (context)
+    diag.print("", static_cast<EDDisassembler*>(context)->ErrorStream);
 }
 
 int EDDisassembler::parseInst(SmallVectorImpl<MCParsedAsmOperand*> &operands,

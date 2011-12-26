@@ -247,6 +247,9 @@ public:
                                MachineInstr::mmo_iterator MMOBegin,
                                MachineInstr::mmo_iterator MMOEnd,
                                SmallVectorImpl<MachineInstr*> &NewMIs) const;
+
+  virtual bool expandPostRAPseudo(MachineBasicBlock::iterator MI) const;
+
   virtual
   MachineInstr *emitFrameIndexDebugValue(MachineFunction &MF,
                                          int FrameIx, uint64_t Offset,
@@ -337,12 +340,15 @@ public:
   ///
   unsigned getGlobalBaseReg(MachineFunction *MF) const;
 
-  /// GetSSEDomain - Return the SSE execution domain of MI as the first element,
-  /// and a bitmask of possible arguments to SetSSEDomain ase the second.
-  std::pair<uint16_t, uint16_t> GetSSEDomain(const MachineInstr *MI) const;
+  std::pair<uint16_t, uint16_t>
+  getExecutionDomain(const MachineInstr *MI) const;
 
-  /// SetSSEDomain - Set the SSEDomain of MI.
-  void SetSSEDomain(MachineInstr *MI, unsigned Domain) const;
+  void setExecutionDomain(MachineInstr *MI, unsigned Domain) const;
+
+  unsigned getPartialRegUpdateClearance(const MachineInstr *MI, unsigned OpNum,
+                                        const TargetRegisterInfo *TRI) const;
+  void breakPartialRegDependency(MachineBasicBlock::iterator MI, unsigned OpNum,
+                                 const TargetRegisterInfo *TRI) const;
 
   MachineInstr* foldMemoryOperandImpl(MachineFunction &MF,
                                       MachineInstr* MI,

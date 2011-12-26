@@ -10,7 +10,7 @@
 LEVEL := .
 
 # Top-Level LLVM Build Stages:
-#   1. Build lib/Support, which is used by utils (tblgen).
+#   1. Build lib/Support and lib/TableGen, which are used by utils (tblgen).
 #   2. Build utils, which is used by VMCore.
 #   3. Build VMCore, which builds the Intrinsics.inc file used by libs.
 #   4. Build libs, which are needed by llvm-config.
@@ -27,10 +27,10 @@ LEVEL := .
 ifneq ($(findstring llvmCore, $(RC_ProjectName)),llvmCore)  # Normal build (not "Apple-style").
 
 ifeq ($(BUILD_DIRS_ONLY),1)
-  DIRS := lib/Support utils
-  OPTIONAL_DIRS :=
+  DIRS := lib/Support lib/TableGen utils tools/llvm-config
+  OPTIONAL_DIRS := tools/clang/utils/TableGen
 else
-  DIRS := lib/Support utils lib/VMCore lib tools/llvm-shlib \
+  DIRS := lib/Support lib/TableGen utils lib/VMCore lib tools/llvm-shlib \
           tools/llvm-config tools runtime docs unittests
   OPTIONAL_DIRS := projects bindings
 endif
@@ -68,16 +68,10 @@ endif
 
 ifeq ($(MAKECMDGOALS),install-clang)
   DIRS := tools/clang/tools/driver tools/clang/lib/Headers \
+          tools/clang/tools/libclang tools/clang/tools/c-index-test \
+          tools/clang/include/clang-c \
           tools/clang/runtime tools/clang/docs \
           tools/lto runtime
-  OPTIONAL_DIRS :=
-  NO_INSTALL = 1
-endif
-
-ifeq ($(MAKECMDGOALS),install-clang-c)
-  DIRS := tools/clang/tools/driver tools/clang/lib/Headers \
-          tools/clang/tools/libclang tools/clang/tools/c-index-test \
-	  tools/clang/include/clang-c
   OPTIONAL_DIRS :=
   NO_INSTALL = 1
 endif
@@ -118,18 +112,22 @@ cross-compile-build-tools:
 	  unset CFLAGS ; \
 	  unset CXXFLAGS ; \
 	  $(PROJ_SRC_DIR)/configure --build=$(BUILD_TRIPLE) \
-		--host=$(BUILD_TRIPLE) --target=$(BUILD_TRIPLE); \
+		--host=$(BUILD_TRIPLE) --target=$(BUILD_TRIPLE) \
+	        --disable-polly ; \
 	  cd .. ; \
 	fi; \
 	(unset SDKROOT; \
 	 $(MAKE) -C BuildTools \
 	  BUILD_DIRS_ONLY=1 \
 	  UNIVERSAL= \
+	  TARGET_NATIVE_ARCH="$(TARGET_NATIVE_ARCH)" \
+	  TARGETS_TO_BUILD="$(TARGETS_TO_BUILD)" \
 	  ENABLE_OPTIMIZED=$(ENABLE_OPTIMIZED) \
 	  ENABLE_PROFILING=$(ENABLE_PROFILING) \
 	  ENABLE_COVERAGE=$(ENABLE_COVERAGE) \
 	  DISABLE_ASSERTIONS=$(DISABLE_ASSERTIONS) \
 	  ENABLE_EXPENSIVE_CHECKS=$(ENABLE_EXPENSIVE_CHECKS) \
+	  ENABLE_LIBCPP=$(ENABLE_LIBCPP) \
 	  CFLAGS= \
 	  CXXFLAGS= \
 	) || exit 1;
@@ -165,7 +163,6 @@ clang-only: all
 tools-only: all
 libs-only: all
 install-clang: install
-install-clang-c: install
 install-libs: install
 
 # If SHOW_DIAGNOSTICS is enabled, clear the diagnostics file first.
@@ -187,8 +184,7 @@ FilesToConfig := \
   include/llvm/Config/AsmPrinters.def \
   include/llvm/Config/AsmParsers.def \
   include/llvm/Config/Disassemblers.def \
-  include/llvm/Support/DataTypes.h \
-  tools/llvmc/src/Base.td
+  include/llvm/Support/DataTypes.h
 FilesToConfigPATH  := $(addprefix $(LLVM_OBJ_ROOT)/,$(FilesToConfig))
 
 all-local:: $(FilesToConfigPATH)
@@ -209,7 +205,7 @@ ifneq ($(ENABLE_OPTIMIZED),1)
 	$(Echo) '*****' configure with --enable-optimized.
 ifeq ($(SHOW_DIAGNOSTICS),1)
 	$(Verb) if test -s $(LLVM_OBJ_ROOT)/$(BuildMode)/diags; then \
-	  $(LLVM_SRC_ROOT)/utils/show-diagnostics \
+	  $(LLVM_SRC_ROOT)/utils/clang-parse-diagnostics-file -a \
 	    $(LLVM_OBJ_ROOT)/$(BuildMode)/diags; \
 	fi
 endif
@@ -243,7 +239,7 @@ SVN-UPDATE-OPTIONS =
 AWK = awk
 SUB-SVN-DIRS = $(AWK) '/\?\ \ \ \ \ \ / {print $$2}'   \
 		| LC_ALL=C xargs $(SVN) info 2>/dev/null \
-		| $(AWK) '/Path:\ / {print $$2}'
+		| $(AWK) '/^Path:\ / {print $$2}'
 
 update:
 	$(SVN) $(SVN-UPDATE-OPTIONS) update $(LLVM_SRC_ROOT)

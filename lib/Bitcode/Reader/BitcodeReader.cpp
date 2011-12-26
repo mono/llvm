@@ -403,14 +403,6 @@ Type *BitcodeReader::getTypeByID(unsigned ID) {
   return TypeList[ID] = StructType::create(Context);
 }
 
-/// FIXME: Remove in LLVM 3.1, only used by ParseOldTypeTable.
-Type *BitcodeReader::getTypeByIDOrNull(unsigned ID) {
-  if (ID >= TypeList.size())
-    TypeList.resize(ID+1);
-  
-  return TypeList[ID];
-}
-
 
 //===----------------------------------------------------------------------===//
 //  Functions for parsing blocks from the bitcode file
@@ -573,6 +565,9 @@ bool BitcodeReader::ParseTypeTableBody() {
     case bitc::TYPE_CODE_VOID:      // VOID
       ResultTy = Type::getVoidTy(Context);
       break;
+    case bitc::TYPE_CODE_HALF:     // HALF
+      ResultTy = Type::getHalfTy(Context);
+      break;
     case bitc::TYPE_CODE_FLOAT:     // FLOAT
       ResultTy = Type::getFloatTy(Context);
       break;
@@ -615,7 +610,7 @@ bool BitcodeReader::ParseTypeTableBody() {
       ResultTy = PointerType::get(ResultTy, AddressSpace);
       break;
     }
-    case bitc::TYPE_CODE_FUNCTION: {
+    case bitc::TYPE_CODE_FUNCTION_OLD: {
       // FIXME: attrid is dead, remove it in LLVM 3.0
       // FUNCTION: [vararg, attrid, retty, paramty x N]
       if (Record.size() < 3)
@@ -630,6 +625,25 @@ bool BitcodeReader::ParseTypeTableBody() {
       
       ResultTy = getTypeByID(Record[2]);
       if (ResultTy == 0 || ArgTys.size() < Record.size()-3)
+        return Error("invalid type in function type");
+
+      ResultTy = FunctionType::get(ResultTy, ArgTys, Record[0]);
+      break;
+    }
+    case bitc::TYPE_CODE_FUNCTION: {
+      // FUNCTION: [vararg, retty, paramty x N]
+      if (Record.size() < 2)
+        return Error("Invalid FUNCTION type record");
+      std::vector<Type*> ArgTys;
+      for (unsigned i = 2, e = Record.size(); i != e; ++i) {
+        if (Type *T = getTypeByID(Record[i]))
+          ArgTys.push_back(T);
+        else
+          break;
+      }
+      
+      ResultTy = getTypeByID(Record[1]);
+      if (ResultTy == 0 || ArgTys.size() < Record.size()-2)
         return Error("invalid type in function type");
 
       ResultTy = FunctionType::get(ResultTy, ArgTys, Record[0]);
@@ -725,247 +739,6 @@ bool BitcodeReader::ParseTypeTableBody() {
     assert(ResultTy && "Didn't read a type?");
     assert(TypeList[NumRecords] == 0 && "Already read type?");
     TypeList[NumRecords++] = ResultTy;
-  }
-}
-
-// FIXME: Remove in LLVM 3.1
-bool BitcodeReader::ParseOldTypeTable() {
-  if (Stream.EnterSubBlock(bitc::TYPE_BLOCK_ID_OLD))
-    return Error("Malformed block record");
-
-  if (!TypeList.empty())
-    return Error("Multiple TYPE_BLOCKs found!");
-  
-  
-  // While horrible, we have no good ordering of types in the bc file.  Just
-  // iteratively parse types out of the bc file in multiple passes until we get
-  // them all.  Do this by saving a cursor for the start of the type block.
-  BitstreamCursor StartOfTypeBlockCursor(Stream);
-  
-  unsigned NumTypesRead = 0;
-  
-  SmallVector<uint64_t, 64> Record;
-RestartScan:
-  unsigned NextTypeID = 0;
-  bool ReadAnyTypes = false;
-  
-  // Read all the records for this type table.
-  while (1) {
-    unsigned Code = Stream.ReadCode();
-    if (Code == bitc::END_BLOCK) {
-      if (NextTypeID != TypeList.size())
-        return Error("Invalid type forward reference in TYPE_BLOCK_ID_OLD");
-      
-      // If we haven't read all of the types yet, iterate again.
-      if (NumTypesRead != TypeList.size()) {
-        // If we didn't successfully read any types in this pass, then we must
-        // have an unhandled forward reference.
-        if (!ReadAnyTypes)
-          return Error("Obsolete bitcode contains unhandled recursive type");
-        
-        Stream = StartOfTypeBlockCursor;
-        goto RestartScan;
-      }
-      
-      if (Stream.ReadBlockEnd())
-        return Error("Error at end of type table block");
-      return false;
-    }
-    
-    if (Code == bitc::ENTER_SUBBLOCK) {
-      // No known subblocks, always skip them.
-      Stream.ReadSubBlockID();
-      if (Stream.SkipBlock())
-        return Error("Malformed block record");
-      continue;
-    }
-    
-    if (Code == bitc::DEFINE_ABBREV) {
-      Stream.ReadAbbrevRecord();
-      continue;
-    }
-    
-    // Read a record.
-    Record.clear();
-    Type *ResultTy = 0;
-    switch (Stream.ReadRecord(Code, Record)) {
-    default: return Error("unknown type in type table");
-    case bitc::TYPE_CODE_NUMENTRY: // TYPE_CODE_NUMENTRY: [numentries]
-      // TYPE_CODE_NUMENTRY contains a count of the number of types in the
-      // type list.  This allows us to reserve space.
-      if (Record.size() < 1)
-        return Error("Invalid TYPE_CODE_NUMENTRY record");
-      TypeList.resize(Record[0]);
-      continue;
-    case bitc::TYPE_CODE_VOID:      // VOID
-      ResultTy = Type::getVoidTy(Context);
-      break;
-    case bitc::TYPE_CODE_FLOAT:     // FLOAT
-      ResultTy = Type::getFloatTy(Context);
-      break;
-    case bitc::TYPE_CODE_DOUBLE:    // DOUBLE
-      ResultTy = Type::getDoubleTy(Context);
-      break;
-    case bitc::TYPE_CODE_X86_FP80:  // X86_FP80
-      ResultTy = Type::getX86_FP80Ty(Context);
-      break;
-    case bitc::TYPE_CODE_FP128:     // FP128
-      ResultTy = Type::getFP128Ty(Context);
-      break;
-    case bitc::TYPE_CODE_PPC_FP128: // PPC_FP128
-      ResultTy = Type::getPPC_FP128Ty(Context);
-      break;
-    case bitc::TYPE_CODE_LABEL:     // LABEL
-      ResultTy = Type::getLabelTy(Context);
-      break;
-    case bitc::TYPE_CODE_METADATA:  // METADATA
-      ResultTy = Type::getMetadataTy(Context);
-      break;
-    case bitc::TYPE_CODE_X86_MMX:   // X86_MMX
-      ResultTy = Type::getX86_MMXTy(Context);
-      break;
-    case bitc::TYPE_CODE_INTEGER:   // INTEGER: [width]
-      if (Record.size() < 1)
-        return Error("Invalid Integer type record");
-      ResultTy = IntegerType::get(Context, Record[0]);
-      break;
-    case bitc::TYPE_CODE_OPAQUE:    // OPAQUE
-      if (NextTypeID < TypeList.size() && TypeList[NextTypeID] == 0)
-        ResultTy = StructType::create(Context);
-      break;
-    case bitc::TYPE_CODE_STRUCT_OLD: {// STRUCT_OLD
-      if (NextTypeID >= TypeList.size()) break;
-      // If we already read it, don't reprocess.
-      if (TypeList[NextTypeID] &&
-          !cast<StructType>(TypeList[NextTypeID])->isOpaque())
-        break;
-
-      // Set a type.
-      if (TypeList[NextTypeID] == 0)
-        TypeList[NextTypeID] = StructType::create(Context);
-
-      std::vector<Type*> EltTys;
-      for (unsigned i = 1, e = Record.size(); i != e; ++i) {
-        if (Type *Elt = getTypeByIDOrNull(Record[i]))
-          EltTys.push_back(Elt);
-        else
-          break;
-      }
-
-      if (EltTys.size() != Record.size()-1)
-        break;      // Not all elements are ready.
-      
-      cast<StructType>(TypeList[NextTypeID])->setBody(EltTys, Record[0]);
-      ResultTy = TypeList[NextTypeID];
-      TypeList[NextTypeID] = 0;
-      break;
-    }
-    case bitc::TYPE_CODE_POINTER: { // POINTER: [pointee type] or
-      //          [pointee type, address space]
-      if (Record.size() < 1)
-        return Error("Invalid POINTER type record");
-      unsigned AddressSpace = 0;
-      if (Record.size() == 2)
-        AddressSpace = Record[1];
-      if ((ResultTy = getTypeByIDOrNull(Record[0])))
-        ResultTy = PointerType::get(ResultTy, AddressSpace);
-      break;
-    }
-    case bitc::TYPE_CODE_FUNCTION: {
-      // FIXME: attrid is dead, remove it in LLVM 3.0
-      // FUNCTION: [vararg, attrid, retty, paramty x N]
-      if (Record.size() < 3)
-        return Error("Invalid FUNCTION type record");
-      std::vector<Type*> ArgTys;
-      for (unsigned i = 3, e = Record.size(); i != e; ++i) {
-        if (Type *Elt = getTypeByIDOrNull(Record[i]))
-          ArgTys.push_back(Elt);
-        else
-          break;
-      }
-      if (ArgTys.size()+3 != Record.size())
-        break;  // Something was null.
-      if ((ResultTy = getTypeByIDOrNull(Record[2])))
-        ResultTy = FunctionType::get(ResultTy, ArgTys, Record[0]);
-      break;
-    }
-    case bitc::TYPE_CODE_ARRAY:     // ARRAY: [numelts, eltty]
-      if (Record.size() < 2)
-        return Error("Invalid ARRAY type record");
-      if ((ResultTy = getTypeByIDOrNull(Record[1])))
-        ResultTy = ArrayType::get(ResultTy, Record[0]);
-      break;
-    case bitc::TYPE_CODE_VECTOR:    // VECTOR: [numelts, eltty]
-      if (Record.size() < 2)
-        return Error("Invalid VECTOR type record");
-      if ((ResultTy = getTypeByIDOrNull(Record[1])))
-        ResultTy = VectorType::get(ResultTy, Record[0]);
-      break;
-    }
-    
-    if (NextTypeID >= TypeList.size())
-      return Error("invalid TYPE table");
-    
-    if (ResultTy && TypeList[NextTypeID] == 0) {
-      ++NumTypesRead;
-      ReadAnyTypes = true;
-      
-      TypeList[NextTypeID] = ResultTy;
-    }
-    
-    ++NextTypeID;
-  }
-}
-
-
-bool BitcodeReader::ParseOldTypeSymbolTable() {
-  if (Stream.EnterSubBlock(bitc::TYPE_SYMTAB_BLOCK_ID_OLD))
-    return Error("Malformed block record");
-
-  SmallVector<uint64_t, 64> Record;
-
-  // Read all the records for this type table.
-  std::string TypeName;
-  while (1) {
-    unsigned Code = Stream.ReadCode();
-    if (Code == bitc::END_BLOCK) {
-      if (Stream.ReadBlockEnd())
-        return Error("Error at end of type symbol table block");
-      return false;
-    }
-
-    if (Code == bitc::ENTER_SUBBLOCK) {
-      // No known subblocks, always skip them.
-      Stream.ReadSubBlockID();
-      if (Stream.SkipBlock())
-        return Error("Malformed block record");
-      continue;
-    }
-
-    if (Code == bitc::DEFINE_ABBREV) {
-      Stream.ReadAbbrevRecord();
-      continue;
-    }
-
-    // Read a record.
-    Record.clear();
-    switch (Stream.ReadRecord(Code, Record)) {
-    default:  // Default behavior: unknown type.
-      break;
-    case bitc::TST_CODE_ENTRY:    // TST_ENTRY: [typeid, namechar x N]
-      if (ConvertToString(Record, 1, TypeName))
-        return Error("Invalid TST_ENTRY record");
-      unsigned TypeID = Record[0];
-      if (TypeID >= TypeList.size())
-        return Error("Invalid Type ID in TST_ENTRY record");
-
-      // Only apply the type name to a struct type with no name.
-      if (StructType *STy = dyn_cast<StructType>(TypeList[TypeID]))
-        if (!STy->isLiteral() && !STy->hasName())
-          STy->setName(TypeName);
-      TypeName.clear();
-      break;
-    }
   }
 }
 
@@ -1262,7 +1035,9 @@ bool BitcodeReader::ParseConstants() {
     case bitc::CST_CODE_FLOAT: {    // FLOAT: [fpval]
       if (Record.empty())
         return Error("Invalid FLOAT record");
-      if (CurTy->isFloatTy())
+      if (CurTy->isHalfTy())
+        V = ConstantFP::get(Context, APFloat(APInt(16, (uint16_t)Record[0])));
+      else if (CurTy->isFloatTy())
         V = ConstantFP::get(Context, APFloat(APInt(32, (uint32_t)Record[0])));
       else if (CurTy->isDoubleTy())
         V = ConstantFP::get(Context, APFloat(APInt(64, Record[0])));
@@ -1517,6 +1292,50 @@ bool BitcodeReader::ParseConstants() {
   return false;
 }
 
+bool BitcodeReader::ParseUseLists() {
+  if (Stream.EnterSubBlock(bitc::USELIST_BLOCK_ID))
+    return Error("Malformed block record");
+
+  SmallVector<uint64_t, 64> Record;
+  
+  // Read all the records.
+  while (1) {
+    unsigned Code = Stream.ReadCode();
+    if (Code == bitc::END_BLOCK) {
+      if (Stream.ReadBlockEnd())
+        return Error("Error at end of use-list table block");
+      return false;
+    }
+    
+    if (Code == bitc::ENTER_SUBBLOCK) {
+      // No known subblocks, always skip them.
+      Stream.ReadSubBlockID();
+      if (Stream.SkipBlock())
+        return Error("Malformed block record");
+      continue;
+    }
+    
+    if (Code == bitc::DEFINE_ABBREV) {
+      Stream.ReadAbbrevRecord();
+      continue;
+    }
+    
+    // Read a use list record.
+    Record.clear();
+    switch (Stream.ReadRecord(Code, Record)) {
+    default:  // Default behavior: unknown type.
+      break;
+    case bitc::USELIST_CODE_ENTRY: { // USELIST_CODE_ENTRY: TBD.
+      unsigned RecordLength = Record.size();
+      if (RecordLength < 1)
+        return Error ("Invalid UseList reader!");
+      UseListRecords.push_back(Record);
+      break;
+    }
+    }
+  }
+}
+
 /// RememberAndSkipFunctionBody - When we see the block for a function body,
 /// remember where it is and then skip it.  This lets us lazily deserialize the
 /// functions.
@@ -1600,14 +1419,6 @@ bool BitcodeReader::ParseModule() {
         if (ParseTypeTable())
           return true;
         break;
-      case bitc::TYPE_BLOCK_ID_OLD:
-        if (ParseOldTypeTable())
-          return true;
-        break;
-      case bitc::TYPE_SYMTAB_BLOCK_ID_OLD:
-        if (ParseOldTypeSymbolTable())
-          return true;
-        break;
       case bitc::VALUE_SYMTAB_BLOCK_ID:
         if (ParseValueSymbolTable())
           return true;
@@ -1629,6 +1440,10 @@ bool BitcodeReader::ParseModule() {
         }
 
         if (RememberAndSkipFunctionBody())
+          return true;
+        break;
+      case bitc::USELIST_BLOCK_ID:
+        if (ParseUseLists())
           return true;
         break;
       }
@@ -2653,7 +2468,7 @@ bool BitcodeReader::ParseFunctionBody(Function *F) {
         return Error("Invalid STOREATOMIC record");
 
       AtomicOrdering Ordering = GetDecodedOrdering(Record[OpNum+2]);
-      if (Ordering == NotAtomic || Ordering == Release ||
+      if (Ordering == NotAtomic || Ordering == Acquire ||
           Ordering == AcquireRelease)
         return Error("Invalid STOREATOMIC record");
       SynchronizationScope SynchScope = GetDecodedSynchScope(Record[OpNum+3]);
@@ -2939,9 +2754,6 @@ bool BitcodeReader::MaterializeModule(Module *M, std::string *ErrInfo) {
   }
   std::vector<std::pair<Function*, Function*> >().swap(UpgradedIntrinsics);
 
-  // Check debug info intrinsics.
-  CheckDebugInfoIntrinsics(TheModule);
-
   return false;
 }
 
@@ -2986,6 +2798,9 @@ Module *llvm::ParseBitcodeFile(MemoryBuffer *Buffer, LLVMContext& Context,
     delete M;
     return 0;
   }
+
+  // TODO: Restore the use-lists to the in-memory state when the bitcode was
+  // written.  We must defer until the Module has been fully materialized.
 
   return M;
 }

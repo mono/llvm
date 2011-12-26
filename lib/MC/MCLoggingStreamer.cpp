@@ -122,6 +122,11 @@ public:
     return Child->EndCOFFSymbolDef();
   }
 
+  virtual void EmitCOFFSecRel32(MCSymbol const *Symbol) {
+    LogCall("EmitCOFFSecRel32");
+    return Child->EmitCOFFSecRel32(Symbol);
+  }
+
   virtual void EmitELFSize(MCSymbol *Symbol, const MCExpr *Value) {
     LogCall("EmitELFSize");
     return Child->EmitELFSize(Symbol, Value);
@@ -208,10 +213,12 @@ public:
     return Child->EmitFileDirective(Filename);
   }
 
-  virtual bool EmitDwarfFileDirective(unsigned FileNo, StringRef Filename) {
+  virtual bool EmitDwarfFileDirective(unsigned FileNo, StringRef Directory,
+                                      StringRef Filename) {
     LogCall("EmitDwarfFileDirective",
-            "FileNo:" + Twine(FileNo) + " Filename:" + Filename);
-    return Child->EmitDwarfFileDirective(FileNo, Filename);
+            "FileNo:" + Twine(FileNo) + " Directory:" + Directory +
+            " Filename:" + Filename);
+    return Child->EmitDwarfFileDirective(FileNo, Directory, Filename);
   }
 
   virtual void EmitDwarfLocDirective(unsigned FileNo, unsigned Line,

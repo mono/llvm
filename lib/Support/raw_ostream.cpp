@@ -20,6 +20,7 @@
 #include "llvm/Config/config.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/system_error.h"
 #include "llvm/ADT/STLExtras.h"
 #include <cctype>
 #include <cerrno>
@@ -121,7 +122,8 @@ raw_ostream &raw_ostream::operator<<(unsigned long N) {
 raw_ostream &raw_ostream::operator<<(long N) {
   if (N <  0) {
     *this << '-';
-    N = -N;
+    // Avoid undefined behavior on LONG_MIN with a cast.
+    N = -(unsigned long)N;
   }
 
   return this->operator<<(static_cast<unsigned long>(N));

@@ -22,9 +22,11 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
+using namespace llvm;
+
 // NOTE: PTXMFInfoExtract must after register allocation!
 
-namespace llvm {
+namespace {
   /// PTXMFInfoExtract - PTX specific code to extract of PTX machine
   /// function information for PTXAsmPrinter
   ///
@@ -42,7 +44,7 @@ namespace llvm {
         return "PTX Machine Function Info Extractor";
       }
   }; // class PTXMFInfoExtract
-} // namespace llvm
+} // end anonymous namespace
 
 using namespace llvm;
 
@@ -52,36 +54,25 @@ bool PTXMFInfoExtract::runOnMachineFunction(MachineFunction &MF) {
   PTXMachineFunctionInfo *MFI = MF.getInfo<PTXMachineFunctionInfo>();
   MachineRegisterInfo &MRI = MF.getRegInfo();
 
-  DEBUG(dbgs() << "******** PTX FUNCTION LOCAL VAR REG DEF ********\n");
-
-  DEBUG(dbgs()
-        << "PTX::NoRegister == " << PTX::NoRegister << "\n"
-        << "PTX::NUM_TARGET_REGS == " << PTX::NUM_TARGET_REGS << "\n");
-
-  DEBUG(for (unsigned reg = PTX::NoRegister + 1;
-             reg < PTX::NUM_TARGET_REGS; ++reg)
-          if (MRI.isPhysRegUsed(reg))
-            dbgs() << "Used Reg: " << reg << "\n";);
-
-  // FIXME: This is a slow linear scanning
-  for (unsigned reg = PTX::NoRegister + 1; reg < PTX::NUM_TARGET_REGS; ++reg)
-    if (MRI.isPhysRegUsed(reg) &&
-        !MFI->isRetReg(reg) &&
-        (MFI->isKernel() || !MFI->isArgReg(reg)))
-      MFI->addLocalVarReg(reg);
-
-  // Notify MachineFunctionInfo that I've done adding local var reg
-  MFI->doneAddLocalVar();
-
-  DEBUG(for (PTXMachineFunctionInfo::reg_iterator
-             i = MFI->argRegBegin(), e = MFI->argRegEnd();
-             i != e; ++i)
-        dbgs() << "Arg Reg: " << *i << "\n";);
-
-  DEBUG(for (PTXMachineFunctionInfo::reg_iterator
-             i = MFI->localVarRegBegin(), e = MFI->localVarRegEnd();
-             i != e; ++i)
-        dbgs() << "Local Var Reg: " << *i << "\n";);
+  // Generate list of all virtual registers used in this function
+  for (unsigned i = 0; i < MRI.getNumVirtRegs(); ++i) {
+    unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+    const TargetRegisterClass *TRC = MRI.getRegClass(Reg);
+    unsigned RegType;
+    if (TRC == PTX::RegPredRegisterClass)
+      RegType = PTXRegisterType::Pred;
+    else if (TRC == PTX::RegI16RegisterClass)
+      RegType = PTXRegisterType::B16;
+    else if (TRC == PTX::RegI32RegisterClass)
+      RegType = PTXRegisterType::B32;
+    else if (TRC == PTX::RegI64RegisterClass)
+      RegType = PTXRegisterType::B64;
+    else if (TRC == PTX::RegF32RegisterClass)
+      RegType = PTXRegisterType::F32;
+    else if (TRC == PTX::RegF64RegisterClass)
+      RegType = PTXRegisterType::F64;
+    MFI->addRegister(Reg, RegType, PTXRegisterSpace::Reg);
+  }
 
   return false;
 }

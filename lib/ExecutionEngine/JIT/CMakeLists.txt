@@ -10,11 +10,3 @@ add_llvm_library(LLVMJIT
   JITMemoryManager.cpp
   OProfileJITEventListener.cpp
   )
-
-add_llvm_library_dependencies(LLVMJIT
-  LLVMCore
-  LLVMExecutionEngine
-  LLVMRuntimeDyld
-  LLVMSupport
-  LLVMTarget
-  )

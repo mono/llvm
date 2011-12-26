@@ -27,14 +27,21 @@
 #ifndef LLVM_SUPPORT_FILE_SYSTEM_H
 #define LLVM_SUPPORT_FILE_SYSTEM_H
 
+#include "llvm/ADT/IntrusiveRefCntPtr.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/DataTypes.h"
-#include "llvm/Support/PathV1.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/system_error.h"
 #include <ctime>
 #include <iterator>
+#include <stack>
 #include <string>
+#include <vector>
+
+#if HAVE_SYS_STAT_H
+#include <sys/stat.h>
+#endif
 
 namespace llvm {
 namespace sys {
@@ -91,7 +98,20 @@ struct space_info {
 ///               a platform specific member to store the result.
 class file_status
 {
-  // implementation defined status field.
+  #if defined(LLVM_ON_UNIX)
+  dev_t st_dev;
+  ino_t st_ino;
+  #elif defined (LLVM_ON_WIN32)
+  uint32_t LastWriteTimeHigh;
+  uint32_t LastWriteTimeLow;
+  uint32_t VolumeSerialNumber;
+  uint32_t FileSizeHigh;
+  uint32_t FileSizeLow;
+  uint32_t FileIndexHigh;
+  uint32_t FileIndexLow;
+  #endif
+  friend bool equivalent(file_status A, file_status B);
+  friend error_code status(const Twine &path, file_status &result);
   file_type Type;
 public:
   explicit file_status(file_type v=file_type::status_error)
@@ -99,6 +119,44 @@ public:
 
   file_type type() const { return Type; }
   void type(file_type v) { Type = v; }
+};
+
+/// file_magic - An "enum class" enumeration of file types based on magic (the first
+///         N bytes of the file).
+struct file_magic {
+  enum _ {
+    unknown = 0,              ///< Unrecognized file
+    bitcode,                  ///< Bitcode file
+    archive,                  ///< ar style archive file
+    elf_relocatable,          ///< ELF Relocatable object file
+    elf_executable,           ///< ELF Executable image
+    elf_shared_object,        ///< ELF dynamically linked shared lib
+    elf_core,                 ///< ELF core image
+    macho_object,             ///< Mach-O Object file
+    macho_executable,         ///< Mach-O Executable
+    macho_fixed_virtual_memory_shared_lib, ///< Mach-O Shared Lib, FVM
+    macho_core,               ///< Mach-O Core File
+    macho_preload_executabl,  ///< Mach-O Preloaded Executable
+    macho_dynamically_linked_shared_lib, ///< Mach-O dynlinked shared lib
+    macho_dynamic_linker,     ///< The Mach-O dynamic linker
+    macho_bundle,             ///< Mach-O Bundle file
+    macho_dynamically_linked_shared_lib_stub, ///< Mach-O Shared lib stub
+    macho_dsym_companion,     ///< Mach-O dSYM companion file
+    coff_object,              ///< COFF object file
+    pecoff_executable         ///< PECOFF executable file
+  };
+
+  bool is_object() const {
+    return v_ == unknown ? false : true;
+  }
+
+  file_magic() : v_(unknown) {}
+  file_magic(_ v) : v_(v) {}
+  explicit file_magic(int v) : v_(_(v)) {}
+  operator int() const {return v_;}
+
+private:
+  int v_;
 };
 
 /// @}
@@ -201,30 +259,6 @@ error_code rename(const Twine &from, const Twine &to);
 ///          platform specific error_code.
 error_code resize_file(const Twine &path, uint64_t size);
 
-/// @brief Make file readable.
-///
-/// @param path Input path.
-/// @param value If true, make readable, else, make unreadable.
-/// @results errc::success if readability has been successfully set, otherwise a
-///          platform specific error_code.
-error_code set_read(const Twine &path, bool value);
-
-/// @brief Make file writeable.
-///
-/// @param path Input path.
-/// @param value If true, make writeable, else, make unwriteable.
-/// @results errc::success if writeability has been successfully set, otherwise
-///          a platform specific error_code.
-error_code set_write(const Twine &path, bool value);
-
-/// @brief Make file executable.
-///
-/// @param path Input path.
-/// @param value If true, make executable, else, make unexecutable.
-/// @results errc::success if executability has been successfully set, otherwise
-///          a platform specific error_code.
-error_code set_execute(const Twine &path, bool value);
-
 /// @}
 /// @name Physical Observers
 /// @{
@@ -245,6 +279,13 @@ bool exists(file_status status);
 ///          platform specific error_code.
 error_code exists(const Twine &path, bool &result);
 
+/// @brief Simpler version of exists for clients that don't need to
+///        differentiate between an error and false.
+inline bool exists(const Twine &path) {
+  bool result;
+  return !exists(path, result) && result;
+}
+
 /// @brief Do file_status's represent the same thing?
 ///
 /// @param A Input file_status.
@@ -257,6 +298,8 @@ error_code exists(const Twine &path, bool &result);
 bool equivalent(file_status A, file_status B);
 
 /// @brief Do paths represent the same thing?
+///
+/// assert(status_known(A) || status_known(B));
 ///
 /// @param A Input path A.
 /// @param B Input path B.
@@ -288,15 +331,6 @@ bool is_directory(file_status status);
 /// @results errc::success if result has been successfully set, otherwise a
 ///          platform specific error_code.
 error_code is_directory(const Twine &path, bool &result);
-
-/// @brief Is path an empty file?
-///
-/// @param path Input path.
-/// @param result Set to true if \a path is a an empty file, false if it is not.
-///               Undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code is_empty(const Twine &path, bool &result);
 
 /// @brief Does status represent a regular file?
 ///
@@ -346,40 +380,6 @@ bool is_symlink(file_status status);
 ///          platform specific error_code.
 error_code is_symlink(const Twine &path, bool &result);
 
-/// @brief Get last write time without changing it.
-///
-/// @param path Input path.
-/// @param result Set to the last write time (UNIX time) of \a path if it
-///               exists.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code last_write_time(const Twine &path, std::time_t &result);
-
-/// @brief Set last write time.
-///
-/// @param path Input path.
-/// @param value Time to set (UNIX time) \a path's last write time to.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code set_last_write_time(const Twine &path, std::time_t value);
-
-/// @brief Read a symlink's value.
-///
-/// @param path Input path.
-/// @param result Set to the value of the symbolic link \a path.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code read_symlink(const Twine &path, SmallVectorImpl<char> &result);
-
-/// @brief Get disk space usage information.
-///
-/// @param path Input path.
-/// @param result Set to the capacity, free, and available space on the device
-///               \a path is on.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code disk_space(const Twine &path, space_info &result);
-
 /// @brief Get file status as if by POSIX stat().
 ///
 /// @param path Input path.
@@ -401,16 +401,6 @@ bool status_known(file_status s);
 /// @results errc::success if result has been successfully set, otherwise a
 ///          platform specific error_code.
 error_code status_known(const Twine &path, bool &result);
-
-/// @brief Get file status as if by POSIX lstat().
-///
-/// Does not resolve symlinks.
-///
-/// @param path Input path.
-/// @param result Set to the file status.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code symlink_status(const Twine &path, file_status &result);
 
 /// @brief Generate a unique path and open it as a file.
 ///
@@ -467,67 +457,16 @@ error_code has_magic(const Twine &path, const Twine &magic, bool &result);
 error_code get_magic(const Twine &path, uint32_t len,
                      SmallVectorImpl<char> &result);
 
+/// @brief Identify the type of a binary file based on how magical it is.
+file_magic identify_magic(StringRef magic);
+
 /// @brief Get and identify \a path's type based on its content.
 ///
 /// @param path Input path.
 /// @param result Set to the type of file, or LLVMFileType::Unknown_FileType.
 /// @results errc::success if result has been successfully set, otherwise a
 ///          platform specific error_code.
-error_code identify_magic(const Twine &path, LLVMFileType &result);
-
-/// @brief Is file bitcode?
-///
-/// @param path Input path.
-/// @param result Set to true if \a path is a bitcode file, false if it is not,
-///               undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code is_bitcode(const Twine &path, bool &result);
-
-/// @brief Is file a dynamic library?
-///
-/// @param path Input path.
-/// @param result Set to true if \a path is a dynamic library, false if it is
-///               not, undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code is_dynamic_library(const Twine &path, bool &result);
-
-/// @brief Is an object file?
-///
-/// @param path Input path.
-/// @param result Set to true if \a path is an object file, false if it is not,
-///               undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code is_object_file(const Twine &path, bool &result);
-
-/// @brief Can file be read?
-///
-/// @param path Input path.
-/// @param result Set to true if \a path is readable, false it it is not,
-///               undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code can_read(const Twine &path, bool &result);
-
-/// @brief Can file be written?
-///
-/// @param path Input path.
-/// @param result Set to true if \a path is writeable, false it it is not,
-///               undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code can_write(const Twine &path, bool &result);
-
-/// @brief Can file be executed?
-///
-/// @param path Input path.
-/// @param result Set to true if \a path is executable, false it it is not,
-///               undefined otherwise.
-/// @results errc::success if result has been successfully set, otherwise a
-///          platform specific error_code.
-error_code can_execute(const Twine &path, bool &result);
+error_code identify_magic(const Twine &path, file_magic &result);
 
 /// @brief Get library paths the system linker uses.
 ///
@@ -572,35 +511,28 @@ error_code GetMainExecutable(const char *argv0, void *MainAddr,
 /// @{
 
 /// directory_entry - A single entry in a directory. Caches the status either
-/// from the result of the iteration syscall, or the first time status or
-/// symlink_status is called.
+/// from the result of the iteration syscall, or the first time status is
+/// called.
 class directory_entry {
   std::string Path;
   mutable file_status Status;
-  mutable file_status SymlinkStatus;
 
 public:
-  explicit directory_entry(const Twine &path, file_status st = file_status(),
-                                       file_status symlink_st = file_status())
+  explicit directory_entry(const Twine &path, file_status st = file_status())
     : Path(path.str())
-    , Status(st)
-    , SymlinkStatus(symlink_st) {}
+    , Status(st) {}
 
   directory_entry() {}
 
-  void assign(const Twine &path, file_status st = file_status(),
-                          file_status symlink_st = file_status()) {
+  void assign(const Twine &path, file_status st = file_status()) {
     Path = path.str();
     Status = st;
-    SymlinkStatus = symlink_st;
   }
 
-  void replace_filename(const Twine &filename, file_status st = file_status(),
-                              file_status symlink_st = file_status());
+  void replace_filename(const Twine &filename, file_status st = file_status());
 
   const std::string &path() const { return Path; }
   error_code status(file_status &result) const;
-  error_code symlink_status(file_status &result) const;
 
   bool operator==(const directory_entry& rhs) const { return Path == rhs.Path; }
   bool operator!=(const directory_entry& rhs) const { return !(*this == rhs); }
@@ -610,76 +542,171 @@ public:
   bool operator>=(const directory_entry& rhs) const;
 };
 
+namespace detail {
+  struct DirIterState;
+
+  error_code directory_iterator_construct(DirIterState&, StringRef);
+  error_code directory_iterator_increment(DirIterState&);
+  error_code directory_iterator_destruct(DirIterState&);
+
+  /// DirIterState - Keeps state for the directory_iterator. It is reference
+  /// counted in order to preserve InputIterator semantics on copy.
+  struct DirIterState : public RefCountedBase<DirIterState> {
+    DirIterState()
+      : IterationHandle(0) {}
+
+    ~DirIterState() {
+      directory_iterator_destruct(*this);
+    }
+
+    intptr_t IterationHandle;
+    directory_entry CurrentEntry;
+  };
+}
+
 /// directory_iterator - Iterates through the entries in path. There is no
 /// operator++ because we need an error_code. If it's really needed we can make
 /// it call report_fatal_error on error.
 class directory_iterator {
-  intptr_t IterationHandle;
-  directory_entry CurrentEntry;
-
-  // Platform implementations implement these functions to handle iteration.
-  friend error_code directory_iterator_construct(directory_iterator &it,
-                                                 StringRef path);
-  friend error_code directory_iterator_increment(directory_iterator &it);
-  friend error_code directory_iterator_destruct(directory_iterator &it);
+  IntrusiveRefCntPtr<detail::DirIterState> State;
 
 public:
-  explicit directory_iterator(const Twine &path, error_code &ec)
-  : IterationHandle(0) {
+  explicit directory_iterator(const Twine &path, error_code &ec) {
+    State = new detail::DirIterState;
     SmallString<128> path_storage;
-    ec = directory_iterator_construct(*this, path.toStringRef(path_storage));
+    ec = detail::directory_iterator_construct(*State,
+            path.toStringRef(path_storage));
+  }
+
+  explicit directory_iterator(const directory_entry &de, error_code &ec) {
+    State = new detail::DirIterState;
+    ec = detail::directory_iterator_construct(*State, de.path());
   }
 
   /// Construct end iterator.
-  directory_iterator() : IterationHandle(0) {}
-
-  ~directory_iterator() {
-    directory_iterator_destruct(*this);
-  }
+  directory_iterator() : State(new detail::DirIterState) {}
 
   // No operator++ because we need error_code.
   directory_iterator &increment(error_code &ec) {
-    ec = directory_iterator_increment(*this);
+    ec = directory_iterator_increment(*State);
     return *this;
   }
 
-  const directory_entry &operator*() const { return CurrentEntry; }
-  const directory_entry *operator->() const { return &CurrentEntry; }
+  const directory_entry &operator*() const { return State->CurrentEntry; }
+  const directory_entry *operator->() const { return &State->CurrentEntry; }
+
+  bool operator==(const directory_iterator &RHS) const {
+    return State->CurrentEntry == RHS.State->CurrentEntry;
+  }
 
   bool operator!=(const directory_iterator &RHS) const {
-    return CurrentEntry != RHS.CurrentEntry;
+    return !(*this == RHS);
   }
   // Other members as required by
   // C++ Std, 24.1.1 Input iterators [input.iterators]
 };
 
+namespace detail {
+  /// RecDirIterState - Keeps state for the recursive_directory_iterator. It is
+  /// reference counted in order to preserve InputIterator semantics on copy.
+  struct RecDirIterState : public RefCountedBase<RecDirIterState> {
+    RecDirIterState()
+      : Level(0)
+      , HasNoPushRequest(false) {}
+
+    std::stack<directory_iterator, std::vector<directory_iterator> > Stack;
+    uint16_t Level;
+    bool HasNoPushRequest;
+  };
+}
+
 /// recursive_directory_iterator - Same as directory_iterator except for it
 /// recurses down into child directories.
 class recursive_directory_iterator {
-  uint16_t  Level;
-  bool HasNoPushRequest;
-  // implementation directory iterator status
+  IntrusiveRefCntPtr<detail::RecDirIterState> State;
 
 public:
-  explicit recursive_directory_iterator(const Twine &path, error_code &ec);
+  recursive_directory_iterator() {}
+  explicit recursive_directory_iterator(const Twine &path, error_code &ec)
+    : State(new detail::RecDirIterState) {
+    State->Stack.push(directory_iterator(path, ec));
+    if (State->Stack.top() == directory_iterator())
+      State.reset();
+  }
   // No operator++ because we need error_code.
-  directory_iterator &increment(error_code &ec);
+  recursive_directory_iterator &increment(error_code &ec) {
+    static const directory_iterator end_itr;
 
-  const directory_entry &operator*() const;
-  const directory_entry *operator->() const;
+    if (State->HasNoPushRequest)
+      State->HasNoPushRequest = false;
+    else {
+      file_status st;
+      if ((ec = State->Stack.top()->status(st))) return *this;
+      if (is_directory(st)) {
+        State->Stack.push(directory_iterator(*State->Stack.top(), ec));
+        if (ec) return *this;
+        if (State->Stack.top() != end_itr) {
+          ++State->Level;
+          return *this;
+        }
+        State->Stack.pop();
+      }
+    }
+
+    while (!State->Stack.empty()
+           && State->Stack.top().increment(ec) == end_itr) {
+      State->Stack.pop();
+      --State->Level;
+    }
+
+    // Check if we are done. If so, create an end iterator.
+    if (State->Stack.empty())
+      State.reset();
+
+    return *this;
+  }
+
+  const directory_entry &operator*() const { return *State->Stack.top(); }
+  const directory_entry *operator->() const { return &*State->Stack.top(); }
 
   // observers
-  /// Gets the current level. path is at level 0.
-  int level() const;
+  /// Gets the current level. Starting path is at level 0.
+  int level() const { return State->Level; }
+
   /// Returns true if no_push has been called for this directory_entry.
-  bool no_push_request() const;
+  bool no_push_request() const { return State->HasNoPushRequest; }
 
   // modifiers
   /// Goes up one level if Level > 0.
-  void pop();
-  /// Does not go down into the current directory_entry.
-  void no_push();
+  void pop() {
+    assert(State && "Cannot pop and end itertor!");
+    assert(State->Level > 0 && "Cannot pop an iterator with level < 1");
 
+    static const directory_iterator end_itr;
+    error_code ec;
+    do {
+      if (ec)
+        report_fatal_error("Error incrementing directory iterator.");
+      State->Stack.pop();
+      --State->Level;
+    } while (!State->Stack.empty()
+             && State->Stack.top().increment(ec) == end_itr);
+
+    // Check if we are done. If so, create an end iterator.
+    if (State->Stack.empty())
+      State.reset();
+  }
+
+  /// Does not go down into the current directory_entry.
+  void no_push() { State->HasNoPushRequest = true; }
+
+  bool operator==(const recursive_directory_iterator &RHS) const {
+    return State == RHS.State;
+  }
+
+  bool operator!=(const recursive_directory_iterator &RHS) const {
+    return !(*this == RHS);
+  }
   // Other members as required by
   // C++ Std, 24.1.1 Input iterators [input.iterators]
 };

@@ -56,18 +56,21 @@ std::string ARM_MC::ParseARMTriple(StringRef TT) {
     unsigned SubVer = TT[Idx];
     if (SubVer >= '7' && SubVer <= '9') {
       if (Len >= Idx+2 && TT[Idx+1] == 'm') {
-        // v7m: FeatureNoARM, FeatureDB, FeatureHWDiv
-        ARMArchFeature = "+v7,+noarm,+db,+hwdiv";
+        // v7m: FeatureNoARM, FeatureDB, FeatureHWDiv, FeatureMClass
+        ARMArchFeature = "+v7,+noarm,+db,+hwdiv,+mclass";
       } else if (Len >= Idx+3 && TT[Idx+1] == 'e'&& TT[Idx+2] == 'm') {
         // v7em: FeatureNoARM, FeatureDB, FeatureHWDiv, FeatureDSPThumb2,
-        //       FeatureT2XtPk
-        ARMArchFeature = "+v7,+noarm,+db,+hwdiv,+t2dsp,t2xtpk";
+        //       FeatureT2XtPk, FeatureMClass
+        ARMArchFeature = "+v7,+noarm,+db,+hwdiv,+t2dsp,t2xtpk,+mclass";
       } else
-        // v7a: FeatureNEON, FeatureDB, FeatureDSPThumb2
-        ARMArchFeature = "+v7,+neon,+db,+t2dsp";
+        // v7a: FeatureNEON, FeatureDB, FeatureDSPThumb2, FeatureT2XtPk
+        ARMArchFeature = "+v7,+neon,+db,+t2dsp,+t2xtpk";
     } else if (SubVer == '6') {
       if (Len >= Idx+3 && TT[Idx+1] == 't' && TT[Idx+2] == '2')
         ARMArchFeature = "+v6t2";
+      else if (Len >= Idx+2 && TT[Idx+1] == 'm')
+        // v6m: FeatureNoARM, FeatureMClass
+        ARMArchFeature = "+v6t2,+noarm,+mclass";
       else
         ARMArchFeature = "+v6";
     } else if (SubVer == '5') {
@@ -84,14 +87,6 @@ std::string ARM_MC::ParseARMTriple(StringRef TT) {
       ARMArchFeature = "+thumb-mode";
     else
       ARMArchFeature += ",+thumb-mode";
-  }
-
-  Triple TheTriple(TT);
-  if (TheTriple.getOS() == Triple::NativeClient) {
-    if (ARMArchFeature.empty())
-      ARMArchFeature = "+nacl-mode";
-    else
-      ARMArchFeature += ",+nacl-mode";
   }
 
   return ARMArchFeature;
@@ -134,11 +129,15 @@ static MCAsmInfo *createARMMCAsmInfo(const Target &T, StringRef TT) {
 }
 
 static MCCodeGenInfo *createARMMCCodeGenInfo(StringRef TT, Reloc::Model RM,
-                                             CodeModel::Model CM) {
+                                             CodeModel::Model CM,
+                                             CodeGenOpt::Level OL) {
   MCCodeGenInfo *X = new MCCodeGenInfo();
-  if (RM == Reloc::Default)
-    RM = Reloc::DynamicNoPIC;
-  X->InitMCCodeGenInfo(RM, CM);
+  if (RM == Reloc::Default) {
+    Triple TheTriple(TT);
+    // Default relocation model on Darwin is PIC, not DynamicNoPIC.
+    RM = TheTriple.isOSDarwin() ? Reloc::PIC_ : Reloc::DynamicNoPIC;
+  }
+  X->InitMCCodeGenInfo(RM, CM, OL);
   return X;
 }
 

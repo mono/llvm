@@ -1,4 +1,4 @@
-; RUN: llc < %s -march=x86 -promote-elements -mattr=+sse41 | FileCheck %s
+; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7 -promote-elements -mattr=+sse41 | FileCheck %s
 
 ;CHECK: vsel_float
 ;CHECK: blendvps
@@ -6,6 +6,23 @@
 define <4 x float> @vsel_float(<4 x float> %v1, <4 x float> %v2) {
   %vsel = select <4 x i1> <i1 true, i1 false, i1 false, i1 false>, <4 x float> %v1, <4 x float> %v2
   ret <4 x float> %vsel
+}
+
+
+;CHECK: vsel_4xi8
+;CHECK: blendvps
+;CHECK: ret
+define <4 x i8> @vsel_4xi8(<4 x i8> %v1, <4 x i8> %v2) {
+  %vsel = select <4 x i1> <i1 true, i1 false, i1 false, i1 false>, <4 x i8> %v1, <4 x i8> %v2
+  ret <4 x i8> %vsel
+}
+
+;CHECK: vsel_4xi16
+;CHECK: blendvps
+;CHECK: ret
+define <4 x i16> @vsel_4xi16(<4 x i16> %v1, <4 x i16> %v2) {
+  %vsel = select <4 x i1> <i1 true, i1 false, i1 false, i1 false>, <4 x i16> %v1, <4 x i16> %v2
+  ret <4 x i16> %vsel
 }
 
 
@@ -44,4 +61,22 @@ define <16 x i8> @vsel_i8(<16 x i8> %v1, <16 x i8> %v2) {
   ret <16 x i8> %vsel
 }
 
+;; TEST blend + compares
+; CHECK: A
+define <2 x double> @A(<2 x double> %x, <2 x double> %y) {
+  ; CHECK: cmplepd
+  ; CHECK: blendvpd
+  %max_is_x = fcmp oge <2 x double> %x, %y
+  %max = select <2 x i1> %max_is_x, <2 x double> %x, <2 x double> %y
+  ret <2 x double> %max
+}
+
+; CHECK: B
+define <2 x double> @B(<2 x double> %x, <2 x double> %y) {
+  ; CHECK: cmpnlepd
+  ; CHECK: blendvpd
+  %min_is_x = fcmp ult <2 x double> %x, %y
+  %min = select <2 x i1> %min_is_x, <2 x double> %x, <2 x double> %y
+  ret <2 x double> %min
+}
 

@@ -15,84 +15,186 @@
 #define PTX_MACHINE_FUNCTION_INFO_H
 
 #include "PTX.h"
+#include "PTXParamManager.h"
+#include "PTXRegisterInfo.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace llvm {
+
 /// PTXMachineFunctionInfo - This class is derived from MachineFunction and
 /// contains private PTX target-specific information for each MachineFunction.
 ///
 class PTXMachineFunctionInfo : public MachineFunctionInfo {
-private:
-  bool is_kernel;
-  std::vector<unsigned> reg_arg, reg_local_var;
-  std::vector<unsigned> reg_ret;
-  std::vector<unsigned> call_params;
-  bool _isDoneAddArg;
+  virtual void anchor();
+  bool IsKernel;
+  DenseSet<unsigned> RegArgs;
+  DenseSet<unsigned> RegRets;
+
+  typedef DenseMap<int, std::string> FrameMap;
+
+  FrameMap FrameSymbols;
+
+  struct RegisterInfo {
+    unsigned Reg;
+    unsigned Type;
+    unsigned Space;
+    unsigned Offset;
+    unsigned Encoded;
+  };
+
+  typedef DenseMap<unsigned, RegisterInfo> RegisterInfoMap;
+
+  RegisterInfoMap RegInfo;
+
+  PTXParamManager ParamManager;
 
 public:
+  typedef DenseSet<unsigned>::const_iterator reg_iterator;
+
   PTXMachineFunctionInfo(MachineFunction &MF)
-    : is_kernel(false), reg_ret(PTX::NoRegister), _isDoneAddArg(false) {
-      reg_arg.reserve(8);
-      reg_local_var.reserve(32);
+    : IsKernel(false) {
+  }
+
+  /// getParamManager - Returns the PTXParamManager instance for this function.
+  PTXParamManager& getParamManager() { return ParamManager; }
+  const PTXParamManager& getParamManager() const { return ParamManager; }
+
+  /// setKernel/isKernel - Gets/sets a flag that indicates if this function is
+  /// a PTX kernel function.
+  void setKernel(bool _IsKernel=true) { IsKernel = _IsKernel; }
+  bool isKernel() const { return IsKernel; }
+
+  /// argreg_begin/argreg_end - Returns iterators to the set of registers
+  /// containing function arguments.
+  reg_iterator argreg_begin() const { return RegArgs.begin(); }
+  reg_iterator argreg_end()   const { return RegArgs.end(); }
+
+  /// retreg_begin/retreg_end - Returns iterators to the set of registers
+  /// containing the function return values.
+  reg_iterator retreg_begin() const { return RegRets.begin(); }
+  reg_iterator retreg_end()   const { return RegRets.end(); }
+
+  /// addRegister - Adds a virtual register to the set of all used registers
+  void addRegister(unsigned Reg, unsigned RegType, unsigned RegSpace) {
+    if (!RegInfo.count(Reg)) {
+      RegisterInfo Info;
+      Info.Reg = Reg;
+      Info.Type = RegType;
+      Info.Space = RegSpace;
+
+      // Determine register offset
+      Info.Offset = 0;
+      for(RegisterInfoMap::const_iterator i = RegInfo.begin(),
+          e = RegInfo.end(); i != e; ++i) {
+        const RegisterInfo& RI = i->second;
+        if (RI.Space == RegSpace)
+          if (RI.Space != PTXRegisterSpace::Reg || RI.Type == Info.Type)
+            Info.Offset++;
+      }
+
+      // Encode the register data into a single register number
+      Info.Encoded = (Info.Offset << 6) | (Info.Type << 3) | Info.Space;
+
+      RegInfo[Reg] = Info;
+
+      if (RegSpace == PTXRegisterSpace::Argument)
+        RegArgs.insert(Reg);
+      else if (RegSpace == PTXRegisterSpace::Return)
+        RegRets.insert(Reg);
     }
+  }
 
-  void setKernel(bool _is_kernel=true) { is_kernel = _is_kernel; }
+  /// countRegisters - Returns the number of registers of the given type and
+  /// space.
+  unsigned countRegisters(unsigned RegType, unsigned RegSpace) const {
+    unsigned Count = 0;
+    for(RegisterInfoMap::const_iterator i = RegInfo.begin(), e = RegInfo.end();
+        i != e; ++i) {
+      const RegisterInfo& RI = i->second;
+      if (RI.Type == RegType && RI.Space == RegSpace)
+        Count++;
+    }
+    return Count;
+  }
 
-  void addArgReg(unsigned reg) { reg_arg.push_back(reg); }
-  void addLocalVarReg(unsigned reg) { reg_local_var.push_back(reg); }
-  void addRetReg(unsigned reg) {
-    if (!isRetReg(reg)) {
-      reg_ret.push_back(reg);
+  /// getEncodedRegister - Returns the encoded value of the register.
+  unsigned getEncodedRegister(unsigned Reg) const {
+    return RegInfo.lookup(Reg).Encoded;
+  }
+
+  /// addRetReg - Adds a register to the set of return-value registers.
+  void addRetReg(unsigned Reg) {
+    if (!RegRets.count(Reg)) {
+      RegRets.insert(Reg);
     }
   }
 
-  void doneAddArg(void) {
-    _isDoneAddArg = true;
-  }
-  void doneAddLocalVar(void) {}
-
-  bool isKernel() const { return is_kernel; }
-
-  typedef std::vector<unsigned>::const_iterator         reg_iterator;
-  typedef std::vector<unsigned>::const_reverse_iterator reg_reverse_iterator;
-  typedef std::vector<unsigned>::const_iterator         ret_iterator;
-  typedef std::vector<unsigned>::const_iterator         param_iterator;
-
-  bool         argRegEmpty() const { return reg_arg.empty(); }
-  int          getNumArg() const { return reg_arg.size(); }
-  reg_iterator argRegBegin() const { return reg_arg.begin(); }
-  reg_iterator argRegEnd()   const { return reg_arg.end(); }
-  reg_reverse_iterator argRegReverseBegin() const { return reg_arg.rbegin(); }
-  reg_reverse_iterator argRegReverseEnd() const { return reg_arg.rend(); }
-
-  bool         localVarRegEmpty() const { return reg_local_var.empty(); }
-  reg_iterator localVarRegBegin() const { return reg_local_var.begin(); }
-  reg_iterator localVarRegEnd()   const { return reg_local_var.end(); }
-
-  bool         retRegEmpty() const { return reg_ret.empty(); }
-  int          getNumRet() const { return reg_ret.size(); }
-  ret_iterator retRegBegin() const { return reg_ret.begin(); }
-  ret_iterator retRegEnd()   const { return reg_ret.end(); }
-
-  param_iterator paramBegin() const { return call_params.begin(); }
-  param_iterator paramEnd() const { return call_params.end(); }
-  unsigned       getNextParam(unsigned size) {
-    call_params.push_back(size);
-    return call_params.size()-1;
+  /// addArgReg - Adds a register to the set of function argument registers.
+  void addArgReg(unsigned Reg) {
+    RegArgs.insert(Reg);
   }
 
-  bool isArgReg(unsigned reg) const {
-    return std::find(reg_arg.begin(), reg_arg.end(), reg) != reg_arg.end();
+  /// getRegisterName - Returns the name of the specified virtual register. This
+  /// name is used during PTX emission.
+  std::string getRegisterName(unsigned Reg) const {
+    if (RegInfo.count(Reg)) {
+      const RegisterInfo& RI = RegInfo.lookup(Reg);
+      std::string Name;
+      raw_string_ostream NameStr(Name);
+      decodeRegisterName(NameStr, RI.Encoded);
+      NameStr.flush();
+      return Name;
+    }
+    else if (Reg == PTX::NoRegister)
+      return "%noreg";
+    else
+      llvm_unreachable("Register not in register name map");
   }
 
-  bool isRetReg(unsigned reg) const {
-    return std::find(reg_ret.begin(), reg_ret.end(), reg) != reg_ret.end();
+  /// getEncodedRegisterName - Returns the name of the encoded register.
+  std::string getEncodedRegisterName(unsigned EncodedReg) const {
+    std::string Name;
+    raw_string_ostream NameStr(Name);
+    decodeRegisterName(NameStr, EncodedReg);
+    NameStr.flush();
+    return Name;
   }
 
-  bool isLocalVarReg(unsigned reg) const {
-    return std::find(reg_local_var.begin(), reg_local_var.end(), reg)
-      != reg_local_var.end();
+  /// getRegisterType - Returns the type of the specified virtual register.
+  unsigned getRegisterType(unsigned Reg) const {
+    if (RegInfo.count(Reg))
+      return RegInfo.lookup(Reg).Type;
+    else
+      llvm_unreachable("Unknown register");
+  }
+
+  /// getOffsetForRegister - Returns the offset of the virtual register
+  unsigned getOffsetForRegister(unsigned Reg) const {
+    if (RegInfo.count(Reg))
+      return RegInfo.lookup(Reg).Offset;
+    else
+      return 0;
+  }
+
+  /// getFrameSymbol - Returns the symbol name for the given FrameIndex.
+  const char* getFrameSymbol(int FrameIndex) {
+    if (FrameSymbols.count(FrameIndex)) {
+      return FrameSymbols.lookup(FrameIndex).c_str();
+    } else {
+      std::string Name          = "__local";
+      Name                     += utostr(FrameIndex);
+      // The whole point of caching this name is to ensure the pointer we pass
+      // to any getExternalSymbol() calls will remain valid for the lifetime of
+      // the back-end instance. This is to work around an issue in SelectionDAG
+      // where symbol names are expected to be life-long strings.
+      FrameSymbols[FrameIndex]  = Name;
+      return FrameSymbols[FrameIndex].c_str();
+    }
   }
 }; // class PTXMachineFunctionInfo
 } // namespace llvm

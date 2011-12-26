@@ -40,13 +40,6 @@ namespace llvm {
       // Handle gp_rel (small data/bss sections) relocation.
       GPRel,
 
-      // General Dynamic TLS
-      TlsGd,
-
-      // Local Exec TLS
-      TprelHi,
-      TprelLo,
-
       // Thread Pointer
       ThreadPointer,
 
@@ -79,7 +72,7 @@ namespace llvm {
       BuildPairF64,
       ExtractElementF64,
 
-      WrapperPIC,
+      Wrapper,
 
       DynAlloc,
 
@@ -98,6 +91,8 @@ namespace llvm {
   public:
     explicit MipsTargetLowering(MipsTargetMachine &TM);
 
+    virtual MVT getShiftAmountTy(EVT LHSTy) const { return MVT::i32; }
+
     virtual bool allowsUnalignedMemoryAccesses (EVT VT) const;
 
     /// LowerOperation - Provide custom lowering hooks for some operations.
@@ -114,7 +109,8 @@ namespace llvm {
   private:
     // Subtarget Info
     const MipsSubtarget *Subtarget;
-
+    
+    bool HasMips64, IsN64, IsO32;
 
     // Lower Operand helpers
     SDValue LowerCallResult(SDValue Chain, SDValue InFlag,

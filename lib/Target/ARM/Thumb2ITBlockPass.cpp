@@ -13,6 +13,7 @@
 #include "Thumb2InstrInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineInstrBundle.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
@@ -124,6 +125,27 @@ Thumb2ITBlockPass::MoveCopyOutOfITBlock(MachineInstr *MI,
   if (Uses.count(DstReg) || Defs.count(SrcReg))
     return false;
 
+  // If the CPSR is defined by this copy, then we don't want to move it. E.g.,
+  // if we have:
+  //
+  //   movs  r1, r1
+  //   rsb   r1, 0
+  //   movs  r2, r2
+  //   rsb   r2, 0
+  //
+  // we don't want this to be converted to:
+  //
+  //   movs  r1, r1
+  //   movs  r2, r2
+  //   itt   mi
+  //   rsb   r1, 0
+  //   rsb   r2, 0
+  //
+  const MCInstrDesc &MCID = MI->getDesc();
+  if (MI->hasOptionalDef() &&
+      MI->getOperand(MCID.getNumOperands() - 1).getReg() == ARM::CPSR)
+    return false;
+
   // Then peek at the next instruction to see if it's predicated on CC or OCC.
   // If not, then there is nothing to be gained by moving the copy.
   MachineBasicBlock::iterator I = MI; ++I;
@@ -177,7 +199,7 @@ bool Thumb2ITBlockPass::InsertITInstructions(MachineBasicBlock &MBB) {
     // Branches, including tricky ones like LDM_RET, need to end an IT
     // block so check the instruction we just put in the block.
     for (; MBBI != E && Pos &&
-           (!MI->getDesc().isBranch() && !MI->getDesc().isReturn()) ; ++MBBI) {
+           (!MI->isBranch() && !MI->isReturn()) ; ++MBBI) {
       if (MBBI->isDebugValue())
         continue;
 
@@ -215,6 +237,9 @@ bool Thumb2ITBlockPass::InsertITInstructions(MachineBasicBlock &MBB) {
 
     // Last instruction in IT block kills ITSTATE.
     LastITMI->findRegisterUseOperand(ARM::ITSTATE)->setIsKill();
+
+    // Finalize the bundle.
+    FinalizeBundle(MBB, InsertPos.getInstrIterator(), LastITMI);
 
     Modified = true;
     ++NumITs;

@@ -87,7 +87,7 @@ Module *llvm::ParseInputFile(const std::string &Filename,
   SMDiagnostic Err;
   Module *Result = ParseIRFile(Filename, Err, Ctxt);
   if (!Result)
-    Err.Print("bugpoint", errs());
+    Err.print("bugpoint", errs());
 
   // If we don't have an override triple, use the first one to configure
   // bugpoint, or use the host triple if none provided.
@@ -96,7 +96,7 @@ Module *llvm::ParseInputFile(const std::string &Filename,
       Triple TheTriple(Result->getTargetTriple());
 
       if (TheTriple.getTriple().empty())
-        TheTriple.setTriple(sys::getHostTriple());
+        TheTriple.setTriple(sys::getDefaultTargetTriple());
 
       TargetTriple.setTriple(TheTriple.getTriple());
     }
@@ -127,7 +127,8 @@ bool BugDriver::addSources(const std::vector<std::string> &Filenames) {
 
     outs() << "Linking in input file: '" << Filenames[i] << "'\n";
     std::string ErrorMessage;
-    if (Linker::LinkModules(Program, M.get(), &ErrorMessage)) {
+    if (Linker::LinkModules(Program, M.get(), Linker::DestroySource,
+                            &ErrorMessage)) {
       errs() << ToolName << ": error linking in '" << Filenames[i] << "': "
              << ErrorMessage << '\n';
       return true;

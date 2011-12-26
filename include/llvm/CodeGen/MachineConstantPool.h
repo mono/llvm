@@ -34,6 +34,7 @@ class raw_ostream;
 /// Abstract base class for all machine specific constantpool value subclasses.
 ///
 class MachineConstantPoolValue {
+  virtual void anchor();
   Type *Ty;
 
 public:
@@ -54,7 +55,7 @@ public:
   virtual int getExistingMachineCPValue(MachineConstantPool *CP,
                                         unsigned Alignment) = 0;
 
-  virtual void AddSelectionDAGCSEId(FoldingSetNodeID &ID) = 0;
+  virtual void addSelectionDAGCSEId(FoldingSetNodeID &ID) = 0;
 
   /// print - Implement operator<<
   virtual void print(raw_ostream &O) const = 0;

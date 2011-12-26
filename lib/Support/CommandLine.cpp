@@ -44,6 +44,7 @@ TEMPLATE_INSTANTIATION(class basic_parser<bool>);
 TEMPLATE_INSTANTIATION(class basic_parser<boolOrDefault>);
 TEMPLATE_INSTANTIATION(class basic_parser<int>);
 TEMPLATE_INSTANTIATION(class basic_parser<unsigned>);
+TEMPLATE_INSTANTIATION(class basic_parser<unsigned long long>);
 TEMPLATE_INSTANTIATION(class basic_parser<double>);
 TEMPLATE_INSTANTIATION(class basic_parser<float>);
 TEMPLATE_INSTANTIATION(class basic_parser<std::string>);
@@ -56,12 +57,16 @@ TEMPLATE_INSTANTIATION(class opt<char>);
 TEMPLATE_INSTANTIATION(class opt<bool>);
 } } // end namespace llvm::cl
 
+void GenericOptionValue::anchor() {}
+void OptionValue<boolOrDefault>::anchor() {}
+void OptionValue<std::string>::anchor() {}
 void Option::anchor() {}
 void basic_parser_impl::anchor() {}
 void parser<bool>::anchor() {}
 void parser<boolOrDefault>::anchor() {}
 void parser<int>::anchor() {}
 void parser<unsigned>::anchor() {}
+void parser<unsigned long long>::anchor() {}
 void parser<double>::anchor() {}
 void parser<float>::anchor() {}
 void parser<std::string>::anchor() {}
@@ -1005,6 +1010,16 @@ bool parser<unsigned>::parse(Option &O, StringRef ArgName,
   return false;
 }
 
+// parser<unsigned long long> implementation
+//
+bool parser<unsigned long long>::parse(Option &O, StringRef ArgName,
+                                      StringRef Arg, unsigned long long &Value){
+
+  if (Arg.getAsInteger(0, Value))
+    return O.error("'" + Arg + "' value invalid for uint argument!");
+  return false;
+}
+
 // parser<double>/parser<float> implementation
 //
 static bool parseDouble(Option &O, StringRef Arg, double &Value) {
@@ -1150,6 +1165,7 @@ PRINT_OPT_DIFF(bool)
 PRINT_OPT_DIFF(boolOrDefault)
 PRINT_OPT_DIFF(int)
 PRINT_OPT_DIFF(unsigned)
+PRINT_OPT_DIFF(unsigned long long)
 PRINT_OPT_DIFF(double)
 PRINT_OPT_DIFF(float)
 PRINT_OPT_DIFF(char)
@@ -1356,7 +1372,7 @@ public:
 #if (ENABLE_TIMESTAMPS == 1)
        << "  Built " << __DATE__ << " (" << __TIME__ << ").\n"
 #endif
-       << "  Host: " << sys::getHostTriple() << '\n'
+       << "  Default target: " << sys::getDefaultTargetTriple() << '\n'
        << "  Host CPU: " << CPU << '\n';
   }
   void operator=(bool OptionWasSpecified) {

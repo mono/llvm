@@ -13,8 +13,8 @@
 
 #include "CodeGenTarget.h"
 #include "IntrinsicEmitter.h"
-#include "Record.h"
 #include "StringMatcher.h"
+#include "llvm/TableGen/Record.h"
 #include "llvm/ADT/StringExtras.h"
 #include <algorithm>
 using namespace llvm;
@@ -181,6 +181,8 @@ static void EmitTypeForValueType(raw_ostream &OS, MVT::SimpleValueType VT) {
   } else if (VT == MVT::Other) {
     // MVT::OtherVT is used to mean the empty struct type here.
     OS << "StructType::get(Context)";
+  } else if (VT == MVT::f16) {
+    OS << "Type::getHalfTy(Context)";
   } else if (VT == MVT::f32) {
     OS << "Type::getFloatTy(Context)";
   } else if (VT == MVT::f64) {

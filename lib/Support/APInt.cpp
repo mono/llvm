@@ -48,18 +48,20 @@ inline static uint64_t* getMemory(unsigned numWords) {
 inline static unsigned getDigit(char cdigit, uint8_t radix) {
   unsigned r;
 
-  if (radix == 16) {
+  if (radix == 16 || radix == 36) {
     r = cdigit - '0';
     if (r <= 9)
       return r;
 
     r = cdigit - 'A';
-    if (r <= 5)
+    if (r <= radix - 11U)
       return r + 10;
 
     r = cdigit - 'a';
-    if (r <= 5)
+    if (r <= radix - 11U)
       return r + 10;
+    
+    radix = 10;
   }
 
   r = cdigit - '0';
@@ -384,6 +386,7 @@ APInt& APInt::operator*=(const APInt& RHS) {
   clearAllBits();
   unsigned wordsToCopy = destWords >= getNumWords() ? getNumWords() : destWords;
   memcpy(pVal, dest, wordsToCopy * APINT_WORD_SIZE);
+  clearUnusedBits();
 
   // delete dest array and return
   delete[] dest;
@@ -469,7 +472,7 @@ APInt APInt::operator*(const APInt& RHS) const {
     return APInt(BitWidth, VAL * RHS.VAL);
   APInt Result(*this);
   Result *= RHS;
-  return Result.clearUnusedBits();
+  return Result;
 }
 
 APInt APInt::operator+(const APInt& RHS) const {
@@ -621,8 +624,9 @@ void APInt::flipBit(unsigned bitPosition) {
 
 unsigned APInt::getBitsNeeded(StringRef str, uint8_t radix) {
   assert(!str.empty() && "Invalid string length");
-  assert((radix == 10 || radix == 8 || radix == 16 || radix == 2) &&
-         "Radix should be 2, 8, 10, or 16!");
+  assert((radix == 10 || radix == 8 || radix == 16 || radix == 2 || 
+          radix == 36) &&
+         "Radix should be 2, 8, 10, 16, or 36!");
 
   size_t slen = str.size();
 
@@ -644,6 +648,8 @@ unsigned APInt::getBitsNeeded(StringRef str, uint8_t radix) {
   if (radix == 16)
     return slen * 4 + isNegative;
 
+  // FIXME: base 36
+  
   // This is grossly inefficient but accurate. We could probably do something
   // with a computation of roughly slen*64/20 and then adjust by the value of
   // the first few digits. But, I'm not sure how accurate that could be.
@@ -652,7 +658,9 @@ unsigned APInt::getBitsNeeded(StringRef str, uint8_t radix) {
   // be too large. This avoids the assertion in the constructor. This
   // calculation doesn't work appropriately for the numbers 0-9, so just use 4
   // bits in that case.
-  unsigned sufficient = slen == 1 ? 4 : slen * 64/18;
+  unsigned sufficient 
+    = radix == 10? (slen == 1 ? 4 : slen * 64/18)
+                 : (slen == 1 ? 7 : slen * 16/3);
 
   // Convert to the actual binary value.
   APInt tmp(sufficient, StringRef(p, slen), radix);
@@ -862,30 +870,43 @@ unsigned APInt::countPopulationSlowCase() const {
   return Count;
 }
 
+/// Perform a logical right-shift from Src to Dst, which must be equal or
+/// non-overlapping, of Words words, by Shift, which must be less than 64.
+static void lshrNear(uint64_t *Dst, uint64_t *Src, unsigned Words,
+                     unsigned Shift) {
+  uint64_t Carry = 0;
+  for (int I = Words - 1; I >= 0; --I) {
+    uint64_t Tmp = Src[I];
+    Dst[I] = (Tmp >> Shift) | Carry;
+    Carry = Tmp << (64 - Shift);
+  }
+}
+
 APInt APInt::byteSwap() const {
   assert(BitWidth >= 16 && BitWidth % 16 == 0 && "Cannot byteswap!");
   if (BitWidth == 16)
     return APInt(BitWidth, ByteSwap_16(uint16_t(VAL)));
-  else if (BitWidth == 32)
+  if (BitWidth == 32)
     return APInt(BitWidth, ByteSwap_32(unsigned(VAL)));
-  else if (BitWidth == 48) {
+  if (BitWidth == 48) {
     unsigned Tmp1 = unsigned(VAL >> 16);
     Tmp1 = ByteSwap_32(Tmp1);
     uint16_t Tmp2 = uint16_t(VAL);
     Tmp2 = ByteSwap_16(Tmp2);
     return APInt(BitWidth, (uint64_t(Tmp2) << 32) | Tmp1);
-  } else if (BitWidth == 64)
-    return APInt(BitWidth, ByteSwap_64(VAL));
-  else {
-    APInt Result(BitWidth, 0);
-    char *pByte = (char*)Result.pVal;
-    for (unsigned i = 0; i < BitWidth / APINT_WORD_SIZE / 2; ++i) {
-      char Tmp = pByte[i];
-      pByte[i] = pByte[BitWidth / APINT_WORD_SIZE - 1 - i];
-      pByte[BitWidth / APINT_WORD_SIZE - i - 1] = Tmp;
-    }
-    return Result;
   }
+  if (BitWidth == 64)
+    return APInt(BitWidth, ByteSwap_64(VAL));
+
+  APInt Result(getNumWords() * APINT_BITS_PER_WORD, 0);
+  for (unsigned I = 0, N = getNumWords(); I != N; ++I)
+    Result.pVal[I] = ByteSwap_64(pVal[N - I - 1]);
+  if (Result.BitWidth != BitWidth) {
+    lshrNear(Result.pVal, Result.pVal, getNumWords(),
+             Result.BitWidth - BitWidth);
+    Result.BitWidth = BitWidth;
+  }
+  return Result;
 }
 
 APInt llvm::APIntOps::GreatestCommonDivisor(const APInt& API1,
@@ -1224,11 +1245,7 @@ APInt APInt::lshr(unsigned shiftAmt) const {
 
   // If we are shifting less than a word, compute the shift with a simple carry
   if (shiftAmt < APINT_BITS_PER_WORD) {
-    uint64_t carry = 0;
-    for (int i = getNumWords()-1; i >= 0; --i) {
-      val[i] = (pVal[i] >> shiftAmt) | carry;
-      carry = pVal[i] << (APINT_BITS_PER_WORD - shiftAmt);
-    }
+    lshrNear(val, pVal, getNumWords(), shiftAmt);
     return APInt(val, BitWidth).clearUnusedBits();
   }
 
@@ -1321,14 +1338,10 @@ APInt APInt::rotl(const APInt &rotateAmt) const {
 }
 
 APInt APInt::rotl(unsigned rotateAmt) const {
+  rotateAmt %= BitWidth;
   if (rotateAmt == 0)
     return *this;
-  // Don't get too fancy, just use existing shift/or facilities
-  APInt hi(*this);
-  APInt lo(*this);
-  hi.shl(rotateAmt);
-  lo.lshr(BitWidth - rotateAmt);
-  return hi | lo;
+  return shl(rotateAmt) | lshr(BitWidth - rotateAmt);
 }
 
 APInt APInt::rotr(const APInt &rotateAmt) const {
@@ -1336,14 +1349,10 @@ APInt APInt::rotr(const APInt &rotateAmt) const {
 }
 
 APInt APInt::rotr(unsigned rotateAmt) const {
+  rotateAmt %= BitWidth;
   if (rotateAmt == 0)
     return *this;
-  // Don't get too fancy, just use existing shift/or facilities
-  APInt hi(*this);
-  APInt lo(*this);
-  lo.lshr(rotateAmt);
-  hi.shl(BitWidth - rotateAmt);
-  return hi | lo;
+  return lshr(rotateAmt) | shl(BitWidth - rotateAmt);
 }
 
 // Square Root - this method computes and returns the square root of "this".
@@ -1423,15 +1432,11 @@ APInt APInt::sqrt() const {
   APInt nextSquare((x_old + 1) * (x_old +1));
   if (this->ult(square))
     return x_old;
-  else if (this->ule(nextSquare)) {
-    APInt midpoint((nextSquare - square).udiv(two));
-    APInt offset(*this - square);
-    if (offset.ult(midpoint))
-      return x_old;
-    else
-      return x_old + 1;
-  } else
-    llvm_unreachable("Error in APInt::sqrt computation");
+  assert(this->ule(nextSquare) && "Error in APInt::sqrt computation");
+  APInt midpoint((nextSquare - square).udiv(two));
+  APInt offset(*this - square);
+  if (offset.ult(midpoint))
+    return x_old;
   return x_old + 1;
 }
 
@@ -2115,8 +2120,9 @@ APInt APInt::sshl_ov(unsigned ShAmt, bool &Overflow) const {
 void APInt::fromString(unsigned numbits, StringRef str, uint8_t radix) {
   // Check our assumptions here
   assert(!str.empty() && "Invalid string length");
-  assert((radix == 10 || radix == 8 || radix == 16 || radix == 2) &&
-         "Radix should be 2, 8, 10, or 16!");
+  assert((radix == 10 || radix == 8 || radix == 16 || radix == 2 || 
+          radix == 36) &&
+         "Radix should be 2, 8, 10, 16, or 36!");
 
   StringRef::iterator p = str.begin();
   size_t slen = str.size();
@@ -2173,8 +2179,9 @@ void APInt::fromString(unsigned numbits, StringRef str, uint8_t radix) {
 
 void APInt::toString(SmallVectorImpl<char> &Str, unsigned Radix,
                      bool Signed, bool formatAsCLiteral) const {
-  assert((Radix == 10 || Radix == 8 || Radix == 16 || Radix == 2) &&
-         "Radix should be 2, 8, 10, or 16!");
+  assert((Radix == 10 || Radix == 8 || Radix == 16 || Radix == 2 || 
+          Radix == 36) &&
+         "Radix should be 2, 8, 10, 16, or 36!");
 
   const char *Prefix = "";
   if (formatAsCLiteral) {
@@ -2187,9 +2194,13 @@ void APInt::toString(SmallVectorImpl<char> &Str, unsigned Radix,
       case 8:
         Prefix = "0";
         break;
+      case 10:
+        break; // No prefix
       case 16:
         Prefix = "0x";
         break;
+      default:
+        llvm_unreachable("Invalid radix!");
     }
   }
 
@@ -2203,7 +2214,7 @@ void APInt::toString(SmallVectorImpl<char> &Str, unsigned Radix,
     return;
   }
 
-  static const char Digits[] = "0123456789ABCDEF";
+  static const char Digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
   if (isSingleWord()) {
     char Buffer[65];
@@ -2257,7 +2268,7 @@ void APInt::toString(SmallVectorImpl<char> &Str, unsigned Radix,
   // For the 2, 8 and 16 bit cases, we can just shift instead of divide
   // because the number of bits per digit (1, 3 and 4 respectively) divides
   // equaly.  We just shift until the value is zero.
-  if (Radix != 10) {
+  if (Radix == 2 || Radix == 8 || Radix == 16) {
     // Just shift tmp right for each digit width until it becomes zero
     unsigned ShiftAmt = (Radix == 16 ? 4 : (Radix == 8 ? 3 : 1));
     unsigned MaskAmt = Radix - 1;
@@ -2268,7 +2279,7 @@ void APInt::toString(SmallVectorImpl<char> &Str, unsigned Radix,
       Tmp = Tmp.lshr(ShiftAmt);
     }
   } else {
-    APInt divisor(4, 10);
+    APInt divisor(Radix == 10? 4 : 8, Radix);
     while (Tmp != 0) {
       APInt APdigit(1, 0);
       APInt tmp2(Tmp.getBitWidth(), 0);

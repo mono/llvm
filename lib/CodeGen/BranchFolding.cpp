@@ -432,10 +432,9 @@ static unsigned EstimateRuntime(MachineBasicBlock::iterator I,
   for (; I != E; ++I) {
     if (I->isDebugValue())
       continue;
-    const MCInstrDesc &MCID = I->getDesc();
-    if (MCID.isCall())
+    if (I->isCall())
       Time += 10;
-    else if (MCID.mayLoad() || MCID.mayStore())
+    else if (I->mayLoad() || I->mayStore())
       Time += 2;
     else
       ++Time;
@@ -502,7 +501,7 @@ static unsigned CountTerminators(MachineBasicBlock *MBB,
       break;
     }
     --I;
-    if (!I->getDesc().isTerminator()) break;
+    if (!I->isTerminator()) break;
     ++NumTerms;
   }
   return NumTerms;
@@ -550,8 +549,8 @@ static bool ProfitableToMerge(MachineBasicBlock *MBB1,
   // heuristics.
   unsigned EffectiveTailLen = CommonTailLen;
   if (SuccBB && MBB1 != PredBB && MBB2 != PredBB &&
-      !MBB1->back().getDesc().isBarrier() &&
-      !MBB2->back().getDesc().isBarrier())
+      !MBB1->back().isBarrier() &&
+      !MBB2->back().isBarrier())
     ++EffectiveTailLen;
 
   // Check if the common tail is long enough to be worthwhile.
@@ -870,6 +869,9 @@ bool BranchFolder::TailMergeBlocks(MachineFunction &MF) {
         // Visit each predecessor only once.
         if (!UniquePreds.insert(PBB))
           continue;
+        // Skip blocks which may jump to a landing pad. Can't tail merge these.
+        if (PBB->getLandingPadSuccessor())
+          continue;
         MachineBasicBlock *TBB = 0, *FBB = 0;
         SmallVector<MachineOperand, 4> Cond;
         if (!TII->AnalyzeBranch(*PBB, TBB, FBB, Cond, true)) {
@@ -924,8 +926,9 @@ bool BranchFolder::TailMergeBlocks(MachineFunction &MF) {
       if (MergePotentials.size() >= 2)
         MadeChange |= TryTailMergeBlocks(IBB, PredBB);
       // Reinsert an unconditional branch if needed.
-      // The 1 below can occur as a result of removing blocks in TryTailMergeBlocks.
-      PredBB = prior(I);      // this may have been changed in TryTailMergeBlocks
+      // The 1 below can occur as a result of removing blocks in
+      // TryTailMergeBlocks.
+      PredBB = prior(I);     // this may have been changed in TryTailMergeBlocks
       if (MergePotentials.size() == 1 &&
           MergePotentials.begin()->getBlock() != PredBB)
         FixTail(MergePotentials.begin()->getBlock(), IBB, TII);
@@ -980,7 +983,7 @@ static bool IsBranchOnlyBlock(MachineBasicBlock *MBB) {
     if (!MBBI->isDebugValue())
       break;
   }
-  return (MBBI->getDesc().isBranch());
+  return (MBBI->isBranch());
 }
 
 /// IsBetterFallthrough - Return true if it would be clearly better to
@@ -1008,7 +1011,7 @@ static bool IsBetterFallthrough(MachineBasicBlock *MBB1,
   MachineBasicBlock::iterator MBB2I = --MBB2->end();
   while (MBB2I->isDebugValue())
     --MBB2I;
-  return MBB2I->getDesc().isCall() && !MBB1I->getDesc().isCall();
+  return MBB2I->isCall() && !MBB1I->isCall();
 }
 
 /// OptimizeBlock - Analyze and optimize control flow related to the specified

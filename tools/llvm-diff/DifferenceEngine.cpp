@@ -327,7 +327,7 @@ class FunctionDifferenceEngine {
         if (LCase) {
           if (TryUnify) tryUnify(LCase, RI->getSuccessor(I));
           LCases.erase(CaseValue);
-        } else if (!Difference) {
+        } else if (Complain || !Difference) {
           if (Complain)
             Engine.logf("right switch has extra case %r") << CaseValue;
           Difference = true;
@@ -627,6 +627,8 @@ void FunctionDifferenceEngine::runBlockDiff(BasicBlock::iterator LStart,
 }
 
 }
+
+void DifferenceEngine::Oracle::anchor() { }
 
 void DifferenceEngine::diff(Function *L, Function *R) {
   Context C(*this, L, R);

@@ -38,8 +38,9 @@ class X86TargetMachine : public LLVMTargetMachine {
 
 public:
   X86TargetMachine(const Target &T, StringRef TT, 
-                   StringRef CPU, StringRef FS,
+                   StringRef CPU, StringRef FS, const TargetOptions &Options,
                    Reloc::Model RM, CodeModel::Model CM,
+                   CodeGenOpt::Level OL,
                    bool is64Bit);
 
   virtual const X86InstrInfo     *getInstrInfo() const {
@@ -66,17 +67,18 @@ public:
   }
 
   // Set up the pass pipeline.
-  virtual bool addInstSelector(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
-  virtual bool addPreRegAlloc(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
-  virtual bool addPostRegAlloc(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
-  virtual bool addPreEmitPass(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
-  virtual bool addCodeEmitter(PassManagerBase &PM, CodeGenOpt::Level OptLevel,
+  virtual bool addInstSelector(PassManagerBase &PM);
+  virtual bool addPreRegAlloc(PassManagerBase &PM);
+  virtual bool addPostRegAlloc(PassManagerBase &PM);
+  virtual bool addPreEmitPass(PassManagerBase &PM);
+  virtual bool addCodeEmitter(PassManagerBase &PM,
                               JITCodeEmitter &JCE);
 };
 
 /// X86_32TargetMachine - X86 32-bit target machine.
 ///
 class X86_32TargetMachine : public X86TargetMachine {
+  virtual void anchor();
   const TargetData  DataLayout; // Calculates type size & alignment
   X86InstrInfo      InstrInfo;
   X86SelectionDAGInfo TSInfo;
@@ -84,8 +86,9 @@ class X86_32TargetMachine : public X86TargetMachine {
   X86JITInfo        JITInfo;
 public:
   X86_32TargetMachine(const Target &T, StringRef TT,
-                      StringRef CPU, StringRef FS,
-                      Reloc::Model RM, CodeModel::Model CM);
+                      StringRef CPU, StringRef FS, const TargetOptions &Options,
+                      Reloc::Model RM, CodeModel::Model CM,
+                      CodeGenOpt::Level OL);
   virtual const TargetData *getTargetData() const { return &DataLayout; }
   virtual const X86TargetLowering *getTargetLowering() const {
     return &TLInfo;
@@ -104,6 +107,7 @@ public:
 /// X86_64TargetMachine - X86 64-bit target machine.
 ///
 class X86_64TargetMachine : public X86TargetMachine {
+  virtual void anchor();
   const TargetData  DataLayout; // Calculates type size & alignment
   X86InstrInfo      InstrInfo;
   X86SelectionDAGInfo TSInfo;
@@ -111,8 +115,9 @@ class X86_64TargetMachine : public X86TargetMachine {
   X86JITInfo        JITInfo;
 public:
   X86_64TargetMachine(const Target &T, StringRef TT,
-                      StringRef CPU, StringRef FS,
-                      Reloc::Model RM, CodeModel::Model CM);
+                      StringRef CPU, StringRef FS, const TargetOptions &Options,
+                      Reloc::Model RM, CodeModel::Model CM,
+                      CodeGenOpt::Level OL);
   virtual const TargetData *getTargetData() const { return &DataLayout; }
   virtual const X86TargetLowering *getTargetLowering() const {
     return &TLInfo;

@@ -29,29 +29,17 @@ using namespace llvm;
 static std::string getOSVersion() {
   struct utsname info;
 
-#ifdef __APPLE__
-  // Recognize UNAME_RELEASE environment variable to match Darwin's uname,
-  // where the value of this variable sets the OS release version
-  // reported by "uname -r".
-  const char *UnameOverride = ::getenv("UNAME_RELEASE");
-  if (UnameOverride && UnameOverride[0] != '\0')
-    return UnameOverride;
-#endif // __APPLE__
-
   if (uname(&info))
     return "";
 
   return info.release;
 }
 
-std::string sys::getHostTriple() {
-  // FIXME: Derive directly instead of relying on the autoconf generated
-  // variable.
+std::string sys::getDefaultTargetTriple() {
+  StringRef TargetTripleString(LLVM_DEFAULT_TARGET_TRIPLE);
+  std::pair<StringRef, StringRef> ArchSplit = TargetTripleString.split('-');
 
-  StringRef HostTripleString(LLVM_HOSTTRIPLE);
-  std::pair<StringRef, StringRef> ArchSplit = HostTripleString.split('-');
-
-  // Normalize the arch, since the host triple may not actually match the host.
+  // Normalize the arch, since the target triple may not actually match the target.
   std::string Arch = ArchSplit.first;
 
   std::string Triple(Arch);
@@ -64,7 +52,7 @@ std::string sys::getHostTriple() {
     Triple[1] = '3';
 
   // On darwin, we want to update the version to match that of the
-  // host.
+  // target.
   std::string::size_type DarwinDashIdx = Triple.find("-darwin");
   if (DarwinDashIdx != std::string::npos) {
     Triple.resize(DarwinDashIdx + strlen("-darwin"));

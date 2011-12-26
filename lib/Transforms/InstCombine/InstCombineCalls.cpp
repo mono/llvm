@@ -265,6 +265,8 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
       // Get the current byte offset into the thing. Use the original
       // operand in case we're looking through a bitcast.
       SmallVector<Value*, 8> Ops(GEP->idx_begin(), GEP->idx_end());
+      if (!GEP->getPointerOperandType()->isPointerTy())
+        return 0;
       Offset = TD->getIndexedOffset(GEP->getPointerOperandType(), Ops);
 
       Op1 = GEP->getPointerOperand()->stripPointerCasts();
@@ -654,15 +656,13 @@ Instruction *InstCombiner::visitCallInst(CallInst &CI) {
           
           if (ExtractedElts[Idx] == 0) {
             ExtractedElts[Idx] = 
-              Builder->CreateExtractElement(Idx < 16 ? Op0 : Op1, 
-                  ConstantInt::get(Type::getInt32Ty(II->getContext()),
-                                   Idx&15, false), "tmp");
+              Builder->CreateExtractElement(Idx < 16 ? Op0 : Op1,
+                                            Builder->getInt32(Idx&15));
           }
         
           // Insert this value into the result vector.
           Result = Builder->CreateInsertElement(Result, ExtractedElts[Idx],
-                         ConstantInt::get(Type::getInt32Ty(II->getContext()),
-                                          i, false), "tmp");
+                                                Builder->getInt32(i));
         }
         return CastInst::Create(Instruction::BitCast, Result, CI.getType());
       }
@@ -762,7 +762,7 @@ static bool isSafeToEliminateVarargsCast(const CallSite CS,
   // The size of ByVal arguments is derived from the type, so we
   // can't change to a type with a different size.  If the size were
   // passed explicitly we could avoid this check.
-  if (!CS.paramHasAttr(ix, Attribute::ByVal))
+  if (!CS.isByValArgument(ix))
     return true;
 
   Type* SrcTy = 
@@ -962,7 +962,7 @@ Instruction *InstCombiner::visitCallSite(CallSite CS) {
   PointerType *PTy = cast<PointerType>(Callee->getType());
   FunctionType *FTy = cast<FunctionType>(PTy->getElementType());
   if (FTy->isVarArg()) {
-    int ix = FTy->getNumParams() + (isa<InvokeInst>(Callee) ? 3 : 1);
+    int ix = FTy->getNumParams();
     // See if we can optimize any arguments passed through the varargs area of
     // the call.
     for (CallSite::arg_iterator I = CS.arg_begin()+FTy->getNumParams(),
@@ -1143,7 +1143,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
     } else {
       Instruction::CastOps opcode = CastInst::getCastOpcode(*AI,
           false, ParamTy, false);
-      Args.push_back(Builder->CreateCast(opcode, *AI, ParamTy, "tmp"));
+      Args.push_back(Builder->CreateCast(opcode, *AI, ParamTy));
     }
 
     // Add any parameter attributes.
@@ -1169,7 +1169,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
           // Must promote to pass through va_arg area!
           Instruction::CastOps opcode =
             CastInst::getCastOpcode(*AI, false, PTy, false);
-          Args.push_back(Builder->CreateCast(opcode, *AI, PTy, "tmp"));
+          Args.push_back(Builder->CreateCast(opcode, *AI, PTy));
         } else {
           Args.push_back(*AI);
         }
@@ -1213,7 +1213,7 @@ bool InstCombiner::transformConstExprCastCall(CallSite CS) {
     if (!NV->getType()->isVoidTy()) {
       Instruction::CastOps opcode =
         CastInst::getCastOpcode(NC, false, OldRetTy, false);
-      NV = NC = CastInst::Create(opcode, NC, OldRetTy, "tmp");
+      NV = NC = CastInst::Create(opcode, NC, OldRetTy);
       NC->setDebugLoc(Caller->getDebugLoc());
 
       // If this is an invoke instruction, we should insert it after the first

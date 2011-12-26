@@ -73,6 +73,12 @@ TEST(StringRefTest, StringOps) {
   EXPECT_EQ( 1, StringRef("2").compare_numeric("1"));
   EXPECT_EQ( 0, StringRef("llvm_v1i64_ty").compare_numeric("llvm_v1i64_ty"));
   EXPECT_EQ( 1, StringRef("\xFF").compare_numeric("\1"));
+  EXPECT_EQ( 1, StringRef("V16").compare_numeric("V1_q0"));
+  EXPECT_EQ(-1, StringRef("V1_q0").compare_numeric("V16"));
+  EXPECT_EQ(-1, StringRef("V8_q0").compare_numeric("V16"));
+  EXPECT_EQ( 1, StringRef("V16").compare_numeric("V8_q0"));
+  EXPECT_EQ(-1, StringRef("V1_q0").compare_numeric("V8_q0"));
+  EXPECT_EQ( 1, StringRef("V8_q0").compare_numeric("V1_q0"));
 }
 
 TEST(StringRefTest, Operators) {
@@ -239,6 +245,12 @@ TEST(StringRefTest, Find) {
   EXPECT_EQ(StringRef::npos, Str.find("zz"));
   EXPECT_EQ(2U, Str.find("ll", 2));
   EXPECT_EQ(StringRef::npos, Str.find("ll", 3));
+  EXPECT_EQ(0U, Str.find(""));
+  StringRef LongStr("hellx xello hell ello world foo bar hello");
+  EXPECT_EQ(36U, LongStr.find("hello"));
+  EXPECT_EQ(28U, LongStr.find("foo"));
+  EXPECT_EQ(12U, LongStr.find("hell", 2));
+  EXPECT_EQ(0U, LongStr.find(""));
 
   EXPECT_EQ(3U, Str.rfind('l'));
   EXPECT_EQ(StringRef::npos, Str.rfind('z'));

@@ -29,7 +29,7 @@
 using namespace llvm;
 
 namespace {
-  enum SpillerName { trivial, standard, inline_ };
+  enum SpillerName { trivial, inline_ };
 }
 
 static cl::opt<SpillerName>
@@ -37,10 +37,9 @@ spillerOpt("spiller",
            cl::desc("Spiller to use: (default: standard)"),
            cl::Prefix,
            cl::values(clEnumVal(trivial,   "trivial spiller"),
-                      clEnumVal(standard,  "default spiller"),
                       clEnumValN(inline_,  "inline", "inline spiller"),
                       clEnumValEnd),
-           cl::init(standard));
+           cl::init(trivial));
 
 // Spiller virtual destructor implementation.
 Spiller::~Spiller() {}
@@ -140,8 +139,7 @@ protected:
                                   tri);
         MachineInstr *loadInstr(prior(miItr));
         SlotIndex loadIndex =
-          lis->InsertMachineInstrInMaps(loadInstr).getDefIndex();
-        vrm->addSpillSlotUse(ss, loadInstr);
+          lis->InsertMachineInstrInMaps(loadInstr).getRegSlot();
         SlotIndex endIndex = loadIndex.getNextIndex();
         VNInfo *loadVNI =
           newLI->getNextValue(loadIndex, 0, lis->getVNInfoAllocator());
@@ -154,8 +152,7 @@ protected:
                                  true, ss, trc, tri);
         MachineInstr *storeInstr(llvm::next(miItr));
         SlotIndex storeIndex =
-          lis->InsertMachineInstrInMaps(storeInstr).getDefIndex();
-        vrm->addSpillSlotUse(ss, storeInstr);
+          lis->InsertMachineInstrInMaps(storeInstr).getRegSlot();
         SlotIndex beginIndex = storeIndex.getPrevIndex();
         VNInfo *storeVNI =
           newLI->getNextValue(beginIndex, 0, lis->getVNInfoAllocator());
@@ -188,46 +185,7 @@ public:
 
 } // end anonymous namespace
 
-namespace {
-
-/// Falls back on LiveIntervals::addIntervalsForSpills.
-class StandardSpiller : public Spiller {
-protected:
-  MachineFunction *mf;
-  LiveIntervals *lis;
-  LiveStacks *lss;
-  MachineLoopInfo *loopInfo;
-  VirtRegMap *vrm;
-public:
-  StandardSpiller(MachineFunctionPass &pass, MachineFunction &mf,
-                  VirtRegMap &vrm)
-    : mf(&mf),
-      lis(&pass.getAnalysis<LiveIntervals>()),
-      lss(&pass.getAnalysis<LiveStacks>()),
-      loopInfo(pass.getAnalysisIfAvailable<MachineLoopInfo>()),
-      vrm(&vrm) {}
-
-  /// Falls back on LiveIntervals::addIntervalsForSpills.
-  void spill(LiveRangeEdit &LRE) {
-    std::vector<LiveInterval*> added =
-      lis->addIntervalsForSpills(LRE.getParent(), LRE.getUselessVRegs(),
-                                 loopInfo, *vrm);
-    LRE.getNewVRegs()->insert(LRE.getNewVRegs()->end(),
-                              added.begin(), added.end());
-
-    // Update LiveStacks.
-    int SS = vrm->getStackSlot(LRE.getReg());
-    if (SS == VirtRegMap::NO_STACK_SLOT)
-      return;
-    const TargetRegisterClass *RC = mf->getRegInfo().getRegClass(LRE.getReg());
-    LiveInterval &SI = lss->getOrCreateInterval(SS, RC);
-    if (!SI.hasAtLeastOneValue())
-      SI.getNextValue(SlotIndex(), 0, lss->getVNInfoAllocator());
-    SI.MergeRangesInAsValue(LRE.getParent(), SI.getValNumInfo(0));
-  }
-};
-
-} // end anonymous namespace
+void Spiller::anchor() { }
 
 llvm::Spiller* llvm::createSpiller(MachineFunctionPass &pass,
                                    MachineFunction &mf,
@@ -235,7 +193,6 @@ llvm::Spiller* llvm::createSpiller(MachineFunctionPass &pass,
   switch (spillerOpt) {
   default: assert(0 && "unknown spiller");
   case trivial: return new TrivialSpiller(pass, mf, vrm);
-  case standard: return new StandardSpiller(pass, mf, vrm);
   case inline_: return createInlineSpiller(pass, mf, vrm);
   }
 }

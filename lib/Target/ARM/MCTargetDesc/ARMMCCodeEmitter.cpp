@@ -144,6 +144,12 @@ public:
   /// operand.
   uint32_t getT2AddrModeImm8s4OpValue(const MCInst &MI, unsigned OpIdx,
                                    SmallVectorImpl<MCFixup> &Fixups) const;
+
+  /// getT2AddrModeImm0_1020s4OpValue - Return encoding info for 'reg + imm8<<2'
+  /// operand.
+  uint32_t getT2AddrModeImm0_1020s4OpValue(const MCInst &MI, unsigned OpIdx,
+                                   SmallVectorImpl<MCFixup> &Fixups) const;
+
   /// getT2Imm8s4OpValue - Return encoding info for '+/- imm8<<2'
   /// operand.
   uint32_t getT2Imm8s4OpValue(const MCInst &MI, unsigned OpIdx,
@@ -276,9 +282,6 @@ public:
 
   unsigned getBitfieldInvertedMaskOpValue(const MCInst &MI, unsigned Op,
                                       SmallVectorImpl<MCFixup> &Fixups) const;
-
-  unsigned getMsbOpValue(const MCInst &MI, unsigned Op,
-                         SmallVectorImpl<MCFixup> &Fixups) const;
 
   unsigned getRegisterListOpValue(const MCInst &MI, unsigned Op,
                                   SmallVectorImpl<MCFixup> &Fixups) const;
@@ -656,7 +659,12 @@ getT2AdrLabelOpValue(const MCInst &MI, unsigned OpIdx,
   if (MO.isExpr())
     return ::getBranchTargetOpValue(MI, OpIdx, ARM::fixup_t2_adr_pcrel_12,
                                     Fixups);
-  return MO.getImm();
+  int32_t Val = MO.getImm();
+  if (Val < 0) {
+    Val *= -1;
+    Val |= 0x1000;
+  }
+  return Val;
 }
 
 /// getAdrLabelOpValue - Return encoding info for 8-bit immediate ADR label
@@ -702,17 +710,26 @@ getAddrModeImm12OpValue(const MCInst &MI, unsigned OpIdx,
     Imm12 = 0;
     isAdd = false ; // 'U' bit is set as part of the fixup.
 
-    assert(MO.isExpr() && "Unexpected machine operand type!");
-    const MCExpr *Expr = MO.getExpr();
+    if (MO.isExpr()) {
+      const MCExpr *Expr = MO.getExpr();
 
-    MCFixupKind Kind;
-    if (isThumb2())
-      Kind = MCFixupKind(ARM::fixup_t2_ldst_pcrel_12);
-    else
-      Kind = MCFixupKind(ARM::fixup_arm_ldst_pcrel_12);
-    Fixups.push_back(MCFixup::Create(0, Expr, Kind));
+      MCFixupKind Kind;
+      if (isThumb2())
+        Kind = MCFixupKind(ARM::fixup_t2_ldst_pcrel_12);
+      else
+        Kind = MCFixupKind(ARM::fixup_arm_ldst_pcrel_12);
+      Fixups.push_back(MCFixup::Create(0, Expr, Kind));
 
-    ++MCNumCPRelocations;
+      ++MCNumCPRelocations;
+    } else {
+      Reg = ARM::PC;
+      int32_t Offset = MO.getImm();
+      if (Offset < 0) {
+        Offset *= -1;
+        isAdd = false;
+      }
+      Imm12 = Offset;
+    }
   } else
     isAdd = EncodeAddrModeOpValues(MI, OpIdx, Reg, Imm12, Fixups);
 
@@ -774,7 +791,7 @@ getT2AddrModeImm8s4OpValue(const MCInst &MI, unsigned OpIdx,
 
     assert(MO.isExpr() && "Unexpected machine operand type!");
     const MCExpr *Expr = MO.getExpr();
-    MCFixupKind Kind = MCFixupKind(ARM::fixup_arm_pcrel_10);
+    MCFixupKind Kind = MCFixupKind(ARM::fixup_t2_pcrel_10);
     Fixups.push_back(MCFixup::Create(0, Expr, Kind));
 
     ++MCNumCPRelocations;
@@ -793,6 +810,20 @@ getT2AddrModeImm8s4OpValue(const MCInst &MI, unsigned OpIdx,
     Binary |= (1 << 8);
   Binary |= (Reg << 9);
   return Binary;
+}
+
+/// getT2AddrModeImm0_1020s4OpValue - Return encoding info for
+/// 'reg + imm8<<2' operand.
+uint32_t ARMMCCodeEmitter::
+getT2AddrModeImm0_1020s4OpValue(const MCInst &MI, unsigned OpIdx,
+                        SmallVectorImpl<MCFixup> &Fixups) const {
+  // {11-8} = reg
+  // {7-0}  = imm8
+  const MCOperand &MO = MI.getOperand(OpIdx);
+  const MCOperand &MO1 = MI.getOperand(OpIdx + 1);
+  unsigned Reg = getARMRegisterNumbering(MO.getReg());
+  unsigned Imm8 = MO1.getImm();
+  return (Reg << 8) | Imm8;
 }
 
 // FIXME: This routine assumes that a binary
@@ -962,6 +993,19 @@ getAddrMode3OpValue(const MCInst &MI, unsigned OpIdx,
   const MCOperand &MO = MI.getOperand(OpIdx);
   const MCOperand &MO1 = MI.getOperand(OpIdx+1);
   const MCOperand &MO2 = MI.getOperand(OpIdx+2);
+
+  // If The first operand isn't a register, we have a label reference.
+  if (!MO.isReg()) {
+    unsigned Rn = getARMRegisterNumbering(ARM::PC);   // Rn is PC.
+
+    assert(MO.isExpr() && "Unexpected machine operand type!");
+    const MCExpr *Expr = MO.getExpr();
+    MCFixupKind Kind = MCFixupKind(ARM::fixup_arm_pcrel_10_unscaled);
+    Fixups.push_back(MCFixup::Create(0, Expr, Kind));
+
+    ++MCNumCPRelocations;
+    return (Rn << 9) | (1 << 13);
+  }
   unsigned Rn = getARMRegisterNumbering(MO.getReg());
   unsigned Imm = MO2.getImm();
   bool isAdd = ARM_AM::getAM3Op(Imm) == ARM_AM::add;
@@ -1246,6 +1290,7 @@ getT2SORegOpValue(const MCInst &MI, unsigned OpIdx,
   case ARM_AM::lsl: SBits = 0x0; break;
   case ARM_AM::lsr: SBits = 0x2; break;
   case ARM_AM::asr: SBits = 0x4; break;
+  case ARM_AM::rrx: // FALLTHROUGH
   case ARM_AM::ror: SBits = 0x6; break;
   }
 
@@ -1268,17 +1313,6 @@ getBitfieldInvertedMaskOpValue(const MCInst &MI, unsigned Op,
   uint32_t msb = (32 - CountLeadingZeros_32 (v)) - 1;
   assert (v != 0 && lsb < 32 && msb < 32 && "Illegal bitfield mask!");
   return lsb | (msb << 5);
-}
-
-unsigned ARMMCCodeEmitter::
-getMsbOpValue(const MCInst &MI, unsigned Op,
-              SmallVectorImpl<MCFixup> &Fixups) const {
-  // MSB - 5 bits.
-  uint32_t lsb = MI.getOperand(Op-1).getImm();
-  uint32_t width = MI.getOperand(Op).getImm();
-  uint32_t msb = lsb+width-1;
-  assert (width != 0 && msb < 32 && "Illegal bit width!");
-  return msb;
 }
 
 unsigned ARMMCCodeEmitter::
@@ -1351,11 +1385,11 @@ getAddrMode6OneLane32AddressOpValue(const MCInst &MI, unsigned Op,
 
   switch (Imm.getImm()) {
   default: break;
-  case 2:
-  case 4:
   case 8:
-  case 16: Align = 0x00; break;
-  case 32: Align = 0x03; break;
+  case 16:
+  case 32: // Default '0' value for invalid alignments of 8, 16, 32 bytes.
+  case 2: Align = 0x00; break;
+  case 4: Align = 0x03; break;
   }
 
   return RegNo | (Align << 4);
@@ -1391,7 +1425,7 @@ getAddrMode6OffsetOpValue(const MCInst &MI, unsigned Op,
                           SmallVectorImpl<MCFixup> &Fixups) const {
   const MCOperand &MO = MI.getOperand(Op);
   if (MO.getReg() == 0) return 0x0D;
-  return MO.getReg();
+  return getARMRegisterNumbering(MO.getReg());
 }
 
 unsigned ARMMCCodeEmitter::

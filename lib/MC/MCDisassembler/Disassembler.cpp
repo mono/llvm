@@ -18,7 +18,6 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Support/MemoryObject.h"
 #include "llvm/Support/TargetRegistry.h"
-#include "llvm/Support/TargetSelect.h"
 
 namespace llvm {
 class Target;
@@ -35,12 +34,6 @@ using namespace llvm;
 LLVMDisasmContextRef LLVMCreateDisasm(const char *TripleName, void *DisInfo,
                                       int TagType, LLVMOpInfoCallback GetOpInfo,
                                       LLVMSymbolLookupCallback SymbolLookUp) {
-  // Initialize targets and assembly printers/parsers.
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllDisassemblers();
-
   // Get the target.
   std::string Error;
   const Target *TheTarget = TargetRegistry::lookupTarget(TripleName, Error);
@@ -68,7 +61,7 @@ LLVMDisasmContextRef LLVMCreateDisasm(const char *TripleName, void *DisInfo,
   // Set up disassembler.
   MCDisassembler *DisAsm = TheTarget->createMCDisassembler(*STI);
   assert(DisAsm && "Unable to create disassembler!");
-  DisAsm->setupForSymbolicDisassembly(GetOpInfo, DisInfo, Ctx);
+  DisAsm->setupForSymbolicDisassembly(GetOpInfo, SymbolLookUp, DisInfo, Ctx);
 
   // Set up the instruction printer.
   int AsmPrinterVariant = MAI->getAssemblerDialect();
@@ -81,6 +74,7 @@ LLVMDisasmContextRef LLVMCreateDisasm(const char *TripleName, void *DisInfo,
                                                 TheTarget, MAI, MRI,
                                                 Ctx, DisAsm, IP);
   assert(DC && "Allocation failure!");
+
   return DC;
 }
 
@@ -141,7 +135,7 @@ size_t LLVMDisasmInstruction(LLVMDisasmContextRef DCR, uint8_t *Bytes,
   MCInstPrinter *IP = DC->getIP();
   MCDisassembler::DecodeStatus S;
   S = DisAsm->getInstruction(Inst, Size, MemoryObject, PC,
-                             /*REMOVE*/ nulls());
+                             /*REMOVE*/ nulls(), DC->CommentStream);
   switch (S) {
   case MCDisassembler::Fail:
   case MCDisassembler::SoftFail:
@@ -149,10 +143,17 @@ size_t LLVMDisasmInstruction(LLVMDisasmContextRef DCR, uint8_t *Bytes,
     return 0;
 
   case MCDisassembler::Success: {
+    DC->CommentStream.flush();
+    StringRef Comments = DC->CommentsToEmit.str();
+
     SmallVector<char, 64> InsnStr;
     raw_svector_ostream OS(InsnStr);
-    IP->printInst(&Inst, OS);
+    IP->printInst(&Inst, OS, Comments);
     OS.flush();
+
+    // Tell the comment stream that the vector changed underneath it.
+    DC->CommentsToEmit.clear();
+    DC->CommentStream.resync();
 
     assert(OutStringSize != 0 && "Output buffer cannot be zero size");
     size_t OutputSize = std::min(OutStringSize-1, InsnStr.size());

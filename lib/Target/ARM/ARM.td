@@ -23,9 +23,6 @@ include "llvm/Target/Target.td"
 def ModeThumb  : SubtargetFeature<"thumb-mode", "InThumbMode", "true",
                                   "Thumb mode">;
 
-def ModeNaCl   : SubtargetFeature<"nacl-mode", "InNaClMode", "true",
-                                  "Native client mode">;
-
 //===----------------------------------------------------------------------===//
 // ARM Subtarget features.
 //
@@ -94,6 +91,10 @@ def FeatureDSPThumb2 : SubtargetFeature<"t2dsp", "Thumb2DSP", "true",
 def FeatureMP : SubtargetFeature<"mp", "HasMPExtension", "true",
                                  "Supports Multiprocessing extension">;
 
+// M-series ISA?
+def FeatureMClass : SubtargetFeature<"mclass", "IsMClass", "true",
+                                     "Is microcontroller profile ('M' series)">;
+
 // ARM ISAs.
 def HasV4TOps   : SubtargetFeature<"v4t", "HasV4TOps", "true",
                                    "Support ARM v4T instructions">;
@@ -108,7 +109,7 @@ def HasV6Ops    : SubtargetFeature<"v6", "HasV6Ops", "true",
                                    [HasV5TEOps]>;
 def HasV6T2Ops  : SubtargetFeature<"v6t2", "HasV6T2Ops", "true",
                                    "Support ARM v6t2 instructions",
-                                   [HasV6Ops, FeatureThumb2, FeatureDSPThumb2]>;
+                                   [HasV6Ops, FeatureThumb2]>;
 def HasV7Ops    : SubtargetFeature<"v7", "HasV7Ops", "true",
                                    "Support ARM v7 instructions",
                                    [HasV6T2Ops]>;
@@ -185,12 +186,14 @@ def : Processor<"mpcore",           ARMV6Itineraries, [HasV6Ops, FeatureVFP2,
 
 // V6M Processors.
 def : Processor<"cortex-m0",        ARMV6Itineraries, [HasV6Ops, FeatureNoARM,
-                                                       FeatureDB]>;
+                                                       FeatureDB, FeatureMClass]>;
 
 // V6T2 Processors.
-def : Processor<"arm1156t2-s",      ARMV6Itineraries, [HasV6T2Ops]>;
+def : Processor<"arm1156t2-s",      ARMV6Itineraries, [HasV6T2Ops,
+                                                       FeatureDSPThumb2]>;
 def : Processor<"arm1156t2f-s",     ARMV6Itineraries, [HasV6T2Ops, FeatureVFP2,
-                                                       FeatureHasSlowFPVMLx]>;
+                                                       FeatureHasSlowFPVMLx,
+                                                       FeatureDSPThumb2]>;
 
 // V7a Processors.
 def : Processor<"cortex-a8",        CortexA8Itineraries,
@@ -206,14 +209,14 @@ def : Processor<"cortex-a9-mp",     CortexA9Itineraries,
 // V7M Processors.
 def : ProcNoItin<"cortex-m3",       [HasV7Ops,
                                      FeatureThumb2, FeatureNoARM, FeatureDB,
-                                     FeatureHWDiv]>;
+                                     FeatureHWDiv, FeatureMClass]>;
 
 // V7EM Processors.
 def : ProcNoItin<"cortex-m4",       [HasV7Ops,
                                      FeatureThumb2, FeatureNoARM, FeatureDB,
                                      FeatureHWDiv, FeatureDSPThumb2,
                                      FeatureT2XtPk, FeatureVFP2,
-                                     FeatureVFPOnlySP]>;
+                                     FeatureVFPOnlySP, FeatureMClass]>;
 
 //===----------------------------------------------------------------------===//
 // Register File Description

@@ -112,130 +112,45 @@ X86RegisterInfo::getSEHRegNum(unsigned i) const {
 }
 
 const TargetRegisterClass *
+X86RegisterInfo::getSubClassWithSubReg(const TargetRegisterClass *RC,
+                                       unsigned Idx) const {
+  // The sub_8bit sub-register index is more constrained in 32-bit mode.
+  // It behaves just like the sub_8bit_hi index.
+  if (!Is64Bit && Idx == X86::sub_8bit)
+    Idx = X86::sub_8bit_hi;
+
+  // Forward to TableGen's default version.
+  return X86GenRegisterInfo::getSubClassWithSubReg(RC, Idx);
+}
+
+const TargetRegisterClass *
 X86RegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
                                           const TargetRegisterClass *B,
                                           unsigned SubIdx) const {
-  switch (SubIdx) {
-  default: return 0;
-  case X86::sub_8bit:
-    if (B == &X86::GR8RegClass) {
-      if (A->getSize() == 2 || A->getSize() == 4 || A->getSize() == 8)
-        return A;
-    } else if (B == &X86::GR8_ABCD_LRegClass || B == &X86::GR8_ABCD_HRegClass) {
-      if (A == &X86::GR64RegClass || A == &X86::GR64_ABCDRegClass ||
-          A == &X86::GR64_NOREXRegClass ||
-          A == &X86::GR64_NOSPRegClass ||
-          A == &X86::GR64_NOREX_NOSPRegClass)
-        return &X86::GR64_ABCDRegClass;
-      else if (A == &X86::GR32RegClass || A == &X86::GR32_ABCDRegClass ||
-               A == &X86::GR32_NOREXRegClass ||
-               A == &X86::GR32_NOSPRegClass)
-        return &X86::GR32_ABCDRegClass;
-      else if (A == &X86::GR16RegClass || A == &X86::GR16_ABCDRegClass ||
-               A == &X86::GR16_NOREXRegClass)
-        return &X86::GR16_ABCDRegClass;
-    } else if (B == &X86::GR8_NOREXRegClass) {
-      if (A == &X86::GR64RegClass || A == &X86::GR64_NOREXRegClass ||
-          A == &X86::GR64_NOSPRegClass || A == &X86::GR64_NOREX_NOSPRegClass)
-        return &X86::GR64_NOREXRegClass;
-      else if (A == &X86::GR64_ABCDRegClass)
-        return &X86::GR64_ABCDRegClass;
-      else if (A == &X86::GR32RegClass || A == &X86::GR32_NOREXRegClass ||
-               A == &X86::GR32_NOSPRegClass)
-        return &X86::GR32_NOREXRegClass;
-      else if (A == &X86::GR32_ABCDRegClass)
-        return &X86::GR32_ABCDRegClass;
-      else if (A == &X86::GR16RegClass || A == &X86::GR16_NOREXRegClass)
-        return &X86::GR16_NOREXRegClass;
-      else if (A == &X86::GR16_ABCDRegClass)
-        return &X86::GR16_ABCDRegClass;
-    }
-    break;
-  case X86::sub_8bit_hi:
-    if (B->hasSubClassEq(&X86::GR8_ABCD_HRegClass))
-      switch (A->getSize()) {
-        case 2: return getCommonSubClass(A, &X86::GR16_ABCDRegClass);
-        case 4: return getCommonSubClass(A, &X86::GR32_ABCDRegClass);
-        case 8: return getCommonSubClass(A, &X86::GR64_ABCDRegClass);
-        default: return 0;
-      }
-    break;
-  case X86::sub_16bit:
-    if (B == &X86::GR16RegClass) {
-      if (A->getSize() == 4 || A->getSize() == 8)
-        return A;
-    } else if (B == &X86::GR16_ABCDRegClass) {
-      if (A == &X86::GR64RegClass || A == &X86::GR64_ABCDRegClass ||
-          A == &X86::GR64_NOREXRegClass ||
-          A == &X86::GR64_NOSPRegClass ||
-          A == &X86::GR64_NOREX_NOSPRegClass)
-        return &X86::GR64_ABCDRegClass;
-      else if (A == &X86::GR32RegClass || A == &X86::GR32_ABCDRegClass ||
-               A == &X86::GR32_NOREXRegClass || A == &X86::GR32_NOSPRegClass)
-        return &X86::GR32_ABCDRegClass;
-    } else if (B == &X86::GR16_NOREXRegClass) {
-      if (A == &X86::GR64RegClass || A == &X86::GR64_NOREXRegClass ||
-          A == &X86::GR64_NOSPRegClass || A == &X86::GR64_NOREX_NOSPRegClass)
-        return &X86::GR64_NOREXRegClass;
-      else if (A == &X86::GR64_ABCDRegClass)
-        return &X86::GR64_ABCDRegClass;
-      else if (A == &X86::GR32RegClass || A == &X86::GR32_NOREXRegClass ||
-               A == &X86::GR32_NOSPRegClass)
-        return &X86::GR32_NOREXRegClass;
-      else if (A == &X86::GR32_ABCDRegClass)
-        return &X86::GR64_ABCDRegClass;
-    }
-    break;
-  case X86::sub_32bit:
-    if (B == &X86::GR32RegClass) {
-      if (A->getSize() == 8)
-        return A;
-    } else if (B == &X86::GR32_NOSPRegClass) {
-      if (A == &X86::GR64RegClass || A == &X86::GR64_NOSPRegClass)
-        return &X86::GR64_NOSPRegClass;
-      if (A->getSize() == 8)
-        return getCommonSubClass(A, &X86::GR64_NOSPRegClass);
-    } else if (B == &X86::GR32_ABCDRegClass) {
-      if (A == &X86::GR64RegClass || A == &X86::GR64_ABCDRegClass ||
-          A == &X86::GR64_NOREXRegClass ||
-          A == &X86::GR64_NOSPRegClass ||
-          A == &X86::GR64_NOREX_NOSPRegClass)
-        return &X86::GR64_ABCDRegClass;
-    } else if (B == &X86::GR32_NOREXRegClass) {
-      if (A == &X86::GR64RegClass || A == &X86::GR64_NOREXRegClass)
-        return &X86::GR64_NOREXRegClass;
-      else if (A == &X86::GR64_NOSPRegClass || A == &X86::GR64_NOREX_NOSPRegClass)
-        return &X86::GR64_NOREX_NOSPRegClass;
-      else if (A == &X86::GR64_ABCDRegClass)
-        return &X86::GR64_ABCDRegClass;
-    } else if (B == &X86::GR32_NOREX_NOSPRegClass) {
-      if (A == &X86::GR64RegClass || A == &X86::GR64_NOREXRegClass ||
-          A == &X86::GR64_NOSPRegClass || A == &X86::GR64_NOREX_NOSPRegClass)
-        return &X86::GR64_NOREX_NOSPRegClass;
-      else if (A == &X86::GR64_ABCDRegClass)
-        return &X86::GR64_ABCDRegClass;
-    }
-    break;
-  case X86::sub_ss:
-    if (B == &X86::FR32RegClass)
-      return A;
-    break;
-  case X86::sub_sd:
-    if (B == &X86::FR64RegClass)
-      return A;
-    break;
-  case X86::sub_xmm:
-    if (B == &X86::VR128RegClass)
-      return A;
-    break;
+  // The sub_8bit sub-register index is more constrained in 32-bit mode.
+  if (!Is64Bit && SubIdx == X86::sub_8bit) {
+    A = X86GenRegisterInfo::getSubClassWithSubReg(A, X86::sub_8bit_hi);
+    if (!A)
+      return 0;
   }
-  return 0;
+  return X86GenRegisterInfo::getMatchingSuperRegClass(A, B, SubIdx);
 }
 
 const TargetRegisterClass*
 X86RegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC) const{
+  // Don't allow super-classes of GR8_NOREX.  This class is only used after
+  // extrating sub_8bit_hi sub-registers.  The H sub-registers cannot be copied
+  // to the full GR8 register class in 64-bit mode, so we cannot allow the
+  // reigster class inflation.
+  //
+  // The GR8_NOREX class is always used in a way that won't be constrained to a
+  // sub-class, so sub-classes like GR8_ABCD_L are allowed to expand to the
+  // full GR8 class.
+  if (RC == X86::GR8_NOREXRegisterClass)
+    return RC;
+
   const TargetRegisterClass *Super = RC;
-  TargetRegisterClass::sc_iterator I = RC->superclasses_begin();
+  TargetRegisterClass::sc_iterator I = RC->getSuperClasses();
   do {
     switch (Super->getID()) {
     case X86::GR8RegClassID:
@@ -429,7 +344,7 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
 
 bool X86RegisterInfo::canRealignStack(const MachineFunction &MF) const {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
-  return (RealignStack &&
+  return (MF.getTarget().Options.RealignStack &&
           !MFI->hasVarSizedObjects());
 }
 
@@ -560,7 +475,7 @@ eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
     // sure we restore the stack pointer immediately after the call, there may
     // be spill code inserted between the CALL and ADJCALLSTACKUP instructions.
     MachineBasicBlock::iterator B = MBB.begin();
-    while (I != B && !llvm::prior(I)->getDesc().isCall())
+    while (I != B && !llvm::prior(I)->isCall())
       --I;
     MBB.insert(I, New);
   }
@@ -642,7 +557,7 @@ unsigned getX86SubSuperRegister(unsigned Reg, EVT VT, bool High) {
   case MVT::i8:
     if (High) {
       switch (Reg) {
-      default: return 0;
+      default: return getX86SubSuperRegister(Reg, MVT::i64, High);
       case X86::AH: case X86::AL: case X86::AX: case X86::EAX: case X86::RAX:
         return X86::AH;
       case X86::DH: case X86::DL: case X86::DX: case X86::EDX: case X86::RDX:
@@ -762,6 +677,22 @@ unsigned getX86SubSuperRegister(unsigned Reg, EVT VT, bool High) {
       return X86::R15D;
     }
   case MVT::i64:
+    // For 64-bit mode if we've requested a "high" register and the
+    // Q or r constraints we want one of these high registers or
+    // just the register name otherwise.
+    if (High) {
+      switch (Reg) {
+      case X86::SIL: case X86::SI: case X86::ESI: case X86::RSI:
+        return X86::SI;
+      case X86::DIL: case X86::DI: case X86::EDI: case X86::RDI:
+        return X86::DI;
+      case X86::BPL: case X86::BP: case X86::EBP: case X86::RBP:
+        return X86::BP;
+      case X86::SPL: case X86::SP: case X86::ESP: case X86::RSP:
+        return X86::SP;
+      // Fallthrough.
+      }
+    }
     switch (Reg) {
     default: return Reg;
     case X86::AH: case X86::AL: case X86::AX: case X86::EAX: case X86::RAX:
@@ -822,7 +753,7 @@ namespace {
       for (unsigned i = 0, e = RI.getNumVirtRegs(); i != e; ++i) {
         unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
         if (RI.getRegClass(Reg)->getAlignment() > StackAlignment) {
-          FuncInfo->setReserveFP(true);
+          FuncInfo->setForceFramePointer(true);
           return true;
         }
       }

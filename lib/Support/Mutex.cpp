@@ -19,7 +19,7 @@
 //===          independent code.
 //===----------------------------------------------------------------------===//
 
-#if !defined(ENABLE_THREADS) || ENABLE_THREADS == 0
+#if !defined(LLVM_ENABLE_THREADS) || LLVM_ENABLE_THREADS == 0
 // Define all methods as no-ops if threading is explicitly disabled
 namespace llvm {
 using namespace sys;
@@ -152,6 +152,6 @@ MutexImpl::tryacquire()
 #elif defined( LLVM_ON_WIN32)
 #include "Windows/Mutex.inc"
 #else
-#warning Neither LLVM_ON_UNIX nor LLVM_ON_WIN32 was set in System/Mutex.cpp
+#warning Neither LLVM_ON_UNIX nor LLVM_ON_WIN32 was set in Support/Mutex.cpp
 #endif
 #endif

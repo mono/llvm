@@ -571,7 +571,8 @@ Constant *llvm::ConstantFoldCastInstruction(unsigned opc, Constant *V,
     if (ConstantFP *FPC = dyn_cast<ConstantFP>(V)) {
       bool ignored;
       APFloat Val = FPC->getValueAPF();
-      Val.convert(DestTy->isFloatTy() ? APFloat::IEEEsingle :
+      Val.convert(DestTy->isHalfTy() ? APFloat::IEEEhalf :
+                  DestTy->isFloatTy() ? APFloat::IEEEsingle :
                   DestTy->isDoubleTy() ? APFloat::IEEEdouble :
                   DestTy->isX86_FP80Ty() ? APFloat::x87DoubleExtended :
                   DestTy->isFP128Ty() ? APFloat::IEEEquad :
@@ -2209,7 +2210,7 @@ static Constant *ConstantFoldGetElementPtrImpl(Constant *C,
            I != E; ++I)
         LastTy = *I;
 
-      if ((LastTy && LastTy->isArrayTy()) || Idx0->isNullValue()) {
+      if ((LastTy && isa<SequentialType>(LastTy)) || Idx0->isNullValue()) {
         SmallVector<Value*, 16> NewIndices;
         NewIndices.reserve(Idxs.size() + CE->getNumOperands());
         for (unsigned i = 1, e = CE->getNumOperands()-1; i != e; ++i)

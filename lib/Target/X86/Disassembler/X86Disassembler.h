@@ -87,8 +87,6 @@
 
 #include "llvm/MC/MCDisassembler.h"
 
-struct InternalInstruction;
-
 namespace llvm {
   
 class MCInst;
@@ -104,20 +102,22 @@ namespace X86Disassembler {
 ///   All each platform class should have to do is subclass the constructor, and
 ///   provide a different disassemblerMode value.
 class X86GenericDisassembler : public MCDisassembler {
-protected:
+public:
   /// Constructor     - Initializes the disassembler.
   ///
   /// @param mode     - The X86 architecture mode to decode for.
   X86GenericDisassembler(const MCSubtargetInfo &STI, DisassemblerMode mode);
-public:
+private:
   ~X86GenericDisassembler();
+public:
 
   /// getInstruction - See MCDisassembler.
   DecodeStatus getInstruction(MCInst &instr,
                               uint64_t &size,
                               const MemoryObject &region,
                               uint64_t address,
-                              raw_ostream &vStream) const;
+                              raw_ostream &vStream,
+                              raw_ostream &cStream) const;
 
   /// getEDInfo - See MCDisassembler.
   EDInstInfo *getEDInfo() const;
@@ -125,32 +125,8 @@ private:
   DisassemblerMode              fMode;
 };
 
-/// X86_16Disassembler - 16-bit X86 disassembler.
-class X86_16Disassembler : public X86GenericDisassembler {
-public:
-  X86_16Disassembler(const MCSubtargetInfo &STI) :
-    X86GenericDisassembler(STI, MODE_16BIT) {
-  }
-};  
-
-/// X86_16Disassembler - 32-bit X86 disassembler.
-class X86_32Disassembler : public X86GenericDisassembler {
-public:
-  X86_32Disassembler(const MCSubtargetInfo &STI) :
-    X86GenericDisassembler(STI, MODE_32BIT) {
-  }
-};
-
-/// X86_16Disassembler - 64-bit X86 disassembler.
-class X86_64Disassembler : public X86GenericDisassembler {
-public:
-  X86_64Disassembler(const MCSubtargetInfo &STI) :
-    X86GenericDisassembler(STI, MODE_64BIT) {
-  }
-};
-
 } // namespace X86Disassembler
-  
+
 } // namespace llvm
-  
+
 #endif

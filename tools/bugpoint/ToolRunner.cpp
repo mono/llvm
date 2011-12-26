@@ -234,6 +234,8 @@ int LLI::ExecuteProgram(const std::string &Bitcode,
       Timeout, MemoryLimit, Error);
 }
 
+void AbstractInterpreter::anchor() { }
+
 // LLI create method - Try to find the LLI executable
 AbstractInterpreter *AbstractInterpreter::createLLI(const char *Argv0,
                                                     std::string &Message,
@@ -920,8 +922,7 @@ int GCC::MakeSharedObject(const std::string &InputFile, FileType fileType,
   } else
     GCCArgs.push_back("-shared");  // `-shared' for Linux/X86, maybe others
 
-  if ((TargetTriple.getArch() == Triple::alpha) ||
-      (TargetTriple.getArch() == Triple::x86_64))
+  if (TargetTriple.getArch() == Triple::x86_64)
     GCCArgs.push_back("-fPIC");   // Requires shared objs to contain PIC
 
   if (TargetTriple.getArch() == Triple::sparc)

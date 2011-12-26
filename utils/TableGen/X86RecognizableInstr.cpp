@@ -68,7 +68,7 @@ namespace X86Local {
     DC = 7, DD = 8, DE = 9, DF = 10,
     XD = 11,  XS = 12,
     T8 = 13,  P_TA = 14,
-    A6 = 15,  A7 = 16, TF = 17
+    A6 = 15,  A7 = 16, T8XD = 17, T8XS = 18, TAXD = 19
   };
 }
 
@@ -118,6 +118,9 @@ namespace X86Local {
   EXTENSION_TABLE(ae)             \
   EXTENSION_TABLE(ba)             \
   EXTENSION_TABLE(c7)
+
+#define THREE_BYTE_38_EXTENSION_TABLES \
+  EXTENSION_TABLE(F3)
 
 using namespace X86Disassembler;
 
@@ -216,7 +219,9 @@ RecognizableInstr::RecognizableInstr(DisassemblerTables &tables,
   HasREX_WPrefix   = Rec->getValueAsBit("hasREX_WPrefix");
   HasVEXPrefix     = Rec->getValueAsBit("hasVEXPrefix");
   HasVEX_4VPrefix  = Rec->getValueAsBit("hasVEX_4VPrefix");
+  HasVEX_4VOp3Prefix = Rec->getValueAsBit("hasVEX_4VOp3Prefix");
   HasVEX_WPrefix   = Rec->getValueAsBit("hasVEX_WPrefix");
+  IgnoresVEX_L     = Rec->getValueAsBit("ignoresVEX_L");
   HasLockPrefix    = Rec->getValueAsBit("hasLockPrefix");
   IsCodeGenOnly    = Rec->getValueAsBit("isCodeGenOnly");
   
@@ -229,12 +234,17 @@ RecognizableInstr::RecognizableInstr(DisassemblerTables &tables,
                      (Name.find("CRC32") != Name.npos);
   HasFROperands    = hasFROperands();
   HasVEX_LPrefix   = has256BitOperands() || Rec->getValueAsBit("hasVEX_L");
-  
+
   // Check for 64-bit inst which does not require REX
+  Is32Bit = false;
   Is64Bit = false;
   // FIXME: Is there some better way to check for In64BitMode?
   std::vector<Record*> Predicates = Rec->getValueAsListOfDefs("Predicates");
   for (unsigned i = 0, e = Predicates.size(); i != e; ++i) {
+    if (Predicates[i]->getName().find("32Bit") != Name.npos) {
+      Is32Bit = true;
+      break;
+    }
     if (Predicates[i]->getName().find("64Bit") != Name.npos) {
       Is64Bit = true;
       break;
@@ -248,8 +258,6 @@ RecognizableInstr::RecognizableInstr(DisassemblerTables &tables,
              Rec->getName() == "PUSHFS64" || 
              Rec->getName() == "PUSHGS64" ||
              Rec->getName() == "REX64_PREFIX" ||
-             Rec->getName().find("VMREAD64") != Name.npos ||
-             Rec->getName().find("VMWRITE64") != Name.npos ||
              Rec->getName().find("MOV64") != Name.npos || 
              Rec->getName().find("PUSH64") != Name.npos ||
              Rec->getName().find("POP64") != Name.npos;
@@ -276,56 +284,86 @@ void RecognizableInstr::processInstr(DisassemblerTables &tables,
 InstructionContext RecognizableInstr::insnContext() const {
   InstructionContext insnContext;
 
-  if (HasVEX_4VPrefix || HasVEXPrefix) {
-    if (HasOpSizePrefix && HasVEX_LPrefix)
+  if (HasVEX_4VPrefix || HasVEX_4VOp3Prefix|| HasVEXPrefix) {
+    if (HasVEX_LPrefix && HasVEX_WPrefix) {
+      if (HasOpSizePrefix)
+        insnContext = IC_VEX_L_W_OPSIZE;
+      else
+        llvm_unreachable("Don't support VEX.L and VEX.W together");
+    } else if (HasOpSizePrefix && HasVEX_LPrefix)
       insnContext = IC_VEX_L_OPSIZE;
     else if (HasOpSizePrefix && HasVEX_WPrefix)
       insnContext = IC_VEX_W_OPSIZE;
     else if (HasOpSizePrefix)
       insnContext = IC_VEX_OPSIZE;
-    else if (HasVEX_LPrefix && Prefix == X86Local::XS)
+    else if (HasVEX_LPrefix &&
+             (Prefix == X86Local::XS || Prefix == X86Local::T8XS))
       insnContext = IC_VEX_L_XS;
-    else if (HasVEX_LPrefix && Prefix == X86Local::XD)
+    else if (HasVEX_LPrefix && (Prefix == X86Local::XD ||
+                                Prefix == X86Local::T8XD ||
+                                Prefix == X86Local::TAXD))
       insnContext = IC_VEX_L_XD;
-    else if (HasVEX_WPrefix && Prefix == X86Local::XS)
+    else if (HasVEX_WPrefix &&
+             (Prefix == X86Local::XS || Prefix == X86Local::T8XS))
       insnContext = IC_VEX_W_XS;
-    else if (HasVEX_WPrefix && Prefix == X86Local::XD)
+    else if (HasVEX_WPrefix && (Prefix == X86Local::XD ||
+                                Prefix == X86Local::T8XD ||
+                                Prefix == X86Local::TAXD))
       insnContext = IC_VEX_W_XD;
     else if (HasVEX_WPrefix)
       insnContext = IC_VEX_W;
     else if (HasVEX_LPrefix)
       insnContext = IC_VEX_L;
-    else if (Prefix == X86Local::XD)
+    else if (Prefix == X86Local::XD || Prefix == X86Local::T8XD ||
+             Prefix == X86Local::TAXD)
       insnContext = IC_VEX_XD;
-    else if (Prefix == X86Local::XS)
+    else if (Prefix == X86Local::XS || Prefix == X86Local::T8XS)
       insnContext = IC_VEX_XS;
     else
       insnContext = IC_VEX;
   } else if (Is64Bit || HasREX_WPrefix) {
     if (HasREX_WPrefix && HasOpSizePrefix)
       insnContext = IC_64BIT_REXW_OPSIZE;
+    else if (HasOpSizePrefix && (Prefix == X86Local::XD ||
+                                 Prefix == X86Local::T8XD ||
+                                 Prefix == X86Local::TAXD))
+      insnContext = IC_64BIT_XD_OPSIZE;
+    else if (HasOpSizePrefix &&
+             (Prefix == X86Local::XS || Prefix == X86Local::T8XS))
+      insnContext = IC_64BIT_XS_OPSIZE;
     else if (HasOpSizePrefix)
       insnContext = IC_64BIT_OPSIZE;
-    else if (HasREX_WPrefix && Prefix == X86Local::XS)
+    else if (HasREX_WPrefix &&
+             (Prefix == X86Local::XS || Prefix == X86Local::T8XS))
       insnContext = IC_64BIT_REXW_XS;
-    else if (HasREX_WPrefix && Prefix == X86Local::XD)
+    else if (HasREX_WPrefix && (Prefix == X86Local::XD ||
+                                Prefix == X86Local::T8XD ||
+                                Prefix == X86Local::TAXD))
       insnContext = IC_64BIT_REXW_XD;
-    else if (Prefix == X86Local::XD)
+    else if (Prefix == X86Local::XD || Prefix == X86Local::T8XD ||
+             Prefix == X86Local::TAXD)
       insnContext = IC_64BIT_XD;
-    else if (Prefix == X86Local::XS)
+    else if (Prefix == X86Local::XS || Prefix == X86Local::T8XS)
       insnContext = IC_64BIT_XS;
     else if (HasREX_WPrefix)
       insnContext = IC_64BIT_REXW;
     else
       insnContext = IC_64BIT;
   } else {
-    if (HasOpSizePrefix && Prefix == X86Local::TF)
-      insnContext = IC_XD;
+    if (HasOpSizePrefix && (Prefix == X86Local::XD ||
+                            Prefix == X86Local::T8XD ||
+                            Prefix == X86Local::TAXD))
+      insnContext = IC_XD_OPSIZE;
+    else if (HasOpSizePrefix &&
+             (Prefix == X86Local::XS || Prefix == X86Local::T8XS))
+      insnContext = IC_XS_OPSIZE;
     else if (HasOpSizePrefix)
       insnContext = IC_OPSIZE;
-    else if (Prefix == X86Local::XD)
+    else if (Prefix == X86Local::XD || Prefix == X86Local::T8XD ||
+             Prefix == X86Local::TAXD)
       insnContext = IC_XD;
-    else if (Prefix == X86Local::XS)
+    else if (Prefix == X86Local::XS || Prefix == X86Local::T8XS ||
+             Prefix == X86Local::REP)
       insnContext = IC_XS;
     else
       insnContext = IC;
@@ -345,34 +383,20 @@ RecognizableInstr::filter_ret RecognizableInstr::filter() const {
     return FILTER_STRONG;
   
   if (Form == X86Local::Pseudo ||
-      IsCodeGenOnly)
+      (IsCodeGenOnly && Name.find("_REV") == Name.npos))
     return FILTER_STRONG;
   
   if (Form == X86Local::MRMInitReg)
     return FILTER_STRONG;
     
     
-  // TEMPORARY pending bug fixes
-
-  if (Name.find("VMOVDQU") != Name.npos ||
-      Name.find("VMOVDQA") != Name.npos ||
-      Name.find("VROUND") != Name.npos)
-    return FILTER_STRONG;
-    
   // Filter out artificial instructions
     
-  if (Name.find("TAILJMP") != Name.npos    ||
-      Name.find("_Int") != Name.npos       ||
-      Name.find("_int") != Name.npos       ||
+  if (Name.find("_Int") != Name.npos       ||
       Name.find("Int_") != Name.npos       ||
       Name.find("_NOREX") != Name.npos     ||
-      Name.find("_TC") != Name.npos        ||
-      Name.find("EH_RETURN") != Name.npos  ||
-      Name.find("V_SET") != Name.npos      ||
-      Name.find("LOCK_") != Name.npos      ||
-      Name.find("WIN") != Name.npos        ||
-      Name.find("_AVX") != Name.npos       ||
-      Name.find("2SDL") != Name.npos)
+      Name.find("2SDL") != Name.npos       ||
+      Name == "LOCK_PREFIX")
     return FILTER_STRONG;
 
   // Filter out instructions with segment override prefixes.
@@ -404,16 +428,10 @@ RecognizableInstr::filter_ret RecognizableInstr::filter() const {
   // Filter out alternate forms of AVX instructions
   if (Name.find("_alt") != Name.npos ||
       Name.find("XrYr") != Name.npos ||
-      Name.find("r64r") != Name.npos ||
+      (Name.find("r64r") != Name.npos && Name.find("r64r64") == Name.npos) ||
       Name.find("_64mr") != Name.npos ||
       Name.find("Xrr") != Name.npos ||
       Name.find("rr64") != Name.npos)
-    return FILTER_WEAK;
-    
-  if (Name == "VMASKMOVDQU64"  ||
-      Name == "VEXTRACTPSrr64" ||
-      Name == "VMOVQd64rr"     ||
-      Name == "VMOVQs64rr")
     return FILTER_WEAK;
 
   // Special cases.
@@ -429,29 +447,15 @@ RecognizableInstr::filter_ret RecognizableInstr::filter() const {
     return FILTER_WEAK;
   if (Name.find("Fs") != Name.npos)
     return FILTER_WEAK;
-  if (Name == "MOVLPDrr"          ||
-      Name == "MOVLPSrr"          ||
-      Name == "PUSHFQ"            ||
-      Name == "BSF16rr"           ||
-      Name == "BSF16rm"           ||
-      Name == "BSR16rr"           ||
-      Name == "BSR16rm"           ||
-      Name == "MOVSX16rm8"        ||
-      Name == "MOVSX16rr8"        ||
-      Name == "MOVZX16rm8"        ||
-      Name == "MOVZX16rr8"        ||
-      Name == "PUSH32i16"         ||
-      Name == "PUSH64i16"         ||
+  if (Name == "PUSH64i16"         ||
       Name == "MOVPQI2QImr"       ||
       Name == "VMOVPQI2QImr"      ||
-      Name == "MOVSDmr"           ||
-      Name == "MOVSDrm"           ||
-      Name == "MOVSSmr"           ||
-      Name == "MOVSSrm"           ||
       Name == "MMX_MOVD64rrv164"  ||
-      Name == "CRC32m16"          ||
       Name == "MOV64ri64i32"      ||
-      Name == "CRC32r16")
+      Name == "VMASKMOVDQU64"     ||
+      Name == "VEXTRACTPSrr64"    ||
+      Name == "VMOVQd64rr"        ||
+      Name == "VMOVQs64rr")
     return FILTER_WEAK;
 
   if (HasFROperands && Name.find("MOV") != Name.npos &&
@@ -672,7 +676,7 @@ void RecognizableInstr::emitInstructionSpecifier(DisassemblerTables &tables) {
     // - In AVX, there is a register operand in the VEX.vvvv field here -
     // Operand 3 (optional) is an immediate.
 
-    if (HasVEX_4VPrefix)
+    if (HasVEX_4VPrefix || HasVEX_4VOp3Prefix)
       assert(numPhysicalOperands >= 3 && numPhysicalOperands <= 4 &&
              "Unexpected number of operands for MRMSrcRegFrm with VEX_4V"); 
     else
@@ -680,13 +684,17 @@ void RecognizableInstr::emitInstructionSpecifier(DisassemblerTables &tables) {
              "Unexpected number of operands for MRMSrcRegFrm");
   
     HANDLE_OPERAND(roRegister)
-       
+
     if (HasVEX_4VPrefix)
       // FIXME: In AVX, the register below becomes the one encoded
       // in ModRMVEX and the one above the one in the VEX.VVVV field
       HANDLE_OPERAND(vvvvRegister)
-          
+
     HANDLE_OPERAND(rmRegister)
+
+    if (HasVEX_4VOp3Prefix)
+      HANDLE_OPERAND(vvvvRegister)
+
     HANDLE_OPTIONAL(immediate)
     break;
   case X86Local::MRMSrcMem:
@@ -694,8 +702,8 @@ void RecognizableInstr::emitInstructionSpecifier(DisassemblerTables &tables) {
     // Operand 2 is a memory operand (possibly SIB-extended)
     // - In AVX, there is a register operand in the VEX.vvvv field here -
     // Operand 3 (optional) is an immediate.
-    
-    if (HasVEX_4VPrefix)
+
+    if (HasVEX_4VPrefix || HasVEX_4VOp3Prefix)
       assert(numPhysicalOperands >= 3 && numPhysicalOperands <= 4 &&
              "Unexpected number of operands for MRMSrcMemFrm with VEX_4V"); 
     else
@@ -710,6 +718,10 @@ void RecognizableInstr::emitInstructionSpecifier(DisassemblerTables &tables) {
       HANDLE_OPERAND(vvvvRegister)
 
     HANDLE_OPERAND(memory)
+
+    if (HasVEX_4VOp3Prefix)
+      HANDLE_OPERAND(vvvvRegister)
+
     HANDLE_OPTIONAL(immediate)
     break;
   case X86Local::MRM0r:
@@ -724,12 +736,12 @@ void RecognizableInstr::emitInstructionSpecifier(DisassemblerTables &tables) {
     // Operand 2 (optional) is an immediate or relocation.
     if (HasVEX_4VPrefix)
       assert(numPhysicalOperands <= 3 &&
-             "Unexpected number of operands for MRMSrcMemFrm with VEX_4V");
+             "Unexpected number of operands for MRMnRFrm with VEX_4V");
     else
       assert(numPhysicalOperands <= 2 &&
              "Unexpected number of operands for MRMnRFrm");
     if (HasVEX_4VPrefix)
-      HANDLE_OPERAND(vvvvRegister);
+      HANDLE_OPERAND(vvvvRegister)
     HANDLE_OPTIONAL(rmRegister)
     HANDLE_OPTIONAL(relocation)
     break;
@@ -743,8 +755,14 @@ void RecognizableInstr::emitInstructionSpecifier(DisassemblerTables &tables) {
   case X86Local::MRM7m:
     // Operand 1 is a memory operand (possibly SIB-extended)
     // Operand 2 (optional) is an immediate or relocation.
-    assert(numPhysicalOperands >= 1 && numPhysicalOperands <= 2 &&
-           "Unexpected number of operands for MRMnMFrm");
+    if (HasVEX_4VPrefix)
+      assert(numPhysicalOperands >= 2 && numPhysicalOperands <= 3 &&
+             "Unexpected number of operands for MRMnMFrm");
+    else
+      assert(numPhysicalOperands >= 1 && numPhysicalOperands <= 2 &&
+             "Unexpected number of operands for MRMnMFrm");
+    if (HasVEX_4VPrefix)
+      HANDLE_OPERAND(vvvvRegister)
     HANDLE_OPERAND(memory)
     HANDLE_OPTIONAL(relocation)
     break;
@@ -831,15 +849,50 @@ void RecognizableInstr::emitDecodePath(DisassemblerTables &tables) const {
     opcodeToSet = Opcode;
     break;
   case X86Local::T8:
-  case X86Local::TF:
+  case X86Local::T8XD:
+  case X86Local::T8XS:
     opcodeType = THREEBYTE_38;
-    if (needsModRMForDecode(Form))
-      filter = new ModFilter(isRegFormat(Form));
-    else
-      filter = new DumbFilter();
+    switch (Opcode) {
+    default:
+      if (needsModRMForDecode(Form))
+        filter = new ModFilter(isRegFormat(Form));
+      else
+        filter = new DumbFilter();
+      break;
+#define EXTENSION_TABLE(n) case 0x##n:
+    THREE_BYTE_38_EXTENSION_TABLES
+#undef EXTENSION_TABLE
+      switch (Form) {
+      default:
+        llvm_unreachable("Unhandled two-byte extended opcode");
+      case X86Local::MRM0r:
+      case X86Local::MRM1r:
+      case X86Local::MRM2r:
+      case X86Local::MRM3r:
+      case X86Local::MRM4r:
+      case X86Local::MRM5r:
+      case X86Local::MRM6r:
+      case X86Local::MRM7r:
+        filter = new ExtendedFilter(true, Form - X86Local::MRM0r);
+        break;
+      case X86Local::MRM0m:
+      case X86Local::MRM1m:
+      case X86Local::MRM2m:
+      case X86Local::MRM3m:
+      case X86Local::MRM4m:
+      case X86Local::MRM5m:
+      case X86Local::MRM6m:
+      case X86Local::MRM7m:
+        filter = new ExtendedFilter(false, Form - X86Local::MRM0m);
+        break;
+      MRM_MAPPING
+      } // switch (Form)
+      break;
+    } // switch (Opcode)
     opcodeToSet = Opcode;
     break;
   case X86Local::P_TA:
+  case X86Local::TAXD:
     opcodeType = THREEBYTE_3A;
     if (needsModRMForDecode(Form))
       filter = new ModFilter(isRegFormat(Form));
@@ -882,6 +935,7 @@ void RecognizableInstr::emitDecodePath(DisassemblerTables &tables) const {
     }
     opcodeToSet = 0xd8 + (Prefix - X86Local::D8);
     break;
+  case X86Local::REP:
   default:
     opcodeType = ONEBYTE;
     switch (Opcode) {
@@ -953,7 +1007,7 @@ void RecognizableInstr::emitDecodePath(DisassemblerTables &tables) const {
                               insnContext(), 
                               currentOpcode, 
                               *filter, 
-                              UID);
+                              UID, Is32Bit, IgnoresVEX_L);
     
       Spec->modifierType = MODIFIER_OPCODE;
       Spec->modifierBase = opcodeToSet;
@@ -963,14 +1017,14 @@ void RecognizableInstr::emitDecodePath(DisassemblerTables &tables) const {
                             insnContext(), 
                             opcodeToSet, 
                             *filter, 
-                            UID);
+                            UID, Is32Bit, IgnoresVEX_L);
     }
   } else {
     tables.setTableFields(opcodeType,
                           insnContext(),
                           opcodeToSet,
                           *filter,
-                          UID);
+                          UID, Is32Bit, IgnoresVEX_L);
     
     Spec->modifierType = MODIFIER_NONE;
     Spec->modifierBase = opcodeToSet;
@@ -1057,6 +1111,9 @@ OperandType RecognizableInstr::typeFromString(const std::string &s,
   TYPE("offset32",            TYPE_MOFFS32)
   TYPE("offset64",            TYPE_MOFFS64)
   TYPE("VR256",               TYPE_XMM256)
+  TYPE("GR16_NOAX",           TYPE_Rv)
+  TYPE("GR32_NOAX",           TYPE_Rv)
+  TYPE("GR64_NOAX",           TYPE_R64)
   errs() << "Unhandled type string " << s << "\n";
   llvm_unreachable("Unhandled type string");
 }
@@ -1126,6 +1183,8 @@ OperandEncoding RecognizableInstr::roRegisterEncodingFromString
 OperandEncoding RecognizableInstr::vvvvRegisterEncodingFromString
   (const std::string &s,
    bool hasOpSizePrefix) {
+  ENCODING("GR32",            ENCODING_VVVV)
+  ENCODING("GR64",            ENCODING_VVVV)
   ENCODING("FR32",            ENCODING_VVVV)
   ENCODING("FR64",            ENCODING_VVVV)
   ENCODING("VR128",           ENCODING_VVVV)
@@ -1198,6 +1257,9 @@ OperandEncoding RecognizableInstr::opcodeModifierEncodingFromString
   ENCODING("GR64",            ENCODING_RO)
   ENCODING("GR16",            ENCODING_Rv)
   ENCODING("GR8",             ENCODING_RB)
+  ENCODING("GR16_NOAX",       ENCODING_Rv)
+  ENCODING("GR32_NOAX",       ENCODING_Rv)
+  ENCODING("GR64_NOAX",       ENCODING_RO)
   errs() << "Unhandled opcode modifier encoding " << s << "\n";
   llvm_unreachable("Unhandled opcode modifier encoding");
 }

@@ -29,23 +29,21 @@ namespace bitc {
 
     // Module sub-block id's.
     PARAMATTR_BLOCK_ID,
-    
-    /// TYPE_BLOCK_ID_OLD - This is the type descriptor block in LLVM 2.9 and
-    /// earlier, replaced with TYPE_BLOCK_ID2.  FIXME: Remove in LLVM 3.1.
-    TYPE_BLOCK_ID_OLD,
+
+    UNUSED_ID1,
     
     CONSTANTS_BLOCK_ID,
     FUNCTION_BLOCK_ID,
     
-    /// TYPE_SYMTAB_BLOCK_ID_OLD - This type descriptor is from LLVM 2.9 and
-    /// earlier bitcode files.  FIXME: Remove in LLVM 3.1
-    TYPE_SYMTAB_BLOCK_ID_OLD,
+    UNUSED_ID2,
     
     VALUE_SYMTAB_BLOCK_ID,
     METADATA_BLOCK_ID,
     METADATA_ATTACHMENT_ID,
     
-    TYPE_BLOCK_ID_NEW
+    TYPE_BLOCK_ID_NEW,
+
+    USELIST_BLOCK_ID
   };
 
 
@@ -63,10 +61,10 @@ namespace bitc {
     MODULE_CODE_GLOBALVAR   = 7,
 
     // FUNCTION:  [type, callingconv, isproto, linkage, paramattrs, alignment,
-    //             section, visibility]
+    //             section, visibility, gc, unnamed_addr]
     MODULE_CODE_FUNCTION    = 8,
 
-    // ALIAS: [alias type, aliasee val#, linkage]
+    // ALIAS: [alias type, aliasee val#, linkage, visibility]
     MODULE_CODE_ALIAS       = 9,
 
     /// MODULE_CODE_PURGEVALS: [numvals]
@@ -92,11 +90,12 @@ namespace bitc {
     TYPE_CODE_OPAQUE   =  6,    // OPAQUE
     TYPE_CODE_INTEGER  =  7,    // INTEGER: [width]
     TYPE_CODE_POINTER  =  8,    // POINTER: [pointee type]
-    TYPE_CODE_FUNCTION =  9,    // FUNCTION: [vararg, retty, paramty x N]
+
+    TYPE_CODE_FUNCTION_OLD = 9, // FUNCTION: [vararg, attrid, retty,
+                                //            paramty x N]
     
-    // FIXME: This is the encoding used for structs in LLVM 2.9 and earlier.
-    // REMOVE this in LLVM 3.1
-    TYPE_CODE_STRUCT_OLD = 10,  // STRUCT: [ispacked, eltty x N]
+    TYPE_CODE_HALF     =  10,   // HALF
+    
     TYPE_CODE_ARRAY    = 11,    // ARRAY: [numelts, eltty]
     TYPE_CODE_VECTOR   = 12,    // VECTOR: [numelts, eltty]
 
@@ -113,7 +112,9 @@ namespace bitc {
     
     TYPE_CODE_STRUCT_ANON = 18, // STRUCT_ANON: [ispacked, eltty x N]
     TYPE_CODE_STRUCT_NAME = 19, // STRUCT_NAME: [strchr x N]
-    TYPE_CODE_STRUCT_NAMED = 20 // STRUCT_NAMED: [ispacked, eltty x N]
+    TYPE_CODE_STRUCT_NAMED = 20,// STRUCT_NAMED: [ispacked, eltty x N]
+
+    TYPE_CODE_FUNCTION = 21     // FUNCTION: [vararg, retty, paramty x N]
   };
 
   // The type symbol table only has one code (TST_ENTRY_CODE).
@@ -313,6 +314,10 @@ namespace bitc {
                                      //        ordering, synchscope]
     FUNC_CODE_INST_STOREATOMIC = 42  // STORE: [ptrty,ptr,val, align, vol
                                      //         ordering, synchscope]
+  };
+
+  enum UseListCodes {
+    USELIST_CODE_ENTRY = 1   // USELIST_CODE_ENTRY: TBD.
   };
 } // End bitc namespace
 } // End llvm namespace

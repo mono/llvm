@@ -1,7 +1,5 @@
 @ RUN: llvm-mc -mcpu=cortex-a8 -triple arm-unknown-unknown -show-encoding < %s | FileCheck %s
 
-@ XFAIL: *
-
 	vdup.8	d16, r0
 	vdup.16	d16, r0
 	vdup.32	d16, r0

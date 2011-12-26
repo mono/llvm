@@ -260,12 +260,11 @@ bool MachineCSE::isCSECandidate(MachineInstr *MI) {
     return false;
 
   // Ignore stuff that we obviously can't move.
-  const MCInstrDesc &MCID = MI->getDesc();  
-  if (MCID.mayStore() || MCID.isCall() || MCID.isTerminator() ||
+  if (MI->mayStore() || MI->isCall() || MI->isTerminator() ||
       MI->hasUnmodeledSideEffects())
     return false;
 
-  if (MCID.mayLoad()) {
+  if (MI->mayLoad()) {
     // Okay, this instruction does a load. As a refinement, we allow the target
     // to decide whether the loaded value is actually a constant. If so, we can
     // actually use it as a load.
@@ -287,7 +286,7 @@ bool MachineCSE::isProfitableToCSE(unsigned CSReg, unsigned Reg,
   // Heuristics #1: Don't CSE "cheap" computation if the def is not local or in
   // an immediate predecessor. We don't want to increase register pressure and
   // end up causing other computation to be spilled.
-  if (MI->getDesc().isAsCheapAsAMove()) {
+  if (MI->isAsCheapAsAMove()) {
     MachineBasicBlock *CSBB = CSMI->getParent();
     MachineBasicBlock *BB = MI->getParent();
     if (CSBB != BB && !CSBB->isSuccessor(BB))
@@ -376,7 +375,7 @@ bool MachineCSE::ProcessBlock(MachineBasicBlock *MBB) {
 
     // Commute commutable instructions.
     bool Commuted = false;
-    if (!FoundCSE && MI->getDesc().isCommutable()) {
+    if (!FoundCSE && MI->isCommutable()) {
       MachineInstr *NewMI = TII->commuteInstruction(MI);
       if (NewMI) {
         Commuted = true;
@@ -430,13 +429,24 @@ bool MachineCSE::ProcessBlock(MachineBasicBlock *MBB) {
       unsigned NewReg = CSMI->getOperand(i).getReg();
       if (OldReg == NewReg)
         continue;
+
       assert(TargetRegisterInfo::isVirtualRegister(OldReg) &&
              TargetRegisterInfo::isVirtualRegister(NewReg) &&
              "Do not CSE physical register defs!");
+
       if (!isProfitableToCSE(NewReg, OldReg, CSMI, MI)) {
         DoCSE = false;
         break;
       }
+
+      // Don't perform CSE if the result of the old instruction cannot exist
+      // within the register class of the new instruction.
+      const TargetRegisterClass *OldRC = MRI->getRegClass(OldReg);
+      if (!MRI->constrainRegClass(NewReg, OldRC)) {
+        DoCSE = false;
+        break;
+      }
+
       CSEPairs.push_back(std::make_pair(OldReg, NewReg));
       --NumDefs;
     }

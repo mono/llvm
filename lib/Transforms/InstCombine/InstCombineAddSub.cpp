@@ -136,6 +136,19 @@ Instruction *InstCombiner::visitAdd(BinaryOperator &I) {
         Value *NewShl = Builder->CreateShl(XorLHS, ShAmt, "sext");
         return BinaryOperator::CreateAShr(NewShl, ShAmt);
       }
+
+      // If this is a xor that was canonicalized from a sub, turn it back into
+      // a sub and fuse this add with it.
+      if (LHS->hasOneUse() && (XorRHS->getValue()+1).isPowerOf2()) {
+        IntegerType *IT = cast<IntegerType>(I.getType());
+        APInt Mask = APInt::getAllOnesValue(IT->getBitWidth());
+        APInt LHSKnownOne(IT->getBitWidth(), 0);
+        APInt LHSKnownZero(IT->getBitWidth(), 0);
+        ComputeMaskedBits(XorLHS, Mask, LHSKnownZero, LHSKnownOne);
+        if ((XorRHS->getValue() | LHSKnownZero).isAllOnesValue())
+          return BinaryOperator::CreateSub(ConstantExpr::getAdd(XorRHS, CI),
+                                           XorLHS);
+      }
     }
   }
 
@@ -587,6 +600,9 @@ Instruction *InstCombiner::visitSub(BinaryOperator &I) {
     ConstantInt *C2;
     if (match(Op1, m_Add(m_Value(X), m_ConstantInt(C2))))
       return BinaryOperator::CreateSub(ConstantExpr::getSub(C, C2), X);
+
+    if (SimplifyDemandedInstructionBits(I))
+      return &I;
   }
 
   

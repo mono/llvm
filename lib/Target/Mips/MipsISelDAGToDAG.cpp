@@ -81,15 +81,18 @@ private:
   }
 
   SDNode *getGlobalBaseReg();
+
+  std::pair<SDNode*, SDNode*> SelectMULT(SDNode *N, unsigned Opc, DebugLoc dl,
+                                         EVT Ty, bool HasLo, bool HasHi);
+
   SDNode *Select(SDNode *N);
 
   // Complex Pattern.
   bool SelectAddr(SDValue N, SDValue &Base, SDValue &Offset);
 
-  // getI32Imm - Return a target constant with the specified
-  // value, of type i32.
-  inline SDValue getI32Imm(unsigned Imm) {
-    return CurDAG->getTargetConstant(Imm, MVT::i32);
+  // getImm - Return a target constant with the specified value.
+  inline SDValue getImm(const SDNode *Node, unsigned Imm) {
+    return CurDAG->getTargetConstant(Imm, Node->getValueType(0));
   }
 
   virtual bool SelectInlineAsmMemoryOperand(const SDValue &Op,
@@ -111,29 +114,27 @@ SDNode *MipsDAGToDAGISel::getGlobalBaseReg() {
 /// Used on Mips Load/Store instructions
 bool MipsDAGToDAGISel::
 SelectAddr(SDValue Addr, SDValue &Base, SDValue &Offset) {
+  EVT ValTy = Addr.getValueType();
+  unsigned GPReg = ValTy == MVT::i32 ? Mips::GP : Mips::GP_64;
+
   // if Address is FI, get the TargetFrameIndex.
   if (FrameIndexSDNode *FIN = dyn_cast<FrameIndexSDNode>(Addr)) {
-    Base   = CurDAG->getTargetFrameIndex(FIN->getIndex(), MVT::i32);
-    Offset = CurDAG->getTargetConstant(0, MVT::i32);
+    Base   = CurDAG->getTargetFrameIndex(FIN->getIndex(), ValTy);
+    Offset = CurDAG->getTargetConstant(0, ValTy);
     return true;
   }
 
   // on PIC code Load GA
-  if (TM.getRelocationModel() == Reloc::PIC_) {
-    if (Addr.getOpcode() == MipsISD::WrapperPIC) {
-      Base   = CurDAG->getRegister(Mips::GP, MVT::i32);
-      Offset = Addr.getOperand(0);
-      return true;
-    }
-  } else {
+  if (Addr.getOpcode() == MipsISD::Wrapper) {
+    Base   = CurDAG->getRegister(GPReg, ValTy);
+    Offset = Addr.getOperand(0);
+    return true;
+  }
+
+  if (TM.getRelocationModel() != Reloc::PIC_) {
     if ((Addr.getOpcode() == ISD::TargetExternalSymbol ||
         Addr.getOpcode() == ISD::TargetGlobalAddress))
       return false;
-    else if (Addr.getOpcode() == ISD::TargetGlobalTLSAddress) {
-      Base   = CurDAG->getRegister(Mips::GP, MVT::i32);
-      Offset = Addr;
-      return true;
-    }
   }
 
   // Addresses of the form FI+const or FI|const
@@ -144,11 +145,11 @@ SelectAddr(SDValue Addr, SDValue &Base, SDValue &Offset) {
       // If the first operand is a FI, get the TargetFI Node
       if (FrameIndexSDNode *FIN = dyn_cast<FrameIndexSDNode>
                                   (Addr.getOperand(0)))
-        Base = CurDAG->getTargetFrameIndex(FIN->getIndex(), MVT::i32);
+        Base = CurDAG->getTargetFrameIndex(FIN->getIndex(), ValTy);
       else
         Base = Addr.getOperand(0);
 
-      Offset = CurDAG->getTargetConstant(CN->getZExtValue(), MVT::i32);
+      Offset = CurDAG->getTargetConstant(CN->getZExtValue(), ValTy);
       return true;
     }
   }
@@ -163,9 +164,7 @@ SelectAddr(SDValue Addr, SDValue &Base, SDValue &Offset) {
     // Generate:
     //  lui $2, %hi($CPI1_0)
     //  lwc1 $f0, %lo($CPI1_0)($2)
-    if ((Addr.getOperand(0).getOpcode() == MipsISD::Hi ||
-         Addr.getOperand(0).getOpcode() == ISD::LOAD) &&
-        Addr.getOperand(1).getOpcode() == MipsISD::Lo) {
+    if (Addr.getOperand(1).getOpcode() == MipsISD::Lo) {
       SDValue LoVal = Addr.getOperand(1);
       if (isa<ConstantPoolSDNode>(LoVal.getOperand(0)) || 
           isa<GlobalAddressSDNode>(LoVal.getOperand(0))) {
@@ -177,9 +176,31 @@ SelectAddr(SDValue Addr, SDValue &Base, SDValue &Offset) {
   }
 
   Base   = Addr;
-  Offset = CurDAG->getTargetConstant(0, MVT::i32);
+  Offset = CurDAG->getTargetConstant(0, ValTy);
   return true;
 }
+
+/// Select multiply instructions.
+std::pair<SDNode*, SDNode*>
+MipsDAGToDAGISel::SelectMULT(SDNode *N, unsigned Opc, DebugLoc dl, EVT Ty, 
+                             bool HasLo, bool HasHi) {
+  SDNode *Lo, *Hi;
+  SDNode *Mul = CurDAG->getMachineNode(Opc, dl, MVT::Glue, N->getOperand(0),
+                                       N->getOperand(1));
+  SDValue InFlag = SDValue(Mul, 0);
+
+  if (HasLo) {
+    Lo = CurDAG->getMachineNode(Ty == MVT::i32 ? Mips::MFLO : Mips::MFLO64, dl,
+                                Ty, MVT::Glue, InFlag);
+    InFlag = SDValue(Lo, 1);
+  }
+  if (HasHi)
+    Hi = CurDAG->getMachineNode(Ty == MVT::i32 ? Mips::MFHI : Mips::MFHI64, dl,
+                                Ty, InFlag);
+  
+  return std::make_pair(Lo, Hi);
+}
+
 
 /// Select instructions not customized! Used for
 /// expanded, promoted and normal instructions
@@ -200,113 +221,126 @@ SDNode* MipsDAGToDAGISel::Select(SDNode *Node) {
   // Instruction Selection not handled by the auto-generated
   // tablegen selection should be handled here.
   ///
+  EVT NodeTy = Node->getValueType(0);
+  unsigned MultOpc;
+
   switch(Opcode) {
-    default: break;
+  default: break;
 
-    case ISD::SUBE:
-    case ISD::ADDE: {
-      SDValue InFlag = Node->getOperand(2), CmpLHS;
-      unsigned Opc = InFlag.getOpcode(); (void)Opc;
-      assert(((Opc == ISD::ADDC || Opc == ISD::ADDE) ||
-              (Opc == ISD::SUBC || Opc == ISD::SUBE)) &&
-             "(ADD|SUB)E flag operand must come from (ADD|SUB)C/E insn");
+  case ISD::SUBE:
+  case ISD::ADDE: {
+    SDValue InFlag = Node->getOperand(2), CmpLHS;
+    unsigned Opc = InFlag.getOpcode(); (void)Opc;
+    assert(((Opc == ISD::ADDC || Opc == ISD::ADDE) ||
+            (Opc == ISD::SUBC || Opc == ISD::SUBE)) &&
+           "(ADD|SUB)E flag operand must come from (ADD|SUB)C/E insn");
 
-      unsigned MOp;
-      if (Opcode == ISD::ADDE) {
-        CmpLHS = InFlag.getValue(0);
-        MOp = Mips::ADDu;
-      } else {
-        CmpLHS = InFlag.getOperand(0);
-        MOp = Mips::SUBu;
-      }
-
-      SDValue Ops[] = { CmpLHS, InFlag.getOperand(1) };
-
-      SDValue LHS = Node->getOperand(0);
-      SDValue RHS = Node->getOperand(1);
-
-      EVT VT = LHS.getValueType();
-      SDNode *Carry = CurDAG->getMachineNode(Mips::SLTu, dl, VT, Ops, 2);
-      SDNode *AddCarry = CurDAG->getMachineNode(Mips::ADDu, dl, VT,
-                                                SDValue(Carry,0), RHS);
-
-      return CurDAG->SelectNodeTo(Node, MOp, VT, MVT::Glue,
-                                  LHS, SDValue(AddCarry,0));
+    unsigned MOp;
+    if (Opcode == ISD::ADDE) {
+      CmpLHS = InFlag.getValue(0);
+      MOp = Mips::ADDu;
+    } else {
+      CmpLHS = InFlag.getOperand(0);
+      MOp = Mips::SUBu;
     }
 
-    /// Mul with two results
-    case ISD::SMUL_LOHI:
-    case ISD::UMUL_LOHI: {
-      SDValue Op1 = Node->getOperand(0);
-      SDValue Op2 = Node->getOperand(1);
+    SDValue Ops[] = { CmpLHS, InFlag.getOperand(1) };
 
-      unsigned Op;
-      Op = (Opcode == ISD::UMUL_LOHI ? Mips::MULTu : Mips::MULT);
+    SDValue LHS = Node->getOperand(0);
+    SDValue RHS = Node->getOperand(1);
 
-      SDNode *Mul = CurDAG->getMachineNode(Op, dl, MVT::Glue, Op1, Op2);
+    EVT VT = LHS.getValueType();
+    SDNode *Carry = CurDAG->getMachineNode(Mips::SLTu, dl, VT, Ops, 2);
+    SDNode *AddCarry = CurDAG->getMachineNode(Mips::ADDu, dl, VT,
+                                              SDValue(Carry,0), RHS);
 
-      SDValue InFlag = SDValue(Mul, 0);
-      SDNode *Lo = CurDAG->getMachineNode(Mips::MFLO, dl, MVT::i32,
-                                          MVT::Glue, InFlag);
-      InFlag = SDValue(Lo,1);
-      SDNode *Hi = CurDAG->getMachineNode(Mips::MFHI, dl, MVT::i32, InFlag);
+    return CurDAG->SelectNodeTo(Node, MOp, VT, MVT::Glue,
+                                LHS, SDValue(AddCarry,0));
+  }
 
-      if (!SDValue(Node, 0).use_empty())
-        ReplaceUses(SDValue(Node, 0), SDValue(Lo,0));
+  /// Mul with two results
+  case ISD::SMUL_LOHI:
+  case ISD::UMUL_LOHI: {
+    if (NodeTy == MVT::i32)
+      MultOpc = (Opcode == ISD::UMUL_LOHI ? Mips::MULTu : Mips::MULT);
+    else
+      MultOpc = (Opcode == ISD::UMUL_LOHI ? Mips::DMULTu : Mips::DMULT);
 
-      if (!SDValue(Node, 1).use_empty())
-        ReplaceUses(SDValue(Node, 1), SDValue(Hi,0));
+    std::pair<SDNode*, SDNode*> LoHi = SelectMULT(Node, MultOpc, dl, NodeTy,
+                                                  true, true);
 
-      return NULL;
-    }
+    if (!SDValue(Node, 0).use_empty())
+      ReplaceUses(SDValue(Node, 0), SDValue(LoHi.first, 0));
 
-    /// Special Muls
-    case ISD::MUL:
-      if (Subtarget.isMips32())
-        break;
-    case ISD::MULHS:
-    case ISD::MULHU: {
-      SDValue MulOp1 = Node->getOperand(0);
-      SDValue MulOp2 = Node->getOperand(1);
+    if (!SDValue(Node, 1).use_empty())
+      ReplaceUses(SDValue(Node, 1), SDValue(LoHi.second, 0));
 
-      unsigned MulOp  = (Opcode == ISD::MULHU ? Mips::MULTu : Mips::MULT);
-      SDNode *MulNode = CurDAG->getMachineNode(MulOp, dl,
-                                               MVT::Glue, MulOp1, MulOp2);
+    return NULL;
+  }
 
-      SDValue InFlag = SDValue(MulNode, 0);
-
-      if (Opcode == ISD::MUL)
-        return CurDAG->getMachineNode(Mips::MFLO, dl, MVT::i32, InFlag);
-      else
-        return CurDAG->getMachineNode(Mips::MFHI, dl, MVT::i32, InFlag);
-    }
-
-    // Get target GOT address.
-    case ISD::GLOBAL_OFFSET_TABLE:
-      return getGlobalBaseReg();
-
-    case ISD::ConstantFP: {
-      ConstantFPSDNode *CN = dyn_cast<ConstantFPSDNode>(Node);
-      if (Node->getValueType(0) == MVT::f64 && CN->isExactlyValue(+0.0)) {
-        SDValue Zero = CurDAG->getCopyFromReg(CurDAG->getEntryNode(), dl,
-                                        Mips::ZERO, MVT::i32);
-        return CurDAG->getMachineNode(Mips::BuildPairF64, dl, MVT::f64, Zero,
-                                      Zero);
-      }
+  /// Special Muls
+  case ISD::MUL: {
+    // Mips32 has a 32-bit three operand mul instruction.
+    if (Subtarget.hasMips32() && NodeTy == MVT::i32)
       break;
-    }
+    return SelectMULT(Node, NodeTy == MVT::i32 ? Mips::MULT : Mips::DMULT,
+                      dl, NodeTy, true, false).first;
+  }
+  case ISD::MULHS:
+  case ISD::MULHU: {
+    if (NodeTy == MVT::i32)
+      MultOpc = (Opcode == ISD::MULHU ? Mips::MULTu : Mips::MULT);
+    else
+      MultOpc = (Opcode == ISD::MULHU ? Mips::DMULTu : Mips::DMULT);
 
-    case MipsISD::ThreadPointer: {
-      unsigned SrcReg = Mips::HWR29;
-      unsigned DestReg = Mips::V1;
-      SDNode *Rdhwr = CurDAG->getMachineNode(Mips::RDHWR, Node->getDebugLoc(),
-          Node->getValueType(0), CurDAG->getRegister(SrcReg, MVT::i32));
-      SDValue Chain = CurDAG->getCopyToReg(CurDAG->getEntryNode(), dl, DestReg,
-          SDValue(Rdhwr, 0));
-      SDValue ResNode = CurDAG->getCopyFromReg(Chain, dl, DestReg, MVT::i32);
-      ReplaceUses(SDValue(Node, 0), ResNode);
-      return ResNode.getNode();
+    return SelectMULT(Node, MultOpc, dl, NodeTy, false, true).second;
+  }
+
+  // Get target GOT address.
+  case ISD::GLOBAL_OFFSET_TABLE:
+    return getGlobalBaseReg();
+
+  case ISD::ConstantFP: {
+    ConstantFPSDNode *CN = dyn_cast<ConstantFPSDNode>(Node);
+    if (Node->getValueType(0) == MVT::f64 && CN->isExactlyValue(+0.0)) {
+      if (Subtarget.hasMips64()) {
+        SDValue Zero = CurDAG->getCopyFromReg(CurDAG->getEntryNode(), dl,
+                                              Mips::ZERO_64, MVT::i64);
+        return CurDAG->getMachineNode(Mips::DMTC1, dl, MVT::f64, Zero);
+      }
+
+      SDValue Zero = CurDAG->getCopyFromReg(CurDAG->getEntryNode(), dl,
+                                            Mips::ZERO, MVT::i32);
+      return CurDAG->getMachineNode(Mips::BuildPairF64, dl, MVT::f64, Zero,
+                                    Zero);
     }
+    break;
+  }
+
+  case MipsISD::ThreadPointer: {
+    EVT PtrVT = TLI.getPointerTy();
+    unsigned RdhwrOpc, SrcReg, DestReg;
+
+    if (PtrVT == MVT::i32) {
+      RdhwrOpc = Mips::RDHWR;
+      SrcReg = Mips::HWR29;
+      DestReg = Mips::V1;
+    } else {
+      RdhwrOpc = Mips::RDHWR64;
+      SrcReg = Mips::HWR29_64;
+      DestReg = Mips::V1_64;
+    }
+  
+    SDNode *Rdhwr =
+      CurDAG->getMachineNode(RdhwrOpc, Node->getDebugLoc(),
+                             Node->getValueType(0),
+                             CurDAG->getRegister(SrcReg, PtrVT));
+    SDValue Chain = CurDAG->getCopyToReg(CurDAG->getEntryNode(), dl, DestReg,
+                                         SDValue(Rdhwr, 0));
+    SDValue ResNode = CurDAG->getCopyFromReg(Chain, dl, DestReg, PtrVT);
+    ReplaceUses(SDValue(Node, 0), ResNode);
+    return ResNode.getNode();
+  }
   }
 
   // Select the default instruction

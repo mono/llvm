@@ -1,4 +1,4 @@
-//=======- MBlazeFrameLowering.cpp - MBlaze Frame Information ------*- C++ -*-====//
+//===- MBlazeFrameLowering.cpp - MBlaze Frame Information ------*- C++ -*-====//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -32,13 +32,11 @@
 
 using namespace llvm;
 
-namespace llvm {
-  cl::opt<bool> DisableStackAdjust(
-    "disable-mblaze-stack-adjust",
-    cl::init(false),
-    cl::desc("Disable MBlaze stack layout adjustment."),
-    cl::Hidden);
-}
+static cl::opt<bool> MBDisableStackAdjust(
+  "disable-mblaze-stack-adjust",
+  cl::init(false),
+  cl::desc("Disable MBlaze stack layout adjustment."),
+  cl::Hidden);
 
 static void replaceFrameIndexes(MachineFunction &MF, 
                                 SmallVector<std::pair<int,int64_t>, 16> &FR) {
@@ -85,7 +83,7 @@ static void replaceFrameIndexes(MachineFunction &MF,
 //===----------------------------------------------------------------------===//
 
 static void analyzeFrameIndexes(MachineFunction &MF) {
-  if (DisableStackAdjust) return;
+  if (MBDisableStackAdjust) return;
 
   MachineFrameInfo *MFI = MF.getFrameInfo();
   MBlazeFunctionInfo *MBlazeFI = MF.getInfo<MBlazeFunctionInfo>();
@@ -336,7 +334,8 @@ int MBlazeFrameLowering::getFrameIndexOffset(const MachineFunction &MF, int FI)
 // if frame pointer elimination is disabled.
 bool MBlazeFrameLowering::hasFP(const MachineFunction &MF) const {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
-  return DisableFramePointerElim(MF) || MFI->hasVarSizedObjects();
+  return MF.getTarget().Options.DisableFramePointerElim(MF) ||
+         MFI->hasVarSizedObjects();
 }
 
 void MBlazeFrameLowering::emitPrologue(MachineFunction &MF) const {

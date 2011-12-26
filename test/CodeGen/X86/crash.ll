@@ -6,16 +6,16 @@
 ; Chain and flag folding issues.
 define i32 @test1() nounwind ssp {
 entry:
-  %tmp5.i = volatile load i32* undef              ; <i32> [#uses=1]
+  %tmp5.i = load volatile i32* undef              ; <i32> [#uses=1]
   %conv.i = zext i32 %tmp5.i to i64               ; <i64> [#uses=1]
-  %tmp12.i = volatile load i32* undef             ; <i32> [#uses=1]
+  %tmp12.i = load volatile i32* undef             ; <i32> [#uses=1]
   %conv13.i = zext i32 %tmp12.i to i64            ; <i64> [#uses=1]
   %shl.i = shl i64 %conv13.i, 32                  ; <i64> [#uses=1]
   %or.i = or i64 %shl.i, %conv.i                  ; <i64> [#uses=1]
   %add16.i = add i64 %or.i, 256                   ; <i64> [#uses=1]
   %shr.i = lshr i64 %add16.i, 8                   ; <i64> [#uses=1]
   %conv19.i = trunc i64 %shr.i to i32             ; <i32> [#uses=1]
-  volatile store i32 %conv19.i, i32* undef
+  store volatile i32 %conv19.i, i32* undef
   ret i32 undef
 }
 
@@ -362,5 +362,32 @@ entry:
   br i1 %7, label %"3", label %"5"
 
 "5":
+  ret void
+}
+
+; PR11078
+;
+; A virtual register used by the "foo" inline asm memory operand gets
+; constrained to GR32_ABCD during coalescing.  This makes the inline asm
+; impossible to allocate without splitting the live range and reinflating the
+; register class around the inline asm.
+;
+; The constraint originally comes from the TEST8ri optimization of (icmp (and %t0, 1), 0).
+
+@__force_order = external hidden global i32, align 4
+define void @pr11078(i32* %pgd) nounwind {
+entry:
+  %t0 = load i32* %pgd, align 4
+  %and2 = and i32 %t0, 1
+  %tobool = icmp eq i32 %and2, 0
+  br i1 %tobool, label %if.then, label %if.end
+
+if.then:
+  %t1 = tail call i32 asm sideeffect "bar", "=r,=*m,~{dirflag},~{fpsr},~{flags}"(i32* @__force_order) nounwind
+  br label %if.end
+
+if.end:
+  %t6 = inttoptr i32 %t0 to i64*
+  %t11 = tail call i64 asm sideeffect "foo", "=*m,=A,{bx},{cx},1,~{memory},~{dirflag},~{fpsr},~{flags}"(i64* %t6, i32 0, i32 0, i64 0) nounwind
   ret void
 }

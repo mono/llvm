@@ -216,7 +216,7 @@
         @ Out of order STM registers
         stmda sp!, {r5, r2}
 
-@ CHECK-ERRORS: warning: register not in ascending order in register list
+@ CHECK-ERRORS: error: register list not in ascending order
 @ CHECK-ERRORS:         stmda     sp!, {r5, r2}
 @ CHECK-ERRORS:                            ^
 
@@ -248,7 +248,7 @@
         sxtah r9, r3, r3, ror #-8
         sxtb16ge r2, r3, lsr #24
 
-@ CHECK-ERRORS: error: rotate operator 'ror' expected
+@ CHECK-ERRORS: error: invalid operand for instruction
 @ CHECK-ERRORS:         sxtb r8, r3, #8
 @ CHECK-ERRORS:                      ^
 @ CHECK-ERRORS: error: '#' expected
@@ -269,7 +269,7 @@
 @ CHECK-ERRORS: error: 'ror' rotate amount must be 8, 16, or 24
 @ CHECK-ERRORS:         sxtah r9, r3, r3, ror #-8
 @ CHECK-ERRORS:                                ^
-@ CHECK-ERRORS: error: rotate operator 'ror' expected
+@ CHECK-ERRORS: error: invalid operand for instruction
 @ CHECK-ERRORS:         sxtb16ge r2, r3, lsr #24
 @ CHECK-ERRORS:                          ^
 
@@ -297,3 +297,21 @@
 @ CHECK-ERRORS: error: destination operands must be sequential
 @ CHECK-ERRORS:         ldrd  r4, r3, [r8], #8
 @ CHECK-ERRORS:                   ^
+
+
+        @ Bad register lists for VFP.
+        vpush {s0, s3}
+@ CHECK-ERRORS: error: non-contiguous register range
+@ CHECK-ERRORS:         vpush {s0, s3}
+@ CHECK-ERRORS:                    ^
+
+        @ Out of range coprocessor option immediate.
+        ldc2 p2, c8, [r1], { 256 }
+        ldc2 p2, c8, [r1], { -1 }
+
+@ CHECK-ERRORS: error: coprocessor option must be an immediate in range [0, 255]
+@ CHECK-ERRORS:         ldc2 p2, c8, [r1], { 256 }
+@ CHECK-ERRORS:                              ^
+@ CHECK-ERRORS: error: coprocessor option must be an immediate in range [0, 255]
+@ CHECK-ERRORS:         ldc2 p2, c8, [r1], { -1 }
+@ CHECK-ERRORS:                              ^

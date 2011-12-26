@@ -21,18 +21,19 @@
 
 using namespace llvm;
 
+void MipsSubtarget::anchor() { }
+
 MipsSubtarget::MipsSubtarget(const std::string &TT, const std::string &CPU,
                              const std::string &FS, bool little) :
   MipsGenSubtargetInfo(TT, CPU, FS),
-  MipsArchVersion(Mips1), MipsABI(O32), IsLittle(little), IsSingleFloat(false),
-  IsFP64bit(false), IsGP64bit(false), HasVFPU(false), IsLinux(true),
-  HasSEInReg(false), HasCondMov(false), HasMulDivAdd(false), HasMinMax(false),
-  HasSwap(false), HasBitCount(false)
+  MipsArchVersion(Mips32), MipsABI(UnknownABI), IsLittle(little), 
+  IsSingleFloat(false), IsFP64bit(false), IsGP64bit(false), HasVFPU(false),
+  IsLinux(true), HasSEInReg(false), HasCondMov(false), HasMulDivAdd(false),
+  HasMinMax(false), HasSwap(false), HasBitCount(false)
 {
   std::string CPUName = CPU;
   if (CPUName.empty())
-    CPUName = "mips1";
-  MipsArchVersion = Mips1;
+    CPUName = "mips32";
 
   // Parse features string.
   ParseSubtargetFeatures(CPUName, FS);
@@ -40,23 +41,16 @@ MipsSubtarget::MipsSubtarget(const std::string &TT, const std::string &CPU,
   // Initialize scheduling itinerary for the specified CPU.
   InstrItins = getInstrItineraryForCPU(CPUName);
 
+  // Set MipsABI if it hasn't been set yet.
+  if (MipsABI == UnknownABI)
+    MipsABI = hasMips64() ? N64 : O32; 
+
+  // Check if Architecture and ABI are compatible.
+  assert(((!hasMips64() && (isABI_O32() || isABI_EABI())) ||
+          (hasMips64() && (isABI_N32() || isABI_N64()))) &&
+         "Invalid  Arch & ABI pair.");
+
   // Is the target system Linux ?
   if (TT.find("linux") == std::string::npos)
     IsLinux = false;
-
-  // When only the target triple is specified and is
-  // a allegrex target, set the features. We also match
-  // big and little endian allegrex cores (dont really
-  // know if a big one exists)
-  if (TT.find("mipsallegrex") != std::string::npos ||
-      TT.find("psp") != std::string::npos) {
-    MipsABI = EABI;
-    IsSingleFloat = true;
-    MipsArchVersion = Mips2;
-    HasVFPU = true; // Enables Allegrex Vector FPU (not supported yet)
-    HasSEInReg = true;
-    HasBitCount = true;
-    HasSwap = true;
-    HasCondMov = true;
-  }
 }

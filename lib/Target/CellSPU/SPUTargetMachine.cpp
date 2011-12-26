@@ -34,8 +34,10 @@ SPUFrameLowering::getCalleeSaveSpillSlots(unsigned &NumEntries) const {
 
 SPUTargetMachine::SPUTargetMachine(const Target &T, StringRef TT,
                                    StringRef CPU, StringRef FS,
-                                   Reloc::Model RM, CodeModel::Model CM)
-  : LLVMTargetMachine(T, TT, CPU, FS, RM, CM),
+                                   const TargetOptions &Options,
+                                   Reloc::Model RM, CodeModel::Model CM,
+                                   CodeGenOpt::Level OL)
+  : LLVMTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL),
     Subtarget(TT, CPU, FS),
     DataLayout(Subtarget.getTargetDataString()),
     InstrInfo(*this),
@@ -49,8 +51,7 @@ SPUTargetMachine::SPUTargetMachine(const Target &T, StringRef TT,
 // Pass Pipeline Configuration
 //===----------------------------------------------------------------------===//
 
-bool SPUTargetMachine::addInstSelector(PassManagerBase &PM,
-                                       CodeGenOpt::Level OptLevel) {
+bool SPUTargetMachine::addInstSelector(PassManagerBase &PM) {
   // Install an instruction selector.
   PM.add(createSPUISelDag(*this));
   return false;
@@ -58,7 +59,7 @@ bool SPUTargetMachine::addInstSelector(PassManagerBase &PM,
 
 // passes to run just before printing the assembly
 bool SPUTargetMachine::
-addPreEmitPass(PassManagerBase &PM, CodeGenOpt::Level OptLevel) {
+addPreEmitPass(PassManagerBase &PM) {
   // load the TCE instruction scheduler, if available via
   // loaded plugins
   typedef llvm::FunctionPass* (*BuilderFunc)(const char*);

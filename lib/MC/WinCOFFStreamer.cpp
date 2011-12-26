@@ -32,6 +32,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
+
 using namespace llvm;
 
 namespace {
@@ -60,6 +61,7 @@ public:
   virtual void EmitCOFFSymbolStorageClass(int StorageClass);
   virtual void EmitCOFFSymbolType(int Type);
   virtual void EndCOFFSymbolDef();
+  virtual void EmitCOFFSecRel32(MCSymbol const *Symbol);
   virtual void EmitELFSize(MCSymbol *Symbol, const MCExpr *Value);
   virtual void EmitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                                 unsigned ByteAlignment);
@@ -291,6 +293,16 @@ void WinCOFFStreamer::EmitCOFFSymbolType(int Type) {
 void WinCOFFStreamer::EndCOFFSymbolDef() {
   assert(CurSymbol != NULL && "BeginCOFFSymbolDef must be called first!");
   CurSymbol = NULL;
+}
+
+void WinCOFFStreamer::EmitCOFFSecRel32(MCSymbol const *Symbol)
+{
+  MCDataFragment *DF = getOrCreateDataFragment();
+
+  DF->addFixup(MCFixup::Create(DF->getContents().size(),
+                               MCSymbolRefExpr::Create (Symbol, getContext ()),
+                               FK_SecRel_4));
+  DF->getContents().resize(DF->getContents().size() + 4, 0);
 }
 
 void WinCOFFStreamer::EmitELFSize(MCSymbol *Symbol, const MCExpr *Value) {

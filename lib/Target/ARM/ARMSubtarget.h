@@ -70,11 +70,12 @@ protected:
   /// InThumbMode - True if compiling for Thumb, false for ARM.
   bool InThumbMode;
 
-  /// InNaClMode - True if targeting Native Client
-  bool InNaClMode;
-
   /// HasThumb2 - True if Thumb2 instructions are supported.
   bool HasThumb2;
+
+  /// IsMClass - True if the subtarget belongs to the 'M' profile of CPUs - 
+  /// v6m, v7m for example.
+  bool IsMClass;
 
   /// NoARM - True if subtarget does not support ARM mode execution.
   bool NoARM;
@@ -88,6 +89,11 @@ protected:
   /// UseMovt - True if MOVT / MOVW pairs are used for materialization of 32-bit
   /// imms (including global addresses).
   bool UseMovt;
+
+  /// SupportsTailCall - True if the OS supports tail call. The dynamic linker
+  /// must be able to synthesize call stubs for interworking between ARM and
+  /// Thumb.
+  bool SupportsTailCall;
 
   /// HasFP16 - True if subtarget supports half-precision FP (We support VFP+HF
   /// only so far)
@@ -185,6 +191,7 @@ protected:
 
   bool isCortexA8() const { return ARMProcFamily == CortexA8; }
   bool isCortexA9() const { return ARMProcFamily == CortexA9; }
+  bool isCortexM3() const { return CPUString == "cortex-m3"; }
 
   bool hasARMOps() const { return !NoARM; }
 
@@ -211,6 +218,7 @@ protected:
 
   const Triple &getTargetTriple() const { return TargetTriple; }
 
+  bool isTargetIOS() const { return TargetTriple.getOS() == Triple::IOS; }
   bool isTargetDarwin() const { return TargetTriple.isOSDarwin(); }
   bool isTargetNaCl() const {
     return TargetTriple.getOS() == Triple::NativeClient;
@@ -224,10 +232,13 @@ protected:
   bool isThumb1Only() const { return InThumbMode && !HasThumb2; }
   bool isThumb2() const { return InThumbMode && HasThumb2; }
   bool hasThumb2() const { return HasThumb2; }
+  bool isMClass() const { return IsMClass; }
+  bool isARClass() const { return !IsMClass; }
 
   bool isR9Reserved() const { return IsR9Reserved; }
 
   bool useMovt() const { return UseMovt && hasV6T2Ops(); }
+  bool supportsTailCall() const { return SupportsTailCall; }
 
   bool allowsUnalignedMem() const { return AllowsUnalignedMem; }
 

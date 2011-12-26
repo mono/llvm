@@ -72,6 +72,8 @@ namespace {
     typedef DenseSet<unsigned> RegSet;
     typedef DenseMap<unsigned, const MachineInstr*> RegMap;
 
+    const MachineInstr *FirstTerminator;
+
     BitVector regsReserved;
     RegSet regsLive;
     RegVector regsDefined, regsDead, regsKilled;
@@ -277,13 +279,17 @@ bool MachineVerifier::runOnMachineFunction(MachineFunction &MF) {
   for (MachineFunction::const_iterator MFI = MF.begin(), MFE = MF.end();
        MFI!=MFE; ++MFI) {
     visitMachineBasicBlockBefore(MFI);
-    for (MachineBasicBlock::const_iterator MBBI = MFI->begin(),
-           MBBE = MFI->end(); MBBI != MBBE; ++MBBI) {
+    for (MachineBasicBlock::const_instr_iterator MBBI = MFI->instr_begin(),
+           MBBE = MFI->instr_end(); MBBI != MBBE; ++MBBI) {
       if (MBBI->getParent() != MFI) {
         report("Bad instruction parent pointer", MFI);
         *OS << "Instruction: " << *MBBI;
         continue;
       }
+      // Skip BUNDLE instruction for now. FIXME: We should add code to verify
+      // the BUNDLE's specifically.
+      if (MBBI->isBundle())
+        continue;
       visitMachineInstrBefore(MBBI);
       for (unsigned I = 0, E = MBBI->getNumOperands(); I != E; ++I)
         visitMachineOperand(&MBBI->getOperand(I), I);
@@ -318,7 +324,7 @@ void MachineVerifier::report(const char *msg, const MachineFunction *MF) {
     MF->print(*OS, Indexes);
   }
   *OS << "*** Bad machine code: " << msg << " ***\n"
-      << "- function:    " << MF->getFunction()->getNameStr() << "\n";
+      << "- function:    " << MF->getFunction()->getName() << "\n";
 }
 
 void MachineVerifier::report(const char *msg, const MachineBasicBlock *MBB) {
@@ -389,6 +395,8 @@ static bool matchPair(MachineBasicBlock::const_succ_iterator i,
 
 void
 MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
+  FirstTerminator = 0;
+
   // Count the number of landing pad successors.
   SmallPtrSet<MachineBasicBlock*, 4> LandingPadSuccs;
   for (MachineBasicBlock::const_succ_iterator I = MBB->succ_begin(),
@@ -431,7 +439,7 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
         report("MBB exits via unconditional fall-through but its successor "
                "differs from its CFG successor!", MBB);
       }
-      if (!MBB->empty() && MBB->back().getDesc().isBarrier() &&
+      if (!MBB->empty() && MBB->back().isBarrier() &&
           !TII->isPredicated(&MBB->back())) {
         report("MBB exits via unconditional fall-through but ends with a "
                "barrier instruction!", MBB);
@@ -452,10 +460,10 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
       if (MBB->empty()) {
         report("MBB exits via unconditional branch but doesn't contain "
                "any instructions!", MBB);
-      } else if (!MBB->back().getDesc().isBarrier()) {
+      } else if (!MBB->back().isBarrier()) {
         report("MBB exits via unconditional branch but doesn't end with a "
                "barrier instruction!", MBB);
-      } else if (!MBB->back().getDesc().isTerminator()) {
+      } else if (!MBB->back().isTerminator()) {
         report("MBB exits via unconditional branch but the branch isn't a "
                "terminator instruction!", MBB);
       }
@@ -475,10 +483,10 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
       if (MBB->empty()) {
         report("MBB exits via conditional branch/fall-through but doesn't "
                "contain any instructions!", MBB);
-      } else if (MBB->back().getDesc().isBarrier()) {
+      } else if (MBB->back().isBarrier()) {
         report("MBB exits via conditional branch/fall-through but ends with a "
                "barrier instruction!", MBB);
-      } else if (!MBB->back().getDesc().isTerminator()) {
+      } else if (!MBB->back().isTerminator()) {
         report("MBB exits via conditional branch/fall-through but the branch "
                "isn't a terminator instruction!", MBB);
       }
@@ -495,10 +503,10 @@ MachineVerifier::visitMachineBasicBlockBefore(const MachineBasicBlock *MBB) {
       if (MBB->empty()) {
         report("MBB exits via conditional branch/branch but doesn't "
                "contain any instructions!", MBB);
-      } else if (!MBB->back().getDesc().isBarrier()) {
+      } else if (!MBB->back().isBarrier()) {
         report("MBB exits via conditional branch/branch but doesn't end with a "
                "barrier instruction!", MBB);
-      } else if (!MBB->back().getDesc().isTerminator()) {
+      } else if (!MBB->back().isTerminator()) {
         report("MBB exits via conditional branch/branch but the branch "
                "isn't a terminator instruction!", MBB);
       }
@@ -551,9 +559,9 @@ void MachineVerifier::visitMachineInstrBefore(const MachineInstr *MI) {
   // Check the MachineMemOperands for basic consistency.
   for (MachineInstr::mmo_iterator I = MI->memoperands_begin(),
        E = MI->memoperands_end(); I != E; ++I) {
-    if ((*I)->isLoad() && !MCID.mayLoad())
+    if ((*I)->isLoad() && !MI->mayLoad())
       report("Missing mayLoad flag", MI);
-    if ((*I)->isStore() && !MCID.mayStore())
+    if ((*I)->isStore() && !MI->mayStore())
       report("Missing mayStore flag", MI);
   }
 
@@ -570,6 +578,18 @@ void MachineVerifier::visitMachineInstrBefore(const MachineInstr *MI) {
     }
   }
 
+  // Ensure non-terminators don't follow terminators.
+  if (MI->isTerminator()) {
+    if (!FirstTerminator)
+      FirstTerminator = MI;
+  } else if (FirstTerminator) {
+    report("Non-terminator instruction after the first terminator", MI);
+    *OS << "First terminator was:\t" << *FirstTerminator;
+  }
+
+  StringRef ErrorInfo;
+  if (!TII->verifyInstruction(MI, ErrorInfo))
+    report(ErrorInfo.data(), MI);
 }
 
 void
@@ -590,7 +610,7 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
     // Don't check if it's the last operand in a variadic instruction. See,
     // e.g., LDM_RET in the arm back end.
     if (MO->isReg() &&
-        !(MCID.isVariadic() && MONum == MCID.getNumOperands()-1)) {
+        !(MI->isVariadic() && MONum == MCID.getNumOperands()-1)) {
       if (MO->isDef() && !MCOI.isOptionalDef())
           report("Explicit operand marked as def", MO, MONum);
       if (MO->isImplicit())
@@ -598,7 +618,7 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
     }
   } else {
     // ARM adds %reg0 operands to indicate predicates. We'll allow that.
-    if (MO->isReg() && !MO->isImplicit() && !MCID.isVariadic() && MO->getReg())
+    if (MO->isReg() && !MO->isImplicit() && !MI->isVariadic() && MO->getReg())
       report("Extra explicit operand on non-variadic instruction", MO, MONum);
   }
 
@@ -643,7 +663,7 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
       // Check LiveInts liveness and kill.
       if (TargetRegisterInfo::isVirtualRegister(Reg) &&
           LiveInts && !LiveInts->isNotInMIMap(MI)) {
-        SlotIndex UseIdx = LiveInts->getInstructionIndex(MI).getUseIndex();
+        SlotIndex UseIdx = LiveInts->getInstructionIndex(MI).getRegSlot(true);
         if (LiveInts->hasInterval(Reg)) {
           const LiveInterval &LI = LiveInts->getInterval(Reg);
           if (!LI.liveAt(UseIdx)) {
@@ -652,7 +672,7 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
           }
           // Check for extra kill flags.
           // Note that we allow missing kill flags for now.
-          if (MO->isKill() && !LI.killedAt(UseIdx.getDefIndex())) {
+          if (MO->isKill() && !LI.killedAt(UseIdx.getRegSlot())) {
             report("Live range continues after kill flag", MO, MONum);
             *OS << "Live range: " << LI << '\n';
           }
@@ -694,7 +714,7 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
       // Check LiveInts for a live range, but only for virtual registers.
       if (LiveInts && TargetRegisterInfo::isVirtualRegister(Reg) &&
           !LiveInts->isNotInMIMap(MI)) {
-        SlotIndex DefIdx = LiveInts->getInstructionIndex(MI).getDefIndex();
+        SlotIndex DefIdx = LiveInts->getInstructionIndex(MI).getRegSlot();
         if (LiveInts->hasInterval(Reg)) {
           const LiveInterval &LI = LiveInts->getInterval(Reg);
           if (const VNInfo *VNI = LI.getVNInfoAt(DefIdx)) {
@@ -719,20 +739,14 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
       unsigned SubIdx = MO->getSubReg();
 
       if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
-        unsigned sr = Reg;
         if (SubIdx) {
-          unsigned s = TRI->getSubReg(Reg, SubIdx);
-          if (!s) {
-            report("Invalid subregister index for physical register",
-                   MO, MONum);
-            return;
-          }
-          sr = s;
+          report("Illegal subregister index for physical register", MO, MONum);
+          return;
         }
         if (const TargetRegisterClass *DRC = TII->getRegClass(MCID,MONum,TRI)) {
-          if (!DRC->contains(sr)) {
+          if (!DRC->contains(Reg)) {
             report("Illegal physical register for instruction", MO, MONum);
-            *OS << TRI->getName(sr) << " is not a "
+            *OS << TRI->getName(Reg) << " is not a "
                 << DRC->getName() << " register.\n";
           }
         }
@@ -740,16 +754,35 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
         // Virtual register.
         const TargetRegisterClass *RC = MRI->getRegClass(Reg);
         if (SubIdx) {
-          const TargetRegisterClass *SRC = RC->getSubRegisterRegClass(SubIdx);
+          const TargetRegisterClass *SRC =
+            TRI->getSubClassWithSubReg(RC, SubIdx);
           if (!SRC) {
             report("Invalid subregister index for virtual register", MO, MONum);
             *OS << "Register class " << RC->getName()
                 << " does not support subreg index " << SubIdx << "\n";
             return;
           }
-          RC = SRC;
+          if (RC != SRC) {
+            report("Invalid register class for subregister index", MO, MONum);
+            *OS << "Register class " << RC->getName()
+                << " does not fully support subreg index " << SubIdx << "\n";
+            return;
+          }
         }
         if (const TargetRegisterClass *DRC = TII->getRegClass(MCID,MONum,TRI)) {
+          if (SubIdx) {
+            const TargetRegisterClass *SuperRC =
+              TRI->getLargestLegalSuperClass(RC);
+            if (!SuperRC) {
+              report("No largest legal super class exists.", MO, MONum);
+              return;
+            }
+            DRC = TRI->getMatchingSuperRegClass(SuperRC, DRC, SubIdx);
+            if (!DRC) {
+              report("No matching super-reg register class.", MO, MONum);
+              return;
+            }
+          }
           if (!RC->hasSuperClassEq(DRC)) {
             report("Illegal virtual register for instruction", MO, MONum);
             *OS << "Expected a " << DRC->getName() << " register, but got a "
@@ -771,11 +804,11 @@ MachineVerifier::visitMachineOperand(const MachineOperand *MO, unsigned MONum) {
         LiveInts && !LiveInts->isNotInMIMap(MI)) {
       LiveInterval &LI = LiveStks->getInterval(MO->getIndex());
       SlotIndex Idx = LiveInts->getInstructionIndex(MI);
-      if (MCID.mayLoad() && !LI.liveAt(Idx.getUseIndex())) {
+      if (MI->mayLoad() && !LI.liveAt(Idx.getRegSlot(true))) {
         report("Instruction loads from dead spill slot", MO, MONum);
         *OS << "Live stack: " << LI << '\n';
       }
-      if (MCID.mayStore() && !LI.liveAt(Idx.getDefIndex())) {
+      if (MI->mayStore() && !LI.liveAt(Idx.getRegSlot())) {
         report("Instruction stores to dead spill slot", MO, MONum);
         *OS << "Live stack: " << LI << '\n';
       }
@@ -1056,13 +1089,14 @@ void MachineVerifier::verifyLiveIntervals() {
         // Early clobber defs begin at USE slots, but other defs must begin at
         // DEF slots.
         if (isEarlyClobber) {
-          if (!VNI->def.isUse()) {
-            report("Early clobber def must be at a USE slot", MF);
+          if (!VNI->def.isEarlyClobber()) {
+            report("Early clobber def must be at an early-clobber slot", MF);
             *OS << "Valno #" << VNI->id << " is defined at " << VNI->def
                 << " in " << LI << '\n';
           }
-        } else if (!VNI->def.isDef()) {
-          report("Non-PHI, non-early clobber def must be at a DEF slot", MF);
+        } else if (!VNI->def.isRegister()) {
+          report("Non-PHI, non-early clobber def must be at a register slot",
+                 MF);
           *OS << "Valno #" << VNI->id << " is defined at " << VNI->def
               << " in " << LI << '\n';
         }
@@ -1163,26 +1197,16 @@ void MachineVerifier::verifyLiveIntervals() {
         // Check that VNI is live-out of all predecessors.
         for (MachineBasicBlock::const_pred_iterator PI = MFI->pred_begin(),
              PE = MFI->pred_end(); PI != PE; ++PI) {
-          SlotIndex PEnd = LiveInts->getMBBEndIdx(*PI).getPrevSlot();
-          const VNInfo *PVNI = LI.getVNInfoAt(PEnd);
+          SlotIndex PEnd = LiveInts->getMBBEndIdx(*PI);
+          const VNInfo *PVNI = LI.getVNInfoBefore(PEnd);
 
-          if (VNI->isPHIDef() && VNI->def == LiveInts->getMBBStartIdx(MFI)) {
-            if (PVNI && !PVNI->hasPHIKill()) {
-              report("Value live out of predecessor doesn't have PHIKill", MF);
-              *OS << "Valno #" << PVNI->id << " live out of BB#"
-                  << (*PI)->getNumber() << '@' << PEnd
-                  << " doesn't have PHIKill, but Valno #" << VNI->id
-                  << " is PHIDef and defined at the beginning of BB#"
-                  << MFI->getNumber() << '@' << LiveInts->getMBBStartIdx(MFI)
-                  << " in " << LI << '\n';
-            }
+          if (VNI->isPHIDef() && VNI->def == LiveInts->getMBBStartIdx(MFI))
             continue;
-          }
 
           if (!PVNI) {
             report("Register not marked live out of predecessor", *PI);
             *OS << "Valno #" << VNI->id << " live into BB#" << MFI->getNumber()
-                << '@' << LiveInts->getMBBStartIdx(MFI) << ", not live at "
+                << '@' << LiveInts->getMBBStartIdx(MFI) << ", not live before "
                 << PEnd << " in " << LI << '\n';
             continue;
           }

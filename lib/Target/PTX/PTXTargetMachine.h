@@ -17,6 +17,7 @@
 #include "PTXISelLowering.h"
 #include "PTXInstrInfo.h"
 #include "PTXFrameLowering.h"
+#include "PTXSelectionDAGInfo.h"
 #include "PTXSubtarget.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetFrameLowering.h"
@@ -25,16 +26,18 @@
 namespace llvm {
 class PTXTargetMachine : public LLVMTargetMachine {
   private:
-    const TargetData  DataLayout;
-    PTXSubtarget      Subtarget; // has to be initialized before FrameLowering
-    PTXFrameLowering  FrameLowering;
-    PTXInstrInfo      InstrInfo;
-    PTXTargetLowering TLInfo;
+    const TargetData    DataLayout;
+    PTXSubtarget        Subtarget; // has to be initialized before FrameLowering
+    PTXFrameLowering    FrameLowering;
+    PTXInstrInfo        InstrInfo;
+    PTXSelectionDAGInfo TSInfo;
+    PTXTargetLowering   TLInfo;
 
   public:
     PTXTargetMachine(const Target &T, StringRef TT,
-                     StringRef CPU, StringRef FS,
+                     StringRef CPU, StringRef FS, const TargetOptions &Options,
                      Reloc::Model RM, CodeModel::Model CM,
+                     CodeGenOpt::Level OL,
                      bool is64Bit);
 
     virtual const TargetData *getTargetData() const { return &DataLayout; }
@@ -50,29 +53,61 @@ class PTXTargetMachine : public LLVMTargetMachine {
     virtual const PTXTargetLowering *getTargetLowering() const {
       return &TLInfo; }
 
+    virtual const PTXSelectionDAGInfo* getSelectionDAGInfo() const {
+      return &TSInfo;
+    }
+
     virtual const PTXSubtarget *getSubtargetImpl() const { return &Subtarget; }
 
-    virtual bool addInstSelector(PassManagerBase &PM,
-                                 CodeGenOpt::Level OptLevel);
-    virtual bool addPostRegAlloc(PassManagerBase &PM,
-                                 CodeGenOpt::Level OptLevel);
+    virtual bool addInstSelector(PassManagerBase &PM);
+    virtual bool addPostRegAlloc(PassManagerBase &PM);
+
+    // We override this method to supply our own set of codegen passes.
+    virtual bool addPassesToEmitFile(PassManagerBase &,
+                                     formatted_raw_ostream &,
+                                     CodeGenFileType,
+                                     bool = true);
+
+    // Emission of machine code through JITCodeEmitter is not supported.
+    virtual bool addPassesToEmitMachineCode(PassManagerBase &,
+                                            JITCodeEmitter &,
+                                            bool = true) {
+      return true;
+    }
+
+    // Emission of machine code through MCJIT is not supported.
+    virtual bool addPassesToEmitMC(PassManagerBase &,
+                                   MCContext *&,
+                                   raw_ostream &,
+                                   bool = true) {
+      return true;
+    }
+
+  private:
+
+    bool addCommonCodeGenPasses(PassManagerBase &,
+                                bool DisableVerify, MCContext *&OutCtx);
 }; // class PTXTargetMachine
 
 
 class PTX32TargetMachine : public PTXTargetMachine {
+  virtual void anchor();
 public:
 
   PTX32TargetMachine(const Target &T, StringRef TT,
-                     StringRef CPU, StringRef FS,
-                     Reloc::Model RM, CodeModel::Model CM);
+                     StringRef CPU, StringRef FS, const TargetOptions &Options,
+                     Reloc::Model RM, CodeModel::Model CM,
+                     CodeGenOpt::Level OL);
 }; // class PTX32TargetMachine
 
 class PTX64TargetMachine : public PTXTargetMachine {
+  virtual void anchor();
 public:
 
   PTX64TargetMachine(const Target &T, StringRef TT,
-                     StringRef CPU, StringRef FS,
-                     Reloc::Model RM, CodeModel::Model CM);
+                     StringRef CPU, StringRef FS, const TargetOptions &Options,
+                     Reloc::Model RM, CodeModel::Model CM,
+                     CodeGenOpt::Level OL);
 }; // class PTX32TargetMachine
 
 } // namespace llvm

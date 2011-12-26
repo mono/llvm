@@ -283,7 +283,7 @@ software you will need.</p>
 <tr>
   <td>Windows</td>
   <td>x86<sup><a href="#pf_1">1</a></sup></td>
-  <td>Visual Studio 2005 SP1 or higher<sup><a href="#pf_4">4</a>,<a href="#pf_5">5</a></sup></td>
+  <td>Visual Studio 2008 or higher<sup><a href="#pf_4">4</a>,<a href="#pf_5">5</a></sup></td>
 <tr>
   <td>AIX<sup><a href="#pf_3">3</a>,<a href="#pf_4">4</a></sup></td>
   <td>PowerPC</td>
@@ -516,9 +516,8 @@ href="GCCFEBuildInstrs.html">try to compile it</a> on your platform.</p>
 
 <p>LLVM is very demanding of the host C++ compiler, and as such tends to expose
 bugs in the compiler.  In particular, several versions of GCC crash when trying
-to compile LLVM.  We routinely use GCC 3.3.3, 3.4.0, and Apple 4.0.1 
-successfully with them (however, see important notes below).  Other versions 
-of GCC will probably work as well.  GCC versions listed
+to compile LLVM.  We routinely use GCC 4.2 (and higher) or Clang.  
+Other versions of GCC will probably work as well.  GCC versions listed
 here are known to not work.  If you are using one of these versions, please try
 to upgrade your GCC to something more recent.  If you run into a problem with a
 version of GCC not listed here, please <a href="mailto:llvmdev@cs.uiuc.edu">let
@@ -890,6 +889,8 @@ Then, your .git/config should have [imap] sections.
         folder = "[Gmail]/Drafts"
 ; example for Japanese, "Modified UTF-7" encoded.
         folder = "[Gmail]/&amp;Tgtm+DBN-"
+; example for Traditional Chinese
+        folder = "[Gmail]/&amp;g0l6Pw-"
 </pre>
 
 </div>
@@ -1502,13 +1503,9 @@ different <a href="#tools">tools</a>.</p>
   at runtime in both interpreted and JIT compiled fashions.</dd>
 
   <dt><tt><b>llvm/lib/Support/</b></tt></dt>
-  <dd> This directory contains the source code that corresponds to the header 
-  files located in <tt>llvm/include/Support/</tt>.</dd>
-
-  <!--FIXME: obsoleted -->
-  <dt><tt><b>llvm/lib/System/</b></tt></dt>
-  <dd>This directory contains the operating system abstraction layer that
-  shields LLVM from platform-specific coding.</dd>
+  <dd> This directory contains the source code that corresponds to the header
+  files located in <tt>llvm/include/ADT/</tt>
+  and <tt>llvm/include/Support/</tt>.</dd>
 </dl>
 
 </div>
@@ -1595,16 +1592,6 @@ information is in the <a href="CommandGuide/index.html">Command Guide</a>.</p>
   href="HowToSubmitABug.html">HowToSubmitABug.html</a> for more information
   on using <tt>bugpoint</tt>.</dd>
 
-  <dt><tt><b>llvmc</b></tt></dt>
-  <dd>The LLVM Compiler Driver. This program can
-  be configured to utilize both LLVM and non-LLVM compilation tools to enable
-  pre-processing, translation, optimization, assembly, and linking of programs
-  all from one command line. <tt>llvmc</tt> also takes care of processing the
-  dependent libraries found in bitcode. This reduces the need to get the
-  traditional <tt>-l&lt;name&gt;</tt> options right on the command line. Please
-  note that this tool, while functional, is still experimental and not feature
-  complete.</dd>
-
   <dt><tt><b>llvm-ar</b></tt></dt>
   <dd>The archiver produces an archive containing
   the given LLVM bitcode files, optionally with an index for faster
@@ -1620,9 +1607,9 @@ information is in the <a href="CommandGuide/index.html">Command Guide</a>.</p>
 
   <dt><tt><b>llvm-ld</b></tt></dt>
   <dd><tt>llvm-ld</tt> is a general purpose and extensible linker for LLVM. 
-  This is the linker invoked by <tt>llvmc</tt>. It performs standard link time
-  optimizations and allows optimization modules to be loaded and run so that 
-  language specific optimizations can be applied at link time.</dd>
+  It performs standard link time optimizations and allows optimization
+  modules to be loaded and run so that language specific optimizations can 
+  be applied at link time.</dd>
 
   <dt><tt><b>llvm-link</b></tt></dt>
   <dd><tt>llvm-link</tt>, not surprisingly, links multiple LLVM modules into 

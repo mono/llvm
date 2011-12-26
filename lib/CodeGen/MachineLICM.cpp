@@ -37,9 +37,15 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
+
+static cl::opt<bool>
+AvoidSpeculation("avoid-speculation",
+                 cl::desc("MachineLICM should avoid speculation"),
+                 cl::init(true), cl::Hidden);
 
 STATISTIC(NumHoisted,
           "Number of machine instructions hoisted out of loops");
@@ -90,6 +96,17 @@ namespace {
 
     // For each opcode, keep a list of potential CSE instructions.
     DenseMap<unsigned, std::vector<const MachineInstr*> > CSEMap;
+
+    enum {
+      SpeculateFalse   = 0,
+      SpeculateTrue    = 1,
+      SpeculateUnknown = 2
+    };
+
+    // If a MBB does not dominate loop exiting blocks then it may not safe
+    // to hoist loads from this block.
+    // Tri-state: 0 - false, 1 - true, 2 - unknown
+    unsigned SpeculationState;
 
   public:
     static char ID; // Pass identification, replacement for typeid
@@ -194,13 +211,29 @@ namespace {
     /// hoist the given loop invariant.
     bool IsProfitableToHoist(MachineInstr &MI);
 
-    /// HoistRegion - Walk the specified region of the CFG (defined by all
-    /// blocks dominated by the specified block, and that are in the current
-    /// loop) in depth first order w.r.t the DominatorTree. This allows us to
-    /// visit definitions before uses, allowing us to hoist a loop body in one
-    /// pass without iteration.
+    /// IsGuaranteedToExecute - Check if this mbb is guaranteed to execute.
+    /// If not then a load from this mbb may not be safe to hoist.
+    bool IsGuaranteedToExecute(MachineBasicBlock *BB);
+
+    void EnterScope(MachineBasicBlock *MBB);
+
+    void ExitScope(MachineBasicBlock *MBB);
+
+    /// ExitScopeIfDone - Destroy scope for the MBB that corresponds to given
+    /// dominator tree node if its a leaf or all of its children are done. Walk
+    /// up the dominator tree to destroy ancestors which are now done.
+    void ExitScopeIfDone(MachineDomTreeNode *Node,
+                DenseMap<MachineDomTreeNode*, unsigned> &OpenChildren,
+                DenseMap<MachineDomTreeNode*, MachineDomTreeNode*> &ParentMap);
+
+    /// HoistOutOfLoop - Walk the specified loop in the CFG (defined by all
+    /// blocks dominated by the specified header block, and that are in the
+    /// current loop) in depth first order w.r.t the DominatorTree. This allows
+    /// us to visit definitions before uses, allowing us to hoist a loop body in
+    /// one pass without iteration.
     ///
-    void HoistRegion(MachineDomTreeNode *N, bool IsHeader = false);
+    void HoistOutOfLoop(MachineDomTreeNode *LoopHeaderNode);
+    void HoistRegion(MachineDomTreeNode *N, bool IsHeader);
 
     /// getRegisterClassIDAndCost - For a given MI, register, and the operand
     /// index, return the ID and cost of its representative register class by
@@ -235,6 +268,10 @@ namespace {
     /// the instruction to the preheader.
     bool EliminateCSE(MachineInstr *MI,
            DenseMap<unsigned, std::vector<const MachineInstr*> >::iterator &CI);
+
+    /// MayCSE - Return true if the given instruction will be CSE'd if it's
+    /// hoisted out of the loop.
+    bool MayCSE(MachineInstr *MI);
 
     /// Hoist - When an instruction is found to only use loop invariant operands
     /// that is safe to hoist, this instruction is called to do the dirty work.
@@ -331,7 +368,7 @@ bool MachineLICM::runOnMachineFunction(MachineFunction &MF) {
       // being hoisted.
       MachineDomTreeNode *N = DT->getNode(CurLoop->getHeader());
       FirstInLoop = true;
-      HoistRegion(N, true);
+      HoistOutOfLoop(N);
       CSEMap.clear();
     }
   }
@@ -448,6 +485,12 @@ void MachineLICM::HoistRegionPostRA() {
   const std::vector<MachineBasicBlock*> Blocks = CurLoop->getBlocks();
   for (unsigned i = 0, e = Blocks.size(); i != e; ++i) {
     MachineBasicBlock *BB = Blocks[i];
+
+    // If the header of the loop containing this basic block is a landing pad,
+    // then don't try to hoist instructions out of this loop.
+    const MachineLoop *ML = MLI->getLoopFor(BB);
+    if (ML && ML->getHeader()->isLandingPad()) continue;
+
     // Conservatively treat live-in's as an external def.
     // FIXME: That means a reload that're reused in successor block(s) will not
     // be LICM'ed.
@@ -459,6 +502,7 @@ void MachineLICM::HoistRegionPostRA() {
         ++PhysRegDefs[*AS];
     }
 
+    SpeculationState = SpeculateUnknown;
     for (MachineBasicBlock::iterator
            MII = BB->begin(), E = BB->end(); MII != E; ++MII) {
       MachineInstr *MI = &*MII;
@@ -552,51 +596,147 @@ void MachineLICM::HoistPostRA(MachineInstr *MI, unsigned Def) {
   Changed = true;
 }
 
-/// HoistRegion - Walk the specified region of the CFG (defined by all blocks
-/// dominated by the specified block, and that are in the current loop) in depth
-/// first order w.r.t the DominatorTree. This allows us to visit definitions
-/// before uses, allowing us to hoist a loop body in one pass without iteration.
-///
-void MachineLICM::HoistRegion(MachineDomTreeNode *N, bool IsHeader) {
-  assert(N != 0 && "Null dominator tree node?");
-  MachineBasicBlock *BB = N->getBlock();
+// IsGuaranteedToExecute - Check if this mbb is guaranteed to execute.
+// If not then a load from this mbb may not be safe to hoist.
+bool MachineLICM::IsGuaranteedToExecute(MachineBasicBlock *BB) {
+  if (SpeculationState != SpeculateUnknown)
+    return SpeculationState == SpeculateFalse;
+    
+  if (BB != CurLoop->getHeader()) {
+    // Check loop exiting blocks.
+    SmallVector<MachineBasicBlock*, 8> CurrentLoopExitingBlocks;
+    CurLoop->getExitingBlocks(CurrentLoopExitingBlocks);
+    for (unsigned i = 0, e = CurrentLoopExitingBlocks.size(); i != e; ++i)
+      if (!DT->dominates(BB, CurrentLoopExitingBlocks[i])) {
+        SpeculationState = SpeculateTrue;
+        return false;
+      }
+  }
 
-  // If this subregion is not in the top level loop at all, exit.
-  if (!CurLoop->contains(BB)) return;
+  SpeculationState = SpeculateFalse;
+  return true;
+}
 
-  MachineBasicBlock *Preheader = getCurPreheader();
-  if (!Preheader)
+void MachineLICM::EnterScope(MachineBasicBlock *MBB) {
+  DEBUG(dbgs() << "Entering: " << MBB->getName() << '\n');
+
+  // Remember livein register pressure.
+  BackTrace.push_back(RegPressure);
+}
+
+void MachineLICM::ExitScope(MachineBasicBlock *MBB) {
+  DEBUG(dbgs() << "Exiting: " << MBB->getName() << '\n');
+  BackTrace.pop_back();
+}
+
+/// ExitScopeIfDone - Destroy scope for the MBB that corresponds to the given
+/// dominator tree node if its a leaf or all of its children are done. Walk
+/// up the dominator tree to destroy ancestors which are now done.
+void MachineLICM::ExitScopeIfDone(MachineDomTreeNode *Node,
+                                  DenseMap<MachineDomTreeNode*, unsigned> &OpenChildren,
+                                  DenseMap<MachineDomTreeNode*, MachineDomTreeNode*> &ParentMap) {
+  if (OpenChildren[Node])
     return;
 
-  if (IsHeader) {
+  // Pop scope.
+  ExitScope(Node->getBlock());
+
+  // Now traverse upwards to pop ancestors whose offsprings are all done.
+  while (MachineDomTreeNode *Parent = ParentMap[Node]) {
+    unsigned Left = --OpenChildren[Parent];
+    if (Left != 0)
+      break;
+    ExitScope(Parent->getBlock());
+    Node = Parent;
+  }
+}
+
+/// HoistOutOfLoop - Walk the specified loop in the CFG (defined by all
+/// blocks dominated by the specified header block, and that are in the
+/// current loop) in depth first order w.r.t the DominatorTree. This allows
+/// us to visit definitions before uses, allowing us to hoist a loop body in
+/// one pass without iteration.
+///
+void MachineLICM::HoistOutOfLoop(MachineDomTreeNode *HeaderN) {
+  SmallVector<MachineDomTreeNode*, 32> Scopes;
+  SmallVector<MachineDomTreeNode*, 8> WorkList;
+  DenseMap<MachineDomTreeNode*, MachineDomTreeNode*> ParentMap;
+  DenseMap<MachineDomTreeNode*, unsigned> OpenChildren;
+
+  // Perform a DFS walk to determine the order of visit.
+  WorkList.push_back(HeaderN);
+  do {
+    MachineDomTreeNode *Node = WorkList.pop_back_val();
+    assert(Node != 0 && "Null dominator tree node?");
+    MachineBasicBlock *BB = Node->getBlock();
+
+    // If the header of the loop containing this basic block is a landing pad,
+    // then don't try to hoist instructions out of this loop.
+    const MachineLoop *ML = MLI->getLoopFor(BB);
+    if (ML && ML->getHeader()->isLandingPad())
+      continue;
+
+    // If this subregion is not in the top level loop at all, exit.
+    if (!CurLoop->contains(BB))
+      continue;
+
+    Scopes.push_back(Node);
+    const std::vector<MachineDomTreeNode*> &Children = Node->getChildren();
+    unsigned NumChildren = Children.size();
+
+    // Don't hoist things out of a large switch statement.  This often causes
+    // code to be hoisted that wasn't going to be executed, and increases
+    // register pressure in a situation where it's likely to matter.
+    if (BB->succ_size() >= 25)
+      NumChildren = 0;
+
+    OpenChildren[Node] = NumChildren;
+    // Add children in reverse order as then the next popped worklist node is
+    // the first child of this node.  This means we ultimately traverse the
+    // DOM tree in exactly the same order as if we'd recursed.
+    for (int i = (int)NumChildren-1; i >= 0; --i) {
+      MachineDomTreeNode *Child = Children[i];
+      ParentMap[Child] = Node;
+      WorkList.push_back(Child);
+    }
+  } while (!WorkList.empty());
+
+  if (Scopes.size() != 0) {
+    MachineBasicBlock *Preheader = getCurPreheader();
+    if (!Preheader)
+      return;
+
     // Compute registers which are livein into the loop headers.
     RegSeen.clear();
     BackTrace.clear();
     InitRegPressure(Preheader);
   }
 
-  // Remember livein register pressure.
-  BackTrace.push_back(RegPressure);
+  // Now perform LICM.
+  for (unsigned i = 0, e = Scopes.size(); i != e; ++i) {
+    MachineDomTreeNode *Node = Scopes[i];
+    MachineBasicBlock *MBB = Node->getBlock();
 
-  for (MachineBasicBlock::iterator
-         MII = BB->begin(), E = BB->end(); MII != E; ) {
-    MachineBasicBlock::iterator NextMII = MII; ++NextMII;
-    MachineInstr *MI = &*MII;
-    if (!Hoist(MI, Preheader))
-      UpdateRegPressure(MI);
-    MII = NextMII;
+    MachineBasicBlock *Preheader = getCurPreheader();
+    if (!Preheader)
+      continue;
+
+    EnterScope(MBB);
+
+    // Process the block
+    SpeculationState = SpeculateUnknown;
+    for (MachineBasicBlock::iterator
+         MII = MBB->begin(), E = MBB->end(); MII != E; ) {
+      MachineBasicBlock::iterator NextMII = MII; ++NextMII;
+      MachineInstr *MI = &*MII;
+      if (!Hoist(MI, Preheader))
+        UpdateRegPressure(MI);
+      MII = NextMII;
+    }
+
+    // If it's a leaf node, it's done. Traverse upwards to pop ancestors.
+    ExitScopeIfDone(Node, OpenChildren, ParentMap);
   }
-
-  // Don't hoist things out of a large switch statement.  This often causes
-  // code to be hoisted that wasn't going to be executed, and increases
-  // register pressure in a situation where it's likely to matter.
-  if (BB->succ_size() < 25) {
-    const std::vector<MachineDomTreeNode*> &Children = N->getChildren();
-    for (unsigned I = 0, E = Children.size(); I != E; ++I)
-      HoistRegion(Children[I]);
-  }
-
-  BackTrace.pop_back();
 }
 
 static bool isOperandKill(const MachineOperand &MO, MachineRegisterInfo *MRI) {
@@ -611,7 +751,7 @@ MachineLICM::getRegisterClassIDAndCost(const MachineInstr *MI,
                                        unsigned &RCId, unsigned &RCCost) const {
   const TargetRegisterClass *RC = MRI->getRegClass(Reg);
   EVT VT = *RC->vt_begin();
-  if (VT == MVT::untyped) {
+  if (VT == MVT::Untyped) {
     RCId = RC->getID();
     RCCost = 1;
   } else {
@@ -703,6 +843,21 @@ void MachineLICM::UpdateRegPressure(const MachineInstr *MI) {
   }
 }
 
+/// isLoadFromGOTOrConstantPool - Return true if this machine instruction 
+/// loads from global offset table or constant pool.
+static bool isLoadFromGOTOrConstantPool(MachineInstr &MI) {
+  assert (MI.mayLoad() && "Expected MI that loads!");
+  for (MachineInstr::mmo_iterator I = MI.memoperands_begin(),
+	 E = MI.memoperands_end(); I != E; ++I) {
+    if (const Value *V = (*I)->getValue()) {
+      if (const PseudoSourceValue *PSV = dyn_cast<PseudoSourceValue>(V))
+        if (PSV == PSV->getGOT() || PSV == PSV->getConstantPool())
+	  return true;
+    }
+  }
+  return false;
+}
+
 /// IsLICMCandidate - Returns true if the instruction may be a suitable
 /// candidate for LICM. e.g. If the instruction is a call, then it's obviously
 /// not safe to hoist it.
@@ -711,7 +866,17 @@ bool MachineLICM::IsLICMCandidate(MachineInstr &I) {
   bool DontMoveAcrossStore = true;
   if (!I.isSafeToMove(TII, AA, DontMoveAcrossStore))
     return false;
-  
+
+  // If it is load then check if it is guaranteed to execute by making sure that
+  // it dominates all exiting blocks. If it doesn't, then there is a path out of
+  // the loop which does not execute this load, so we can't hoist it. Loads
+  // from constant memory are not safe to speculate all the time, for example
+  // indexed load from a jump table.
+  // Stores and side effects are already checked by isSafeToMove.
+  if (I.mayLoad() && !isLoadFromGOTOrConstantPool(I) && 
+      !IsGuaranteedToExecute(I.getParent()))
+    return false;
+
   return true;
 }
 
@@ -837,7 +1002,7 @@ bool MachineLICM::HasHighOperandLatency(MachineInstr &MI,
 /// IsCheapInstruction - Return true if the instruction is marked "cheap" or
 /// the operand latency between its def and a use is one or less.
 bool MachineLICM::IsCheapInstruction(MachineInstr &MI) const {
-  if (MI.getDesc().isAsCheapAsAMove() || MI.isCopyLike())
+  if (MI.isAsCheapAsAMove() || MI.isCopyLike())
     return true;
   if (!InstrItins || InstrItins->isEmpty())
     return false;
@@ -871,9 +1036,11 @@ bool MachineLICM::CanCauseHighRegPressure(DenseMap<unsigned, int> &Cost) {
       continue;
 
     unsigned RCId = CI->first;
+    unsigned Limit = RegLimit[RCId];
+    int Cost = CI->second;
     for (unsigned i = BackTrace.size(); i != 0; --i) {
       SmallVector<unsigned, 8> &RP = BackTrace[i-1];
-      if (RP[RCId] + CI->second >= RegLimit[RCId])
+      if (RP[RCId] + Cost >= Limit)
         return true;
     }
   }
@@ -992,6 +1159,13 @@ bool MachineLICM::IsProfitableToHoist(MachineInstr &MI) {
       return true;
     }
 
+    // Do not "speculate" in high register pressure situation. If an
+    // instruction is not guaranteed to be executed in the loop, it's best to be
+    // conservative.
+    if (AvoidSpeculation &&
+        (!IsGuaranteedToExecute(MI.getParent()) && !MayCSE(&MI)))
+      return false;
+
     // High register pressure situation, only hoist if the instruction is going to
     // be remat'ed.
     if (!TII->isTriviallyReMaterializable(&MI, AA) &&
@@ -1014,7 +1188,7 @@ bool MachineLICM::IsProfitableToHoist(MachineInstr &MI) {
 
 MachineInstr *MachineLICM::ExtractHoistableLoad(MachineInstr *MI) {
   // Don't unfold simple loads.
-  if (MI->getDesc().canFoldAsLoad())
+  if (MI->canFoldAsLoad())
     return 0;
 
   // If not, we may be able to unfold a load and hoist that.
@@ -1050,8 +1224,9 @@ MachineInstr *MachineLICM::ExtractHoistableLoad(MachineInstr *MI) {
   assert(NewMIs.size() == 2 &&
          "Unfolded a load into multiple instructions!");
   MachineBasicBlock *MBB = MI->getParent();
-  MBB->insert(MI, NewMIs[0]);
-  MBB->insert(MI, NewMIs[1]);
+  MachineBasicBlock::iterator Pos = MI;
+  MBB->insert(Pos, NewMIs[0]);
+  MBB->insert(Pos, NewMIs[1]);
   // If unfolding produced a load that wasn't loop-invariant or profitable to
   // hoist, discard the new instructions and bail.
   if (!IsLoopInvariantInst(*NewMIs[0]) || !IsProfitableToHoist(*NewMIs[0])) {
@@ -1107,6 +1282,7 @@ bool MachineLICM::EliminateCSE(MachineInstr *MI,
 
     // Replace virtual registers defined by MI by their counterparts defined
     // by Dup.
+    SmallVector<unsigned, 2> Defs;
     for (unsigned i = 0, e = MI->getNumOperands(); i != e; ++i) {
       const MachineOperand &MO = MI->getOperand(i);
 
@@ -1117,16 +1293,52 @@ bool MachineLICM::EliminateCSE(MachineInstr *MI,
              "Instructions with different phys regs are not identical!");
 
       if (MO.isReg() && MO.isDef() &&
-          !TargetRegisterInfo::isPhysicalRegister(MO.getReg())) {
-        MRI->replaceRegWith(MO.getReg(), Dup->getOperand(i).getReg());
-        MRI->clearKillFlags(Dup->getOperand(i).getReg());
+          !TargetRegisterInfo::isPhysicalRegister(MO.getReg()))
+        Defs.push_back(i);
+    }
+
+    SmallVector<const TargetRegisterClass*, 2> OrigRCs;
+    for (unsigned i = 0, e = Defs.size(); i != e; ++i) {
+      unsigned Idx = Defs[i];
+      unsigned Reg = MI->getOperand(Idx).getReg();
+      unsigned DupReg = Dup->getOperand(Idx).getReg();
+      OrigRCs.push_back(MRI->getRegClass(DupReg));
+
+      if (!MRI->constrainRegClass(DupReg, MRI->getRegClass(Reg))) {
+        // Restore old RCs if more than one defs.
+        for (unsigned j = 0; j != i; ++j)
+          MRI->setRegClass(Dup->getOperand(Defs[j]).getReg(), OrigRCs[j]);
+        return false;
       }
     }
+
+    for (unsigned i = 0, e = Defs.size(); i != e; ++i) {
+      unsigned Idx = Defs[i];
+      unsigned Reg = MI->getOperand(Idx).getReg();
+      unsigned DupReg = Dup->getOperand(Idx).getReg();
+      MRI->replaceRegWith(Reg, DupReg);
+      MRI->clearKillFlags(DupReg);
+    }
+
     MI->eraseFromParent();
     ++NumCSEed;
     return true;
   }
   return false;
+}
+
+/// MayCSE - Return true if the given instruction will be CSE'd if it's
+/// hoisted out of the loop.
+bool MachineLICM::MayCSE(MachineInstr *MI) {
+  unsigned Opcode = MI->getOpcode();
+  DenseMap<unsigned, std::vector<const MachineInstr*> >::iterator
+    CI = CSEMap.find(Opcode);
+  // Do not CSE implicit_def so ProcessImplicitDefs can properly propagate
+  // the undef property onto uses.
+  if (CI == CSEMap.end() || MI->isImplicitDef())
+    return false;
+
+  return LookForDuplicate(MI, CI->second) != 0;
 }
 
 /// Hoist - When an instruction is found to use only loop invariant operands

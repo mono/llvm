@@ -16,15 +16,18 @@
 
 using namespace llvm;
 
+void MipsMCAsmInfo::anchor() { }
+
 MipsMCAsmInfo::MipsMCAsmInfo(const Target &T, StringRef TT) {
   Triple TheTriple(TT);
-  if (TheTriple.getArch() == Triple::mips)
+  if ((TheTriple.getArch() == Triple::mips) ||
+      (TheTriple.getArch() == Triple::mips64))
     IsLittleEndian = false;
 
   AlignmentIsInBytes          = false;
   Data16bitsDirective         = "\t.2byte\t";
   Data32bitsDirective         = "\t.4byte\t";
-  Data64bitsDirective         = 0;
+  Data64bitsDirective         = "\t.8byte\t";
   PrivateGlobalPrefix         = "$";
   CommentString               = "#";
   ZeroDirective               = "\t.space\t";

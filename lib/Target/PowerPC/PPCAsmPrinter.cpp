@@ -50,7 +50,6 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "InstPrinter/PPCInstPrinter.h"
 using namespace llvm;
@@ -366,14 +365,21 @@ void PPCAsmPrinter::EmitInstruction(const MachineInstr *MI) {
   }
       
   case PPC::MFCRpseud:
+  case PPC::MFCR8pseud:
     // Transform: %R3 = MFCRpseud %CR7
     // Into:      %R3 = MFCR      ;; cr7
     OutStreamer.AddComment(PPCInstPrinter::
                            getRegisterName(MI->getOperand(1).getReg()));
-    TmpInst.setOpcode(PPC::MFCR);
+    TmpInst.setOpcode(Subtarget.isPPC64() ? PPC::MFCR8 : PPC::MFCR);
     TmpInst.addOperand(MCOperand::CreateReg(MI->getOperand(0).getReg()));
     OutStreamer.EmitInstruction(TmpInst);
     return;
+  case PPC::SYNC:
+    // In Book E sync is called msync, handle this special case here...
+    if (Subtarget.isBookE()) {
+      OutStreamer.EmitRawText(StringRef("\tmsync"));
+      return;
+    }
   }
 
   LowerPPCMachineInstrToMCInst(MI, TmpInst, *this, Subtarget.isDarwin());
@@ -421,6 +427,7 @@ void PPCDarwinAsmPrinter::EmitStartOfAsmFile(Module &M) {
   static const char *const CPUDirectives[] = {
     "",
     "ppc",
+    "ppc440",
     "ppc601",
     "ppc602",
     "ppc603",
@@ -435,7 +442,7 @@ void PPCDarwinAsmPrinter::EmitStartOfAsmFile(Module &M) {
     Directive = PPC::DIR_970;
   if (Subtarget.hasAltivec() && Directive < PPC::DIR_7400)
     Directive = PPC::DIR_7400;
-  if (Subtarget.isPPC64() && Directive < PPC::DIR_970)
+  if (Subtarget.isPPC64() && Directive < PPC::DIR_64)
     Directive = PPC::DIR_64;
   assert(Directive <= PPC::DIR_64 && "Directive out of range.");
   

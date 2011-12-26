@@ -83,7 +83,7 @@ class Register<string n, list<string> altNames = []> {
   // CostPerUse - Additional cost of instructions using this register compared
   // to other registers in its class. The register allocator will try to
   // minimize the number of instructions using a register with a CostPerUse.
-  // This is used by the x86-64 and ARM Thumb targets where some registers 
+  // This is used by the x86-64 and ARM Thumb targets where some registers
   // require larger instruction encodings.
   int CostPerUse = 0;
 }
@@ -356,6 +356,15 @@ class Instruction {
   // associated with them. Once we've migrated all of them over to true
   // pseudo-instructions that are lowered to real instructions prior to
   // the printer/emitter, we can remove this attribute and just use isPseudo.
+  //
+  // The intended use is:
+  // isPseudo: Does not have encoding information and should be expanded,
+  //   at the latest, during lowering to MCInst.
+  //
+  // isCodeGenOnly: Does have encoding information and can go through to the
+  //   CodeEmitter unchanged, but duplicates a canonical instruction
+  //   definition's encoding and should be ignored when constructing the
+  //   assembler match tables.
   bit isCodeGenOnly = 0;
 
   // Is this instruction a pseudo instruction for use by the assembler parser.
@@ -414,7 +423,7 @@ class Predicate<string cond> {
 /// NoHonorSignDependentRounding - This predicate is true if support for
 /// sign-dependent-rounding is not enabled.
 def NoHonorSignDependentRounding
- : Predicate<"!HonorSignDependentRoundingFPMath()">;
+ : Predicate<"!TM.Options.HonorSignDependentRoundingFPMath()">;
 
 class Requires<list<Predicate> preds> {
   list<Predicate> Predicates = preds;
@@ -586,7 +595,7 @@ class InstrInfo {
 // Standard Pseudo Instructions.
 // This list must match TargetOpcodes.h and CodeGenTarget.cpp.
 // Only these instructions are allowed in the TargetOpcode namespace.
-let isCodeGenOnly = 1, Namespace = "TargetOpcode" in {
+let isCodeGenOnly = 1, isPseudo = 1, Namespace = "TargetOpcode" in {
 def PHI : Instruction {
   let OutOperandList = (outs);
   let InOperandList = (ins variable_ops);
@@ -679,6 +688,11 @@ def COPY : Instruction {
   let neverHasSideEffects = 1;
   let isAsCheapAsAMove = 1;
 }
+def BUNDLE : Instruction {
+  let OutOperandList = (outs);
+  let InOperandList = (ins variable_ops);
+  let AsmString = "BUNDLE";
+}
 }
 
 //===----------------------------------------------------------------------===//
@@ -724,7 +738,20 @@ class AssemblerPredicate<string cond> {
   string AssemblerCondString = cond;
 }
 
-
+/// TokenAlias - This class allows targets to define assembler token
+/// operand aliases. That is, a token literal operand which is equivalent
+/// to another, canonical, token literal. For example, ARM allows:
+///   vmov.u32 s4, #0  -> vmov.i32, #0
+/// 'u32' is a more specific designator for the 32-bit integer type specifier
+/// and is legal for any instruction which accepts 'i32' as a datatype suffix.
+///   def : TokenAlias<".u32", ".i32">;
+///
+/// This works by marking the match class of 'From' as a subclass of the
+/// match class of 'To'.
+class TokenAlias<string From, string To> {
+  string FromToken = From;
+  string ToToken = To;
+}
 
 /// MnemonicAlias - This class allows targets to define assembler mnemonic
 /// aliases.  This should be used when all forms of one mnemonic are accepted

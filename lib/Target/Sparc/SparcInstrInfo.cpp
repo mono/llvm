@@ -112,6 +112,17 @@ static SPCC::CondCodes GetOppositeBranchCondition(SPCC::CondCodes CC)
   }
 }
 
+MachineInstr *
+SparcInstrInfo::emitFrameIndexDebugValue(MachineFunction &MF,
+                                         int FrameIx,
+                                         uint64_t Offset,
+                                         const MDNode *MDPtr,
+                                         DebugLoc dl) const {
+  MachineInstrBuilder MIB = BuildMI(MF, dl, get(SP::DBG_VALUE))
+    .addFrameIndex(FrameIx).addImm(0).addImm(Offset).addMetadata(MDPtr);
+  return &*MIB;
+}
+
 
 bool SparcInstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,
                                    MachineBasicBlock *&TBB,
@@ -133,7 +144,7 @@ bool SparcInstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,
       break;
 
     //Terminator is not a branch
-    if (!I->getDesc().isBranch())
+    if (!I->isBranch())
       return true;
 
     //Handle Unconditional branches
@@ -195,7 +206,7 @@ bool SparcInstrInfo::AnalyzeBranch(MachineBasicBlock &MBB,
           .addMBB(UnCondBrIter->getOperand(0).getMBB()).addImm(BranchCode);
         BuildMI(MBB, UnCondBrIter, MBB.findDebugLoc(I), get(SP::BA))
           .addMBB(TargetBB);
-        MBB.addSuccessor(TargetBB);
+
         OldInst->eraseFromParent();
         UnCondBrIter->eraseFromParent();
 

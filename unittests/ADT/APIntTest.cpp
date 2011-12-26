@@ -144,6 +144,12 @@ TEST(APIntTest, i1) {
   EXPECT_EQ(zero, one.lshr(1));
   EXPECT_EQ(zero, one.ashr(1));
 
+  // Rotates.
+  EXPECT_EQ(one, one.rotl(0));
+  EXPECT_EQ(one, one.rotl(1));
+  EXPECT_EQ(one, one.rotr(0));
+  EXPECT_EQ(one, one.rotr(1));
+
   // Multiplies.
   EXPECT_EQ(neg_one, neg_one * one);
   EXPECT_EQ(neg_one, one * neg_one);
@@ -237,6 +243,20 @@ TEST(APIntTest, fromString) {
   EXPECT_EQ(APInt(32, uint64_t(-16LL)), APInt(32, "-10", 16));
   EXPECT_EQ(APInt(32, uint64_t(-31LL)), APInt(32, "-1F", 16));
   EXPECT_EQ(APInt(32, uint64_t(-32LL)), APInt(32, "-20", 16));
+
+  EXPECT_EQ(APInt(32,  0), APInt(32,  "0", 36));
+  EXPECT_EQ(APInt(32,  1), APInt(32,  "1", 36));
+  EXPECT_EQ(APInt(32, 35), APInt(32,  "Z", 36));
+  EXPECT_EQ(APInt(32, 36), APInt(32, "10", 36));
+  EXPECT_EQ(APInt(32, 71), APInt(32, "1Z", 36));
+  EXPECT_EQ(APInt(32, 72), APInt(32, "20", 36));
+  
+  EXPECT_EQ(APInt(32,  uint64_t(-0LL)), APInt(32,  "-0", 36));
+  EXPECT_EQ(APInt(32,  uint64_t(-1LL)), APInt(32,  "-1", 36));
+  EXPECT_EQ(APInt(32, uint64_t(-35LL)), APInt(32,  "-Z", 36));
+  EXPECT_EQ(APInt(32, uint64_t(-36LL)), APInt(32, "-10", 36));
+  EXPECT_EQ(APInt(32, uint64_t(-71LL)), APInt(32, "-1Z", 36));
+  EXPECT_EQ(APInt(32, uint64_t(-72LL)), APInt(32, "-20", 36));
 }
 
 TEST(APIntTest, FromArray) {
@@ -340,6 +360,9 @@ TEST(APIntTest, toString) {
   APInt(8, 0).toString(S, 16, true, true);
   EXPECT_EQ(S.str().str(), "0x0");
   S.clear();
+  APInt(8, 0).toString(S, 36, true, false);
+  EXPECT_EQ(S.str().str(), "0");
+  S.clear();
 
   isSigned = false;
   APInt(8, 255, isSigned).toString(S, 2, isSigned, true);
@@ -354,6 +377,9 @@ TEST(APIntTest, toString) {
   APInt(8, 255, isSigned).toString(S, 16, isSigned, true);
   EXPECT_EQ(S.str().str(), "0xFF");
   S.clear();
+  APInt(8, 255, isSigned).toString(S, 36, isSigned, false);
+  EXPECT_EQ(S.str().str(), "73");
+  S.clear();
 
   isSigned = true;
   APInt(8, 255, isSigned).toString(S, 2, isSigned, true);
@@ -367,6 +393,9 @@ TEST(APIntTest, toString) {
   S.clear();
   APInt(8, 255, isSigned).toString(S, 16, isSigned, true);
   EXPECT_EQ(S.str().str(), "-0x1");
+  S.clear();
+  APInt(8, 255, isSigned).toString(S, 36, isSigned, false);
+  EXPECT_EQ(S.str().str(), "-1");
   S.clear();
 }
 
@@ -407,7 +436,7 @@ TEST(APIntTest, magicu) {
 TEST(APIntTest, StringDeath) {
   EXPECT_DEATH(APInt(0, "", 0), "Bitwidth too small");
   EXPECT_DEATH(APInt(32, "", 0), "Invalid string length");
-  EXPECT_DEATH(APInt(32, "0", 0), "Radix should be 2, 8, 10, or 16!");
+  EXPECT_DEATH(APInt(32, "0", 0), "Radix should be 2, 8, 10, 16, or 36!");
   EXPECT_DEATH(APInt(32, "", 10), "Invalid string length");
   EXPECT_DEATH(APInt(32, "-", 10), "String is only a sign, needs a value.");
   EXPECT_DEATH(APInt(1, "1234", 10), "Insufficient bit width");
@@ -417,5 +446,40 @@ TEST(APIntTest, StringDeath) {
 }
 #endif
 #endif
+
+TEST(APIntTest, mul_clear) {
+  APInt ValA(65, -1ULL);
+  APInt ValB(65, 4);
+  APInt ValC(65, 0);
+  ValC = ValA * ValB;
+  ValA *= ValB;
+  EXPECT_EQ(ValA.toString(10, false), ValC.toString(10, false));
+}
+
+TEST(APIntTest, Rotate) {
+  EXPECT_EQ(APInt(8, 1),  APInt(8, 1).rotl(0));
+  EXPECT_EQ(APInt(8, 2),  APInt(8, 1).rotl(1));
+  EXPECT_EQ(APInt(8, 4),  APInt(8, 1).rotl(2));
+  EXPECT_EQ(APInt(8, 16), APInt(8, 1).rotl(4));
+  EXPECT_EQ(APInt(8, 1),  APInt(8, 1).rotl(8));
+
+  EXPECT_EQ(APInt(8, 16), APInt(8, 16).rotl(0));
+  EXPECT_EQ(APInt(8, 32), APInt(8, 16).rotl(1));
+  EXPECT_EQ(APInt(8, 64), APInt(8, 16).rotl(2));
+  EXPECT_EQ(APInt(8, 1),  APInt(8, 16).rotl(4));
+  EXPECT_EQ(APInt(8, 16), APInt(8, 16).rotl(8));
+
+  EXPECT_EQ(APInt(8, 16), APInt(8, 16).rotr(0));
+  EXPECT_EQ(APInt(8, 8),  APInt(8, 16).rotr(1));
+  EXPECT_EQ(APInt(8, 4),  APInt(8, 16).rotr(2));
+  EXPECT_EQ(APInt(8, 1),  APInt(8, 16).rotr(4));
+  EXPECT_EQ(APInt(8, 16), APInt(8, 16).rotr(8));
+
+  EXPECT_EQ(APInt(8, 1),   APInt(8, 1).rotr(0));
+  EXPECT_EQ(APInt(8, 128), APInt(8, 1).rotr(1));
+  EXPECT_EQ(APInt(8, 64),  APInt(8, 1).rotr(2));
+  EXPECT_EQ(APInt(8, 16),  APInt(8, 1).rotr(4));
+  EXPECT_EQ(APInt(8, 1),   APInt(8, 1).rotr(8));
+}
 
 }

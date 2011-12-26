@@ -81,7 +81,6 @@ namespace llvm {
 
       EH_SJLJ_SETJMP,         // SjLj exception handling setjmp.
       EH_SJLJ_LONGJMP,        // SjLj exception handling longjmp.
-      EH_SJLJ_DISPATCHSETUP,  // SjLj exception handling dispatch setup.
 
       TC_RETURN,    // Tail call return pseudo.
 
@@ -145,6 +144,9 @@ namespace llvm {
       // Vector move immediate and move negated immediate:
       VMOVIMM,
       VMVNIMM,
+
+      // Vector move f32 immediate:
+      VMOVFPIMM,
 
       // Vector duplicate:
       VDUP,
@@ -227,12 +229,6 @@ namespace llvm {
 
   /// Define some predicates that are used for node matching.
   namespace ARM {
-    /// getVFPf32Imm / getVFPf64Imm - If the given fp immediate can be
-    /// materialized with a VMOV.f32 / VMOV.f64 (i.e. fconsts / fconstd)
-    /// instruction, returns its 8-bit integer representation. Otherwise,
-    /// returns -1.
-    int getVFPf32Imm(const APFloat &FPImm);
-    int getVFPf64Imm(const APFloat &FPImm);
     bool isBitFieldInvertedMask(unsigned v);
   }
 
@@ -272,8 +268,13 @@ namespace llvm {
 
     /// allowsUnalignedMemoryAccesses - Returns true if the target allows
     /// unaligned memory accesses. of the specified type.
-    /// FIXME: Add getOptimalMemOpType to implement memcpy with NEON?
     virtual bool allowsUnalignedMemoryAccesses(EVT VT) const;
+
+    virtual EVT getOptimalMemOpType(uint64_t Size,
+                                    unsigned DstAlign, unsigned SrcAlign,
+                                    bool IsZeroVal,
+                                    bool MemcpyStrSrc,
+                                    MachineFunction &MF) const;
 
     /// isLegalAddressingMode - Return true if the addressing mode represented
     /// by AM is legal for this target, for a load/store of the specified type.
@@ -408,7 +409,6 @@ namespace llvm {
                              ISD::ArgFlagsTy Flags) const;
     SDValue LowerEH_SJLJ_SETJMP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerEH_SJLJ_LONGJMP(SDValue Op, SelectionDAG &DAG) const;
-    SDValue LowerEH_SJLJ_DISPATCHSETUP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG,
                                     const ARMSubtarget *Subtarget) const;
     SDValue LowerBlockAddress(SDValue Op, SelectionDAG &DAG) const;
@@ -517,6 +517,13 @@ namespace llvm {
                                                unsigned Size,
                                                bool signExtend,
                                                ARMCC::CondCodes Cond) const;
+
+    void SetupEntryBlockForSjLj(MachineInstr *MI,
+                                MachineBasicBlock *MBB,
+                                MachineBasicBlock *DispatchBB, int FI) const;
+
+    MachineBasicBlock *EmitSjLjDispatchBlock(MachineInstr *MI,
+                                             MachineBasicBlock *MBB) const;
 
     bool RemapAddSubWithFlags(MachineInstr *MI, MachineBasicBlock *BB) const;
   };

@@ -84,7 +84,8 @@ XCoreFrameLowering::XCoreFrameLowering(const XCoreSubtarget &sti)
 }
 
 bool XCoreFrameLowering::hasFP(const MachineFunction &MF) const {
-  return DisableFramePointerElim(MF) || MF.getFrameInfo()->hasVarSizedObjects();
+  return MF.getTarget().Options.DisableFramePointerElim(MF) ||
+    MF.getFrameInfo()->hasVarSizedObjects();
 }
 
 void XCoreFrameLowering::emitPrologue(MachineFunction &MF) const {
@@ -100,7 +101,8 @@ void XCoreFrameLowering::emitPrologue(MachineFunction &MF) const {
   DebugLoc dl = MBBI != MBB.end() ? MBBI->getDebugLoc() : DebugLoc();
 
   bool FP = hasFP(MF);
-  bool Nested = MF.getFunction()->getAttributes().hasAttrSomewhere(Attribute::Nest);
+  bool Nested = MF.getFunction()->
+                getAttributes().hasAttrSomewhere(Attribute::Nest);
 
   if (Nested) {
     loadFromStack(MBB, MBBI, XCore::R11, 0, dl, TII);

@@ -368,20 +368,11 @@ ReSimplify:
   case X86::SETB_C64r:    LowerUnaryToTwoAddr(OutMI, X86::SBB64rr); break;
   case X86::MOV8r0:       LowerUnaryToTwoAddr(OutMI, X86::XOR8rr); break;
   case X86::MOV32r0:      LowerUnaryToTwoAddr(OutMI, X86::XOR32rr); break;
-  case X86::FsFLD0SS:      LowerUnaryToTwoAddr(OutMI, X86::PXORrr); break;
-  case X86::FsFLD0SD:      LowerUnaryToTwoAddr(OutMI, X86::PXORrr); break;
-  case X86::VFsFLD0SS:     LowerUnaryToTwoAddr(OutMI, X86::VPXORrr); break;
-  case X86::VFsFLD0SD:     LowerUnaryToTwoAddr(OutMI, X86::VPXORrr); break;
-  case X86::V_SET0PS:      LowerUnaryToTwoAddr(OutMI, X86::XORPSrr); break;
-  case X86::V_SET0PD:      LowerUnaryToTwoAddr(OutMI, X86::XORPDrr); break;
-  case X86::V_SET0PI:      LowerUnaryToTwoAddr(OutMI, X86::PXORrr); break;
   case X86::V_SETALLONES:  LowerUnaryToTwoAddr(OutMI, X86::PCMPEQDrr); break;
-  case X86::AVX_SET0PS:    LowerUnaryToTwoAddr(OutMI, X86::VXORPSrr); break;
   case X86::AVX_SET0PSY:   LowerUnaryToTwoAddr(OutMI, X86::VXORPSYrr); break;
-  case X86::AVX_SET0PD:    LowerUnaryToTwoAddr(OutMI, X86::VXORPDrr); break;
   case X86::AVX_SET0PDY:   LowerUnaryToTwoAddr(OutMI, X86::VXORPDYrr); break;
-  case X86::AVX_SET0PI:    LowerUnaryToTwoAddr(OutMI, X86::VPXORrr); break;
   case X86::AVX_SETALLONES:  LowerUnaryToTwoAddr(OutMI, X86::VPCMPEQDrr); break;
+  case X86::AVX2_SETALLONES: LowerUnaryToTwoAddr(OutMI, X86::VPCMPEQDYrr);break;
 
   case X86::MOV16r0:
     LowerSubReg32_Op0(OutMI, X86::MOV32r0);   // MOV16r0 -> MOV32r0
@@ -533,6 +524,22 @@ ReSimplify:
   case X86::XOR16ri:    SimplifyShortImmForm(OutMI, X86::XOR16i16);  break;
   case X86::XOR32ri:    SimplifyShortImmForm(OutMI, X86::XOR32i32);  break;
   case X86::XOR64ri32:  SimplifyShortImmForm(OutMI, X86::XOR64i32);  break;
+
+  case X86::MORESTACK_RET:
+    OutMI.setOpcode(X86::RET);
+    break;
+
+  case X86::MORESTACK_RET_RESTORE_R10: {
+    MCInst retInst;
+
+    OutMI.setOpcode(X86::MOV64rr);
+    OutMI.addOperand(MCOperand::CreateReg(X86::R10));
+    OutMI.addOperand(MCOperand::CreateReg(X86::RAX));
+
+    retInst.setOpcode(X86::RET);
+    AsmPrinter.OutStreamer.EmitInstruction(retInst);
+    break;
+  }
   }
 }
 
@@ -598,6 +605,8 @@ static void LowerTlsAddr(MCStreamer &OutStreamer,
 }
 
 void X86AsmPrinter::EmitInstruction(const MachineInstr *MI) {
+  OutStreamer.EmitCodeRegion();
+
   X86MCInstLower MCInstLowering(Mang, *MF, *this);
   switch (MI->getOpcode()) {
   case TargetOpcode::DBG_VALUE:
@@ -614,7 +623,7 @@ void X86AsmPrinter::EmitInstruction(const MachineInstr *MI) {
     if (OutStreamer.hasRawTextSupport())
       OutStreamer.EmitRawText(StringRef("\t#MEMBARRIER"));
     return;
-        
+
 
   case X86::EH_RETURN:
   case X86::EH_RETURN64: {

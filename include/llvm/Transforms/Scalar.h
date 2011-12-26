@@ -112,6 +112,8 @@ Pass *createLICMPass();
 //
 Pass *createLoopStrengthReducePass(const TargetLowering *TLI = 0);
 
+Pass *createGlobalMergePass(const TargetLowering *TLI = 0);
+
 //===----------------------------------------------------------------------===//
 //
 // LoopUnswitch - This pass is a simple loop unswitching pass.
@@ -305,12 +307,6 @@ FunctionPass *createCodeGenPreparePass(const TargetLowering *TLI = 0);
 FunctionPass *createInstructionNamerPass();
 extern char &InstructionNamerID;
   
-//===----------------------------------------------------------------------===//
-//
-// GEPSplitter - Split complex GEPs into simple ones
-//
-FunctionPass *createGEPSplitterPass();
-
 //===----------------------------------------------------------------------===//
 //
 // Sink - Code Sinking

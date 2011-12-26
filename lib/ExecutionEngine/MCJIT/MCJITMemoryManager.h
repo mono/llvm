@@ -21,12 +21,15 @@ namespace llvm {
 // and the RuntimeDyld interface that maps objects, by name, onto their
 // matching LLVM IR counterparts in the module(s) being compiled.
 class MCJITMemoryManager : public RTDyldMemoryManager {
+  virtual void anchor();
   JITMemoryManager *JMM;
 
   // FIXME: Multiple modules.
   Module *M;
 public:
   MCJITMemoryManager(JITMemoryManager *jmm, Module *m) : JMM(jmm), M(m) {}
+  // We own the JMM, so make sure to delete it.
+  ~MCJITMemoryManager() { delete JMM; }
 
   // Allocate ActualSize bytes, or more, for the named function. Return
   // a pointer to the allocated memory and update Size to reflect how much
@@ -37,9 +40,9 @@ public:
     if (Name[0] == '_') ++Name;
     Function *F = M->getFunction(Name);
     // Some ObjC names have a prefixed \01 in the IR. If we failed to find
-    // the symbol and it's of the ObjC conventions (starts with "-"), try
-    // prepending a \01 and see if we can find it that way.
-    if (!F && Name[0] == '-')
+    // the symbol and it's of the ObjC conventions (starts with "-" or 
+    // "+"), try prepending a \01 and see if we can find it that way.
+    if (!F && (Name[0] == '-' || Name[0] == '+'))
       F = M->getFunction((Twine("\1") + Name).str());
     assert(F && "No matching function in JIT IR Module!");
     return JMM->startFunctionBody(F, Size);
@@ -54,9 +57,9 @@ public:
     if (Name[0] == '_') ++Name;
     Function *F = M->getFunction(Name);
     // Some ObjC names have a prefixed \01 in the IR. If we failed to find
-    // the symbol and it's of the ObjC conventions (starts with "-"), try
-    // prepending a \01 and see if we can find it that way.
-    if (!F && Name[0] == '-')
+    // the symbol and it's of the ObjC conventions (starts with "-" or
+    // "+"), try prepending a \01 and see if we can find it that way.
+    if (!F && (Name[0] == '-' || Name[0] == '+'))
       F = M->getFunction((Twine("\1") + Name).str());
     assert(F && "No matching function in JIT IR Module!");
     JMM->endFunctionBody(F, FunctionStart, FunctionEnd);

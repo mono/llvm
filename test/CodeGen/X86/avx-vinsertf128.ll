@@ -36,3 +36,23 @@ allocas:
   store <4 x i32> %blendAsInt.i503, <4 x i32>* undef, align 4
   ret void
 }
+
+;; DAG Combine must remove useless vinsertf128 instructions
+
+; CHECK: DAGCombineA
+; CHECK-NOT: vinsertf128 $1
+define <4 x i32> @DAGCombineA(<4 x i32> %v1) nounwind readonly {
+  %1 = shufflevector <4 x i32> %v1, <4 x i32> undef, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
+  %2 = shufflevector <8 x i32> %1, <8 x i32> undef, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
+  ret <4 x i32> %2
+}
+
+; CHECK: DAGCombineB
+; CHECK: vpaddd %xmm
+; CHECK-NOT: vinsertf128  $1
+; CHECK: vpaddd %xmm
+define <8 x i32> @DAGCombineB(<8 x i32> %v1, <8 x i32> %v2) nounwind readonly {
+  %1 = add <8 x i32> %v1, %v2
+  %2 = add <8 x i32> %1, %v1
+  ret <8 x i32> %2
+}

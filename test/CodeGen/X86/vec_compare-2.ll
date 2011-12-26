@@ -1,4 +1,4 @@
-; RUN: llc < %s -march=x86 -mcpu=penryn | FileCheck %s
+; RUN: llc < %s -mtriple=i686-linux -mcpu=penryn | FileCheck %s
 
 declare <4 x float> @llvm.x86.sse41.blendvps(<4 x float>, <4 x float>, <4 x float>) nounwind readnone
 
@@ -8,6 +8,7 @@ declare <4 x i32> @llvm.x86.sse41.pmaxsd(<4 x i32>, <4 x i32>) nounwind readnone
 
 define void @blackDespeckle_wrapper(i8** %args_list, i64* %gtid, i64 %xend) {
 entry:
+; CHECK: cfi_def_cfa_offset
 ; CHECK-NOT: set
 ; CHECK: pcmpgt
 ; CHECK: blendvps

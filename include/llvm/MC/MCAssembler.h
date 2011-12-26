@@ -106,6 +106,7 @@ public:
 };
 
 class MCDataFragment : public MCFragment {
+  virtual void anchor();
   SmallString<32> Contents;
 
   /// Fixups - The list of fixups in this fragment.
@@ -160,6 +161,8 @@ public:
 // object with just the MCInst and a code size, then we should just change
 // MCDataFragment to have an optional MCInst at its end.
 class MCInstFragment : public MCFragment {
+  virtual void anchor();
+
   /// Inst - The instruction this is a fragment for.
   MCInst Inst;
 
@@ -215,6 +218,8 @@ public:
 };
 
 class MCAlignFragment : public MCFragment {
+  virtual void anchor();
+
   /// Alignment - The alignment to ensure, in bytes.
   unsigned Alignment;
 
@@ -263,6 +268,8 @@ public:
 };
 
 class MCFillFragment : public MCFragment {
+  virtual void anchor();
+
   /// Value - Value to use for filling bytes.
   int64_t Value;
 
@@ -300,6 +307,8 @@ public:
 };
 
 class MCOrgFragment : public MCFragment {
+  virtual void anchor();
+
   /// Offset - The offset this fragment should start at.
   const MCExpr *Offset;
 
@@ -327,6 +336,8 @@ public:
 };
 
 class MCLEBFragment : public MCFragment {
+  virtual void anchor();
+
   /// Value - The value this fragment should contain.
   const MCExpr *Value;
 
@@ -358,6 +369,8 @@ public:
 };
 
 class MCDwarfLineAddrFragment : public MCFragment {
+  virtual void anchor();
+
   /// LineDelta - the value of the difference between the two line numbers
   /// between two .loc dwarf directives.
   int64_t LineDelta;
@@ -393,6 +406,8 @@ public:
 };
 
 class MCDwarfCallFrameFragment : public MCFragment {
+  virtual void anchor();
+
   /// AddrDelta - The expression for the difference of the two symbols that
   /// make up the address delta between two .cfi_* dwarf directives.
   const MCExpr *AddrDelta;
@@ -711,43 +726,44 @@ private:
   /// \return Whether the fixup value was fully resolved. This is true if the
   /// \arg Value result is fixed, otherwise the value may change due to
   /// relocation.
-  bool EvaluateFixup(const MCAsmLayout &Layout,
+  bool evaluateFixup(const MCAsmLayout &Layout,
                      const MCFixup &Fixup, const MCFragment *DF,
                      MCValue &Target, uint64_t &Value) const;
 
   /// Check whether a fixup can be satisfied, or whether it needs to be relaxed
   /// (increased in size, in order to hold its value correctly).
-  bool FixupNeedsRelaxation(const MCFixup &Fixup, const MCFragment *DF,
+  bool fixupNeedsRelaxation(const MCFixup &Fixup, const MCInstFragment *DF,
                             const MCAsmLayout &Layout) const;
 
   /// Check whether the given fragment needs relaxation.
-  bool FragmentNeedsRelaxation(const MCInstFragment *IF,
+  bool fragmentNeedsRelaxation(const MCInstFragment *IF,
                                const MCAsmLayout &Layout) const;
 
-  /// LayoutOnce - Perform one layout iteration and return true if any offsets
+  /// layoutOnce - Perform one layout iteration and return true if any offsets
   /// were adjusted.
-  bool LayoutOnce(MCAsmLayout &Layout);
+  bool layoutOnce(MCAsmLayout &Layout);
 
-  bool LayoutSectionOnce(MCAsmLayout &Layout, MCSectionData &SD);
+  bool layoutSectionOnce(MCAsmLayout &Layout, MCSectionData &SD);
 
-  bool RelaxInstruction(MCAsmLayout &Layout, MCInstFragment &IF);
+  bool relaxInstruction(MCAsmLayout &Layout, MCInstFragment &IF);
 
-  bool RelaxLEB(MCAsmLayout &Layout, MCLEBFragment &IF);
+  bool relaxLEB(MCAsmLayout &Layout, MCLEBFragment &IF);
 
-  bool RelaxDwarfLineAddr(MCAsmLayout &Layout, MCDwarfLineAddrFragment &DF);
-  bool RelaxDwarfCallFrameFragment(MCAsmLayout &Layout,
+  bool relaxDwarfLineAddr(MCAsmLayout &Layout, MCDwarfLineAddrFragment &DF);
+  bool relaxDwarfCallFrameFragment(MCAsmLayout &Layout,
                                    MCDwarfCallFrameFragment &DF);
 
-  /// FinishLayout - Finalize a layout, including fragment lowering.
-  void FinishLayout(MCAsmLayout &Layout);
+  /// finishLayout - Finalize a layout, including fragment lowering.
+  void finishLayout(MCAsmLayout &Layout);
 
-  uint64_t HandleFixup(const MCAsmLayout &Layout,
+  uint64_t handleFixup(const MCAsmLayout &Layout,
                        MCFragment &F, const MCFixup &Fixup);
 
 public:
   /// Compute the effective fragment size assuming it is laid out at the given
   /// \arg SectionAddress and \arg FragmentOffset.
-  uint64_t ComputeFragmentSize(const MCAsmLayout &Layout, const MCFragment &F) const;
+  uint64_t computeFragmentSize(const MCAsmLayout &Layout,
+                               const MCFragment &F) const;
 
   /// Find the symbol which defines the atom containing the given symbol, or
   /// null if there is no such symbol.
@@ -760,7 +776,7 @@ public:
   bool isSymbolLinkerVisible(const MCSymbol &SD) const;
 
   /// Emit the section contents using the given object writer.
-  void WriteSectionData(const MCSectionData *Section,
+  void writeSectionData(const MCSectionData *Section,
                         const MCAsmLayout &Layout) const;
 
   /// Check whether a given symbol has been flagged with .thumb_func.

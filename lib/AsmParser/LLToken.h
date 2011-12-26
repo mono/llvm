@@ -90,6 +90,7 @@ namespace lltok {
     kw_readnone,
     kw_readonly,
     kw_uwtable,
+    kw_returns_twice,
 
     kw_inlinehint,
     kw_noinline,
@@ -100,7 +101,6 @@ namespace lltok {
     kw_noredzone,
     kw_noimplicitfloat,
     kw_naked,
-    kw_hotpatch,
     kw_nonlazybind,
 
     kw_type,

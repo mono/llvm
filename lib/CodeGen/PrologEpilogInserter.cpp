@@ -55,7 +55,8 @@ INITIALIZE_PASS_END(PEI, "prologepilog",
 
 STATISTIC(NumVirtualFrameRegs, "Number of virtual frame regs encountered");
 STATISTIC(NumScavengedRegs, "Number of frame index regs scavenged");
-STATISTIC(NumBytesStackSpace, "Number of bytes used for stack in all functions");
+STATISTIC(NumBytesStackSpace,
+          "Number of bytes used for stack in all functions");
 
 /// createPrologEpilogCodeInserter - This function returns a pass that inserts
 /// prolog and epilog code, and eliminates abstract frame references.
@@ -223,17 +224,9 @@ void PEI::calculateCalleeSavedRegisters(MachineFunction &Fn) {
   std::vector<CalleeSavedInfo> CSI;
   for (unsigned i = 0; CSRegs[i]; ++i) {
     unsigned Reg = CSRegs[i];
-    if (Fn.getRegInfo().isPhysRegUsed(Reg)) {
+    if (Fn.getRegInfo().isPhysRegOrOverlapUsed(Reg)) {
       // If the reg is modified, save it!
       CSI.push_back(CalleeSavedInfo(Reg));
-    } else {
-      for (const unsigned *AliasSet = RegInfo->getAliasSet(Reg);
-           *AliasSet; ++AliasSet) {  // Check alias registers too.
-        if (Fn.getRegInfo().isPhysRegUsed(*AliasSet)) {
-          CSI.push_back(CalleeSavedInfo(Reg));
-          break;
-        }
-      }
     }
   }
 
@@ -331,7 +324,7 @@ void PEI::insertCSRSpillsAndRestores(MachineFunction &Fn) {
       // Skip over all terminator instructions, which are part of the return
       // sequence.
       MachineBasicBlock::iterator I2 = I;
-      while (I2 != MBB->begin() && (--I2)->getDesc().isTerminator())
+      while (I2 != MBB->begin() && (--I2)->isTerminator())
         I = I2;
 
       bool AtStart = I == MBB->begin();
@@ -425,11 +418,11 @@ void PEI::insertCSRSpillsAndRestores(MachineFunction &Fn) {
 
       // Skip over all terminator instructions, which are part of the
       // return sequence.
-      if (! I->getDesc().isTerminator()) {
+      if (! I->isTerminator()) {
         ++I;
       } else {
         MachineBasicBlock::iterator I2 = I;
-        while (I2 != MBB->begin() && (--I2)->getDesc().isTerminator())
+        while (I2 != MBB->begin() && (--I2)->isTerminator())
           I = I2;
       }
     }
@@ -697,7 +690,7 @@ void PEI::insertPrologEpilogCode(MachineFunction &Fn) {
   // Add epilogue to restore the callee-save registers in each exiting block
   for (MachineFunction::iterator I = Fn.begin(), E = Fn.end(); I != E; ++I) {
     // If last instruction is a return instruction, add an epilogue
-    if (!I->empty() && I->back().getDesc().isReturn())
+    if (!I->empty() && I->back().isReturn())
       TFI.emitEpilogue(Fn, *I);
   }
 
@@ -705,7 +698,7 @@ void PEI::insertPrologEpilogCode(MachineFunction &Fn) {
   // we've been asked for it.  This, when linked with a runtime with support
   // for segmented stacks (libgcc is one), will result in allocating stack
   // space in small chunks instead of one large contiguous block.
-  if (EnableSegmentedStacks)
+  if (Fn.getTarget().Options.EnableSegmentedStacks)
     TFI.adjustForSegmentedStacks(Fn);
 }
 

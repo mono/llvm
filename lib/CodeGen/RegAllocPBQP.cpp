@@ -31,15 +31,17 @@
 
 #define DEBUG_TYPE "regalloc"
 
+#include "LiveRangeEdit.h"
 #include "RenderMachineFunction.h"
-#include "Splitter.h"
+#include "Spiller.h"
 #include "VirtRegMap.h"
-#include "VirtRegRewriter.h"
 #include "RegisterCoalescer.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
 #include "llvm/CodeGen/RegAllocPBQP.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -67,11 +69,6 @@ pbqpCoalescing("pbqp-coalescing",
                 cl::desc("Attempt coalescing during PBQP register allocation."),
                 cl::init(false), cl::Hidden);
 
-static cl::opt<bool>
-pbqpPreSplitting("pbqp-pre-splitting",
-                 cl::desc("Pre-split before PBQP register allocation."),
-                 cl::init(false), cl::Hidden);
-
 namespace {
 
 ///
@@ -92,7 +89,6 @@ public:
     initializeCalculateSpillWeightsPass(*PassRegistry::getPassRegistry());
     initializeLiveStacksPass(*PassRegistry::getPassRegistry());
     initializeMachineLoopInfoPass(*PassRegistry::getPassRegistry());
-    initializeLoopSplitterPass(*PassRegistry::getPassRegistry());
     initializeVirtRegMapPass(*PassRegistry::getPassRegistry());
     initializeRenderMachineFunctionPass(*PassRegistry::getPassRegistry());
   }
@@ -132,6 +128,7 @@ private:
   MachineRegisterInfo *mri;
   RenderMachineFunction *rmf;
 
+  std::auto_ptr<Spiller> spiller;
   LiveIntervals *lis;
   LiveStacks *lss;
   VirtRegMap *vrm;
@@ -140,10 +137,6 @@ private:
 
   /// \brief Finds the initial set of vreg intervals to allocate.
   void findVRegIntervalsToAlloc();
-
-  /// \brief Adds a stack interval if the given live interval has been
-  /// spilled. Used to support stack slot coloring.
-  void addStackInterval(const LiveInterval *spilled,MachineRegisterInfo* mri);
 
   /// \brief Given a solved PBQP problem maps this solution back to a register
   /// assignment.
@@ -446,6 +439,9 @@ void PBQPBuilderWithCoalescing::addVirtRegCoalesce(
 
 
 void RegAllocPBQP::getAnalysisUsage(AnalysisUsage &au) const {
+  au.setPreservesCFG();
+  au.addRequired<AliasAnalysis>();
+  au.addPreserved<AliasAnalysis>();
   au.addRequired<SlotIndexes>();
   au.addPreserved<SlotIndexes>();
   au.addRequired<LiveIntervals>();
@@ -456,10 +452,10 @@ void RegAllocPBQP::getAnalysisUsage(AnalysisUsage &au) const {
   au.addRequired<CalculateSpillWeights>();
   au.addRequired<LiveStacks>();
   au.addPreserved<LiveStacks>();
+  au.addRequired<MachineDominatorTree>();
+  au.addPreserved<MachineDominatorTree>();
   au.addRequired<MachineLoopInfo>();
   au.addPreserved<MachineLoopInfo>();
-  if (pbqpPreSplitting)
-    au.addRequired<LoopSplitter>();
   au.addRequired<VirtRegMap>();
   au.addRequired<RenderMachineFunction>();
   MachineFunctionPass::getAnalysisUsage(au);
@@ -488,29 +484,6 @@ void RegAllocPBQP::findVRegIntervalsToAlloc() {
   }
 }
 
-void RegAllocPBQP::addStackInterval(const LiveInterval *spilled,
-                                    MachineRegisterInfo* mri) {
-  int stackSlot = vrm->getStackSlot(spilled->reg);
-
-  if (stackSlot == VirtRegMap::NO_STACK_SLOT) {
-    return;
-  }
-
-  const TargetRegisterClass *RC = mri->getRegClass(spilled->reg);
-  LiveInterval &stackInterval = lss->getOrCreateInterval(stackSlot, RC);
-
-  VNInfo *vni;
-  if (stackInterval.getNumValNums() != 0) {
-    vni = stackInterval.getValNumInfo(0);
-  } else {
-    vni = stackInterval.getNextValue(
-      SlotIndex(), 0, lss->getVNInfoAllocator());
-  }
-
-  LiveInterval &rhsInterval = lis->getInterval(spilled->reg);
-  stackInterval.MergeRangesInAsValue(rhsInterval, vni);
-}
-
 bool RegAllocPBQP::mapPBQPToRegAlloc(const PBQPRAProblem &problem,
                                      const PBQP::Solution &solution) {
   // Set to true if we have any spills
@@ -535,22 +508,16 @@ bool RegAllocPBQP::mapPBQPToRegAlloc(const PBQPRAProblem &problem,
       vrm->assignVirt2Phys(vreg, preg);      
     } else if (problem.isSpillOption(vreg, alloc)) {
       vregsToAlloc.erase(vreg);
-      const LiveInterval* spillInterval = &lis->getInterval(vreg);
-      double oldWeight = spillInterval->weight;
-      rmf->rememberUseDefs(spillInterval);
-      std::vector<LiveInterval*> newSpills =
-        lis->addIntervalsForSpills(*spillInterval, 0, loopInfo, *vrm);
-      addStackInterval(spillInterval, mri);
-      rmf->rememberSpills(spillInterval, newSpills);
+      SmallVector<LiveInterval*, 8> newSpills;
+      LiveRangeEdit LRE(lis->getInterval(vreg), newSpills);
+      spiller->spill(LRE);
 
-      (void) oldWeight;
       DEBUG(dbgs() << "VREG " << vreg << " -> SPILLED (Cost: "
-                   << oldWeight << ", New vregs: ");
+                   << LRE.getParent().weight << ", New vregs: ");
 
       // Copy any newly inserted live intervals into the list of regs to
       // allocate.
-      for (std::vector<LiveInterval*>::const_iterator
-           itr = newSpills.begin(), end = newSpills.end();
+      for (LiveRangeEdit::iterator itr = LRE.begin(), end = LRE.end();
            itr != end; ++itr) {
         assert(!(*itr)->empty() && "Empty spill range.");
         DEBUG(dbgs() << (*itr)->reg << " ");
@@ -560,7 +527,7 @@ bool RegAllocPBQP::mapPBQPToRegAlloc(const PBQPRAProblem &problem,
       DEBUG(dbgs() << ")\n");
 
       // We need another round if spill intervals were added.
-      anotherRoundNeeded |= !newSpills.empty();
+      anotherRoundNeeded |= !LRE.empty();
     } else {
       assert(false && "Unknown allocation option.");
     }
@@ -650,6 +617,7 @@ bool RegAllocPBQP::runOnMachineFunction(MachineFunction &MF) {
   rmf = &getAnalysis<RenderMachineFunction>();
 
   vrm = &getAnalysis<VirtRegMap>();
+  spiller.reset(createInlineSpiller(*this, MF, *vrm));
 
 
   DEBUG(dbgs() << "PBQP Register Allocating for " << mf->getFunction()->getName() << "\n");
@@ -698,9 +666,7 @@ bool RegAllocPBQP::runOnMachineFunction(MachineFunction &MF) {
   DEBUG(dbgs() << "Post alloc VirtRegMap:\n" << *vrm << "\n");
 
   // Run rewriter
-  std::auto_ptr<VirtRegRewriter> rewriter(createVirtRegRewriter());
-
-  rewriter->runOnMachineFunction(*mf, *vrm, lis);
+  vrm->rewrite(lis->getSlotIndexes());
 
   return true;
 }

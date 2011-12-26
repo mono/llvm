@@ -1035,8 +1035,19 @@ void Verifier::visitPtrToIntInst(PtrToIntInst &I) {
   Type *SrcTy = I.getOperand(0)->getType();
   Type *DestTy = I.getType();
 
-  Assert1(SrcTy->isPointerTy(), "PtrToInt source must be pointer", &I);
-  Assert1(DestTy->isIntegerTy(), "PtrToInt result must be integral", &I);
+  Assert1(SrcTy->getScalarType()->isPointerTy(),
+          "PtrToInt source must be pointer", &I);
+  Assert1(DestTy->getScalarType()->isIntegerTy(),
+          "PtrToInt result must be integral", &I);
+  Assert1(SrcTy->isVectorTy() == DestTy->isVectorTy(),
+          "PtrToInt type mismatch", &I);
+
+  if (SrcTy->isVectorTy()) {
+    VectorType *VSrc = dyn_cast<VectorType>(SrcTy);
+    VectorType *VDest = dyn_cast<VectorType>(DestTy);
+    Assert1(VSrc->getNumElements() == VDest->getNumElements(),
+          "PtrToInt Vector width mismatch", &I);
+  }
 
   visitInstruction(I);
 }
@@ -1046,9 +1057,18 @@ void Verifier::visitIntToPtrInst(IntToPtrInst &I) {
   Type *SrcTy = I.getOperand(0)->getType();
   Type *DestTy = I.getType();
 
-  Assert1(SrcTy->isIntegerTy(), "IntToPtr source must be an integral", &I);
-  Assert1(DestTy->isPointerTy(), "IntToPtr result must be a pointer",&I);
-
+  Assert1(SrcTy->getScalarType()->isIntegerTy(),
+          "IntToPtr source must be an integral", &I);
+  Assert1(DestTy->getScalarType()->isPointerTy(),
+          "IntToPtr result must be a pointer",&I);
+  Assert1(SrcTy->isVectorTy() == DestTy->isVectorTy(),
+          "IntToPtr type mismatch", &I);
+  if (SrcTy->isVectorTy()) {
+    VectorType *VSrc = dyn_cast<VectorType>(SrcTy);
+    VectorType *VDest = dyn_cast<VectorType>(DestTy);
+    Assert1(VSrc->getNumElements() == VDest->getNumElements(),
+          "IntToPtr Vector width mismatch", &I);
+  }
   visitInstruction(I);
 }
 
@@ -1167,6 +1187,12 @@ void Verifier::visitCallInst(CallInst &CI) {
 
 void Verifier::visitInvokeInst(InvokeInst &II) {
   VerifyCallSite(&II);
+
+  // Verify that there is a landingpad instruction as the first non-PHI
+  // instruction of the 'unwind' destination.
+  Assert1(II.getUnwindDest()->isLandingPad(),
+          "The unwind destination does not have a landingpad instruction!",&II);
+
   visitTerminatorInst(II);
 }
 
@@ -1239,7 +1265,7 @@ void Verifier::visitICmpInst(ICmpInst &IC) {
   Assert1(Op0Ty == Op1Ty,
           "Both operands to ICmp instruction are not of the same type!", &IC);
   // Check that the operands are the right type
-  Assert1(Op0Ty->isIntOrIntVectorTy() || Op0Ty->isPointerTy(),
+  Assert1(Op0Ty->isIntOrIntVectorTy() || Op0Ty->getScalarType()->isPointerTy(),
           "Invalid operand types for ICmp instruction", &IC);
   // Check that the predicate is valid.
   Assert1(IC.getPredicate() >= CmpInst::FIRST_ICMP_PREDICATE &&
@@ -1289,17 +1315,43 @@ void Verifier::visitShuffleVectorInst(ShuffleVectorInst &SV) {
 }
 
 void Verifier::visitGetElementPtrInst(GetElementPtrInst &GEP) {
-  Assert1(cast<PointerType>(GEP.getOperand(0)->getType())
-            ->getElementType()->isSized(),
+  Type *TargetTy = GEP.getPointerOperandType();
+  if (VectorType *VTy = dyn_cast<VectorType>(TargetTy))
+    TargetTy = VTy->getElementType();
+
+  Assert1(dyn_cast<PointerType>(TargetTy),
+    "GEP base pointer is not a vector or a vector of pointers", &GEP);
+  Assert1(cast<PointerType>(TargetTy)->getElementType()->isSized(),
           "GEP into unsized type!", &GEP);
-  
+
   SmallVector<Value*, 16> Idxs(GEP.idx_begin(), GEP.idx_end());
   Type *ElTy =
-    GetElementPtrInst::getIndexedType(GEP.getOperand(0)->getType(), Idxs);
+    GetElementPtrInst::getIndexedType(GEP.getPointerOperandType(), Idxs);
   Assert1(ElTy, "Invalid indices for GEP pointer type!", &GEP);
-  Assert2(GEP.getType()->isPointerTy() &&
-          cast<PointerType>(GEP.getType())->getElementType() == ElTy,
-          "GEP is not of right type for indices!", &GEP, ElTy);
+
+  if (GEP.getPointerOperandType()->isPointerTy()) {
+    // Validate GEPs with scalar indices.
+    Assert2(GEP.getType()->isPointerTy() &&
+           cast<PointerType>(GEP.getType())->getElementType() == ElTy,
+           "GEP is not of right type for indices!", &GEP, ElTy);
+  } else {
+    // Validate GEPs with a vector index.
+    Assert1(Idxs.size() == 1, "Invalid number of indices!", &GEP);
+    Value *Index = Idxs[0];
+    Type  *IndexTy = Index->getType();
+    Assert1(IndexTy->isVectorTy(),
+      "Vector GEP must have vector indices!", &GEP);
+    Assert1(GEP.getType()->isVectorTy(),
+      "Vector GEP must return a vector value", &GEP);
+    Type *ElemPtr = cast<VectorType>(GEP.getType())->getElementType();
+    Assert1(ElemPtr->isPointerTy(),
+      "Vector GEP pointer operand is not a pointer!", &GEP);
+    unsigned IndexWidth = cast<VectorType>(IndexTy)->getNumElements();
+    unsigned GepWidth = cast<VectorType>(GEP.getType())->getNumElements();
+    Assert1(IndexWidth == GepWidth, "Invalid GEP index vector width", &GEP);
+    Assert1(ElTy == cast<PointerType>(ElemPtr)->getElementType(),
+      "Vector GEP type does not match pointer type!", &GEP);
+  }
   visitInstruction(GEP);
 }
 
@@ -1442,6 +1494,22 @@ void Verifier::visitLandingPadInst(LandingPadInst &LPI) {
     Assert1(LPI.getPersonalityFn() == PersonalityFn,
             "Personality function doesn't match others in function", &LPI);
   PersonalityFn = LPI.getPersonalityFn();
+
+  // All operands must be constants.
+  Assert1(isa<Constant>(PersonalityFn), "Personality function is not constant!",
+          &LPI);
+  for (unsigned i = 0, e = LPI.getNumClauses(); i < e; ++i) {
+    Value *Clause = LPI.getClause(i);
+    Assert1(isa<Constant>(Clause), "Clause is not constant!", &LPI);
+    if (LPI.isCatch(i)) {
+      Assert1(isa<PointerType>(Clause->getType()),
+              "Catch operand does not have pointer type!", &LPI);
+    } else {
+      Assert1(LPI.isFilter(i), "Clause is neither catch nor filter!", &LPI);
+      Assert1(isa<ConstantArray>(Clause) || isa<ConstantAggregateZero>(Clause),
+              "Filter operand is not an array of constants!", &LPI);
+    }
+  }
 
   visitInstruction(LPI);
 }
@@ -1621,6 +1689,12 @@ void Verifier::visitIntrinsicFunctionCall(Intrinsic::ID ID, CallInst &CI) {
 
   switch (ID) {
   default:
+    break;
+  case Intrinsic::ctlz:  // llvm.ctlz
+  case Intrinsic::cttz:  // llvm.cttz
+    Assert1(isa<ConstantInt>(CI.getArgOperand(1)),
+            "is_zero_undef argument of bit counting intrinsics must be a "
+            "constant int", &CI);
     break;
   case Intrinsic::dbg_declare: {  // llvm.dbg.declare
     Assert1(CI.getArgOperand(0) && isa<MDNode>(CI.getArgOperand(0)),

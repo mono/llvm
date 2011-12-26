@@ -57,13 +57,6 @@ public:
                         MCValue Target, uint64_t &FixedValue) {}
 };
 
-class PPCELFObjectWriter : public MCELFObjectTargetWriter {
-public:
-  PPCELFObjectWriter(bool Is64Bit, Triple::OSType OSType, uint16_t EMachine,
-                     bool HasRelocationAddend, bool isLittleEndian)
-    : MCELFObjectTargetWriter(Is64Bit, OSType, EMachine, HasRelocationAddend) {}
-};
-
 class PPCAsmBackend : public MCAsmBackend {
 const Target &TheTarget;
 public:
@@ -93,6 +86,16 @@ public:
     // FIXME.
     return false;
   }
+
+  bool fixupNeedsRelaxation(const MCFixup &Fixup,
+                            uint64_t Value,
+                            const MCInstFragment *DF,
+                            const MCAsmLayout &Layout) const {
+    // FIXME.
+    assert(0 && "RelaxInstruction() unimplemented");
+    return false;
+  }
+
   
   void RelaxInstruction(const MCInst &Inst, MCInst &Res) const {
     // FIXME.
@@ -144,10 +147,10 @@ namespace {
   };
 
   class ELFPPCAsmBackend : public PPCAsmBackend {
-    Triple::OSType OSType;
+    uint8_t OSABI;
   public:
-    ELFPPCAsmBackend(const Target &T, Triple::OSType OSType) :
-      PPCAsmBackend(T), OSType(OSType) { }
+    ELFPPCAsmBackend(const Target &T, uint8_t OSABI) :
+      PPCAsmBackend(T), OSABI(OSABI) { }
     
     void ApplyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                     uint64_t Value) const {
@@ -165,12 +168,7 @@ namespace {
     
     MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
       bool is64 = getPointerSize() == 8;
-      return createELFObjectWriter(new PPCELFObjectWriter(
-                                      /*Is64Bit=*/is64,
-                                      OSType,
-                                      is64 ? ELF::EM_PPC64 : ELF::EM_PPC,                                      
-                                      /*addend*/ true, /*isLittleEndian*/ false),
-                                   OS, /*IsLittleEndian=*/false);
+      return createPPCELFObjectWriter(OS, is64, OSABI);
     }
     
     virtual bool doesSectionRequireSymbols(const MCSection &Section) const {
@@ -187,5 +185,6 @@ MCAsmBackend *llvm::createPPCAsmBackend(const Target &T, StringRef TT) {
   if (Triple(TT).isOSDarwin())
     return new DarwinPPCAsmBackend(T);
 
-  return new ELFPPCAsmBackend(T, Triple(TT).getOS());
+  uint8_t OSABI = MCELFObjectTargetWriter::getOSABI(Triple(TT).getOS());
+  return new ELFPPCAsmBackend(T, OSABI);
 }

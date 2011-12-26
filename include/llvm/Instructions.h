@@ -776,6 +776,10 @@ public:
   static Type *getIndexedType(Type *Ptr, ArrayRef<Constant *> IdxList);
   static Type *getIndexedType(Type *Ptr, ArrayRef<uint64_t> IdxList);
 
+  /// getIndexedType - Returns the address space used by the GEP pointer.
+  ///
+  static unsigned getAddressSpace(Value *Ptr);
+
   inline op_iterator       idx_begin()       { return op_begin()+1; }
   inline const_op_iterator idx_begin() const { return op_begin()+1; }
   inline op_iterator       idx_end()         { return op_end(); }
@@ -788,7 +792,7 @@ public:
     return getOperand(0);
   }
   static unsigned getPointerOperandIndex() {
-    return 0U;                      // get index for modifying correct operand
+    return 0U;    // get index for modifying correct operand.
   }
 
   unsigned getPointerAddressSpace() const {
@@ -797,10 +801,25 @@ public:
 
   /// getPointerOperandType - Method to return the pointer operand as a
   /// PointerType.
-  PointerType *getPointerOperandType() const {
-    return reinterpret_cast<PointerType*>(getPointerOperand()->getType());
+  Type *getPointerOperandType() const {
+    return getPointerOperand()->getType();
   }
 
+  /// GetGEPReturnType - Returns the pointer type returned by the GEP
+  /// instruction, which may be a vector of pointers.
+  static Type *getGEPReturnType(Value *Ptr, ArrayRef<Value *> IdxList) {
+    Type *PtrTy = PointerType::get(checkGEPType(
+                                   getIndexedType(Ptr->getType(), IdxList)),
+                                   getAddressSpace(Ptr));
+    // Vector GEP
+    if (Ptr->getType()->isVectorTy()) {
+      unsigned NumElem = cast<VectorType>(Ptr->getType())->getNumElements();
+      return VectorType::get(PtrTy, NumElem);
+    }
+
+    // Scalar GEP
+    return PtrTy;
+  }
 
   unsigned getNumIndices() const {  // Note: always non-negative
     return getNumOperands() - 1;
@@ -847,10 +866,7 @@ GetElementPtrInst::GetElementPtrInst(Value *Ptr,
                                      unsigned Values,
                                      const Twine &NameStr,
                                      Instruction *InsertBefore)
-  : Instruction(PointerType::get(checkGEPType(
-                                   getIndexedType(Ptr->getType(), IdxList)),
-                                 cast<PointerType>(Ptr->getType())
-                                   ->getAddressSpace()),
+  : Instruction(getGEPReturnType(Ptr, IdxList),
                 GetElementPtr,
                 OperandTraits<GetElementPtrInst>::op_end(this) - Values,
                 Values, InsertBefore) {
@@ -861,10 +877,7 @@ GetElementPtrInst::GetElementPtrInst(Value *Ptr,
                                      unsigned Values,
                                      const Twine &NameStr,
                                      BasicBlock *InsertAtEnd)
-  : Instruction(PointerType::get(checkGEPType(
-                                   getIndexedType(Ptr->getType(), IdxList)),
-                                 cast<PointerType>(Ptr->getType())
-                                   ->getAddressSpace()),
+  : Instruction(getGEPReturnType(Ptr, IdxList),
                 GetElementPtr,
                 OperandTraits<GetElementPtrInst>::op_end(this) - Values,
                 Values, InsertAtEnd) {
@@ -905,7 +918,7 @@ public:
           "Both operands to ICmp instruction are not of the same type!");
     // Check that the operands are the right type
     assert((getOperand(0)->getType()->isIntOrIntVectorTy() ||
-            getOperand(0)->getType()->isPointerTy()) &&
+            getOperand(0)->getType()->getScalarType()->isPointerTy()) &&
            "Invalid operand types for ICmp instruction");
   }
 
@@ -945,7 +958,7 @@ public:
           "Both operands to ICmp instruction are not of the same type!");
     // Check that the operands are the right type
     assert((getOperand(0)->getType()->isIntOrIntVectorTy() ||
-            getOperand(0)->getType()->isPointerTy()) &&
+            getOperand(0)->getType()->getScalarType()->isPointerTy()) &&
            "Invalid operand types for ICmp instruction");
   }
 
@@ -1265,6 +1278,15 @@ public:
   void setIsNoInline(bool Value = true) {
     if (Value) addAttribute(~0, Attribute::NoInline);
     else removeAttribute(~0, Attribute::NoInline);
+  }
+
+  /// @brief Return true if the call can return twice
+  bool canReturnTwice() const {
+    return paramHasAttr(~0, Attribute::ReturnsTwice);
+  }
+  void setCanReturnTwice(bool Value = true) {
+    if (Value) addAttribute(~0, Attribute::ReturnsTwice);
+    else removeAttribute(~0, Attribute::ReturnsTwice);
   }
 
   /// @brief Determine if the call does not access memory.
@@ -2358,6 +2380,13 @@ public:
     *(&Op<-1>() - idx) = (Value*)NewSucc;
   }
 
+  /// \brief Swap the successors of this branch instruction.
+  ///
+  /// Swaps the successors of the branch instruction. This also swaps any
+  /// branch weight metadata associated with the instruction so that it
+  /// continues to map correctly to each operand.
+  void swapSuccessors();
+
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const BranchInst *) { return true; }
   static inline bool classof(const Instruction *I) {
@@ -2507,6 +2536,13 @@ public:
   ConstantInt *getSuccessorValue(unsigned idx) const {
     assert(idx < getNumSuccessors() && "Successor # out of range!");
     return reinterpret_cast<ConstantInt*>(getOperand(idx*2));
+  }
+
+  // setSuccessorValue - Updates the value associated with the specified
+  // successor.
+  void setSuccessorValue(unsigned idx, ConstantInt* SuccessorValue) {
+    assert(idx < getNumSuccessors() && "Successor # out of range!");
+    setOperand(idx*2, reinterpret_cast<Value*>(SuccessorValue));
   }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:

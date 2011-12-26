@@ -15,6 +15,7 @@ add_llvm_library(LLVMSupport
   CommandLine.cpp
   ConstantRange.cpp
   CrashRecoveryContext.cpp
+  DataExtractor.cpp
   Debug.cpp
   DeltaAlgorithm.cpp
   DAGDeltaAlgorithm.cpp
@@ -26,8 +27,10 @@ add_llvm_library(LLVMSupport
   GraphWriter.cpp
   IntEqClasses.cpp
   IntervalMap.cpp
+  IntrusiveRefCntPtr.cpp
   IsInf.cpp
   IsNAN.cpp
+  JSONParser.cpp
   ManagedStatic.cpp
   MemoryBuffer.cpp
   MemoryObject.cpp

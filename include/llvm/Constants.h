@@ -45,6 +45,7 @@ struct ConvertConstantType;
 /// represents both boolean and integral constants.
 /// @brief Class for constant integers.
 class ConstantInt : public Constant {
+  virtual void anchor();
   void *operator new(size_t, unsigned);  // DO NOT IMPLEMENT
   ConstantInt(const ConstantInt &);      // DO NOT IMPLEMENT
   ConstantInt(IntegerType *Ty, const APInt& V);
@@ -229,6 +230,7 @@ public:
 ///
 class ConstantFP : public Constant {
   APFloat Val;
+  virtual void anchor();
   void *operator new(size_t, unsigned);// DO NOT IMPLEMENT
   ConstantFP(const ConstantFP &);      // DO NOT IMPLEMENT
   friend class LLVMContextImpl;
@@ -475,12 +477,6 @@ public:
   inline VectorType *getType() const {
     return reinterpret_cast<VectorType*>(Value::getType());
   }
-  
-  /// This function will return true iff every element in this vector constant
-  /// is set to all ones.
-  /// @returns true iff this constant's emements are all set to all ones.
-  /// @brief Determine if the value is all ones.
-  bool isAllOnesValue() const;
 
   /// getSplatValue - If this is a splat constant, meaning that all of the
   /// elements have the same value, return that value. Otherwise return NULL.

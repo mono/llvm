@@ -29,6 +29,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/PathV2.h"
 #include <cctype>
 using namespace llvm;
 
@@ -50,6 +51,7 @@ private:
   unsigned ShowInst : 1;
   unsigned UseLoc : 1;
   unsigned UseCFI : 1;
+  unsigned UseDwarfDirectory : 1;
 
   enum EHSymbolFlags { EHGlobal         = 1,
                        EHWeakDefinition = 1 << 1,
@@ -63,13 +65,15 @@ private:
 public:
   MCAsmStreamer(MCContext &Context, formatted_raw_ostream &os,
                 bool isVerboseAsm, bool useLoc, bool useCFI,
+                bool useDwarfDirectory,
                 MCInstPrinter *printer, MCCodeEmitter *emitter,
                 MCAsmBackend *asmbackend,
                 bool showInst)
     : MCStreamer(Context), OS(os), MAI(Context.getAsmInfo()),
       InstPrinter(printer), Emitter(emitter), AsmBackend(asmbackend),
       CommentStream(CommentToEmit), IsVerboseAsm(isVerboseAsm),
-      ShowInst(showInst), UseLoc(useLoc), UseCFI(useCFI) {
+      ShowInst(showInst), UseLoc(useLoc), UseCFI(useCFI),
+      UseDwarfDirectory(useDwarfDirectory) {
     if (InstPrinter && IsVerboseAsm)
       InstPrinter->setCommentStream(CommentStream);
   }
@@ -150,6 +154,7 @@ public:
   virtual void EmitCOFFSymbolStorageClass(int StorageClass);
   virtual void EmitCOFFSymbolType(int Type);
   virtual void EndCOFFSymbolDef();
+  virtual void EmitCOFFSecRel32(MCSymbol const *Symbol);
   virtual void EmitELFSize(MCSymbol *Symbol, const MCExpr *Value);
   virtual void EmitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                                 unsigned ByteAlignment);
@@ -196,7 +201,8 @@ public:
                                  unsigned char Value = 0);
 
   virtual void EmitFileDirective(StringRef Filename);
-  virtual bool EmitDwarfFileDirective(unsigned FileNo, StringRef Filename);
+  virtual bool EmitDwarfFileDirective(unsigned FileNo, StringRef Directory,
+                                      StringRef Filename);
   virtual void EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                      unsigned Column, unsigned Flags,
                                      unsigned Isa, unsigned Discriminator,
@@ -462,6 +468,11 @@ void MCAsmStreamer::EmitCOFFSymbolType (int Type) {
 
 void MCAsmStreamer::EndCOFFSymbolDef() {
   OS << "\t.endef";
+  EmitEOL();
+}
+
+void MCAsmStreamer::EmitCOFFSecRel32(MCSymbol const *Symbol) {
+  OS << "\t.secrel32\t" << *Symbol << '\n';
   EmitEOL();
 }
 
@@ -748,13 +759,27 @@ void MCAsmStreamer::EmitFileDirective(StringRef Filename) {
   EmitEOL();
 }
 
-bool MCAsmStreamer::EmitDwarfFileDirective(unsigned FileNo, StringRef Filename){
+bool MCAsmStreamer::EmitDwarfFileDirective(unsigned FileNo, StringRef Directory,
+                                           StringRef Filename) {
+  if (!UseDwarfDirectory && !Directory.empty()) {
+    if (sys::path::is_absolute(Filename))
+      return EmitDwarfFileDirective(FileNo, "", Filename);
+
+    SmallString<128> FullPathName = Directory;
+    sys::path::append(FullPathName, Filename);
+    return EmitDwarfFileDirective(FileNo, "", FullPathName);
+  }
+
   if (UseLoc) {
     OS << "\t.file\t" << FileNo << ' ';
+    if (!Directory.empty()) {
+      PrintQuotedString(Directory, OS);
+      OS << ' ';
+    }
     PrintQuotedString(Filename, OS);
     EmitEOL();
   }
-  return this->MCStreamer::EmitDwarfFileDirective(FileNo, Filename);
+  return this->MCStreamer::EmitDwarfFileDirective(FileNo, Directory, Filename);
 }
 
 void MCAsmStreamer::EmitDwarfLocDirective(unsigned FileNo, unsigned Line,
@@ -1244,7 +1269,7 @@ void MCAsmStreamer::EmitInstruction(const MCInst &Inst) {
 
   // If we have an AsmPrinter, use that to print, otherwise print the MCInst.
   if (InstPrinter)
-    InstPrinter->printInst(&Inst, OS);
+    InstPrinter->printInst(&Inst, OS, "");
   else
     Inst.print(OS, &MAI);
   EmitEOL();
@@ -1265,15 +1290,19 @@ void MCAsmStreamer::Finish() {
   if (getContext().hasDwarfFiles() && !UseLoc)
     MCDwarfFileTable::Emit(this);
 
+  // If we are generating dwarf for assembly source files dump out the sections.
+  if (getContext().getGenDwarfForAssembly())
+    MCGenDwarfInfo::Emit(this);
+
   if (!UseCFI)
     EmitFrames(false);
 }
 MCStreamer *llvm::createAsmStreamer(MCContext &Context,
                                     formatted_raw_ostream &OS,
                                     bool isVerboseAsm, bool useLoc,
-                                    bool useCFI, MCInstPrinter *IP,
-                                    MCCodeEmitter *CE, MCAsmBackend *MAB,
-                                    bool ShowInst) {
+                                    bool useCFI, bool useDwarfDirectory,
+                                    MCInstPrinter *IP, MCCodeEmitter *CE,
+                                    MCAsmBackend *MAB, bool ShowInst) {
   return new MCAsmStreamer(Context, OS, isVerboseAsm, useLoc, useCFI,
-                           IP, CE, MAB, ShowInst);
+                           useDwarfDirectory, IP, CE, MAB, ShowInst);
 }

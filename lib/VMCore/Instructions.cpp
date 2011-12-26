@@ -785,6 +785,27 @@ BranchInst::BranchInst(const BranchInst &BI) :
   SubclassOptionalData = BI.SubclassOptionalData;
 }
 
+void BranchInst::swapSuccessors() {
+  assert(isConditional() &&
+         "Cannot swap successors of an unconditional branch");
+  Op<-1>().swap(Op<-2>());
+
+  // Update profile metadata if present and it matches our structural
+  // expectations.
+  MDNode *ProfileData = getMetadata(LLVMContext::MD_prof);
+  if (!ProfileData || ProfileData->getNumOperands() != 3)
+    return;
+
+  // The first operand is the name. Fetch them backwards and build a new one.
+  Value *Ops[] = {
+    ProfileData->getOperand(0),
+    ProfileData->getOperand(2),
+    ProfileData->getOperand(1)
+  };
+  setMetadata(LLVMContext::MD_prof,
+              MDNode::get(ProfileData->getContext(), Ops));
+}
+
 BasicBlock *BranchInst::getSuccessorV(unsigned idx) const {
   return getSuccessor(idx);
 }
@@ -1338,6 +1359,15 @@ GetElementPtrInst::GetElementPtrInst(const GetElementPtrInst &GEPI)
 ///
 template <typename IndexTy>
 static Type *getIndexedTypeInternal(Type *Ptr, ArrayRef<IndexTy> IdxList) {
+  if (Ptr->isVectorTy()) {
+    assert(IdxList.size() == 1 &&
+      "GEP with vector pointers must have a single index");
+    PointerType *PTy = dyn_cast<PointerType>(
+        cast<VectorType>(Ptr)->getElementType());
+    assert(PTy && "Gep with invalid vector pointer found");
+    return PTy->getElementType();
+  }
+
   PointerType *PTy = dyn_cast<PointerType>(Ptr);
   if (!PTy) return 0;   // Type isn't a pointer type!
   Type *Agg = PTy->getElementType();
@@ -1345,7 +1375,7 @@ static Type *getIndexedTypeInternal(Type *Ptr, ArrayRef<IndexTy> IdxList) {
   // Handle the special case of the empty set index set, which is always valid.
   if (IdxList.empty())
     return Agg;
-  
+
   // If there is at least one index, the top level type must be sized, otherwise
   // it cannot be 'stepped over'.
   if (!Agg->isSized())
@@ -1373,6 +1403,19 @@ Type *GetElementPtrInst::getIndexedType(Type *Ptr,
 
 Type *GetElementPtrInst::getIndexedType(Type *Ptr, ArrayRef<uint64_t> IdxList) {
   return getIndexedTypeInternal(Ptr, IdxList);
+}
+
+unsigned GetElementPtrInst::getAddressSpace(Value *Ptr) {
+  Type *Ty = Ptr->getType();
+
+  if (VectorType *VTy = dyn_cast<VectorType>(Ty))
+    Ty = VTy->getElementType();
+
+  if (PointerType *PTy = dyn_cast<PointerType>(Ty))
+    return PTy->getAddressSpace();
+
+  assert(false && "Invalid GEP pointer type");
+  return 0;
 }
 
 /// hasAllZeroIndices - Return true if all of the indices of this GEP are
@@ -1555,10 +1598,17 @@ bool ShuffleVectorInst::isValidOperands(const Value *V1, const Value *V2,
         return false;
       }
     }
-  }
-  else if (!isa<UndefValue>(Mask) && !isa<ConstantAggregateZero>(Mask))
+  } else if (!isa<UndefValue>(Mask) && !isa<ConstantAggregateZero>(Mask)) {
+    // The bitcode reader can create a place holder for a forward reference
+    // used as the shuffle mask. When this occurs, the shuffle mask will
+    // fall into this case and fail. To avoid this error, do this bit of
+    // ugliness to allow such a mask pass.
+    if (const ConstantExpr* CE = dyn_cast<ConstantExpr>(Mask)) {
+      if (CE->getOpcode() == Instruction::UserOp1)
+        return true;
+    }
     return false;
-  
+  }
   return true;
 }
 
@@ -1977,6 +2027,8 @@ bool BinaryOperator::isExact() const {
 //                                CastInst Class
 //===----------------------------------------------------------------------===//
 
+void CastInst::anchor() {}
+
 // Just determine if this cast only deals with integral->integral conversion.
 bool CastInst::isIntegerCast() const {
   switch (getOpcode()) {
@@ -2022,7 +2074,7 @@ bool CastInst::isNoopCast(Instruction::CastOps Opcode,
                           Type *IntPtrTy) {
   switch (Opcode) {
     default:
-      assert(!"Invalid CastOp");
+      assert(0 && "Invalid CastOp");
     case Instruction::Trunc:
     case Instruction::ZExt:
     case Instruction::SExt: 
@@ -2215,10 +2267,10 @@ unsigned CastInst::isEliminableCastPair(
     case 99: 
       // cast combination can't happen (error in input). This is for all cases
       // where the MidTy is not the same for the two cast instructions.
-      assert(!"Invalid Cast Combination");
+      assert(0 && "Invalid Cast Combination");
       return 0;
     default:
-      assert(!"Error in CastResults table!!!");
+      assert(0 && "Error in CastResults table!!!");
       return 0;
   }
   return 0;
@@ -2242,7 +2294,7 @@ CastInst *CastInst::Create(Instruction::CastOps op, Value *S, Type *Ty,
     case IntToPtr: return new IntToPtrInst (S, Ty, Name, InsertBefore);
     case BitCast:  return new BitCastInst  (S, Ty, Name, InsertBefore);
     default:
-      assert(!"Invalid opcode provided");
+      assert(0 && "Invalid opcode provided");
   }
   return 0;
 }
@@ -2265,7 +2317,7 @@ CastInst *CastInst::Create(Instruction::CastOps op, Value *S, Type *Ty,
     case IntToPtr: return new IntToPtrInst (S, Ty, Name, InsertAtEnd);
     case BitCast:  return new BitCastInst  (S, Ty, Name, InsertAtEnd);
     default:
-      assert(!"Invalid opcode provided");
+      assert(0 && "Invalid opcode provided");
   }
   return 0;
 }
@@ -2549,17 +2601,17 @@ CastInst::getCastOpcode(
     } else if (SrcTy->isIntegerTy()) {
       return IntToPtr;                              // int -> ptr
     } else {
-      assert(!"Casting pointer to other than pointer or int");
+      assert(0 && "Casting pointer to other than pointer or int");
     }
   } else if (DestTy->isX86_MMXTy()) {
     if (SrcTy->isVectorTy()) {
       assert(DestBits == SrcBits && "Casting vector of wrong width to X86_MMX");
       return BitCast;                               // 64-bit vector to MMX
     } else {
-      assert(!"Illegal cast to X86_MMX");
+      assert(0 && "Illegal cast to X86_MMX");
     }
   } else {
-    assert(!"Casting to type that is not first-class");
+    assert(0 && "Casting to type that is not first-class");
   }
 
   // If we fall through to here we probably hit an assertion cast above
@@ -2624,9 +2676,15 @@ CastInst::castIsValid(Instruction::CastOps op, Value *S, Type *DstTy) {
     return SrcTy->isFPOrFPVectorTy() && DstTy->isIntOrIntVectorTy() &&
       SrcLength == DstLength;
   case Instruction::PtrToInt:
-    return SrcTy->isPointerTy() && DstTy->isIntegerTy();
+    if (SrcTy->getNumElements() != DstTy->getNumElements())
+      return false;
+    return SrcTy->getScalarType()->isPointerTy() &&
+           DstTy->getScalarType()->isIntegerTy();
   case Instruction::IntToPtr:
-    return SrcTy->isIntegerTy() && DstTy->isPointerTy();
+    if (SrcTy->getNumElements() != DstTy->getNumElements())
+      return false;
+    return SrcTy->getScalarType()->isIntegerTy() &&
+           DstTy->getScalarType()->isPointerTy();
   case Instruction::BitCast:
     // BitCast implies a no-op cast of type only. No bits change.
     // However, you can't cast pointers to anything but pointers.
@@ -2869,7 +2927,7 @@ bool CmpInst::isEquality() const {
 
 CmpInst::Predicate CmpInst::getInversePredicate(Predicate pred) {
   switch (pred) {
-    default: assert(!"Unknown cmp predicate!");
+    default: assert(0 && "Unknown cmp predicate!");
     case ICMP_EQ: return ICMP_NE;
     case ICMP_NE: return ICMP_EQ;
     case ICMP_UGT: return ICMP_ULE;
@@ -2902,7 +2960,7 @@ CmpInst::Predicate CmpInst::getInversePredicate(Predicate pred) {
 
 ICmpInst::Predicate ICmpInst::getSignedPredicate(Predicate pred) {
   switch (pred) {
-    default: assert(! "Unknown icmp predicate!");
+    default: assert(0 && "Unknown icmp predicate!");
     case ICMP_EQ: case ICMP_NE: 
     case ICMP_SGT: case ICMP_SLT: case ICMP_SGE: case ICMP_SLE: 
        return pred;
@@ -2915,7 +2973,7 @@ ICmpInst::Predicate ICmpInst::getSignedPredicate(Predicate pred) {
 
 ICmpInst::Predicate ICmpInst::getUnsignedPredicate(Predicate pred) {
   switch (pred) {
-    default: assert(! "Unknown icmp predicate!");
+    default: assert(0 && "Unknown icmp predicate!");
     case ICMP_EQ: case ICMP_NE: 
     case ICMP_UGT: case ICMP_ULT: case ICMP_UGE: case ICMP_ULE: 
        return pred;
@@ -2991,7 +3049,7 @@ ICmpInst::makeConstantRange(Predicate pred, const APInt &C) {
 
 CmpInst::Predicate CmpInst::getSwappedPredicate(Predicate pred) {
   switch (pred) {
-    default: assert(!"Unknown cmp predicate!");
+    default: assert(0 && "Unknown cmp predicate!");
     case ICMP_EQ: case ICMP_NE:
       return pred;
     case ICMP_SGT: return ICMP_SLT;

@@ -706,15 +706,14 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
       // pointer were passed to arguments that were neither of these, then it
       // couldn't be no-capture.
       if (!(*CI)->getType()->isPointerTy() ||
-          (!CS.paramHasAttr(ArgNo+1, Attribute::NoCapture) &&
-           !CS.paramHasAttr(ArgNo+1, Attribute::ByVal)))
+          (!CS.doesNotCapture(ArgNo) && !CS.isByValArgument(ArgNo)))
         continue;
       
       // If this is a no-capture pointer argument, see if we can tell that it
       // is impossible to alias the pointer we're checking.  If not, we have to
       // assume that the call could touch the pointer, even though it doesn't
       // escape.
-      if (!isNoAlias(Location(cast<Value>(CI)), Loc)) {
+      if (!isNoAlias(Location(*CI), Location(Object))) {
         PassedAsArg = true;
         break;
       }
@@ -762,26 +761,6 @@ BasicAliasAnalysis::getModRefInfo(ImmutableCallSite CS,
       }
       // We know that memset doesn't load anything.
       Min = Mod;
-      break;
-    case Intrinsic::atomic_cmp_swap:
-    case Intrinsic::atomic_swap:
-    case Intrinsic::atomic_load_add:
-    case Intrinsic::atomic_load_sub:
-    case Intrinsic::atomic_load_and:
-    case Intrinsic::atomic_load_nand:
-    case Intrinsic::atomic_load_or:
-    case Intrinsic::atomic_load_xor:
-    case Intrinsic::atomic_load_max:
-    case Intrinsic::atomic_load_min:
-    case Intrinsic::atomic_load_umax:
-    case Intrinsic::atomic_load_umin:
-      if (TD) {
-        Value *Op1 = II->getArgOperand(0);
-        uint64_t Op1Size = TD->getTypeStoreSize(Op1->getType());
-        MDNode *Tag = II->getMetadata(LLVMContext::MD_tbaa);
-        if (isNoAlias(Location(Op1, Op1Size, Tag), Loc))
-          return NoModRef;
-      }
       break;
     case Intrinsic::lifetime_start:
     case Intrinsic::lifetime_end:

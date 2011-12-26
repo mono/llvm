@@ -69,7 +69,7 @@ static inline std::auto_ptr<Module> LoadFile(const char *argv0,
   Result = ParseIRFile(FNStr, Err, Context);
   if (Result) return std::auto_ptr<Module>(Result);   // Load successful!
 
-  Err.Print(argv0, errs());
+  Err.print(argv0, errs());
   return std::auto_ptr<Module>();
 }
 
@@ -103,7 +103,8 @@ int main(int argc, char **argv) {
 
     if (Verbose) errs() << "Linking in '" << InputFilenames[i] << "'\n";
 
-    if (Linker::LinkModules(Composite.get(), M.get(), &ErrorMessage)) {
+    if (Linker::LinkModules(Composite.get(), M.get(), Linker::DestroySource,
+                            &ErrorMessage)) {
       errs() << argv[0] << ": link error in '" << InputFilenames[i]
              << "': " << ErrorMessage << "\n";
       return 1;

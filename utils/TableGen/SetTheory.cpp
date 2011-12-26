@@ -13,8 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "SetTheory.h"
-#include "Error.h"
-#include "Record.h"
+#include "llvm/TableGen/Error.h"
+#include "llvm/TableGen/Record.h"
 #include "llvm/Support/Format.h"
 
 using namespace llvm;
@@ -197,6 +197,10 @@ struct FieldExpander : public SetTheory::Expander {
   }
 };
 } // end anonymous namespace
+
+void SetTheory::Operator::anchor() { }
+
+void SetTheory::Expander::anchor() { }
 
 SetTheory::SetTheory() {
   addOperator("add", new AddOp);

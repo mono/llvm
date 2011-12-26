@@ -135,6 +135,7 @@ class BitcodeReader : public GVMaterializer {
   BitcodeReaderValueList ValueList;
   BitcodeReaderMDValueList MDValueList;
   SmallVector<Instruction *, 64> InstructionList;
+  SmallVector<SmallVector<uint64_t, 64>, 64> UseListRecords;
 
   std::vector<std::pair<GlobalVariable*, unsigned> > GlobalInits;
   std::vector<std::pair<GlobalAlias*, unsigned> > AliasInits;
@@ -211,7 +212,6 @@ public:
   bool ParseTriple(std::string &Triple);
 private:
   Type *getTypeByID(unsigned ID);
-  Type *getTypeByIDOrNull(unsigned ID);
   Value *getFnValueByID(unsigned ID, Type *Ty) {
     if (Ty && Ty->isMetadataTy())
       return MDValueList.getValueFwdRef(ID);
@@ -259,10 +259,8 @@ private:
   bool ParseModule();
   bool ParseAttributeBlock();
   bool ParseTypeTable();
-  bool ParseOldTypeTable();         // FIXME: Remove in LLVM 3.1
   bool ParseTypeTableBody();
 
-  bool ParseOldTypeSymbolTable();   // FIXME: Remove in LLVM 3.1
   bool ParseValueSymbolTable();
   bool ParseConstants();
   bool RememberAndSkipFunctionBody();
@@ -271,6 +269,7 @@ private:
   bool ParseMetadata();
   bool ParseMetadataAttachment();
   bool ParseModuleTriple(std::string &Triple);
+  bool ParseUseLists();
 };
   
 } // End llvm namespace

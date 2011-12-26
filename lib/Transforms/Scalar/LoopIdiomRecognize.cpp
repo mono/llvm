@@ -267,7 +267,7 @@ bool LoopIdiomRecognize::runOnLoopBlock(BasicBlock *BB, const SCEV *BECount,
 
 /// processLoopStore - See if this store can be promoted to a memset or memcpy.
 bool LoopIdiomRecognize::processLoopStore(StoreInst *SI, const SCEV *BECount) {
-  if (SI->isVolatile()) return false;
+  if (!SI->isSimple()) return false;
 
   Value *StoredVal = SI->getValueOperand();
   Value *StorePtr = SI->getPointerOperand();
@@ -314,7 +314,7 @@ bool LoopIdiomRecognize::processLoopStore(StoreInst *SI, const SCEV *BECount) {
     const SCEVAddRecExpr *LoadEv =
       dyn_cast<SCEVAddRecExpr>(SE->getSCEV(LI->getOperand(0)));
     if (LoadEv && LoadEv->getLoop() == CurLoop && LoadEv->isAffine() &&
-        StoreEv->getOperand(1) == LoadEv->getOperand(1) && !LI->isVolatile())
+        StoreEv->getOperand(1) == LoadEv->getOperand(1) && LI->isSimple())
       if (processLoopStoreOfLoopLoad(SI, StoreSize, StoreEv, LoadEv, BECount))
         return true;
   }
@@ -463,7 +463,7 @@ processLoopStridedStore(Value *DestPtr, unsigned StoreSize,
     SplatValue = 0;
   } else {
     // Otherwise, this isn't an idiom we can transform.  For example, we can't
-    // do anything with a 3-byte store, for example.
+    // do anything with a 3-byte store.
     return false;
   }
 

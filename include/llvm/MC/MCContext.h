@@ -98,6 +98,27 @@ namespace llvm {
     MCDwarfLoc CurrentDwarfLoc;
     bool DwarfLocSeen;
 
+    /// Generate dwarf debugging info for assembly source files.
+    bool GenDwarfForAssembly;
+
+    /// The current dwarf file number when generate dwarf debugging info for
+    /// assembly source files.
+    unsigned GenDwarfFileNumber;
+
+    /// The default initial text section that we generate dwarf debugging line
+    /// info for when generating dwarf assembly source files.
+    const MCSection *GenDwarfSection;
+    /// Symbols created for the start and end of this section.
+    MCSymbol *GenDwarfSectionStartSym, *GenDwarfSectionEndSym;
+
+    /// The information gathered from labels that will have dwarf subprogram
+    /// entries when generating dwarf assembly source files.
+    std::vector<const MCGenDwarfSubprogramEntry *> MCGenDwarfSubprogramEntries;
+
+    /// The string to embed in the debug information for the compile unit, if
+    /// non-empty.
+    StringRef DwarfDebugFlags;
+
     /// Honor temporary labels, this is useful for debugging semantic
     /// differences between temporary and non-temporary labels (primarily on
     /// Darwin).
@@ -204,7 +225,8 @@ namespace llvm {
     /// @{
 
     /// GetDwarfFile - creates an entry in the dwarf file and directory tables.
-    unsigned GetDwarfFile(StringRef FileName, unsigned FileNumber);
+    unsigned GetDwarfFile(StringRef Directory, StringRef FileName,
+                          unsigned FileNumber);
 
     bool isValidDwarfFileNumber(unsigned FileNumber);
 
@@ -250,6 +272,31 @@ namespace llvm {
 
     bool getDwarfLocSeen() { return DwarfLocSeen; }
     const MCDwarfLoc &getCurrentDwarfLoc() { return CurrentDwarfLoc; }
+
+    bool getGenDwarfForAssembly() { return GenDwarfForAssembly; }
+    void setGenDwarfForAssembly(bool Value) { GenDwarfForAssembly = Value; }
+    unsigned getGenDwarfFileNumber() { return GenDwarfFileNumber; }
+    unsigned nextGenDwarfFileNumber() { return ++GenDwarfFileNumber; }
+    const MCSection *getGenDwarfSection() { return GenDwarfSection; }
+    void setGenDwarfSection(const MCSection *Sec) { GenDwarfSection = Sec; }
+    MCSymbol *getGenDwarfSectionStartSym() { return GenDwarfSectionStartSym; }
+    void setGenDwarfSectionStartSym(MCSymbol *Sym) {
+      GenDwarfSectionStartSym = Sym;
+    }
+    MCSymbol *getGenDwarfSectionEndSym() { return GenDwarfSectionEndSym; }
+    void setGenDwarfSectionEndSym(MCSymbol *Sym) {
+      GenDwarfSectionEndSym = Sym;
+    }
+    const std::vector<const MCGenDwarfSubprogramEntry *>
+      &getMCGenDwarfSubprogramEntries() const {
+      return MCGenDwarfSubprogramEntries;
+    }
+    void addMCGenDwarfSubprogramEntry(const MCGenDwarfSubprogramEntry *E) {
+      MCGenDwarfSubprogramEntries.push_back(E);
+    }
+
+    void setDwarfDebugFlags(StringRef S) { DwarfDebugFlags = S; }
+    StringRef getDwarfDebugFlags() { return DwarfDebugFlags; }
 
     /// @}
 

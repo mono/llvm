@@ -46,6 +46,7 @@ namespace llvm {
 
   public:
     RefCountedBase() : ref_cnt(0) {}
+    RefCountedBase(const RefCountedBase &) : ref_cnt(0) {}
 
     void Retain() const { ++ref_cnt; }
     void Release() const {
@@ -64,9 +65,12 @@ namespace llvm {
 //===----------------------------------------------------------------------===//
   class RefCountedBaseVPTR {
     mutable unsigned ref_cnt;
+    virtual void anchor();
 
   protected:
     RefCountedBaseVPTR() : ref_cnt(0) {}
+    RefCountedBaseVPTR(const RefCountedBaseVPTR &) : ref_cnt(0) {}
+
     virtual ~RefCountedBaseVPTR() {}
 
     void Retain() const { ++ref_cnt; }
@@ -153,7 +157,12 @@ namespace llvm {
       other.Obj = Obj;
       Obj = tmp;
     }
-    
+
+    void reset() {
+      release();
+      Obj = 0;
+    }
+
     void resetWithoutRelease() {
       Obj = 0;
     }

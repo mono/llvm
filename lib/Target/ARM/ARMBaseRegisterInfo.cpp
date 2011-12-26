@@ -73,8 +73,8 @@ ARMBaseRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     0
   };
 
-  static const unsigned DarwinCalleeSavedRegs[] = {
-    // Darwin ABI deviates from ARM standard ABI. R9 is not a callee-saved
+  static const unsigned iOSCalleeSavedRegs[] = {
+    // iOS ABI deviates from ARM standard ABI. R9 is not a callee-saved
     // register.
     ARM::LR,  ARM::R7,  ARM::R6, ARM::R5, ARM::R4,
     ARM::R11, ARM::R10, ARM::R8,
@@ -83,8 +83,7 @@ ARMBaseRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     ARM::D11, ARM::D10, ARM::D9,  ARM::D8,
     0
   };
-
-  return STI.isTargetDarwin() ? DarwinCalleeSavedRegs : CalleeSavedRegs;
+  return (STI.isTargetIOS()) ? iOSCalleeSavedRegs : CalleeSavedRegs;
 }
 
 BitVector ARMBaseRegisterInfo::
@@ -143,104 +142,6 @@ bool ARMBaseRegisterInfo::isReservedReg(const MachineFunction &MF,
   }
 
   return false;
-}
-
-const TargetRegisterClass *
-ARMBaseRegisterInfo::getMatchingSuperRegClass(const TargetRegisterClass *A,
-                                              const TargetRegisterClass *B,
-                                              unsigned SubIdx) const {
-  switch (SubIdx) {
-  default: return 0;
-  case ARM::ssub_0:
-  case ARM::ssub_1:
-  case ARM::ssub_2:
-  case ARM::ssub_3: {
-    // S sub-registers.
-    if (A->getSize() == 8) {
-      if (B == &ARM::SPR_8RegClass)
-        return &ARM::DPR_8RegClass;
-      assert(B == &ARM::SPRRegClass && "Expecting SPR register class!");
-      if (A == &ARM::DPR_8RegClass)
-        return A;
-      return &ARM::DPR_VFP2RegClass;
-    }
-
-    if (A->getSize() == 16) {
-      if (B == &ARM::SPR_8RegClass)
-        return &ARM::QPR_8RegClass;
-      return &ARM::QPR_VFP2RegClass;
-    }
-
-    if (A->getSize() == 32) {
-      if (B == &ARM::SPR_8RegClass)
-        return 0;  // Do not allow coalescing!
-      return &ARM::QQPR_VFP2RegClass;
-    }
-
-    assert(A->getSize() == 64 && "Expecting a QQQQ register class!");
-    return 0;  // Do not allow coalescing!
-  }
-  case ARM::dsub_0:
-  case ARM::dsub_1:
-  case ARM::dsub_2:
-  case ARM::dsub_3: {
-    // D sub-registers.
-    if (A->getSize() == 16) {
-      if (B == &ARM::DPR_VFP2RegClass)
-        return &ARM::QPR_VFP2RegClass;
-      if (B == &ARM::DPR_8RegClass)
-        return 0;  // Do not allow coalescing!
-      return A;
-    }
-
-    if (A->getSize() == 32) {
-      if (B == &ARM::DPR_VFP2RegClass)
-        return &ARM::QQPR_VFP2RegClass;
-      if (B == &ARM::DPR_8RegClass)
-        return 0;  // Do not allow coalescing!
-      return A;
-    }
-
-    assert(A->getSize() == 64 && "Expecting a QQQQ register class!");
-    if (B != &ARM::DPRRegClass)
-      return 0;  // Do not allow coalescing!
-    return A;
-  }
-  case ARM::dsub_4:
-  case ARM::dsub_5:
-  case ARM::dsub_6:
-  case ARM::dsub_7: {
-    // D sub-registers of QQQQ registers.
-    if (A->getSize() == 64 && B == &ARM::DPRRegClass)
-      return A;
-    return 0;  // Do not allow coalescing!
-  }
-
-  case ARM::qsub_0:
-  case ARM::qsub_1: {
-    // Q sub-registers.
-    if (A->getSize() == 32) {
-      if (B == &ARM::QPR_VFP2RegClass)
-        return &ARM::QQPR_VFP2RegClass;
-      if (B == &ARM::QPR_8RegClass)
-        return 0;  // Do not allow coalescing!
-      return A;
-    }
-
-    assert(A->getSize() == 64 && "Expecting a QQQQ register class!");
-    if (B == &ARM::QPRRegClass)
-      return A;
-    return 0;  // Do not allow coalescing!
-  }
-  case ARM::qsub_2:
-  case ARM::qsub_3: {
-    // Q sub-registers of QQQQ registers.
-    if (A->getSize() == 64 && B == &ARM::QPRRegClass)
-      return A;
-    return 0;  // Do not allow coalescing!
-  }
-  }
-  return 0;
 }
 
 bool
@@ -363,7 +264,7 @@ const TargetRegisterClass*
 ARMBaseRegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC)
                                                                          const {
   const TargetRegisterClass *Super = RC;
-  TargetRegisterClass::sc_iterator I = RC->superclasses_begin();
+  TargetRegisterClass::sc_iterator I = RC->getSuperClasses();
   do {
     switch (Super->getID()) {
     case ARM::GPRRegClassID:
@@ -641,7 +542,7 @@ bool ARMBaseRegisterInfo::canRealignStack(const MachineFunction &MF) const {
   // 1. Dynamic stack realignment is explicitly disabled,
   // 2. This is a Thumb1 function (it's not useful, so we don't bother), or
   // 3. There are VLAs in the function and the base pointer is disabled.
-  return (RealignStack && !AFI->isThumb1OnlyFunction() &&
+  return (MF.getTarget().Options.RealignStack && !AFI->isThumb1OnlyFunction() &&
           (!MFI->hasVarSizedObjects() || EnableBasePointer));
 }
 
@@ -650,7 +551,7 @@ needsStackRealignment(const MachineFunction &MF) const {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
   const Function *F = MF.getFunction();
   unsigned StackAlign = MF.getTarget().getFrameLowering()->getStackAlignment();
-  bool requiresRealignment = ((MFI->getLocalFrameMaxAlign() > StackAlign) ||
+  bool requiresRealignment = ((MFI->getMaxAlignment() > StackAlign) ||
                                F->hasFnAttr(Attribute::StackAlignment));
 
   return requiresRealignment && canRealignStack(MF);
@@ -659,7 +560,7 @@ needsStackRealignment(const MachineFunction &MF) const {
 bool ARMBaseRegisterInfo::
 cannotEliminateFrame(const MachineFunction &MF) const {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
-  if (DisableFramePointerElim(MF) && MFI->adjustsStack())
+  if (MF.getTarget().Options.DisableFramePointerElim(MF) && MFI->adjustsStack())
     return true;
   return MFI->hasVarSizedObjects() || MFI->isFrameAddressTaken()
     || needsStackRealignment(MF);
@@ -690,85 +591,48 @@ unsigned ARMBaseRegisterInfo::getRegisterPairEven(unsigned Reg,
   default: break;
   // Return 0 if either register of the pair is a special register.
   // So no R12, etc.
-  case ARM::R1:
-    return ARM::R0;
-  case ARM::R3:
-    return ARM::R2;
-  case ARM::R5:
-    return ARM::R4;
+  case ARM::R1: return ARM::R0;
+  case ARM::R3: return ARM::R2;
+  case ARM::R5: return ARM::R4;
   case ARM::R7:
     return (isReservedReg(MF, ARM::R7) || isReservedReg(MF, ARM::R6))
       ? 0 : ARM::R6;
-  case ARM::R9:
-    return isReservedReg(MF, ARM::R9)  ? 0 :ARM::R8;
-  case ARM::R11:
-    return isReservedReg(MF, ARM::R11) ? 0 : ARM::R10;
+  case ARM::R9: return isReservedReg(MF, ARM::R9)  ? 0 :ARM::R8;
+  case ARM::R11: return isReservedReg(MF, ARM::R11) ? 0 : ARM::R10;
 
-  case ARM::S1:
-    return ARM::S0;
-  case ARM::S3:
-    return ARM::S2;
-  case ARM::S5:
-    return ARM::S4;
-  case ARM::S7:
-    return ARM::S6;
-  case ARM::S9:
-    return ARM::S8;
-  case ARM::S11:
-    return ARM::S10;
-  case ARM::S13:
-    return ARM::S12;
-  case ARM::S15:
-    return ARM::S14;
-  case ARM::S17:
-    return ARM::S16;
-  case ARM::S19:
-    return ARM::S18;
-  case ARM::S21:
-    return ARM::S20;
-  case ARM::S23:
-    return ARM::S22;
-  case ARM::S25:
-    return ARM::S24;
-  case ARM::S27:
-    return ARM::S26;
-  case ARM::S29:
-    return ARM::S28;
-  case ARM::S31:
-    return ARM::S30;
+  case ARM::S1: return ARM::S0;
+  case ARM::S3: return ARM::S2;
+  case ARM::S5: return ARM::S4;
+  case ARM::S7: return ARM::S6;
+  case ARM::S9: return ARM::S8;
+  case ARM::S11: return ARM::S10;
+  case ARM::S13: return ARM::S12;
+  case ARM::S15: return ARM::S14;
+  case ARM::S17: return ARM::S16;
+  case ARM::S19: return ARM::S18;
+  case ARM::S21: return ARM::S20;
+  case ARM::S23: return ARM::S22;
+  case ARM::S25: return ARM::S24;
+  case ARM::S27: return ARM::S26;
+  case ARM::S29: return ARM::S28;
+  case ARM::S31: return ARM::S30;
 
-  case ARM::D1:
-    return ARM::D0;
-  case ARM::D3:
-    return ARM::D2;
-  case ARM::D5:
-    return ARM::D4;
-  case ARM::D7:
-    return ARM::D6;
-  case ARM::D9:
-    return ARM::D8;
-  case ARM::D11:
-    return ARM::D10;
-  case ARM::D13:
-    return ARM::D12;
-  case ARM::D15:
-    return ARM::D14;
-  case ARM::D17:
-    return ARM::D16;
-  case ARM::D19:
-    return ARM::D18;
-  case ARM::D21:
-    return ARM::D20;
-  case ARM::D23:
-    return ARM::D22;
-  case ARM::D25:
-    return ARM::D24;
-  case ARM::D27:
-    return ARM::D26;
-  case ARM::D29:
-    return ARM::D28;
-  case ARM::D31:
-    return ARM::D30;
+  case ARM::D1: return ARM::D0;
+  case ARM::D3: return ARM::D2;
+  case ARM::D5: return ARM::D4;
+  case ARM::D7: return ARM::D6;
+  case ARM::D9: return ARM::D8;
+  case ARM::D11: return ARM::D10;
+  case ARM::D13: return ARM::D12;
+  case ARM::D15: return ARM::D14;
+  case ARM::D17: return ARM::D16;
+  case ARM::D19: return ARM::D18;
+  case ARM::D21: return ARM::D20;
+  case ARM::D23: return ARM::D22;
+  case ARM::D25: return ARM::D24;
+  case ARM::D27: return ARM::D26;
+  case ARM::D29: return ARM::D28;
+  case ARM::D31: return ARM::D30;
   }
 
   return 0;
@@ -780,85 +644,48 @@ unsigned ARMBaseRegisterInfo::getRegisterPairOdd(unsigned Reg,
   default: break;
   // Return 0 if either register of the pair is a special register.
   // So no R12, etc.
-  case ARM::R0:
-    return ARM::R1;
-  case ARM::R2:
-    return ARM::R3;
-  case ARM::R4:
-    return ARM::R5;
+  case ARM::R0: return ARM::R1;
+  case ARM::R2: return ARM::R3;
+  case ARM::R4: return ARM::R5;
   case ARM::R6:
     return (isReservedReg(MF, ARM::R7) || isReservedReg(MF, ARM::R6))
       ? 0 : ARM::R7;
-  case ARM::R8:
-    return isReservedReg(MF, ARM::R9)  ? 0 :ARM::R9;
-  case ARM::R10:
-    return isReservedReg(MF, ARM::R11) ? 0 : ARM::R11;
+  case ARM::R8: return isReservedReg(MF, ARM::R9)  ? 0 :ARM::R9;
+  case ARM::R10: return isReservedReg(MF, ARM::R11) ? 0 : ARM::R11;
 
-  case ARM::S0:
-    return ARM::S1;
-  case ARM::S2:
-    return ARM::S3;
-  case ARM::S4:
-    return ARM::S5;
-  case ARM::S6:
-    return ARM::S7;
-  case ARM::S8:
-    return ARM::S9;
-  case ARM::S10:
-    return ARM::S11;
-  case ARM::S12:
-    return ARM::S13;
-  case ARM::S14:
-    return ARM::S15;
-  case ARM::S16:
-    return ARM::S17;
-  case ARM::S18:
-    return ARM::S19;
-  case ARM::S20:
-    return ARM::S21;
-  case ARM::S22:
-    return ARM::S23;
-  case ARM::S24:
-    return ARM::S25;
-  case ARM::S26:
-    return ARM::S27;
-  case ARM::S28:
-    return ARM::S29;
-  case ARM::S30:
-    return ARM::S31;
+  case ARM::S0: return ARM::S1;
+  case ARM::S2: return ARM::S3;
+  case ARM::S4: return ARM::S5;
+  case ARM::S6: return ARM::S7;
+  case ARM::S8: return ARM::S9;
+  case ARM::S10: return ARM::S11;
+  case ARM::S12: return ARM::S13;
+  case ARM::S14: return ARM::S15;
+  case ARM::S16: return ARM::S17;
+  case ARM::S18: return ARM::S19;
+  case ARM::S20: return ARM::S21;
+  case ARM::S22: return ARM::S23;
+  case ARM::S24: return ARM::S25;
+  case ARM::S26: return ARM::S27;
+  case ARM::S28: return ARM::S29;
+  case ARM::S30: return ARM::S31;
 
-  case ARM::D0:
-    return ARM::D1;
-  case ARM::D2:
-    return ARM::D3;
-  case ARM::D4:
-    return ARM::D5;
-  case ARM::D6:
-    return ARM::D7;
-  case ARM::D8:
-    return ARM::D9;
-  case ARM::D10:
-    return ARM::D11;
-  case ARM::D12:
-    return ARM::D13;
-  case ARM::D14:
-    return ARM::D15;
-  case ARM::D16:
-    return ARM::D17;
-  case ARM::D18:
-    return ARM::D19;
-  case ARM::D20:
-    return ARM::D21;
-  case ARM::D22:
-    return ARM::D23;
-  case ARM::D24:
-    return ARM::D25;
-  case ARM::D26:
-    return ARM::D27;
-  case ARM::D28:
-    return ARM::D29;
-  case ARM::D30:
-    return ARM::D31;
+  case ARM::D0: return ARM::D1;
+  case ARM::D2: return ARM::D3;
+  case ARM::D4: return ARM::D5;
+  case ARM::D6: return ARM::D7;
+  case ARM::D8: return ARM::D9;
+  case ARM::D10: return ARM::D11;
+  case ARM::D12: return ARM::D13;
+  case ARM::D14: return ARM::D15;
+  case ARM::D16: return ARM::D17;
+  case ARM::D18: return ARM::D19;
+  case ARM::D20: return ARM::D21;
+  case ARM::D22: return ARM::D23;
+  case ARM::D24: return ARM::D25;
+  case ARM::D26: return ARM::D27;
+  case ARM::D28: return ARM::D29;
+  case ARM::D30: return ARM::D31;
   }
 
   return 0;

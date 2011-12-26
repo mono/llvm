@@ -25,6 +25,7 @@ using namespace llvm;
 Type *Type::getPrimitiveType(LLVMContext &C, TypeID IDNumber) {
   switch (IDNumber) {
   case VoidTyID      : return getVoidTy(C);
+  case HalfTyID      : return getHalfTy(C);
   case FloatTyID     : return getFloatTy(C);
   case DoubleTyID    : return getDoubleTy(C);
   case X86_FP80TyID  : return getX86_FP80Ty(C);
@@ -46,6 +47,14 @@ Type *Type::getScalarType() {
   return this;
 }
 
+/// getNumElements - If this is a vector type, return the number of elements,
+/// otherwise return zero.
+unsigned Type::getNumElements() {
+  if (VectorType *VTy = dyn_cast<VectorType>(this))
+    return VTy->getNumElements();
+  return 0;
+}
+
 /// isIntegerTy - Return true if this is an IntegerType of the specified width.
 bool Type::isIntegerTy(unsigned Bitwidth) const {
   return isIntegerTy() && cast<IntegerType>(this)->getBitWidth() == Bitwidth;
@@ -65,7 +74,7 @@ bool Type::isIntOrIntVectorTy() const {
 /// isFPOrFPVectorTy - Return true if this is a FP type or a vector of FP types.
 ///
 bool Type::isFPOrFPVectorTy() const {
-  if (ID == Type::FloatTyID || ID == Type::DoubleTyID || 
+  if (ID == Type::HalfTyID || ID == Type::FloatTyID || ID == Type::DoubleTyID ||
       ID == Type::FP128TyID || ID == Type::X86_FP80TyID || 
       ID == Type::PPC_FP128TyID)
     return true;
@@ -131,6 +140,7 @@ bool Type::isEmptyTy() const {
 
 unsigned Type::getPrimitiveSizeInBits() const {
   switch (getTypeID()) {
+  case Type::HalfTyID: return 16;
   case Type::FloatTyID: return 32;
   case Type::DoubleTyID: return 64;
   case Type::X86_FP80TyID: return 80;
@@ -157,6 +167,7 @@ int Type::getFPMantissaWidth() const {
   if (const VectorType *VTy = dyn_cast<VectorType>(this))
     return VTy->getElementType()->getFPMantissaWidth();
   assert(isFloatingPointTy() && "Not a floating point type!");
+  if (ID == HalfTyID) return 11;
   if (ID == FloatTyID) return 24;
   if (ID == DoubleTyID) return 53;
   if (ID == X86_FP80TyID) return 64;
@@ -199,6 +210,7 @@ bool Type::isSizedDerivedType() const {
 
 Type *Type::getVoidTy(LLVMContext &C) { return &C.pImpl->VoidTy; }
 Type *Type::getLabelTy(LLVMContext &C) { return &C.pImpl->LabelTy; }
+Type *Type::getHalfTy(LLVMContext &C) { return &C.pImpl->HalfTy; }
 Type *Type::getFloatTy(LLVMContext &C) { return &C.pImpl->FloatTy; }
 Type *Type::getDoubleTy(LLVMContext &C) { return &C.pImpl->DoubleTy; }
 Type *Type::getMetadataTy(LLVMContext &C) { return &C.pImpl->MetadataTy; }
@@ -215,6 +227,10 @@ IntegerType *Type::getInt64Ty(LLVMContext &C) { return &C.pImpl->Int64Ty; }
 
 IntegerType *Type::getIntNTy(LLVMContext &C, unsigned N) {
   return IntegerType::get(C, N);
+}
+
+PointerType *Type::getHalfPtrTy(LLVMContext &C, unsigned AS) {
+  return getHalfTy(C)->getPointerTo(AS);
 }
 
 PointerType *Type::getFloatPtrTy(LLVMContext &C, unsigned AS) {
@@ -664,6 +680,8 @@ VectorType *VectorType::get(Type *elementType, unsigned NumElements) {
 }
 
 bool VectorType::isValidElementType(Type *ElemTy) {
+  if (PointerType *PTy = dyn_cast<PointerType>(ElemTy))
+    ElemTy = PTy->getElementType();
   return ElemTy->isIntegerTy() || ElemTy->isFloatingPointTy();
 }
 

@@ -91,3 +91,33 @@ entry:
   ret <8 x i32> %shuffle
 }
 
+;;; Don't crash on movd
+; CHECK: _VMOVZQI2PQI
+; CHECK: vmovd (%
+define <8 x i32> @VMOVZQI2PQI([0 x float]* nocapture %aFOO) nounwind {
+allocas:
+  %ptrcast.i33.i = bitcast [0 x float]* %aFOO to i32*
+  %val.i34.i = load i32* %ptrcast.i33.i, align 4
+  %ptroffset.i22.i992 = getelementptr [0 x float]* %aFOO, i64 0, i64 1
+  %ptrcast.i23.i = bitcast float* %ptroffset.i22.i992 to i32*
+  %val.i24.i = load i32* %ptrcast.i23.i, align 4
+  %updatedret.i30.i = insertelement <8 x i32> undef, i32 %val.i34.i, i32 1
+  ret <8 x i32> %updatedret.i30.i
+}
+
+;;;; Don't crash on fneg
+; rdar://10566486
+; CHECK: fneg
+; CHECK: vxorps
+define <16 x float> @fneg(<16 x float> addrspace(1)* nocapture %out) nounwind {
+  %1 = fsub <16 x float> <float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00>, <float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00>
+  ret <16 x float> %1
+}
+
+;;; Don't crash on build vector
+; CHECK: @build_vec_16x16
+; CHECK: vmovd
+define <16 x i16> @build_vec_16x16(i16 %a) nounwind readonly {
+  %res = insertelement <16 x i16> <i16 undef, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0, i16 0>, i16 %a, i32 0
+  ret <16 x i16> %res
+}

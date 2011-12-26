@@ -2,6 +2,7 @@
                       "http://www.w3.org/TR/html4/strict.dtd">
 <html>
 <head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
   <title>Building LLVM with CMake</title>
   <link rel="stylesheet" href="llvm.css" type="text/css">
 </head>
@@ -144,7 +145,7 @@
       text. Generator's names are case-sensitive. Example:</p>
 
     <div class="doc_code">
-      <p><tt>cmake -G "Visual Studio 8 2005" path/to/llvm/source/root</tt></p>
+      <p><tt>cmake -G "Visual Studio 9 2008" path/to/llvm/source/root</tt></p>
     </div>
 
     <p>For a given development platform there can be more than one
@@ -249,7 +250,7 @@
   <dd>Semicolon-separated list of targets to build, or <i>all</i> for
     building all targets. Case-sensitive. For Visual C++ defaults
     to <i>X86</i>. On the other cases defaults to <i>all</i>. Example:
-    <i>-DLLVM_TARGETS_TO_BUILD="X86;PowerPC;Alpha"</i>.</dd>
+    <i>-DLLVM_TARGETS_TO_BUILD="X86;PowerPC"</i>.</dd>
 
   <dt><b>LLVM_BUILD_TOOLS</b>:BOOL</dt>
   <dd>Build LLVM tools. Defaults to ON. Targets for building each tool
@@ -340,7 +341,7 @@
     on Visual C++ and Xcode,
     <tt>&quot;-sv&quot;</tt> on others.</dd>
 
-  <dt><b>LLVM_LIT_TOOLS_DIR</b>:STRING</dt>
+  <dt><b>LLVM_LIT_TOOLS_DIR</b>:PATH</dt>
   <dd>The path to GnuWin32 tools for tests. Valid on Windows host.
     Defaults to "", then Lit seeks tools according to %PATH%.
     Lit can find tools(eg. grep, sort, &amp;c) on LLVM_LIT_TOOLS_DIR at first,
@@ -351,6 +352,11 @@
     Function Interface library. If the library or its headers are
     installed on a custom location, you can set the variables
     FFI_INCLUDE_DIR and FFI_LIBRARY_DIR. Defaults to OFF.</dd>
+
+  <dt><b>LLVM_CLANG_SOURCE_DIR</b>:PATH</dt>
+  <dd>Path to Clang's source directory. Defaults to tools/clang.
+    Clang will not be built when it is empty or it does not point valid
+    path.</dd>
 </dl>
 
 </div>

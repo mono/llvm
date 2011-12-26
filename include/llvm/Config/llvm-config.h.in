@@ -25,14 +25,20 @@
 /* Installation directory for data files */
 #undef LLVM_DATADIR
 
+/* Target triple LLVM will generate code for by default */
+#undef LLVM_DEFAULT_TARGET_TRIPLE
+
 /* Installation directory for documentation */
 #undef LLVM_DOCSDIR
+
+/* Define if threads enabled */
+#undef LLVM_ENABLE_THREADS
 
 /* Installation directory for config files */
 #undef LLVM_ETCDIR
 
-/* Host triple we were built on */
-#undef LLVM_HOSTTRIPLE
+/* Has gcc/MSVC atomic intrinsics */
+#undef LLVM_HAS_ATOMICS
 
 /* Installation directory for include files */
 #undef LLVM_INCLUDEDIR
@@ -45,9 +51,6 @@
 
 /* Installation directory for man pages */
 #undef LLVM_MANDIR
-
-/* Build multithreading support into LLVM */
-#undef LLVM_MULTITHREADED
 
 /* LLVM architecture name for the native architecture, if available */
 #undef LLVM_NATIVE_ARCH
@@ -96,6 +99,9 @@
 
 /* Define to path to twopi program if found or 'echo twopi' otherwise */
 #undef LLVM_PATH_TWOPI
+
+/* Define to path to xdot.py program if found or 'echo xdot.py' otherwise */
+#undef LLVM_PATH_XDOT_PY
 
 /* Installation prefix directory */
 #undef LLVM_PREFIX

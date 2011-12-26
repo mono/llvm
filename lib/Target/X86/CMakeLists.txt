@@ -1,20 +1,19 @@
 set(LLVM_TARGET_DEFINITIONS X86.td)
 
-tablegen(X86GenRegisterInfo.inc -gen-register-info)
-tablegen(X86GenDisassemblerTables.inc -gen-disassembler)
-tablegen(X86GenInstrInfo.inc -gen-instr-info)
-tablegen(X86GenAsmWriter.inc -gen-asm-writer)
-tablegen(X86GenAsmWriter1.inc -gen-asm-writer -asmwriternum=1)
-tablegen(X86GenAsmMatcher.inc -gen-asm-matcher)
-tablegen(X86GenDAGISel.inc -gen-dag-isel)
-tablegen(X86GenFastISel.inc -gen-fast-isel)
-tablegen(X86GenCallingConv.inc -gen-callingconv)
-tablegen(X86GenSubtargetInfo.inc -gen-subtarget)
-tablegen(X86GenEDInfo.inc -gen-enhanced-disassembly-info)
+tablegen(LLVM X86GenRegisterInfo.inc -gen-register-info)
+tablegen(LLVM X86GenDisassemblerTables.inc -gen-disassembler)
+tablegen(LLVM X86GenInstrInfo.inc -gen-instr-info)
+tablegen(LLVM X86GenAsmWriter.inc -gen-asm-writer)
+tablegen(LLVM X86GenAsmWriter1.inc -gen-asm-writer -asmwriternum=1)
+tablegen(LLVM X86GenAsmMatcher.inc -gen-asm-matcher)
+tablegen(LLVM X86GenDAGISel.inc -gen-dag-isel)
+tablegen(LLVM X86GenFastISel.inc -gen-fast-isel)
+tablegen(LLVM X86GenCallingConv.inc -gen-callingconv)
+tablegen(LLVM X86GenSubtargetInfo.inc -gen-subtarget)
+tablegen(LLVM X86GenEDInfo.inc -gen-enhanced-disassembly-info)
 add_public_tablegen_target(X86CommonTableGen)
 
 set(sources
-  SSEDomainFix.cpp
   X86AsmPrinter.cpp
   X86COFFMachineModuleInfo.cpp
   X86CodeEmitter.cpp
@@ -27,6 +26,7 @@ set(sources
   X86InstrInfo.cpp
   X86JITInfo.cpp
   X86MCInstLower.cpp
+  X86MachineFunctionInfo.cpp
   X86RegisterInfo.cpp
   X86SelectionDAGInfo.cpp
   X86Subtarget.cpp
@@ -51,19 +51,6 @@ if( CMAKE_CL_64 )
 endif()
 
 add_llvm_target(X86CodeGen ${sources})
-
-add_llvm_library_dependencies(LLVMX86CodeGen
-  LLVMAnalysis
-  LLVMAsmPrinter
-  LLVMCodeGen
-  LLVMCore
-  LLVMMC
-  LLVMSelectionDAG
-  LLVMSupport
-  LLVMTarget
-  LLVMX86AsmPrinter
-  LLVMX86Desc
-  )
 
 add_subdirectory(AsmParser)
 add_subdirectory(Disassembler)

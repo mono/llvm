@@ -26,6 +26,8 @@ namespace PTXISD {
     FIRST_NUMBER = ISD::BUILTIN_OP_END,
     LOAD_PARAM,
     STORE_PARAM,
+    READ_PARAM,
+    WRITE_PARAM,
     EXIT,
     RET,
     COPY_ADDRESS,
@@ -72,6 +74,8 @@ class PTXTargetLowering : public TargetLowering {
                 SmallVectorImpl<SDValue> &InVals) const;
 
     virtual EVT getSetCCResultType(EVT VT) const;
+
+    virtual unsigned getNumRegisters(LLVMContext &Context, EVT VT);
 
   private:
     SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;

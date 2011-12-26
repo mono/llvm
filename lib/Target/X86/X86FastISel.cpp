@@ -22,6 +22,7 @@
 #include "llvm/CallingConv.h"
 #include "llvm/DerivedTypes.h"
 #include "llvm/GlobalVariable.h"
+#include "llvm/GlobalAlias.h"
 #include "llvm/Instructions.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/Operator.h"
@@ -257,6 +258,18 @@ X86FastISel::X86FastEmitStore(EVT VT, unsigned Val, const X86AddressMode &AM) {
     Opc = X86ScalarSSEf64 ?
           (Subtarget->hasAVX() ? X86::VMOVSDmr : X86::MOVSDmr) : X86::ST_Fp64m;
     break;
+  case MVT::v4f32:
+    Opc = X86::MOVAPSmr;
+    break;
+  case MVT::v2f64:
+    Opc = X86::MOVAPDmr;
+    break;
+  case MVT::v4i32:
+  case MVT::v2i64:
+  case MVT::v8i16:
+  case MVT::v16i8:
+    Opc = X86::MOVDQAmr;
+    break;
   }
 
   addFullAddress(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt,
@@ -467,13 +480,22 @@ bool X86FastISel::X86SelectAddress(const Value *V, X86AddressMode &AM) {
 
   // Handle constant address.
   if (const GlobalValue *GV = dyn_cast<GlobalValue>(V)) {
-    // Can't handle alternate code models or TLS yet.
+    // Can't handle alternate code models yet.
     if (TM.getCodeModel() != CodeModel::Small)
       return false;
 
+    // Can't handle TLS yet.
     if (const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GV))
       if (GVar->isThreadLocal())
         return false;
+
+    // Can't handle TLS yet, part 2 (this is slightly crazy, but this is how
+    // it works...).
+    if (const GlobalAlias *GA = dyn_cast<GlobalAlias>(GV))
+      if (const GlobalVariable *GVar =
+            dyn_cast_or_null<GlobalVariable>(GA->resolveAliasedGlobal(false)))
+        if (GVar->isThreadLocal())
+          return false;
 
     // RIP-relative addresses can't have additional register operands, so if
     // we've already folded stuff into the addressing mode, just force the
@@ -661,7 +683,14 @@ bool X86FastISel::X86SelectCallAddress(const Value *V, X86AddressMode &AM) {
 /// X86SelectStore - Select and emit code to implement store instructions.
 bool X86FastISel::X86SelectStore(const Instruction *I) {
   // Atomic stores need special handling.
-  if (cast<StoreInst>(I)->isAtomic())
+  const StoreInst *S = cast<StoreInst>(I);
+
+  if (S->isAtomic())
+    return false;
+
+  unsigned SABIAlignment =
+    TD.getABITypeAlignment(S->getValueOperand()->getType());
+  if (S->getAlignment() != 0 && S->getAlignment() < SABIAlignment)
     return false;
 
   MVT VT;
@@ -699,7 +728,7 @@ bool X86FastISel::X86SelectRet(const Instruction *I) {
 
   // fastcc with -tailcallopt is intended to provide a guaranteed
   // tail call optimization. Fastisel doesn't know how to do that.
-  if (CC == CallingConv::Fast && GuaranteedTailCallOpt)
+  if (CC == CallingConv::Fast && TM.Options.GuaranteedTailCallOpt)
     return false;
 
   // Let SDISel handle vararg functions.
@@ -1500,7 +1529,7 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
 
   // fastcc with -tailcallopt is intended to provide a guaranteed
   // tail call optimization. Fastisel doesn't know how to do that.
-  if (CC == CallingConv::Fast && GuaranteedTailCallOpt)
+  if (CC == CallingConv::Fast && TM.Options.GuaranteedTailCallOpt)
     return false;
 
   PointerType *PT = cast<PointerType>(CS.getCalledValue()->getType());
@@ -1514,7 +1543,7 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
 
   // Fast-isel doesn't know about callee-pop yet.
   if (X86::isCalleePop(CC, Subtarget->is64Bit(), isVarArg,
-                       GuaranteedTailCallOpt))
+                       TM.Options.GuaranteedTailCallOpt))
     return false;
 
   // Check whether the function can return without sret-demotion.
@@ -1728,11 +1757,13 @@ bool X86FastISel::DoSelectCall(const Instruction *I, const char *MemIntName) {
         assert(Res && "memcpy length already checked!"); (void)Res;
       } else if (isa<ConstantInt>(ArgVal) || isa<ConstantPointerNull>(ArgVal)) {
         // If this is a really simple value, emit this with the Value* version
-        //of X86FastEmitStore.  If it isn't simple, we don't want to do this,
+        // of X86FastEmitStore.  If it isn't simple, we don't want to do this,
         // as it can cause us to reevaluate the argument.
-        X86FastEmitStore(ArgVT, ArgVal, AM);
+        if (!X86FastEmitStore(ArgVT, ArgVal, AM))
+          return false;
       } else {
-        X86FastEmitStore(ArgVT, Arg, AM);
+        if (!X86FastEmitStore(ArgVT, Arg, AM))
+          return false;
       }
     }
   }
@@ -2090,7 +2121,7 @@ unsigned X86FastISel::TargetMaterializeFloatZero(const ConstantFP *CF) {
     default: return false;
     case MVT::f32:
       if (X86ScalarSSEf32) {
-        Opc = Subtarget->hasAVX() ? X86::VFsFLD0SS : X86::FsFLD0SS;
+        Opc = X86::FsFLD0SS;
         RC  = X86::FR32RegisterClass;
       } else {
         Opc = X86::LD_Fp032;
@@ -2099,7 +2130,7 @@ unsigned X86FastISel::TargetMaterializeFloatZero(const ConstantFP *CF) {
       break;
     case MVT::f64:
       if (X86ScalarSSEf64) {
-        Opc = Subtarget->hasAVX() ? X86::VFsFLD0SD : X86::FsFLD0SD;
+        Opc = X86::FsFLD0SD;
         RC  = X86::FR64RegisterClass;
       } else {
         Opc = X86::LD_Fp064;

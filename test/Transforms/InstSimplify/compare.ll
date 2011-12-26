@@ -204,6 +204,24 @@ define i1 @select4(i1 %cond) {
 ; CHECK: ret i1 %cond
 }
 
+define i1 @select5(i32 %x) {
+; CHECK: @select5
+  %c = icmp eq i32 %x, 0
+  %s = select i1 %c, i32 1, i32 %x
+  %c2 = icmp eq i32 %s, 0
+  ret i1 %c2
+; CHECK: ret i1 false
+}
+
+define i1 @select6(i32 %x) {
+; CHECK: @select6
+  %c = icmp sgt i32 %x, 0
+  %s = select i1 %c, i32 %x, i32 4
+  %c2 = icmp eq i32 %s, 0
+  ret i1 %c2
+; CHECK: ret i1 %c2
+}
+
 define i1 @urem1(i32 %X, i32 %Y) {
 ; CHECK: @urem1
   %A = urem i32 %X, %Y
@@ -300,6 +318,40 @@ define i1 @udiv2(i32 %X, i32 %Y, i32 %Z) {
 ; CHECK: ret i1 true
 }
 
+define i1 @udiv3(i32 %X, i32 %Y) {
+; CHECK: @udiv3
+  %A = udiv i32 %X, %Y
+  %C = icmp ugt i32 %A, %X
+  ret i1 %C
+; CHECK: ret i1 false
+}
+
+define i1 @udiv4(i32 %X, i32 %Y) {
+; CHECK: @udiv4
+  %A = udiv i32 %X, %Y
+  %C = icmp ule i32 %A, %X
+  ret i1 %C
+; CHECK: ret i1 true
+}
+
+define i1 @udiv5(i32 %X) {
+; CHECK: @udiv5
+  %A = udiv i32 123, %X
+  %C = icmp ugt i32 %A, 124
+  ret i1 %C
+; CHECK: ret i1 false
+}
+
+; PR11340
+define i1 @udiv6(i32 %X) nounwind {
+; CHECK: @udiv6
+  %A = udiv i32 1, %X
+  %C = icmp eq i32 %A, 0
+  ret i1 %C
+; CHECK: ret i1 %C
+}
+
+
 define i1 @sdiv1(i32 %X) {
 ; CHECK: @sdiv1
   %A = sdiv i32 %X, 1000000
@@ -322,4 +374,35 @@ define i1 @and1(i32 %X) {
   %B = icmp ugt i32 %A, 70
   ret i1 %B
 ; CHECK: ret i1 false
+}
+
+define i1 @mul1(i32 %X) {
+; CHECK: @mul1
+; Square of a non-zero number is non-zero if there is no overflow.
+  %Y = or i32 %X, 1
+  %M = mul nuw i32 %Y, %Y
+  %C = icmp eq i32 %M, 0
+  ret i1 %C
+; CHECK: ret i1 false
+}
+
+define i1 @mul2(i32 %X) {
+; CHECK: @mul2
+; Square of a non-zero number is positive if there is no signed overflow.
+  %Y = or i32 %X, 1
+  %M = mul nsw i32 %Y, %Y
+  %C = icmp sgt i32 %M, 0
+  ret i1 %C
+; CHECK: ret i1 true
+}
+
+define i1 @mul3(i32 %X, i32 %Y) {
+; CHECK: @mul3
+; Product of non-negative numbers is non-negative if there is no signed overflow.
+  %XX = mul nsw i32 %X, %X
+  %YY = mul nsw i32 %Y, %Y
+  %M = mul nsw i32 %XX, %YY
+  %C = icmp sge i32 %M, 0
+  ret i1 %C
+; CHECK: ret i1 true
 }

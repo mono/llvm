@@ -18,7 +18,7 @@
 using namespace llvm;
 
 MachineRegisterInfo::MachineRegisterInfo(const TargetRegisterInfo &TRI)
-  : IsSSA(true) {
+  : TRI(&TRI), IsSSA(true) {
   VRegInfo.reserve(256);
   RegAllocHints.reserve(256);
   UsedPhysRegs.resize(TRI.getNumRegs());
@@ -49,22 +49,23 @@ MachineRegisterInfo::setRegClass(unsigned Reg, const TargetRegisterClass *RC) {
 
 const TargetRegisterClass *
 MachineRegisterInfo::constrainRegClass(unsigned Reg,
-                                       const TargetRegisterClass *RC) {
+                                       const TargetRegisterClass *RC,
+                                       unsigned MinNumRegs) {
   const TargetRegisterClass *OldRC = getRegClass(Reg);
   if (OldRC == RC)
     return RC;
-  const TargetRegisterClass *NewRC = getCommonSubClass(OldRC, RC);
-  if (!NewRC)
+  const TargetRegisterClass *NewRC = TRI->getCommonSubClass(OldRC, RC);
+  if (!NewRC || NewRC == OldRC)
+    return NewRC;
+  if (NewRC->getNumRegs() < MinNumRegs)
     return 0;
-  if (NewRC != OldRC)
-    setRegClass(Reg, NewRC);
+  setRegClass(Reg, NewRC);
   return NewRC;
 }
 
 bool
 MachineRegisterInfo::recomputeRegClass(unsigned Reg, const TargetMachine &TM) {
   const TargetInstrInfo *TII = TM.getInstrInfo();
-  const TargetRegisterInfo *TRI = TM.getRegisterInfo();
   const TargetRegisterClass *OldRC = getRegClass(Reg);
   const TargetRegisterClass *NewRC = TRI->getLargestLegalSuperClass(OldRC);
 
@@ -75,16 +76,15 @@ MachineRegisterInfo::recomputeRegClass(unsigned Reg, const TargetMachine &TM) {
   // Accumulate constraints from all uses.
   for (reg_nodbg_iterator I = reg_nodbg_begin(Reg), E = reg_nodbg_end(); I != E;
        ++I) {
-    // TRI doesn't have accurate enough information to model this yet.
-    if (I.getOperand().getSubReg())
-      return false;
-    // Inline asm instuctions don't remember their constraints.
-    if (I->isInlineAsm())
-      return false;
     const TargetRegisterClass *OpRC =
-      TII->getRegClass(I->getDesc(), I.getOperandNo(), TRI);
-    if (OpRC)
-      NewRC = getCommonSubClass(NewRC, OpRC);
+      I->getRegClassConstraint(I.getOperandNo(), TII, TRI);
+    if (unsigned SubIdx = I.getOperand().getSubReg()) {
+      if (OpRC)
+        NewRC = TRI->getMatchingSuperRegClass(NewRC, OpRC, SubIdx);
+      else
+        NewRC = TRI->getSubClassWithSubReg(NewRC, SubIdx);
+    } else if (OpRC)
+      NewRC = TRI->getCommonSubClass(NewRC, OpRC);
     if (!NewRC || NewRC == OldRC)
       return false;
   }

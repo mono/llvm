@@ -215,7 +215,7 @@
 # CHECK:	vldmdb	r2!, {s7, s8, s9, s10, s11}
 0x05 0x3a 0x72 0xed
 
-# CHECK:	vldr.32	s23, [r2, #660]
+# CHECK:	vldr	s23, [r2, #660]
 0xa5 0xba 0xd2 0xed
 
 # CHECK:	strtvc	r5, [r3], r0, lsr #20
@@ -242,10 +242,10 @@
 # CHECK:	pli	[r3, r1, lsl #2]
 0x01 0xf1 0xd3 0xf6
 
-# CHECK:	stc	p2, cr4, [r9], {157}
+# CHECK:	stc	p2, c4, [r9], {157}
 0x9d 0x42 0x89 0xec
 
-# CHECK:	stc2	p2, cr4, [r9], {157}
+# CHECK:	stc2	p2, c4, [r9], {157}
 0x9d 0x42 0x89 0xfc
 
 # CHECK:	bne #-24
@@ -315,5 +315,9 @@
 # CHECK: rfedb	#4!
 0x14 0x0 0x32 0xf9
 
-# CHECK: stc2l	p0, cr0, [r2], #-96
+# CHECK: stc2l	p0, c0, [r2], #-96
 0x18 0x0 0x62 0xfc
+
+# CHECK: ldmgt	sp!, {r9}
+0x00 0x02 0xbd 0xc8
+

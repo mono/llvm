@@ -41,6 +41,7 @@ namespace llvm {
   class Type;
   class ScalarEvolution;
   class TargetData;
+  class TargetLibraryInfo;
   class LLVMContext;
   class Loop;
   class LoopInfo;
@@ -223,6 +224,10 @@ namespace llvm {
     /// TD - The target data information for the target we are targeting.
     ///
     TargetData *TD;
+
+    /// TLI - The target library information for the target we are targeting.
+    ///
+    TargetLibraryInfo *TLI;
 
     /// DT - The dominator tree.
     ///
@@ -586,6 +591,14 @@ namespace llvm {
       SmallVector<const SCEV *, 2> Ops;
       Ops.push_back(LHS);
       Ops.push_back(RHS);
+      return getMulExpr(Ops, Flags);
+    }
+    const SCEV *getMulExpr(const SCEV *Op0, const SCEV *Op1, const SCEV *Op2,
+                           SCEV::NoWrapFlags Flags = SCEV::FlagAnyWrap) {
+      SmallVector<const SCEV *, 3> Ops;
+      Ops.push_back(Op0);
+      Ops.push_back(Op1);
+      Ops.push_back(Op2);
       return getMulExpr(Ops, Flags);
     }
     const SCEV *getUDivExpr(const SCEV *LHS, const SCEV *RHS);

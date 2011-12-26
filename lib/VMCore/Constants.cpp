@@ -40,6 +40,8 @@ using namespace llvm;
 //                              Constant Class
 //===----------------------------------------------------------------------===//
 
+void Constant::anchor() { }
+
 bool Constant::isNegativeZeroValue() const {
   // Floating point values have an explicit -0.0 value.
   if (const ConstantFP *CFP = dyn_cast<ConstantFP>(this))
@@ -71,17 +73,22 @@ bool Constant::isAllOnesValue() const {
   if (const ConstantFP *CFP = dyn_cast<ConstantFP>(this))
     return CFP->getValueAPF().bitcastToAPInt().isAllOnesValue();
 
-  // Check for constant vectors
+  // Check for constant vectors which are splats of -1 values.
   if (const ConstantVector *CV = dyn_cast<ConstantVector>(this))
-    return CV->isAllOnesValue();
+    if (Constant *Splat = CV->getSplatValue())
+      return Splat->isAllOnesValue();
 
   return false;
 }
+
 // Constructor to create a '0' constant of arbitrary type...
 Constant *Constant::getNullValue(Type *Ty) {
   switch (Ty->getTypeID()) {
   case Type::IntegerTyID:
     return ConstantInt::get(Ty, 0);
+  case Type::HalfTyID:
+    return ConstantFP::get(Ty->getContext(),
+                           APFloat::getZero(APFloat::IEEEhalf));
   case Type::FloatTyID:
     return ConstantFP::get(Ty->getContext(),
                            APFloat::getZero(APFloat::IEEEsingle));
@@ -105,7 +112,7 @@ Constant *Constant::getNullValue(Type *Ty) {
     return ConstantAggregateZero::get(Ty);
   default:
     // Function, Label, or Opaque type?
-    assert(!"Cannot create a null constant of that type!");
+    assert(0 && "Cannot create a null constant of that type!");
     return 0;
   }
 }
@@ -358,6 +365,8 @@ void Constant::removeDeadConstantUsers() const {
 //                                ConstantInt
 //===----------------------------------------------------------------------===//
 
+void ConstantInt::anchor() { }
+
 ConstantInt::ConstantInt(IntegerType *Ty, const APInt& V)
   : Constant(Ty, ConstantIntVal, 0, 0), Val(V) {
   assert(V.getBitWidth() == Ty->getBitWidth() && "Invalid constant for type");
@@ -466,6 +475,8 @@ ConstantInt* ConstantInt::get(IntegerType* Ty, StringRef Str,
 //===----------------------------------------------------------------------===//
 
 static const fltSemantics *TypeToFloatSemantics(Type *Ty) {
+  if (Ty->isHalfTy())
+    return &APFloat::IEEEhalf;
   if (Ty->isFloatTy())
     return &APFloat::IEEEsingle;
   if (Ty->isDoubleTy())
@@ -478,6 +489,8 @@ static const fltSemantics *TypeToFloatSemantics(Type *Ty) {
   assert(Ty->isPPC_FP128Ty() && "Unknown FP format");
   return &APFloat::PPCDoubleDouble;
 }
+
+void ConstantFP::anchor() { }
 
 /// get() - This returns a constant fp for the specified value in the
 /// specified type.  This should only be used for simple constant values like
@@ -548,7 +561,9 @@ ConstantFP* ConstantFP::get(LLVMContext &Context, const APFloat& V) {
     
   if (!Slot) {
     Type *Ty;
-    if (&V.getSemantics() == &APFloat::IEEEsingle)
+    if (&V.getSemantics() == &APFloat::IEEEhalf)
+      Ty = Type::getHalfTy(Context);
+    else if (&V.getSemantics() == &APFloat::IEEEsingle)
       Ty = Type::getFloatTy(Context);
     else if (&V.getSemantics() == &APFloat::IEEEdouble)
       Ty = Type::getDoubleTy(Context);
@@ -937,6 +952,12 @@ bool ConstantFP::isValueValidForType(Type *Ty, const APFloat& Val) {
     return false;         // These can't be represented as floating point!
 
   // FIXME rounding mode needs to be more flexible
+  case Type::HalfTyID: {
+    if (&Val2.getSemantics() == &APFloat::IEEEhalf)
+      return true;
+    Val2.convert(APFloat::IEEEhalf, APFloat::rmNearestTiesToEven, &losesInfo);
+    return !losesInfo;
+  }
   case Type::FloatTyID: {
     if (&Val2.getSemantics() == &APFloat::IEEEsingle)
       return true;
@@ -944,22 +965,26 @@ bool ConstantFP::isValueValidForType(Type *Ty, const APFloat& Val) {
     return !losesInfo;
   }
   case Type::DoubleTyID: {
-    if (&Val2.getSemantics() == &APFloat::IEEEsingle ||
+    if (&Val2.getSemantics() == &APFloat::IEEEhalf ||
+        &Val2.getSemantics() == &APFloat::IEEEsingle ||
         &Val2.getSemantics() == &APFloat::IEEEdouble)
       return true;
     Val2.convert(APFloat::IEEEdouble, APFloat::rmNearestTiesToEven, &losesInfo);
     return !losesInfo;
   }
   case Type::X86_FP80TyID:
-    return &Val2.getSemantics() == &APFloat::IEEEsingle || 
+    return &Val2.getSemantics() == &APFloat::IEEEhalf ||
+           &Val2.getSemantics() == &APFloat::IEEEsingle || 
            &Val2.getSemantics() == &APFloat::IEEEdouble ||
            &Val2.getSemantics() == &APFloat::x87DoubleExtended;
   case Type::FP128TyID:
-    return &Val2.getSemantics() == &APFloat::IEEEsingle || 
+    return &Val2.getSemantics() == &APFloat::IEEEhalf ||
+           &Val2.getSemantics() == &APFloat::IEEEsingle || 
            &Val2.getSemantics() == &APFloat::IEEEdouble ||
            &Val2.getSemantics() == &APFloat::IEEEquad;
   case Type::PPC_FP128TyID:
-    return &Val2.getSemantics() == &APFloat::IEEEsingle || 
+    return &Val2.getSemantics() == &APFloat::IEEEhalf ||
+           &Val2.getSemantics() == &APFloat::IEEEsingle || 
            &Val2.getSemantics() == &APFloat::IEEEdouble ||
            &Val2.getSemantics() == &APFloat::PPCDoubleDouble;
   }
@@ -1069,26 +1094,6 @@ void ConstantStruct::destroyConstant() {
 void ConstantVector::destroyConstant() {
   getType()->getContext().pImpl->VectorConstants.remove(this);
   destroyConstantImpl();
-}
-
-/// This function will return true iff every element in this vector constant
-/// is set to all ones.
-/// @returns true iff this constant's elements are all set to all ones.
-/// @brief Determine if the value is all ones.
-bool ConstantVector::isAllOnesValue() const {
-  // Check out first element.
-  const Constant *Elt = getOperand(0);
-  const ConstantInt *CI = dyn_cast<ConstantInt>(Elt);
-  const ConstantFP *CF = dyn_cast<ConstantFP>(Elt);
-
-  // Then make sure all remaining elements point to the same value.
-  for (unsigned I = 1, E = getNumOperands(); I < E; ++I)
-    if (getOperand(I) != Elt)
-      return false;
-  
-  // First value is all-ones.
-  return (CI && CI->isAllOnesValue()) || 
-         (CF && CF->isAllOnesValue());
 }
 
 /// getSplatValue - If this is a splat constant, where all of the
@@ -1416,14 +1421,22 @@ Constant *ConstantExpr::getFPToSI(Constant *C, Type *Ty) {
 }
 
 Constant *ConstantExpr::getPtrToInt(Constant *C, Type *DstTy) {
-  assert(C->getType()->isPointerTy() && "PtrToInt source must be pointer");
-  assert(DstTy->isIntegerTy() && "PtrToInt destination must be integral");
+  assert(C->getType()->getScalarType()->isPointerTy() &&
+         "PtrToInt source must be pointer or pointer vector");
+  assert(DstTy->getScalarType()->isIntegerTy() && 
+         "PtrToInt destination must be integer or integer vector");
+  assert(C->getType()->getNumElements() == DstTy->getNumElements() &&
+    "Invalid cast between a different number of vector elements");
   return getFoldedCast(Instruction::PtrToInt, C, DstTy);
 }
 
 Constant *ConstantExpr::getIntToPtr(Constant *C, Type *DstTy) {
-  assert(C->getType()->isIntegerTy() && "IntToPtr source must be integral");
-  assert(DstTy->isPointerTy() && "IntToPtr destination must be a pointer");
+  assert(C->getType()->getScalarType()->isIntegerTy() &&
+         "IntToPtr source must be integer or integer vector");
+  assert(DstTy->getScalarType()->isPointerTy() &&
+         "IntToPtr destination must be a pointer or pointer vector");
+  assert(C->getType()->getNumElements() == DstTy->getNumElements() &&
+    "Invalid cast between a different number of vector elements");
   return getFoldedCast(Instruction::IntToPtr, C, DstTy);
 }
 

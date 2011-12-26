@@ -43,6 +43,11 @@ LLVMContext::LLVMContext() : pImpl(new LLVMContextImpl(*this)) {
   // Create the 'prof' metadata kind.
   unsigned ProfID = getMDKindID("prof");
   assert(ProfID == MD_prof && "prof kind id drifted"); (void)ProfID;
+
+  // Create the 'fpaccuracy' metadata kind.
+  unsigned FPAccuracyID = getMDKindID("fpaccuracy");
+  assert(FPAccuracyID == MD_fpaccuracy && "fpaccuracy kind id drifted");
+  (void)FPAccuracyID;
 }
 LLVMContext::~LLVMContext() { delete pImpl; }
 
@@ -100,7 +105,7 @@ void LLVMContext::emitError(unsigned LocCookie, StringRef ErrorStr) {
   }
 
   // If we do have an error handler, we can report the error and keep going.
-  SMDiagnostic Diag("", "error: " + ErrorStr.str());
+  SMDiagnostic Diag("", SourceMgr::DK_Error, ErrorStr.str());
 
   pImpl->InlineAsmDiagHandler(Diag, pImpl->InlineAsmDiagContext, LocCookie);
 }

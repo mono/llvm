@@ -97,6 +97,7 @@ GCStrategy::GCStrategy() :
   CustomReadBarriers(false),
   CustomWriteBarriers(false),
   CustomRoots(false),
+  CustomSafePoints(false),
   InitRoots(true),
   UsesMetadata(false)
 {}
@@ -115,6 +116,14 @@ bool GCStrategy::performCustomLowering(Function &F) {
   llvm_unreachable(0);
   return 0;
 }
+
+
+bool GCStrategy::findCustomSafePoints(GCFunctionInfo& FI, MachineFunction &F) {
+  dbgs() << "gc " << getName() << " must override findCustomSafePoints.\n";
+  llvm_unreachable(0);
+  return 0;
+}
+
 
 GCFunctionInfo *GCStrategy::insertFunctionInfo(const Function &F) {
   GCFunctionInfo *FI = new GCFunctionInfo(F, *this);
@@ -377,7 +386,7 @@ void MachineCodeAnalysis::FindSafePoints(MachineFunction &MF) {
                                  BBE = MF.end(); BBI != BBE; ++BBI)
     for (MachineBasicBlock::iterator MI = BBI->begin(),
                                      ME = BBI->end(); MI != ME; ++MI)
-      if (MI->getDesc().isCall())
+      if (MI->isCall())
         VisitCallPoint(MI);
 }
 
@@ -405,9 +414,13 @@ bool MachineCodeAnalysis::runOnMachineFunction(MachineFunction &MF) {
   
   // Find the size of the stack frame.
   FI->setFrameSize(MF.getFrameInfo()->getStackSize());
-  
+
   // Find all safe points.
-  FindSafePoints(MF);
+  if (FI->getStrategy().customSafePoints()) {
+    FI->getStrategy().findCustomSafePoints(*FI, MF);
+  } else {
+    FindSafePoints(MF);
+  }
   
   // Find the stack offsets for all roots.
   FindStackOffsets(MF);

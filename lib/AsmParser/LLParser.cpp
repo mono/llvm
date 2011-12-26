@@ -120,11 +120,6 @@ bool LLParser::ValidateEndOfModule() {
   for (Module::iterator FI = M->begin(), FE = M->end(); FI != FE; )
     UpgradeCallsToIntrinsic(FI++); // must be post-increment, as we remove
 
-  // Upgrade to new EH scheme. N.B. This will go away in 3.1.
-  UpgradeExceptionHandling(M);
-
-  // Check debug info intrinsics.
-  CheckDebugInfoIntrinsics(M);
   return false;
 }
 
@@ -911,6 +906,7 @@ bool LLParser::ParseOptionalAttrs(unsigned &Attrs, unsigned AttrKind) {
     case lltok::kw_noreturn:        Attrs |= Attribute::NoReturn; break;
     case lltok::kw_nounwind:        Attrs |= Attribute::NoUnwind; break;
     case lltok::kw_uwtable:         Attrs |= Attribute::UWTable; break;
+    case lltok::kw_returns_twice:   Attrs |= Attribute::ReturnsTwice; break;
     case lltok::kw_noinline:        Attrs |= Attribute::NoInline; break;
     case lltok::kw_readnone:        Attrs |= Attribute::ReadNone; break;
     case lltok::kw_readonly:        Attrs |= Attribute::ReadOnly; break;
@@ -922,7 +918,6 @@ bool LLParser::ParseOptionalAttrs(unsigned &Attrs, unsigned AttrKind) {
     case lltok::kw_noredzone:       Attrs |= Attribute::NoRedZone; break;
     case lltok::kw_noimplicitfloat: Attrs |= Attribute::NoImplicitFloat; break;
     case lltok::kw_naked:           Attrs |= Attribute::Naked; break;
-    case lltok::kw_hotpatch:        Attrs |= Attribute::Hotpatch; break;
     case lltok::kw_nonlazybind:     Attrs |= Attribute::NonLazyBind; break;
 
     case lltok::kw_alignstack: {
@@ -1069,7 +1064,7 @@ bool LLParser::ParseInstructionMetadata(Instruction *Inst,
       return TokError("expected metadata after comma");
 
     std::string Name = Lex.getStrVal();
-    unsigned MDK = M->getMDKindID(Name.c_str());
+    unsigned MDK = M->getMDKindID(Name);
     Lex.Lex();
 
     MDNode *Node;
@@ -1612,7 +1607,8 @@ bool LLParser::ParseArrayVectorType(Type *&Result, bool isVector) {
     if ((unsigned)Size != Size)
       return Error(SizeLoc, "size too large for vector");
     if (!VectorType::isValidElementType(EltTy))
-      return Error(TypeLoc, "vector element type must be fp or integer");
+      return Error(TypeLoc,
+       "vector element type must be fp, integer or a pointer to these types");
     Result = VectorType::get(EltTy, unsigned(Size));
   } else {
     if (!ArrayType::isValidElementType(EltTy))
@@ -1971,9 +1967,10 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
       return Error(ID.Loc, "constant vector must not be empty");
 
     if (!Elts[0]->getType()->isIntegerTy() &&
-        !Elts[0]->getType()->isFloatingPointTy())
+        !Elts[0]->getType()->isFloatingPointTy() &&
+        !Elts[0]->getType()->isPointerTy())
       return Error(FirstEltLoc,
-                   "vector elements must have integer or floating point type");
+            "vector elements must have integer, pointer or floating point type");
 
     // Verify that all the vector elements have the same type.
     for (unsigned i = 1, e = Elts.size(); i != e; ++i)
@@ -2165,7 +2162,7 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
     } else {
       assert(Opc == Instruction::ICmp && "Unexpected opcode for CmpInst!");
       if (!Val0->getType()->isIntOrIntVectorTy() &&
-          !Val0->getType()->isPointerTy())
+          !Val0->getType()->getScalarType()->isPointerTy())
         return Error(ID.Loc, "icmp requires pointer or integer operands");
       ID.ConstantVal = ConstantExpr::getICmp(Pred, Val0, Val1);
     }
@@ -2299,7 +2296,8 @@ bool LLParser::ParseValID(ValID &ID, PerFunctionState *PFS) {
       return true;
 
     if (Opc == Instruction::GetElementPtr) {
-      if (Elts.size() == 0 || !Elts[0]->getType()->isPointerTy())
+      if (Elts.size() == 0 ||
+          !Elts[0]->getType()->getScalarType()->isPointerTy())
         return Error(ID.Loc, "getelementptr requires pointer operand");
 
       ArrayRef<Constant *> Indices(Elts.begin() + 1, Elts.end());
@@ -2485,13 +2483,16 @@ bool LLParser::ConvertValIDToValue(Type *Ty, ValID &ID, Value *&V,
         !ConstantFP::isValueValidForType(Ty, ID.APFloatVal))
       return Error(ID.Loc, "floating point constant invalid for type");
 
-    // The lexer has no type info, so builds all float and double FP constants
-    // as double.  Fix this here.  Long double does not need this.
-    if (&ID.APFloatVal.getSemantics() == &APFloat::IEEEdouble &&
-        Ty->isFloatTy()) {
+    // The lexer has no type info, so builds all half, float, and double FP
+    // constants as double.  Fix this here.  Long double does not need this.
+    if (&ID.APFloatVal.getSemantics() == &APFloat::IEEEdouble) {
       bool Ignored;
-      ID.APFloatVal.convert(APFloat::IEEEsingle, APFloat::rmNearestTiesToEven,
-                            &Ignored);
+      if (Ty->isHalfTy())
+        ID.APFloatVal.convert(APFloat::IEEEhalf, APFloat::rmNearestTiesToEven,
+                              &Ignored);
+      else if (Ty->isFloatTy())
+        ID.APFloatVal.convert(APFloat::IEEEsingle, APFloat::rmNearestTiesToEven,
+                              &Ignored);
     }
     V = ConstantFP::get(Context, ID.APFloatVal);
 
@@ -2953,19 +2954,11 @@ int LLParser::ParseInstruction(Instruction *&Inst, BasicBlock *BB,
   case lltok::kw_tail:           return ParseCall(Inst, PFS, true);
   // Memory.
   case lltok::kw_alloca:         return ParseAlloc(Inst, PFS);
-  case lltok::kw_load:           return ParseLoad(Inst, PFS, false);
-  case lltok::kw_store:          return ParseStore(Inst, PFS, false);
+  case lltok::kw_load:           return ParseLoad(Inst, PFS);
+  case lltok::kw_store:          return ParseStore(Inst, PFS);
   case lltok::kw_cmpxchg:        return ParseCmpXchg(Inst, PFS);
   case lltok::kw_atomicrmw:      return ParseAtomicRMW(Inst, PFS);
   case lltok::kw_fence:          return ParseFence(Inst, PFS);
-  case lltok::kw_volatile:
-    // For compatibility; canonical location is after load
-    if (EatIfPresent(lltok::kw_load))
-      return ParseLoad(Inst, PFS, true);
-    else if (EatIfPresent(lltok::kw_store))
-      return ParseStore(Inst, PFS, true);
-    else
-      return TokError("expected 'load' or 'store'");
   case lltok::kw_getelementptr: return ParseGetElementPtr(Inst, PFS);
   case lltok::kw_extractvalue:  return ParseExtractValue(Inst, PFS);
   case lltok::kw_insertvalue:   return ParseInsertValue(Inst, PFS);
@@ -3342,7 +3335,7 @@ bool LLParser::ParseCompare(Instruction *&Inst, PerFunctionState &PFS,
   } else {
     assert(Opc == Instruction::ICmp && "Unknown opcode for CmpInst!");
     if (!LHS->getType()->isIntOrIntVectorTy() &&
-        !LHS->getType()->isPointerTy())
+        !LHS->getType()->getScalarType()->isPointerTy())
       return Error(Loc, "icmp requires integer operands");
     Inst = new ICmpInst(CmpInst::Predicate(Pred), LHS, RHS);
   }
@@ -3689,10 +3682,7 @@ int LLParser::ParseAlloc(Instruction *&Inst, PerFunctionState &PFS) {
 ///   ::= 'load' 'volatile'? TypeAndValue (',' 'align' i32)?
 ///   ::= 'load' 'atomic' 'volatile'? TypeAndValue 
 ///       'singlethread'? AtomicOrdering (',' 'align' i32)?
-///   Compatibility:
-///   ::= 'volatile' 'load' TypeAndValue (',' 'align' i32)?
-int LLParser::ParseLoad(Instruction *&Inst, PerFunctionState &PFS,
-                        bool isVolatile) {
+int LLParser::ParseLoad(Instruction *&Inst, PerFunctionState &PFS) {
   Value *Val; LocTy Loc;
   unsigned Alignment = 0;
   bool AteExtraComma = false;
@@ -3701,15 +3691,12 @@ int LLParser::ParseLoad(Instruction *&Inst, PerFunctionState &PFS,
   SynchronizationScope Scope = CrossThread;
 
   if (Lex.getKind() == lltok::kw_atomic) {
-    if (isVolatile)
-      return TokError("mixing atomic with old volatile placement");
     isAtomic = true;
     Lex.Lex();
   }
 
+  bool isVolatile = false;
   if (Lex.getKind() == lltok::kw_volatile) {
-    if (isVolatile)
-      return TokError("duplicate volatile before and after store");
     isVolatile = true;
     Lex.Lex();
   }
@@ -3736,10 +3723,7 @@ int LLParser::ParseLoad(Instruction *&Inst, PerFunctionState &PFS,
 ///   ::= 'store' 'volatile'? TypeAndValue ',' TypeAndValue (',' 'align' i32)?
 ///   ::= 'store' 'atomic' 'volatile'? TypeAndValue ',' TypeAndValue
 ///       'singlethread'? AtomicOrdering (',' 'align' i32)?
-///   Compatibility:
-///   ::= 'volatile' 'store' TypeAndValue ',' TypeAndValue (',' 'align' i32)?
-int LLParser::ParseStore(Instruction *&Inst, PerFunctionState &PFS,
-                         bool isVolatile) {
+int LLParser::ParseStore(Instruction *&Inst, PerFunctionState &PFS) {
   Value *Val, *Ptr; LocTy Loc, PtrLoc;
   unsigned Alignment = 0;
   bool AteExtraComma = false;
@@ -3748,15 +3732,12 @@ int LLParser::ParseStore(Instruction *&Inst, PerFunctionState &PFS,
   SynchronizationScope Scope = CrossThread;
 
   if (Lex.getKind() == lltok::kw_atomic) {
-    if (isVolatile)
-      return TokError("mixing atomic with old volatile placement");
     isAtomic = true;
     Lex.Lex();
   }
 
+  bool isVolatile = false;
   if (Lex.getKind() == lltok::kw_volatile) {
-    if (isVolatile)
-      return TokError("duplicate volatile before and after store");
     isVolatile = true;
     Lex.Lex();
   }
@@ -3902,13 +3883,15 @@ int LLParser::ParseFence(Instruction *&Inst, PerFunctionState &PFS) {
 /// ParseGetElementPtr
 ///   ::= 'getelementptr' 'inbounds'? TypeAndValue (',' TypeAndValue)*
 int LLParser::ParseGetElementPtr(Instruction *&Inst, PerFunctionState &PFS) {
-  Value *Ptr, *Val; LocTy Loc, EltLoc;
+  Value *Ptr = 0;
+  Value *Val = 0;
+  LocTy Loc, EltLoc;
 
   bool InBounds = EatIfPresent(lltok::kw_inbounds);
 
   if (ParseTypeAndValue(Ptr, Loc, PFS)) return true;
 
-  if (!Ptr->getType()->isPointerTy())
+  if (!Ptr->getType()->getScalarType()->isPointerTy())
     return Error(Loc, "base of getelementptr must be a pointer");
 
   SmallVector<Value*, 16> Indices;
@@ -3919,10 +3902,22 @@ int LLParser::ParseGetElementPtr(Instruction *&Inst, PerFunctionState &PFS) {
       break;
     }
     if (ParseTypeAndValue(Val, EltLoc, PFS)) return true;
-    if (!Val->getType()->isIntegerTy())
+    if (!Val->getType()->getScalarType()->isIntegerTy())
       return Error(EltLoc, "getelementptr index must be an integer");
+    if (Val->getType()->isVectorTy() != Ptr->getType()->isVectorTy())
+      return Error(EltLoc, "getelementptr index type missmatch");
+    if (Val->getType()->isVectorTy()) {
+      unsigned ValNumEl = cast<VectorType>(Val->getType())->getNumElements();
+      unsigned PtrNumEl = cast<VectorType>(Ptr->getType())->getNumElements();
+      if (ValNumEl != PtrNumEl)
+        return Error(EltLoc,
+          "getelementptr vector index has a wrong number of elements");
+    }
     Indices.push_back(Val);
   }
+
+  if (Val && Val->getType()->isVectorTy() && Indices.size() != 1)
+    return Error(EltLoc, "vector getelementptrs must have a single index");
 
   if (!GetElementPtrInst::getIndexedType(Ptr->getType(), Indices))
     return Error(Loc, "invalid getelementptr indices");

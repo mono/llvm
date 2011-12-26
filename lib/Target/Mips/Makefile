@@ -13,9 +13,9 @@ TARGET = Mips
 
 # Make sure that tblgen is run, first thing.
 BUILT_SOURCES = MipsGenRegisterInfo.inc MipsGenInstrInfo.inc \
-                MipsGenAsmWriter.inc \
+                MipsGenAsmWriter.inc MipsGenCodeEmitter.inc \
                 MipsGenDAGISel.inc MipsGenCallingConv.inc \
-                MipsGenSubtargetInfo.inc
+                MipsGenSubtargetInfo.inc MipsGenMCCodeEmitter.inc
 
 DIRS = InstPrinter TargetInfo MCTargetDesc
 

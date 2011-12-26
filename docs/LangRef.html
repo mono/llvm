@@ -35,7 +35,7 @@
           <li><a href="#linkage_externweak">'<tt>extern_weak</tt>' Linkage</a></li>
           <li><a href="#linkage_linkonce_odr">'<tt>linkonce_odr</tt>' Linkage</a></li>
           <li><a href="#linkage_weak">'<tt>weak_odr</tt>' Linkage</a></li>
-          <li><a href="#linkage_external">'<tt>externally visible</tt>' Linkage</a></li>
+          <li><a href="#linkage_external">'<tt>external</tt>' Linkage</a></li>
           <li><a href="#linkage_dllimport">'<tt>dllimport</tt>' Linkage</a></li>
           <li><a href="#linkage_dllexport">'<tt>dllexport</tt>' Linkage</a></li>
         </ol>
@@ -92,7 +92,7 @@
       <li><a href="#complexconstants">Complex Constants</a></li>
       <li><a href="#globalconstants">Global Variable and Function Addresses</a></li>
       <li><a href="#undefvalues">Undefined Values</a></li>
-      <li><a href="#trapvalues">Trap Values</a></li>
+      <li><a href="#poisonvalues">Poison Values</a></li>
       <li><a href="#blockaddress">Addresses of Basic Blocks</a></li>
       <li><a href="#constantexprs">Constant Expressions</a></li>
     </ol>
@@ -100,7 +100,12 @@
   <li><a href="#othervalues">Other Values</a>
     <ol>
       <li><a href="#inlineasm">Inline Assembler Expressions</a></li>
-      <li><a href="#metadata">Metadata Nodes and Metadata Strings</a></li>
+      <li><a href="#metadata">Metadata Nodes and Metadata Strings</a>
+        <ol>
+          <li><a href="#tbaa">'<tt>tbaa</tt>' Metadata</a></li>
+          <li><a href="#fpaccuracy">'<tt>fpaccuracy</tt>' Metadata</a></li>
+        </ol>
+      </li>
     </ol>
   </li>
   <li><a href="#intrinsic_globals">Intrinsic Global Variables</a>
@@ -281,29 +286,12 @@
           <li><a href="#int_at">'<tt>llvm.adjust.trampoline</tt>' Intrinsic</a></li>
         </ol>
       </li>
-      <li><a href="#int_atomics">Atomic intrinsics</a>
-        <ol>
-          <li><a href="#int_memory_barrier"><tt>llvm.memory_barrier</tt></a></li>
-          <li><a href="#int_atomic_cmp_swap"><tt>llvm.atomic.cmp.swap</tt></a></li>
-          <li><a href="#int_atomic_swap"><tt>llvm.atomic.swap</tt></a></li>
-          <li><a href="#int_atomic_load_add"><tt>llvm.atomic.load.add</tt></a></li>
-          <li><a href="#int_atomic_load_sub"><tt>llvm.atomic.load.sub</tt></a></li>
-          <li><a href="#int_atomic_load_and"><tt>llvm.atomic.load.and</tt></a></li>
-          <li><a href="#int_atomic_load_nand"><tt>llvm.atomic.load.nand</tt></a></li>
-          <li><a href="#int_atomic_load_or"><tt>llvm.atomic.load.or</tt></a></li>
-          <li><a href="#int_atomic_load_xor"><tt>llvm.atomic.load.xor</tt></a></li>
-          <li><a href="#int_atomic_load_max"><tt>llvm.atomic.load.max</tt></a></li>
-          <li><a href="#int_atomic_load_min"><tt>llvm.atomic.load.min</tt></a></li>
-          <li><a href="#int_atomic_load_umax"><tt>llvm.atomic.load.umax</tt></a></li>
-          <li><a href="#int_atomic_load_umin"><tt>llvm.atomic.load.umin</tt></a></li>
-        </ol>
-      </li>
       <li><a href="#int_memorymarkers">Memory Use Markers</a>
         <ol>
-          <li><a href="#int_lifetime_start"><tt>llvm.lifetime.start</tt></a></li>
-          <li><a href="#int_lifetime_end"><tt>llvm.lifetime.end</tt></a></li>
-          <li><a href="#int_invariant_start"><tt>llvm.invariant.start</tt></a></li>
-          <li><a href="#int_invariant_end"><tt>llvm.invariant.end</tt></a></li>
+          <li><a href="#int_lifetime_start">'<tt>llvm.lifetime.start</tt>' Intrinsic</a></li>
+          <li><a href="#int_lifetime_end">'<tt>llvm.lifetime.end</tt>' Intrinsic</a></li>
+          <li><a href="#int_invariant_start">'<tt>llvm.invariant.start</tt>' Intrinsic</a></li>
+          <li><a href="#int_invariant_end">'<tt>llvm.invariant.end</tt>' Intrinsic</a></li>
         </ol>
       </li>
       <li><a href="#int_general">General intrinsics</a>
@@ -318,6 +306,8 @@
             '<tt>llvm.stackprotector</tt>' Intrinsic</a></li>
 	  <li><a href="#int_objectsize">
             '<tt>llvm.objectsize</tt>' Intrinsic</a></li>
+	  <li><a href="#int_expect">
+            '<tt>llvm.expect</tt>' Intrinsic</a></li>
         </ol>
       </li>
     </ol>
@@ -647,7 +637,7 @@ define i32 @main() {   <i>; i32()* </i>&nbsp;
       be merged with equivalent globals.  These linkage types are otherwise the
       same as their non-<tt>odr</tt> versions.</dd>
 
-  <dt><tt><b><a name="linkage_external">externally visible</a></b></tt>:</dt>
+  <dt><tt><b><a name="linkage_external">external</a></b></tt></dt>
   <dd>If none of the above identifiers are used, the global is externally
       visible, meaning that it participates in linkage and can be used to
       resolve external symbol references.</dd>
@@ -680,8 +670,8 @@ define i32 @main() {   <i>; i32()* </i>&nbsp;
    declarations), they are accessible outside of the current module.</p>
 
 <p>It is illegal for a function <i>declaration</i> to have any linkage type
-   other than "externally visible", <tt>dllimport</tt>
-   or <tt>extern_weak</tt>.</p>
+   other than <tt>external</tt>, <tt>dllimport</tt>
+  or <tt>extern_weak</tt>.</p>
 
 <p>Aliases can have only <tt>external</tt>, <tt>internal</tt>, <tt>weak</tt>
    or <tt>weak_odr</tt> linkages.</p>
@@ -944,7 +934,7 @@ define i32 @main() {   <i>; i32()* </i>&nbsp;
    alignments must be a power of 2.</p>
 
 <p>If the <tt>unnamed_addr</tt> attribute is given, the address is know to not
-  be significant and two identical functions can be merged</p>.
+   be significant and two identical functions can be merged.</p>
 
 <h5>Syntax:</h5>
 <pre class="doc_code">
@@ -1163,14 +1153,6 @@ define void @f() optsize { ... }
       function into callers whenever possible, ignoring any active inlining size
       threshold for this caller.</dd>
 
-  <dt><tt><b>hotpatch</b></tt></dt>
-  <dd>This attribute indicates that the function should be 'hotpatchable',
-      meaning the function can be patched and/or hooked even while it is
-      loaded into memory. On x86, the function prologue will be preceded
-      by six bytes of padding and will begin with a two-byte instruction.
-      Most of the functions in the Windows system DLLs in Windows XP SP2 or
-      higher were compiled in this fashion.</dd>
-
   <dt><tt><b>nonlazybind</b></tt></dt>
   <dd>This attribute suppresses lazy symbol binding for the function. This
       may make calls to the function faster, at the cost of extra program
@@ -1234,6 +1216,12 @@ define void @f() optsize { ... }
       exception by calling the <tt>C++</tt> exception throwing methods, but may
       use the <tt>unwind</tt> instruction.</dd>
 
+  <dt><tt><b><a name="returns_twice">returns_twice</a></b></tt></dt>
+  <dd>This attribute indicates that this function can return twice. The
+      C <code>setjmp</code> is an example of such a function.  The compiler
+      disables some optimizations (like tail calls) in the caller of these
+      functions.</dd>
+
   <dt><tt><b><a name="ssp">ssp</a></b></tt></dt>
   <dd>This attribute indicates that the function should emit a stack smashing
       protector. It is in the form of a "canary"&mdash;a random value placed on
@@ -1261,7 +1249,6 @@ define void @f() optsize { ... }
       show that no exceptions passes by it. This is normally the case for
       the ELF x86-64 abi, but it can be disabled for some compilation
       units.</dd>
-
 </dl>
 
 </div>
@@ -1321,6 +1308,13 @@ target datalayout = "<i>layout specification</i>"
   <dd>Specifies that the target lays out data in little-endian form. That is,
       the bits with the least significance have the lowest address
       location.</dd>
+
+  <dt><tt>S<i>size</i></tt></dt>
+  <dd>Specifies the natural alignment of the stack in bits. Alignment promotion
+      of stack variables is limited to the natural stack alignment to avoid
+      dynamic stack realignment. The stack alignment must be a multiple of
+      8-bits. If omitted, the natural stack alignment defaults to "unspecified",
+      which does not prevent any alignment promotions.</dd>
 
   <dt><tt>p:<i>size</i>:<i>abi</i>:<i>pref</i></tt></dt>
   <dd>This specifies the <i>size</i> of a pointer and its <i>abi</i> and
@@ -1401,6 +1395,22 @@ target datalayout = "<i>layout specification</i>"
       used as a fall back.  This happens because &lt;128 x double&gt; can be
       implemented in terms of 64 &lt;2 x double&gt;, for example.</li>
 </ol>
+
+<p>The function of the data layout string may not be what you expect.  Notably,
+   this is not a specification from the frontend of what alignment the code
+   generator should use.</p>
+
+<p>Instead, if specified, the target data layout is required to match what the 
+   ultimate <em>code generator</em> expects.  This string is used by the 
+   mid-level optimizers to
+   improve code, and this only works if it matches what the ultimate code 
+   generator uses.  If you would like to generate IR that does not embed this
+   target-specific detail into the IR, then you don't have to specify the 
+   string.  This will disable some optimizations that require precise layout
+   information, but this also prevents those optimizations from introducing
+   target specificity into the IR.</p>
+
+
 
 </div>
 
@@ -1699,7 +1709,7 @@ in signal handlers).</p>
     </tr>
     <tr>
       <td><a href="#t_floating">floating point</a></td>
-      <td><tt>float, double, x86_fp80, fp128, ppc_fp128</tt></td>
+      <td><tt>half, float, double, x86_fp80, fp128, ppc_fp128</tt></td>
     </tr>
     <tr>
       <td><a name="t_firstclass">first class</a></td>
@@ -1799,6 +1809,7 @@ in signal handlers).</p>
 <table>
   <tbody>
     <tr><th>Type</th><th>Description</th></tr>
+    <tr><td><tt>half</tt></td><td>16-bit floating point value</td></tr>
     <tr><td><tt>float</tt></td><td>32-bit floating point value</td></tr>
     <tr><td><tt>double</tt></td><td>64-bit floating point value</td></tr>
     <tr><td><tt>fp128</tt></td><td>128-bit floating point value (112-bit mantissa)</td></tr>
@@ -1895,9 +1906,6 @@ in signal handlers).</p>
    possible to have a two dimensional array, using an array as the element type
    of another array.</p>
 
-</div>
-  
-
 <!-- _______________________________________________________________________ -->
 <h4>
   <a name="t_aggregate">Aggregate Types</a>
@@ -1906,9 +1914,9 @@ in signal handlers).</p>
 <div>
 
 <p>Aggregate Types are a subset of derived types that can contain multiple
-  member types. <a href="#t_array">Arrays</a>,
-  <a href="#t_struct">structs</a>, and <a href="#t_vector">vectors</a> are
-  aggregate types.</p>
+  member types. <a href="#t_array">Arrays</a> and
+  <a href="#t_struct">structs</a> are aggregate types.
+  <a href="#t_vector">Vectors</a> are not considered to be aggregate types.</p>
 
 </div>
 
@@ -2049,7 +2057,7 @@ in signal handlers).</p>
   alignment of the struct is one byte, and that there is no padding between
   the elements.  In non-packed structs, padding between field types is inserted
   as defined by the TargetData string in the module, which is required to match
-  what the underlying processor expects.</p>
+  what the underlying code generator expects.</p>
 
 <p>Structures can either be "literal" or "identified".  A literal structure is
   defined inline with other types (e.g. <tt>{i32, i32}*</tt>) whereas identified
@@ -2182,8 +2190,8 @@ in signal handlers).</p>
 </pre>
 
 <p>The number of elements is a constant integer value larger than 0; elementtype
-   may be any integer or floating point type.  Vectors of size zero are not
-   allowed, and pointers are not allowed as the element type.</p>
+   may be any integer or floating point type, or a pointer to these types.
+   Vectors of size zero are not allowed. </p>
 
 <h5>Examples:</h5>
 <table class="layout">
@@ -2199,7 +2207,13 @@ in signal handlers).</p>
     <td class="left"><tt>&lt;2 x i64&gt;</tt></td>
     <td class="left">Vector of 2 64-bit integer values.</td>
   </tr>
+  <tr class="layout">
+    <td class="left"><tt>&lt;4 x i64*&gt;</tt></td>
+    <td class="left">Vector of 4 pointers to 64-bit integer values.</td>
+  </tr>
 </table>
+
+</div>
 
 </div>
 
@@ -2255,10 +2269,11 @@ in signal handlers).</p>
    represented in their IEEE hexadecimal format so that assembly and disassembly
    do not cause any bits to change in the constants.</p>
 
-<p>When using the hexadecimal form, constants of types float and double are
+<p>When using the hexadecimal form, constants of types half, float, and double are
    represented using the 16-digit form shown above (which matches the IEEE754
-   representation for double); float values must, however, be exactly
-   representable as IEE754 single precision.  Hexadecimal format is always used
+   representation for double); half and float values must, however, be exactly
+   representable as IEE754 half and single precision, respectively.
+   Hexadecimal format is always used
    for long double, and there are three forms of long double.  The 80-bit format
    used by x86 is represented as <tt>0xK</tt> followed by 20 hexadecimal digits.
    The 128-bit format used by PowerPC (two adjacent doubles) is represented
@@ -2493,22 +2508,21 @@ b: unreachable
 
 <!-- ======================================================================= -->
 <h3>
-  <a name="trapvalues">Trap Values</a>
+  <a name="poisonvalues">Poison Values</a>
 </h3>
 
 <div>
 
-<p>Trap values are similar to <a href="#undefvalues">undef values</a>, however
-   instead of representing an unspecified bit pattern, they represent the
-   fact that an instruction or constant expression which cannot evoke side
-   effects has nevertheless detected a condition which results in undefined
-   behavior.</p>
+<p>Poison values are similar to <a href="#undefvalues">undef values</a>, however
+   they also represent the fact that an instruction or constant expression which
+   cannot evoke side effects has nevertheless detected a condition which results
+   in undefined behavior.</p>
 
-<p>There is currently no way of representing a trap value in the IR; they
+<p>There is currently no way of representing a poison value in the IR; they
    only exist when produced by operations such as
    <a href="#i_add"><tt>add</tt></a> with the <tt>nsw</tt> flag.</p>
 
-<p>Trap value behavior is defined in terms of value <i>dependence</i>:</p>
+<p>Poison value behavior is defined in terms of value <i>dependence</i>:</p>
 
 <ul>
 <li>Values other than <a href="#i_phi"><tt>phi</tt></a> nodes depend on
@@ -2559,62 +2573,61 @@ b: unreachable
 
 </ul>
 
-<p>Whenever a trap value is generated, all values which depend on it evaluate
-   to trap. If they have side effects, the evoke their side effects as if each
-   operand with a trap value were undef. If they have externally-visible side
-   effects, the behavior is undefined.</p>
+<p>Poison Values have the same behavior as <a href="#undefvalues">undef values</a>,
+   with the additional affect that any instruction which has a <i>dependence</i>
+   on a poison value has undefined behavior.</p>
 
 <p>Here are some examples:</p>
 
 <pre class="doc_code">
 entry:
-  %trap = sub nuw i32 0, 1           ; Results in a trap value.
-  %still_trap = and i32 %trap, 0     ; Whereas (and i32 undef, 0) would return 0.
-  %trap_yet_again = getelementptr i32* @h, i32 %still_trap
-  store i32 0, i32* %trap_yet_again  ; undefined behavior
+  %poison = sub nuw i32 0, 1           ; Results in a poison value.
+  %still_poison = and i32 %poison, 0   ; 0, but also poison.
+  %poison_yet_again = getelementptr i32* @h, i32 %still_poison
+  store i32 0, i32* %poison_yet_again  ; memory at @h[0] is poisoned
 
-  store i32 %trap, i32* @g           ; Trap value conceptually stored to memory.
-  %trap2 = load i32* @g              ; Returns a trap value, not just undef.
+  store i32 %poison, i32* @g           ; Poison value stored to memory.
+  %poison2 = load i32* @g              ; Poison value loaded back from memory.
 
-  volatile store i32 %trap, i32* @g  ; External observation; undefined behavior.
+  store volatile i32 %poison, i32* @g  ; External observation; undefined behavior.
 
   %narrowaddr = bitcast i32* @g to i16*
   %wideaddr = bitcast i32* @g to i64*
-  %trap3 = load i16* %narrowaddr     ; Returns a trap value.
-  %trap4 = load i64* %wideaddr       ; Returns a trap value.
+  %poison3 = load i16* %narrowaddr     ; Returns a poison value.
+  %poison4 = load i64* %wideaddr       ; Returns a poison value.
 
-  %cmp = icmp slt i32 %trap, 0       ; Returns a trap value.
-  br i1 %cmp, label %true, label %end ; Branch to either destination.
+  %cmp = icmp slt i32 %poison, 0       ; Returns a poison value.
+  br i1 %cmp, label %true, label %end  ; Branch to either destination.
 
 true:
-  volatile store i32 0, i32* @g      ; This is control-dependent on %cmp, so
-                                     ; it has undefined behavior.
+  store volatile i32 0, i32* @g        ; This is control-dependent on %cmp, so
+                                       ; it has undefined behavior.
   br label %end
 
 end:
   %p = phi i32 [ 0, %entry ], [ 1, %true ]
-                                     ; Both edges into this PHI are
-                                     ; control-dependent on %cmp, so this
-                                     ; always results in a trap value.
+                                       ; Both edges into this PHI are
+                                       ; control-dependent on %cmp, so this
+                                       ; always results in a poison value.
 
-  volatile store i32 0, i32* @g      ; This would depend on the store in %true
-                                     ; if %cmp is true, or the store in %entry
-                                     ; otherwise, so this is undefined behavior.
+  store volatile i32 0, i32* @g        ; This would depend on the store in %true
+                                       ; if %cmp is true, or the store in %entry
+                                       ; otherwise, so this is undefined behavior.
 
   br i1 %cmp, label %second_true, label %second_end
-                                     ; The same branch again, but this time the
-                                     ; true block doesn't have side effects.
+                                       ; The same branch again, but this time the
+                                       ; true block doesn't have side effects.
 
 second_true:
   ; No side effects!
   ret void
 
 second_end:
-  volatile store i32 0, i32* @g      ; This time, the instruction always depends
-                                     ; on the store in %end. Also, it is
-                                     ; control-equivalent to %end, so this is
-                                     ; well-defined (again, ignoring earlier
-                                     ; undefined behavior in this example).
+  store volatile i32 0, i32* @g        ; This time, the instruction always depends
+                                       ; on the store in %end. Also, it is
+                                       ; control-equivalent to %end, so this is
+                                       ; well-defined (ignoring earlier undefined
+                                       ; behavior in this example).
 </pre>
 
 </div>
@@ -2793,7 +2806,7 @@ second_end:
 <div>
 
 <p>LLVM supports inline assembler expressions (as opposed
-   to <a href="#moduleasm"> Module-Level Inline Assembly</a>) through the use of
+   to <a href="#moduleasm">Module-Level Inline Assembly</a>) through the use of
    a special value.  This value represents the inline assembler as a string
    (containing the instructions to emit), a list of operand constraints (stored
    as a string), a flag that indicates whether or not the inline asm
@@ -2835,23 +2848,27 @@ call void asm alignstack "eieio", ""()
 <p>If both keywords appear the '<tt>sideeffect</tt>' keyword must come
    first.</p>
 
+<!--
 <p>TODO: The format of the asm and constraints string still need to be
    documented here.  Constraints on what can be done (e.g. duplication, moving,
    etc need to be documented).  This is probably best done by reference to
    another document that covers inline asm from a holistic perspective.</p>
+  -->
 
+<!-- _______________________________________________________________________ -->
 <h4>
-<a name="inlineasm_md">Inline Asm Metadata</a>
+  <a name="inlineasm_md">Inline Asm Metadata</a>
 </h4>
 
 <div>
 
-<p>The call instructions that wrap inline asm nodes may have a "!srcloc" MDNode
-   attached to it that contains a list of constant integers.  If present, the
-  code generator will use the integer as the location cookie value when report
-   errors through the LLVMContext error reporting mechanisms.  This allows a
-   front-end to correlate backend errors that occur with inline asm back to the
-   source code that produced it.  For example:</p>
+<p>The call instructions that wrap inline asm nodes may have a
+   "<tt>!srcloc</tt>" MDNode attached to it that contains a list of constant
+   integers.  If present, the code generator will use the integer as the
+   location cookie value when report errors through the <tt>LLVMContext</tt>
+   error reporting mechanisms.  This allows a front-end to correlate backend
+   errors that occur with inline asm back to the source code that produced it.
+   For example:</p>
 
 <pre class="doc_code">
 call void asm sideeffect "something bad", ""()<b>, !srcloc !42</b>
@@ -2860,7 +2877,7 @@ call void asm sideeffect "something bad", ""()<b>, !srcloc !42</b>
 </pre>
 
 <p>It is up to the front-end to make sense of the magic numbers it places in the
-   IR.  If the MDNode contains multiple constants, the code generator will use
+   IR. If the MDNode contains multiple constants, the code generator will use
    the one that corresponds to the line of the asm that the error occurs on.</p>
 
 </div>
@@ -2882,20 +2899,33 @@ call void asm sideeffect "something bad", ""()<b>, !srcloc !42</b>
    preceding exclamation point ('<tt>!</tt>').</p>
 
 <p>A metadata string is a string surrounded by double quotes.  It can contain
-   any character by escaping non-printable characters with "\xx" where "xx" is
-   the two digit hex code.  For example: "<tt>!"test\00"</tt>".</p>
+   any character by escaping non-printable characters with "<tt>\xx</tt>" where
+   "<tt>xx</tt>" is the two digit hex code.  For example:
+   "<tt>!"test\00"</tt>".</p>
 
 <p>Metadata nodes are represented with notation similar to structure constants
    (a comma separated list of elements, surrounded by braces and preceded by an
-   exclamation point).  For example: "<tt>!{ metadata !"test\00", i32
-   10}</tt>".  Metadata nodes can have any values as their operand.</p>
+   exclamation point). Metadata nodes can have any values as their operand. For
+   example:</p>
+
+<div class="doc_code">
+<pre>
+!{ metadata !"test\00", i32 10}
+</pre>
+</div>
 
 <p>A <a href="#namedmetadatastructure">named metadata</a> is a collection of 
    metadata nodes, which can be looked up in the module symbol table. For
-   example: "<tt>!foo =  metadata !{!4, !3}</tt>".
+   example:</p>
+
+<div class="doc_code">
+<pre>
+!foo =  metadata !{!4, !3}
+</pre>
+</div>
 
 <p>Metadata can be used as function arguments. Here <tt>llvm.dbg.value</tt> 
-   function is using two metadata arguments.</p>
+   function is using two metadata arguments:</p>
 
 <div class="doc_code">
 <pre>
@@ -2904,12 +2934,94 @@ call void @llvm.dbg.value(metadata !24, i64 0, metadata !25)
 </div>
 
 <p>Metadata can be attached with an instruction. Here metadata <tt>!21</tt> is
-   attached with <tt>add</tt> instruction using <tt>!dbg</tt> identifier.</p>
+   attached to the <tt>add</tt> instruction using the <tt>!dbg</tt>
+   identifier:</p>
 
 <div class="doc_code">
 <pre>
 %indvar.next = add i64 %indvar, 1, !dbg !21
 </pre>
+</div>
+
+<p>More information about specific metadata nodes recognized by the optimizers
+   and code generator is found below.</p>
+
+<!-- _______________________________________________________________________ -->
+<h4>
+  <a name="tbaa">'<tt>tbaa</tt>' Metadata</a>
+</h4>
+
+<div>
+
+<p>In LLVM IR, memory does not have types, so LLVM's own type system is not
+   suitable for doing TBAA. Instead, metadata is added to the IR to describe
+   a type system of a higher level language. This can be used to implement
+   typical C/C++ TBAA, but it can also be used to implement custom alias
+   analysis behavior for other languages.</p>
+
+<p>The current metadata format is very simple. TBAA metadata nodes have up to
+   three fields, e.g.:</p>
+
+<div class="doc_code">
+<pre>
+!0 = metadata !{ metadata !"an example type tree" }
+!1 = metadata !{ metadata !"int", metadata !0 }
+!2 = metadata !{ metadata !"float", metadata !0 }
+!3 = metadata !{ metadata !"const float", metadata !2, i64 1 }
+</pre>
+</div>
+
+<p>The first field is an identity field. It can be any value, usually
+   a metadata string, which uniquely identifies the type. The most important
+   name in the tree is the name of the root node. Two trees with
+   different root node names are entirely disjoint, even if they
+   have leaves with common names.</p>
+
+<p>The second field identifies the type's parent node in the tree, or
+   is null or omitted for a root node. A type is considered to alias
+   all of its descendants and all of its ancestors in the tree. Also,
+   a type is considered to alias all types in other trees, so that
+   bitcode produced from multiple front-ends is handled conservatively.</p>
+
+<p>If the third field is present, it's an integer which if equal to 1
+   indicates that the type is "constant" (meaning
+   <tt>pointsToConstantMemory</tt> should return true; see
+   <a href="AliasAnalysis.html#OtherItfs">other useful
+   <tt>AliasAnalysis</tt> methods</a>).</p>
+
+</div>
+
+<!-- _______________________________________________________________________ -->
+<h4>
+  <a name="fpaccuracy">'<tt>fpaccuracy</tt>' Metadata</a>
+</h4>
+ 
+<div>
+
+<p><tt>fpaccuracy</tt> metadata may be attached to any instruction of floating
+   point type.  It expresses the maximum relative error of the result of
+   that instruction, in ULPs. ULP is defined as follows:</p>
+
+<blockquote>
+
+<p>If <tt>x</tt> is a real number that lies between two finite consecutive
+   floating-point numbers <tt>a</tt> and <tt>b</tt>, without being equal to one
+   of them, then <tt>ulp(x) = |b - a|</tt>, otherwise <tt>ulp(x)</tt> is the
+   distance between the two non-equal finite floating-point numbers nearest
+   <tt>x</tt>. Moreover, <tt>ulp(NaN)</tt> is <tt>NaN</tt>.</p>
+
+</blockquote>
+
+<p>The maximum relative error may be any rational number.  The metadata node
+   shall consist of a pair of unsigned integers respectively representing
+   the numerator and denominator.  For example, 2.5 ULP:</p>
+
+<div class="doc_code">
+<pre>
+!0 = metadata !{ i32 5, i32 2 }
+</pre>
+</div>
+
 </div>
 
 </div>
@@ -2940,26 +3052,29 @@ href="#linkage_appending">appending linkage</a>.  This array contains a list of
 pointers to global variables and functions which may optionally have a pointer
 cast formed of bitcast or getelementptr.  For example, a legal use of it is:</p>
 
+<div class="doc_code">
 <pre>
-  @X = global i8 4
-  @Y = global i32 123
+@X = global i8 4
+@Y = global i32 123
 
-  @llvm.used = appending global [2 x i8*] [
-     i8* @X,
-     i8* bitcast (i32* @Y to i8*)
-  ], section "llvm.metadata"
+@llvm.used = appending global [2 x i8*] [
+   i8* @X,
+   i8* bitcast (i32* @Y to i8*)
+], section "llvm.metadata"
 </pre>
+</div>
 
 <p>If a global variable appears in the <tt>@llvm.used</tt> list, then the
-compiler, assembler, and linker are required to treat the symbol as if there is
-a reference to the global that it cannot see.  For example, if a variable has
-internal linkage and no references other than that from the <tt>@llvm.used</tt>
-list, it cannot be deleted.  This is commonly used to represent references from
-inline asms and other things the compiler cannot "see", and corresponds to
-"attribute((used))" in GNU C.</p>
+   compiler, assembler, and linker are required to treat the symbol as if there
+   is a reference to the global that it cannot see.  For example, if a variable
+   has internal linkage and no references other than that from
+   the <tt>@llvm.used</tt> list, it cannot be deleted.  This is commonly used to
+   represent references from inline asms and other things the compiler cannot
+   "see", and corresponds to "<tt>attribute((used))</tt>" in GNU C.</p>
 
 <p>On some targets, the code generator must emit a directive to the assembler or
-object file to prevent the assembler and linker from molesting the symbol.</p>
+   object file to prevent the assembler and linker from molesting the
+   symbol.</p>
 
 </div>
 
@@ -2973,13 +3088,13 @@ object file to prevent the assembler and linker from molesting the symbol.</p>
 <div>
 
 <p>The <tt>@llvm.compiler.used</tt> directive is the same as the
-<tt>@llvm.used</tt> directive, except that it only prevents the compiler from
-touching the symbol.  On targets that support it, this allows an intelligent
-linker to optimize references to the symbol without being impeded as it would be
-by <tt>@llvm.used</tt>.</p>
+   <tt>@llvm.used</tt> directive, except that it only prevents the compiler from
+   touching the symbol.  On targets that support it, this allows an intelligent
+   linker to optimize references to the symbol without being impeded as it would
+   be by <tt>@llvm.used</tt>.</p>
 
 <p>This is a rare construct that should only be used in rare circumstances, and
-should not be exposed to source languages.</p>
+   should not be exposed to source languages.</p>
 
 </div>
 
@@ -2989,12 +3104,19 @@ should not be exposed to source languages.</p>
 </h3>
 
 <div>
+
+<div class="doc_code">
 <pre>
 %0 = type { i32, void ()* }
 @llvm.global_ctors = appending global [1 x %0] [%0 { i32 65535, void ()* @ctor }]
 </pre>
-<p>The <tt>@llvm.global_ctors</tt> array contains a list of constructor functions and associated priorities.  The functions referenced by this array will be called in ascending order of priority (i.e. lowest first) when the module is loaded.  The order of functions with the same priority is not defined.
-</p>
+</div>
+
+<p>The <tt>@llvm.global_ctors</tt> array contains a list of constructor
+   functions and associated priorities.  The functions referenced by this array
+   will be called in ascending order of priority (i.e. lowest first) when the
+   module is loaded.  The order of functions with the same priority is not
+   defined.</p>
 
 </div>
 
@@ -3004,13 +3126,18 @@ should not be exposed to source languages.</p>
 </h3>
 
 <div>
+
+<div class="doc_code">
 <pre>
 %0 = type { i32, void ()* }
 @llvm.global_dtors = appending global [1 x %0] [%0 { i32 65535, void ()* @dtor }]
 </pre>
+</div>
 
-<p>The <tt>@llvm.global_dtors</tt> array contains a list of destructor functions and associated priorities.  The functions referenced by this array will be called in descending order of priority (i.e. highest first) when the module is loaded.  The order of functions with the same priority is not defined.
-</p>
+<p>The <tt>@llvm.global_dtors</tt> array contains a list of destructor functions
+   and associated priorities.  The functions referenced by this array will be
+   called in descending order of priority (i.e. highest first) when the module
+   is loaded.  The order of functions with the same priority is not defined.</p>
 
 </div>
 
@@ -3277,7 +3404,7 @@ IfUnequal:
    <i><a href="ExceptionHandling.html#overview">landing pad</a></i> for the
    exception. As such, '<tt>exception</tt>' label is required to have the
    "<a href="#i_landingpad"><tt>landingpad</tt></a>" instruction, which contains
-   the information about about the behavior of the program after unwinding
+   the information about the behavior of the program after unwinding
    happens, as its first non-PHI instruction. The restrictions on the
    "<tt>landingpad</tt>" instruction's tightly couples it to the
    "<tt>invoke</tt>" instruction, so that the important information contained
@@ -3492,7 +3619,7 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
 <p><tt>nuw</tt> and <tt>nsw</tt> stand for &quot;No Unsigned Wrap&quot;
    and &quot;No Signed Wrap&quot;, respectively. If the <tt>nuw</tt> and/or
    <tt>nsw</tt> keywords are present, the result value of the <tt>add</tt>
-   is a <a href="#trapvalues">trap value</a> if unsigned and/or signed overflow,
+   is a <a href="#poisonvalues">poison value</a> if unsigned and/or signed overflow,
    respectively, occurs.</p>
 
 <h5>Example:</h5>
@@ -3573,7 +3700,7 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
 <p><tt>nuw</tt> and <tt>nsw</tt> stand for &quot;No Unsigned Wrap&quot;
    and &quot;No Signed Wrap&quot;, respectively. If the <tt>nuw</tt> and/or
    <tt>nsw</tt> keywords are present, the result value of the <tt>sub</tt>
-   is a <a href="#trapvalues">trap value</a> if unsigned and/or signed overflow,
+   is a <a href="#poisonvalues">poison value</a> if unsigned and/or signed overflow,
    respectively, occurs.</p>
 
 <h5>Example:</h5>
@@ -3660,7 +3787,7 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
 <p><tt>nuw</tt> and <tt>nsw</tt> stand for &quot;No Unsigned Wrap&quot;
    and &quot;No Signed Wrap&quot;, respectively. If the <tt>nuw</tt> and/or
    <tt>nsw</tt> keywords are present, the result value of the <tt>mul</tt>
-   is a <a href="#trapvalues">trap value</a> if unsigned and/or signed overflow,
+   is a <a href="#poisonvalues">poison value</a> if unsigned and/or signed overflow,
    respectively, occurs.</p>
 
 <h5>Example:</h5>
@@ -3730,7 +3857,7 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
 <p>Division by zero leads to undefined behavior.</p>
 
 <p>If the <tt>exact</tt> keyword is present, the result value of the
-   <tt>udiv</tt> is a <a href="#trapvalues">trap value</a> if %op1 is not a
+   <tt>udiv</tt> is a <a href="#poisonvalues">poison value</a> if %op1 is not a
   multiple of %op2 (as such, "((a udiv exact b) mul b) == a").</p>
 
 
@@ -3774,7 +3901,7 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
    a 32-bit division of -2147483648 by -1.</p>
 
 <p>If the <tt>exact</tt> keyword is present, the result value of the
-   <tt>sdiv</tt> is a <a href="#trapvalues">trap value</a> if the result would
+   <tt>sdiv</tt> is a <a href="#poisonvalues">poison value</a> if the result would
    be rounded.</p>
 
 <h5>Example:</h5>
@@ -3983,9 +4110,9 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
    shift amount in <tt>op2</tt>.</p>
 
 <p>If the <tt>nuw</tt> keyword is present, then the shift produces a 
-   <a href="#trapvalues">trap value</a> if it shifts out any non-zero bits.  If
+   <a href="#poisonvalues">poison value</a> if it shifts out any non-zero bits.  If
    the <tt>nsw</tt> keyword is present, then the shift produces a
-   <a href="#trapvalues">trap value</a> if it shifts out any bits that disagree
+   <a href="#poisonvalues">poison value</a> if it shifts out any bits that disagree
    with the resultant sign bit.  As such, NUW/NSW have the same semantics as
    they would if the shift were expressed as a mul instruction with the same
    nsw/nuw bits in (mul %op1, (shl 1, %op2)).</p>
@@ -4032,7 +4159,7 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
    shift amount in <tt>op2</tt>.</p>
 
 <p>If the <tt>exact</tt> keyword is present, the result value of the
-   <tt>lshr</tt> is a <a href="#trapvalues">trap value</a> if any of the bits
+   <tt>lshr</tt> is a <a href="#poisonvalues">poison value</a> if any of the bits
    shifted out are non-zero.</p>
 
 
@@ -4080,7 +4207,7 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
    the corresponding shift amount in <tt>op2</tt>.</p>
 
 <p>If the <tt>exact</tt> keyword is present, the result value of the
-   <tt>ashr</tt> is a <a href="#trapvalues">trap value</a> if any of the bits
+   <tt>ashr</tt> is a <a href="#poisonvalues">poison value</a> if any of the bits
    shifted out are non-zero.</p>
 
 <h5>Example:</h5>
@@ -4122,9 +4249,9 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
 <table border="1" cellspacing="0" cellpadding="4">
   <tbody>
     <tr>
-      <td>In0</td>
-      <td>In1</td>
-      <td>Out</td>
+      <th>In0</th>
+      <th>In1</th>
+      <th>Out</th>
     </tr>
     <tr>
       <td>0</td>
@@ -4183,9 +4310,9 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
 <table border="1" cellspacing="0" cellpadding="4">
   <tbody>
     <tr>
-      <td>In0</td>
-      <td>In1</td>
-      <td>Out</td>
+      <th>In0</th>
+      <th>In1</th>
+      <th>Out</th>
     </tr>
     <tr>
       <td>0</td>
@@ -4247,9 +4374,9 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
 <table border="1" cellspacing="0" cellpadding="4">
   <tbody>
     <tr>
-      <td>In0</td>
-      <td>In1</td>
-      <td>Out</td>
+      <th>In0</th>
+      <th>In1</th>
+      <th>Out</th>
     </tr>
     <tr>
       <td>0</td>
@@ -4660,8 +4787,8 @@ that the invoke/unwind semantics are likely to change in future versions.</p>
 
 <h5>Syntax:</h5>
 <pre>
-  store [volatile] &lt;ty&gt; &lt;value&gt;, &lt;ty&gt;* &lt;pointer&gt;[, align &lt;alignment&gt;][, !nontemporal !&lt;index&gt;]                   <i>; yields {void}</i>
-  store atomic [volatile] &lt;ty&gt; &lt;value&gt;, &lt;ty&gt;* &lt;pointer&gt; [singlethread] &lt;ordering&gt;, align &lt;alignment&gt;             <i>; yields {void}</i>
+  store [volatile] &lt;ty&gt; &lt;value&gt;, &lt;ty&gt;* &lt;pointer&gt;[, align &lt;alignment&gt;][, !nontemporal !&lt;index&gt;]        <i>; yields {void}</i>
+  store atomic [volatile] &lt;ty&gt; &lt;value&gt;, &lt;ty&gt;* &lt;pointer&gt; [singlethread] &lt;ordering&gt;, align &lt;alignment&gt;  <i>; yields {void}</i>
 </pre>
 
 <h5>Overview:</h5>
@@ -4790,7 +4917,7 @@ thread.  (This is useful for interacting with signal handlers.)</p>
 
 <h5>Syntax:</h5>
 <pre>
-  cmpxchg [volatile] &lt;ty&gt;* &lt;pointer&gt;, &lt;ty&gt; &lt;cmp&gt;, &lt;ty&gt; &lt;new&gt; [singlethread] &lt;ordering&gt;                   <i>; yields {ty}</i>
+  cmpxchg [volatile] &lt;ty&gt;* &lt;pointer&gt;, &lt;ty&gt; &lt;cmp&gt;, &lt;ty&gt; &lt;new&gt; [singlethread] &lt;ordering&gt;  <i>; yields {ty}</i>
 </pre>
 
 <h5>Overview:</h5>
@@ -4848,13 +4975,13 @@ FIXME: Is a weaker ordering constraint on failure helpful in practice?
 <h5>Example:</h5>
 <pre>
 entry:
-  %orig = atomic <a href="#i_load">load</a> i32* %ptr unordered                       <i>; yields {i32}</i>
+  %orig = atomic <a href="#i_load">load</a> i32* %ptr unordered                   <i>; yields {i32}</i>
   <a href="#i_br">br</a> label %loop
 
 loop:
   %cmp = <a href="#i_phi">phi</a> i32 [ %orig, %entry ], [%old, %loop]
   %squared = <a href="#i_mul">mul</a> i32 %cmp, %cmp
-  %old = cmpxchg i32* %ptr, i32 %cmp, i32 %squared                       <i>; yields {i32}</i>
+  %old = cmpxchg i32* %ptr, i32 %cmp, i32 %squared          <i>; yields {i32}</i>
   %success = <a href="#i_icmp">icmp</a> eq i32 %cmp, %old
   <a href="#i_br">br</a> i1 %success, label %done, label %loop
 
@@ -4946,6 +5073,7 @@ specified by the <var>operation</var> argument:</p>
 <pre>
   &lt;result&gt; = getelementptr &lt;pty&gt;* &lt;ptrval&gt;{, &lt;ty&gt; &lt;idx&gt;}*
   &lt;result&gt; = getelementptr inbounds &lt;pty&gt;* &lt;ptrval&gt;{, &lt;ty&gt; &lt;idx&gt;}*
+  &lt;result&gt; = getelementptr &lt;ptr vector&gt; ptrval, &lt;vector index type&gt; idx 
 </pre>
 
 <h5>Overview:</h5>
@@ -4954,7 +5082,8 @@ specified by the <var>operation</var> argument:</p>
    It performs address calculation only and does not access memory.</p>
 
 <h5>Arguments:</h5>
-<p>The first argument is always a pointer, and forms the basis of the
+<p>The first argument is always a pointer or a vector of pointers,
+   and forms the basis of the
    calculation. The remaining arguments are indices that indicate which of the
    elements of the aggregate object are indexed. The interpretation of each
    index is dependent on the type being indexed into. The first index always
@@ -4992,54 +5121,57 @@ int *foo(struct ST *s) {
 }
 </pre>
 
-<p>The LLVM code generated by the GCC frontend is:</p>
+<p>The LLVM code generated by Clang is:</p>
 
 <pre class="doc_code">
-%RT = <a href="#namedtypes">type</a> { i8 , [10 x [20 x i32]], i8  }
-%ST = <a href="#namedtypes">type</a> { i32, double, %RT }
+%struct.RT = <a href="#namedtypes">type</a> { i8, [10 x [20 x i32]], i8 }
+%struct.ST = <a href="#namedtypes">type</a> { i32, double, %struct.RT }
 
-define i32* @foo(%ST* %s) {
+define i32* @foo(%struct.ST* %s) nounwind uwtable readnone optsize ssp {
 entry:
-  %reg = getelementptr %ST* %s, i32 1, i32 2, i32 1, i32 5, i32 13
-  ret i32* %reg
+  %arrayidx = getelementptr inbounds %struct.ST* %s, i64 1, i32 2, i32 1, i64 5, i64 13
+  ret i32* %arrayidx
 }
 </pre>
 
 <h5>Semantics:</h5>
-<p>In the example above, the first index is indexing into the '<tt>%ST*</tt>'
-   type, which is a pointer, yielding a '<tt>%ST</tt>' = '<tt>{ i32, double, %RT
-   }</tt>' type, a structure.  The second index indexes into the third element
-   of the structure, yielding a '<tt>%RT</tt>' = '<tt>{ i8 , [10 x [20 x i32]],
-   i8 }</tt>' type, another structure.  The third index indexes into the second
-   element of the structure, yielding a '<tt>[10 x [20 x i32]]</tt>' type, an
-   array.  The two dimensions of the array are subscripted into, yielding an
-   '<tt>i32</tt>' type.  The '<tt>getelementptr</tt>' instruction returns a
-   pointer to this element, thus computing a value of '<tt>i32*</tt>' type.</p>
+<p>In the example above, the first index is indexing into the
+   '<tt>%struct.ST*</tt>' type, which is a pointer, yielding a
+   '<tt>%struct.ST</tt>' = '<tt>{ i32, double, %struct.RT }</tt>' type, a
+   structure. The second index indexes into the third element of the structure,
+   yielding a '<tt>%struct.RT</tt>' = '<tt>{ i8 , [10 x [20 x i32]], i8 }</tt>'
+   type, another structure. The third index indexes into the second element of
+   the structure, yielding a '<tt>[10 x [20 x i32]]</tt>' type, an array. The
+   two dimensions of the array are subscripted into, yielding an '<tt>i32</tt>'
+   type. The '<tt>getelementptr</tt>' instruction returns a pointer to this
+   element, thus computing a value of '<tt>i32*</tt>' type.</p>
 
 <p>Note that it is perfectly legal to index partially through a structure,
    returning a pointer to an inner element.  Because of this, the LLVM code for
    the given testcase is equivalent to:</p>
 
-<pre>
-  define i32* @foo(%ST* %s) {
-    %t1 = getelementptr %ST* %s, i32 1                        <i>; yields %ST*:%t1</i>
-    %t2 = getelementptr %ST* %t1, i32 0, i32 2                <i>; yields %RT*:%t2</i>
-    %t3 = getelementptr %RT* %t2, i32 0, i32 1                <i>; yields [10 x [20 x i32]]*:%t3</i>
-    %t4 = getelementptr [10 x [20 x i32]]* %t3, i32 0, i32 5  <i>; yields [20 x i32]*:%t4</i>
-    %t5 = getelementptr [20 x i32]* %t4, i32 0, i32 13        <i>; yields i32*:%t5</i>
-    ret i32* %t5
-  }
+<pre class="doc_code">
+define i32* @foo(%struct.ST* %s) {
+  %t1 = getelementptr %struct.ST* %s, i32 1                 <i>; yields %struct.ST*:%t1</i>
+  %t2 = getelementptr %struct.ST* %t1, i32 0, i32 2         <i>; yields %struct.RT*:%t2</i>
+  %t3 = getelementptr %struct.RT* %t2, i32 0, i32 1         <i>; yields [10 x [20 x i32]]*:%t3</i>
+  %t4 = getelementptr [10 x [20 x i32]]* %t3, i32 0, i32 5  <i>; yields [20 x i32]*:%t4</i>
+  %t5 = getelementptr [20 x i32]* %t4, i32 0, i32 13        <i>; yields i32*:%t5</i>
+  ret i32* %t5
+}
 </pre>
 
 <p>If the <tt>inbounds</tt> keyword is present, the result value of the
-   <tt>getelementptr</tt> is a <a href="#trapvalues">trap value</a> if the
+   <tt>getelementptr</tt> is a <a href="#poisonvalues">poison value</a> if the
    base pointer is not an <i>in bounds</i> address of an allocated object,
    or if any of the addresses that would be formed by successive addition of
    the offsets implied by the indices to the base address with infinitely
    precise signed arithmetic are not an <i>in bounds</i> address of that
    allocated object. The <i>in bounds</i> addresses for an allocated object
    are all the addresses that point into the object, plus the address one
-   byte past the end.</p>
+   byte past the end.
+   In cases where the base is a vector of pointers the <tt>inbounds</tt> keyword
+   applies to each of the computations element-wise. </p>
 
 <p>If the <tt>inbounds</tt> keyword is not present, the offsets are added to
    the base address with silently-wrapping two's complement arithmetic. If the
@@ -5064,6 +5196,13 @@ entry:
     %eptr = getelementptr [12 x i8]* %aptr, i64 0, i32 1
     <i>; yields i32*:iptr</i>
     %iptr = getelementptr [10 x i32]* @arr, i16 0, i16 0
+</pre>
+
+<p>In cases where the pointer argument is a vector of pointers, only a
+   single index may be used, and the number of vector elements has to be
+   the same.  For example: </p>
+<pre class="doc_code">
+ %A = getelementptr <4 x i8*> %ptrs, <4 x i64> %offsets,
 </pre>
 
 </div>
@@ -5438,13 +5577,16 @@ entry:
 </pre>
 
 <h5>Overview:</h5>
-<p>The '<tt>ptrtoint</tt>' instruction converts the pointer <tt>value</tt> to
-   the integer type <tt>ty2</tt>.</p>
+<p>The '<tt>ptrtoint</tt>' instruction converts the pointer or a vector of
+   pointers <tt>value</tt> to
+   the integer (or vector of integers) type <tt>ty2</tt>.</p>
 
 <h5>Arguments:</h5>
 <p>The '<tt>ptrtoint</tt>' instruction takes a <tt>value</tt> to cast, which
-   must be a <a href="#t_pointer">pointer</a> value, and a type to cast it to
-   <tt>ty2</tt>, which must be an <a href="#t_integer">integer</a> type.</p>
+   must be a a value of type <a href="#t_pointer">pointer</a> or a vector of
+    pointers, and a type to cast it to
+   <tt>ty2</tt>, which must be an <a href="#t_integer">integer</a> or a vector
+   of integers type.</p>
 
 <h5>Semantics:</h5>
 <p>The '<tt>ptrtoint</tt>' instruction converts <tt>value</tt> to integer type
@@ -5457,8 +5599,9 @@ entry:
 
 <h5>Example:</h5>
 <pre>
-  %X = ptrtoint i32* %X to i8           <i>; yields truncation on 32-bit architecture</i>
-  %Y = ptrtoint i32* %x to i64          <i>; yields zero extension on 32-bit architecture</i>
+  %X = ptrtoint i32* %P to i8                         <i>; yields truncation on 32-bit architecture</i>
+  %Y = ptrtoint i32* %P to i64                        <i>; yields zero extension on 32-bit architecture</i>
+  %Z = ptrtoint &lt;4 x i32*&gt; %P to &lt;4 x i64&gt;<i>; yields vector zero extension for a vector of addresses on 32-bit architecture</i>
 </pre>
 
 </div>
@@ -5497,6 +5640,7 @@ entry:
   %X = inttoptr i32 255 to i32*          <i>; yields zero extension on 64-bit architecture</i>
   %Y = inttoptr i32 255 to i32*          <i>; yields no-op on 32-bit architecture</i>
   %Z = inttoptr i64 0 to i32*            <i>; yields truncation on 32-bit architecture</i>
+  %Z = inttoptr &lt;4 x i32&gt; %G to &lt;4 x i8*&gt;<i>; yields truncation of vector G to four pointers</i>
 </pre>
 
 </div>
@@ -5531,8 +5675,9 @@ entry:
 <p>The '<tt>bitcast</tt>' instruction converts <tt>value</tt> to type
    <tt>ty2</tt>. It is always a <i>no-op cast</i> because no bits change with
    this conversion.  The conversion is done as if the <tt>value</tt> had been
-   stored to memory and read back as type <tt>ty2</tt>. Pointer types may only
-   be converted to other pointer types with this instruction. To convert
+   stored to memory and read back as type <tt>ty2</tt>.
+   Pointer (or vector of pointers) types may only be converted to other pointer
+   (or vector of pointers) types with this instruction. To convert
    pointers to other types, use the <a href="#i_inttoptr">inttoptr</a> or
    <a href="#i_ptrtoint">ptrtoint</a> instructions first.</p>
 
@@ -5540,7 +5685,8 @@ entry:
 <pre>
   %X = bitcast i8 255 to i8              <i>; yields i8 :-1</i>
   %Y = bitcast i32* %x to sint*          <i>; yields sint*:%x</i>
-  %Z = bitcast &lt;2 x int&gt; %V to i64;      <i>; yields i64: %V</i>
+  %Z = bitcast &lt;2 x int&gt; %V to i64;        <i>; yields i64: %V</i>
+  %Z = bitcast &lt;2 x i32*&gt; %V to &lt;2 x i64*&gt; <i>; yields &lt;2 x i64*&gt;</i>
 </pre>
 
 </div>
@@ -5571,8 +5717,8 @@ entry:
 
 <h5>Overview:</h5>
 <p>The '<tt>icmp</tt>' instruction returns a boolean value or a vector of
-   boolean values based on comparison of its two integer, integer vector, or
-   pointer operands.</p>
+   boolean values based on comparison of its two integer, integer vector,
+   pointer, or pointer vector operands.</p>
 
 <h5>Arguments:</h5>
 <p>The '<tt>icmp</tt>' instruction takes three operands. The first operand is
@@ -5866,9 +6012,6 @@ Loop:       ; Infinite loop that counts from 0 on up...
 <pre>
   %X = select i1 true, i8 17, i8 42          <i>; yields i8:17</i>
 </pre>
-
-<p>Note that the code generator does not yet support conditions
-   with vector type.</p>
 
 </div>
 
@@ -6296,8 +6439,6 @@ declare void @llvm.va_end(i8*)
    element.  This intrinsic is necessary because
    the <tt><a href="#int_va_start"> llvm.va_start</a></tt> intrinsic may be
    arbitrarily complex and require, for example, memory allocation.</p>
-
-</div>
 
 </div>
 
@@ -6998,8 +7139,6 @@ LLVM</a>.</p>
 
 </div>
 
-</div>
-
 <!-- _______________________________________________________________________ -->
 <h4>
   <a name="int_exp">'<tt>llvm.exp.*</tt>' Intrinsic</a>
@@ -7064,6 +7203,9 @@ LLVM</a>.</p>
 <p>This function returns the same values as the libm <tt>log</tt> functions
    would, and handles error conditions in the same way.</p>
 
+</div>
+
+<!-- _______________________________________________________________________ -->
 <h4>
   <a name="int_fma">'<tt>llvm.fma.*</tt>' Intrinsic</a>
 </h4>
@@ -7094,6 +7236,8 @@ LLVM</a>.</p>
 <h5>Semantics:</h5>
 <p>This function returns the same values as the libm <tt>fma</tt> functions
    would.</p>
+
+</div>
 
 </div>
 
@@ -7191,12 +7335,12 @@ LLVM</a>.</p>
    targets support all bit widths or vector types, however.</p>
 
 <pre>
-  declare i8 @llvm.ctlz.i8 (i8  &lt;src&gt;)
-  declare i16 @llvm.ctlz.i16(i16 &lt;src&gt;)
-  declare i32 @llvm.ctlz.i32(i32 &lt;src&gt;)
-  declare i64 @llvm.ctlz.i64(i64 &lt;src&gt;)
-  declare i256 @llvm.ctlz.i256(i256 &lt;src&gt;)
-  declare &lt;2 x i32&gt; @llvm.ctlz.v2i32(&lt;2 x i32&gt; &lt;src;gt)
+  declare i8   @llvm.ctlz.i8  (i8   &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declare i16  @llvm.ctlz.i16 (i16  &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declare i32  @llvm.ctlz.i32 (i32  &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declare i64  @llvm.ctlz.i64 (i64  &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declare i256 @llvm.ctlz.i256(i256 &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declase &lt;2 x i32&gt; @llvm.ctlz.v2i32(&lt;2 x i32&gt; &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
 </pre>
 
 <h5>Overview:</h5>
@@ -7204,15 +7348,22 @@ LLVM</a>.</p>
    leading zeros in a variable.</p>
 
 <h5>Arguments:</h5>
-<p>The only argument is the value to be counted.  The argument may be of any
-   integer type, or any vector type with integer element type.
-   The return type must match the argument type.</p>
+<p>The first argument is the value to be counted. This argument may be of any
+   integer type, or a vectory with integer element type. The return type
+   must match the first argument type.</p>
+
+<p>The second argument must be a constant and is a flag to indicate whether the
+   intrinsic should ensure that a zero as the first argument produces a defined
+   result. Historically some architectures did not provide a defined result for
+   zero values as efficiently, and many algorithms are now predicated on
+   avoiding zero-value inputs.</p>
 
 <h5>Semantics:</h5>
 <p>The '<tt>llvm.ctlz</tt>' intrinsic counts the leading (most significant)
-   zeros in a variable, or within each element of the vector if the operation
-   is of vector type.  If the src == 0 then the result is the size in bits of
-   the type of src. For example, <tt>llvm.ctlz(i32 2) = 30</tt>.</p>
+   zeros in a variable, or within each element of the vector.
+   If <tt>src == 0</tt> then the result is the size in bits of the type of
+   <tt>src</tt> if <tt>is_zero_undef == 0</tt> and <tt>undef</tt> otherwise.
+   For example, <tt>llvm.ctlz(i32 2) = 30</tt>.</p>
 
 </div>
 
@@ -7229,12 +7380,12 @@ LLVM</a>.</p>
    support all bit widths or vector types, however.</p>
 
 <pre>
-  declare i8 @llvm.cttz.i8 (i8  &lt;src&gt;)
-  declare i16 @llvm.cttz.i16(i16 &lt;src&gt;)
-  declare i32 @llvm.cttz.i32(i32 &lt;src&gt;)
-  declare i64 @llvm.cttz.i64(i64 &lt;src&gt;)
-  declare i256 @llvm.cttz.i256(i256 &lt;src&gt;)
-  declase &lt;2 x i32&gt; @llvm.cttz.v2i32(&lt;2 x i32&gt; &lt;src&gt;)
+  declare i8   @llvm.cttz.i8  (i8   &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declare i16  @llvm.cttz.i16 (i16  &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declare i32  @llvm.cttz.i32 (i32  &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declare i64  @llvm.cttz.i64 (i64  &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declare i256 @llvm.cttz.i256(i256 &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
+  declase &lt;2 x i32&gt; @llvm.cttz.v2i32(&lt;2 x i32&gt; &lt;src&gt;, i1 &lt;is_zero_undef&gt;)
 </pre>
 
 <h5>Overview:</h5>
@@ -7242,15 +7393,22 @@ LLVM</a>.</p>
    trailing zeros.</p>
 
 <h5>Arguments:</h5>
-<p>The only argument is the value to be counted.  The argument may be of any
-   integer type, or a vectory with integer element type..  The return type
-   must match the argument type.</p>
+<p>The first argument is the value to be counted. This argument may be of any
+   integer type, or a vectory with integer element type. The return type
+   must match the first argument type.</p>
+
+<p>The second argument must be a constant and is a flag to indicate whether the
+   intrinsic should ensure that a zero as the first argument produces a defined
+   result. Historically some architectures did not provide a defined result for
+   zero values as efficiently, and many algorithms are now predicated on
+   avoiding zero-value inputs.</p>
 
 <h5>Semantics:</h5>
 <p>The '<tt>llvm.cttz</tt>' intrinsic counts the trailing (least significant)
    zeros in a variable, or within each element of a vector.
-   If the src == 0 then the result is the size in bits of
-   the type of src.  For example, <tt>llvm.cttz(2) = 1</tt>.</p>
+   If <tt>src == 0</tt> then the result is the size in bits of the type of
+   <tt>src</tt> if <tt>is_zero_undef == 0</tt> and <tt>undef</tt> otherwise.
+   For example, <tt>llvm.cttz(2) = 1</tt>.</p>
 
 </div>
 
@@ -7792,503 +7950,6 @@ LLVM</a>.</p>
 
 <!-- ======================================================================= -->
 <h3>
-  <a name="int_atomics">Atomic Operations and Synchronization Intrinsics</a>
-</h3>
-
-<div>
-
-<p>These intrinsic functions expand the "universal IR" of LLVM to represent
-   hardware constructs for atomic operations and memory synchronization.  This
-   provides an interface to the hardware, not an interface to the programmer. It
-   is aimed at a low enough level to allow any programming models or APIs
-   (Application Programming Interfaces) which need atomic behaviors to map
-   cleanly onto it. It is also modeled primarily on hardware behavior. Just as
-   hardware provides a "universal IR" for source languages, it also provides a
-   starting point for developing a "universal" atomic operation and
-   synchronization IR.</p>
-
-<p>These do <em>not</em> form an API such as high-level threading libraries,
-   software transaction memory systems, atomic primitives, and intrinsic
-   functions as found in BSD, GNU libc, atomic_ops, APR, and other system and
-   application libraries.  The hardware interface provided by LLVM should allow
-   a clean implementation of all of these APIs and parallel programming models.
-   No one model or paradigm should be selected above others unless the hardware
-   itself ubiquitously does so.</p>
-
-<!-- _______________________________________________________________________ -->
-<h4>
-  <a name="int_memory_barrier">'<tt>llvm.memory.barrier</tt>' Intrinsic</a>
-</h4>
-
-<div>
-<h5>Syntax:</h5>
-<pre>
-  declare void @llvm.memory.barrier(i1 &lt;ll&gt;, i1 &lt;ls&gt;, i1 &lt;sl&gt;, i1 &lt;ss&gt;, i1 &lt;device&gt;)
-</pre>
-
-<h5>Overview:</h5>
-<p>The <tt>llvm.memory.barrier</tt> intrinsic guarantees ordering between
-   specific pairs of memory access types.</p>
-
-<h5>Arguments:</h5>
-<p>The <tt>llvm.memory.barrier</tt> intrinsic requires five boolean arguments.
-   The first four arguments enables a specific barrier as listed below.  The
-   fifth argument specifies that the barrier applies to io or device or uncached
-   memory.</p>
-
-<ul>
-  <li><tt>ll</tt>: load-load barrier</li>
-  <li><tt>ls</tt>: load-store barrier</li>
-  <li><tt>sl</tt>: store-load barrier</li>
-  <li><tt>ss</tt>: store-store barrier</li>
-  <li><tt>device</tt>: barrier applies to device and uncached memory also.</li>
-</ul>
-
-<h5>Semantics:</h5>
-<p>This intrinsic causes the system to enforce some ordering constraints upon
-   the loads and stores of the program. This barrier does not
-   indicate <em>when</em> any events will occur, it only enforces
-   an <em>order</em> in which they occur. For any of the specified pairs of load
-   and store operations (f.ex.  load-load, or store-load), all of the first
-   operations preceding the barrier will complete before any of the second
-   operations succeeding the barrier begin. Specifically the semantics for each
-   pairing is as follows:</p>
-
-<ul>
-  <li><tt>ll</tt>: All loads before the barrier must complete before any load
-      after the barrier begins.</li>
-  <li><tt>ls</tt>: All loads before the barrier must complete before any
-      store after the barrier begins.</li>
-  <li><tt>ss</tt>: All stores before the barrier must complete before any
-      store after the barrier begins.</li>
-  <li><tt>sl</tt>: All stores before the barrier must complete before any
-      load after the barrier begins.</li>
-</ul>
-
-<p>These semantics are applied with a logical "and" behavior when more than one
-   is enabled in a single memory barrier intrinsic.</p>
-
-<p>Backends may implement stronger barriers than those requested when they do
-   not support as fine grained a barrier as requested.  Some architectures do
-   not need all types of barriers and on such architectures, these become
-   noops.</p>
-
-<h5>Example:</h5>
-<pre>
-%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
-%ptr      = bitcast i8* %mallocP to i32*
-            store i32 4, %ptr
-
-%result1  = load i32* %ptr      <i>; yields {i32}:result1 = 4</i>
-            call void @llvm.memory.barrier(i1 false, i1 true, i1 false, i1 false, i1 true)
-                                <i>; guarantee the above finishes</i>
-            store i32 8, %ptr   <i>; before this begins</i>
-</pre>
-
-</div>
-
-<!-- _______________________________________________________________________ -->
-<h4>
-  <a name="int_atomic_cmp_swap">'<tt>llvm.atomic.cmp.swap.*</tt>' Intrinsic</a>
-</h4>
-
-<div>
-
-<h5>Syntax:</h5>
-<p>This is an overloaded intrinsic. You can use <tt>llvm.atomic.cmp.swap</tt> on
-   any integer bit width and for different address spaces. Not all targets
-   support all bit widths however.</p>
-
-<pre>
-  declare i8 @llvm.atomic.cmp.swap.i8.p0i8(i8* &lt;ptr&gt;, i8 &lt;cmp&gt;, i8 &lt;val&gt;)
-  declare i16 @llvm.atomic.cmp.swap.i16.p0i16(i16* &lt;ptr&gt;, i16 &lt;cmp&gt;, i16 &lt;val&gt;)
-  declare i32 @llvm.atomic.cmp.swap.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;cmp&gt;, i32 &lt;val&gt;)
-  declare i64 @llvm.atomic.cmp.swap.i64.p0i64(i64* &lt;ptr&gt;, i64 &lt;cmp&gt;, i64 &lt;val&gt;)
-</pre>
-
-<h5>Overview:</h5>
-<p>This loads a value in memory and compares it to a given value. If they are
-   equal, it stores a new value into the memory.</p>
-
-<h5>Arguments:</h5>
-<p>The <tt>llvm.atomic.cmp.swap</tt> intrinsic takes three arguments. The result
-   as well as both <tt>cmp</tt> and <tt>val</tt> must be integer values with the
-   same bit width. The <tt>ptr</tt> argument must be a pointer to a value of
-   this integer type. While any bit width integer may be used, targets may only
-   lower representations they support in hardware.</p>
-
-<h5>Semantics:</h5>
-<p>This entire intrinsic must be executed atomically. It first loads the value
-   in memory pointed to by <tt>ptr</tt> and compares it with the
-   value <tt>cmp</tt>. If they are equal, <tt>val</tt> is stored into the
-   memory. The loaded value is yielded in all cases. This provides the
-   equivalent of an atomic compare-and-swap operation within the SSA
-   framework.</p>
-
-<h5>Examples:</h5>
-<pre>
-%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
-%ptr      = bitcast i8* %mallocP to i32*
-            store i32 4, %ptr
-
-%val1     = add i32 4, 4
-%result1  = call i32 @llvm.atomic.cmp.swap.i32.p0i32(i32* %ptr, i32 4, %val1)
-                                          <i>; yields {i32}:result1 = 4</i>
-%stored1  = icmp eq i32 %result1, 4       <i>; yields {i1}:stored1 = true</i>
-%memval1  = load i32* %ptr                <i>; yields {i32}:memval1 = 8</i>
-
-%val2     = add i32 1, 1
-%result2  = call i32 @llvm.atomic.cmp.swap.i32.p0i32(i32* %ptr, i32 5, %val2)
-                                          <i>; yields {i32}:result2 = 8</i>
-%stored2  = icmp eq i32 %result2, 5       <i>; yields {i1}:stored2 = false</i>
-
-%memval2  = load i32* %ptr                <i>; yields {i32}:memval2 = 8</i>
-</pre>
-
-</div>
-
-<!-- _______________________________________________________________________ -->
-<h4>
-  <a name="int_atomic_swap">'<tt>llvm.atomic.swap.*</tt>' Intrinsic</a>
-</h4>
-
-<div>
-<h5>Syntax:</h5>
-
-<p>This is an overloaded intrinsic. You can use <tt>llvm.atomic.swap</tt> on any
-   integer bit width. Not all targets support all bit widths however.</p>
-
-<pre>
-  declare i8 @llvm.atomic.swap.i8.p0i8(i8* &lt;ptr&gt;, i8 &lt;val&gt;)
-  declare i16 @llvm.atomic.swap.i16.p0i16(i16* &lt;ptr&gt;, i16 &lt;val&gt;)
-  declare i32 @llvm.atomic.swap.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;val&gt;)
-  declare i64 @llvm.atomic.swap.i64.p0i64(i64* &lt;ptr&gt;, i64 &lt;val&gt;)
-</pre>
-
-<h5>Overview:</h5>
-<p>This intrinsic loads the value stored in memory at <tt>ptr</tt> and yields
-   the value from memory. It then stores the value in <tt>val</tt> in the memory
-   at <tt>ptr</tt>.</p>
-
-<h5>Arguments:</h5>
-<p>The <tt>llvm.atomic.swap</tt> intrinsic takes two arguments. Both
-  the <tt>val</tt> argument and the result must be integers of the same bit
-  width.  The first argument, <tt>ptr</tt>, must be a pointer to a value of this
-  integer type. The targets may only lower integer representations they
-  support.</p>
-
-<h5>Semantics:</h5>
-<p>This intrinsic loads the value pointed to by <tt>ptr</tt>, yields it, and
-   stores <tt>val</tt> back into <tt>ptr</tt> atomically. This provides the
-   equivalent of an atomic swap operation within the SSA framework.</p>
-
-<h5>Examples:</h5>
-<pre>
-%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
-%ptr      = bitcast i8* %mallocP to i32*
-            store i32 4, %ptr
-
-%val1     = add i32 4, 4
-%result1  = call i32 @llvm.atomic.swap.i32.p0i32(i32* %ptr, i32 %val1)
-                                        <i>; yields {i32}:result1 = 4</i>
-%stored1  = icmp eq i32 %result1, 4     <i>; yields {i1}:stored1 = true</i>
-%memval1  = load i32* %ptr              <i>; yields {i32}:memval1 = 8</i>
-
-%val2     = add i32 1, 1
-%result2  = call i32 @llvm.atomic.swap.i32.p0i32(i32* %ptr, i32 %val2)
-                                        <i>; yields {i32}:result2 = 8</i>
-
-%stored2  = icmp eq i32 %result2, 8     <i>; yields {i1}:stored2 = true</i>
-%memval2  = load i32* %ptr              <i>; yields {i32}:memval2 = 2</i>
-</pre>
-
-</div>
-
-<!-- _______________________________________________________________________ -->
-<h4>
-  <a name="int_atomic_load_add">'<tt>llvm.atomic.load.add.*</tt>' Intrinsic</a>
-</h4>
-
-<div>
-
-<h5>Syntax:</h5>
-<p>This is an overloaded intrinsic. You can use <tt>llvm.atomic.load.add</tt> on
-   any integer bit width. Not all targets support all bit widths however.</p>
-
-<pre>
-  declare i8 @llvm.atomic.load.add.i8.p0i8(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.add.i16.p0i16(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.add.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.add.i64.p0i64(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<h5>Overview:</h5>
-<p>This intrinsic adds <tt>delta</tt> to the value stored in memory
-   at <tt>ptr</tt>. It yields the original value at <tt>ptr</tt>.</p>
-
-<h5>Arguments:</h5>
-<p>The intrinsic takes two arguments, the first a pointer to an integer value
-   and the second an integer value. The result is also an integer value. These
-   integer types can have any bit width, but they must all have the same bit
-   width. The targets may only lower integer representations they support.</p>
-
-<h5>Semantics:</h5>
-<p>This intrinsic does a series of operations atomically. It first loads the
-   value stored at <tt>ptr</tt>. It then adds <tt>delta</tt>, stores the result
-   to <tt>ptr</tt>. It yields the original value stored at <tt>ptr</tt>.</p>
-
-<h5>Examples:</h5>
-<pre>
-%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
-%ptr      = bitcast i8* %mallocP to i32*
-            store i32 4, %ptr
-%result1  = call i32 @llvm.atomic.load.add.i32.p0i32(i32* %ptr, i32 4)
-                                <i>; yields {i32}:result1 = 4</i>
-%result2  = call i32 @llvm.atomic.load.add.i32.p0i32(i32* %ptr, i32 2)
-                                <i>; yields {i32}:result2 = 8</i>
-%result3  = call i32 @llvm.atomic.load.add.i32.p0i32(i32* %ptr, i32 5)
-                                <i>; yields {i32}:result3 = 10</i>
-%memval1  = load i32* %ptr      <i>; yields {i32}:memval1 = 15</i>
-</pre>
-
-</div>
-
-<!-- _______________________________________________________________________ -->
-<h4>
-  <a name="int_atomic_load_sub">'<tt>llvm.atomic.load.sub.*</tt>' Intrinsic</a>
-</h4>
-
-<div>
-
-<h5>Syntax:</h5>
-<p>This is an overloaded intrinsic. You can use <tt>llvm.atomic.load.sub</tt> on
-   any integer bit width and for different address spaces. Not all targets
-   support all bit widths however.</p>
-
-<pre>
-  declare i8 @llvm.atomic.load.sub.i8.p0i32(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.sub.i16.p0i32(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.sub.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.sub.i64.p0i32(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<h5>Overview:</h5>
-<p>This intrinsic subtracts <tt>delta</tt> to the value stored in memory at
-   <tt>ptr</tt>. It yields the original value at <tt>ptr</tt>.</p>
-
-<h5>Arguments:</h5>
-<p>The intrinsic takes two arguments, the first a pointer to an integer value
-   and the second an integer value. The result is also an integer value. These
-   integer types can have any bit width, but they must all have the same bit
-   width. The targets may only lower integer representations they support.</p>
-
-<h5>Semantics:</h5>
-<p>This intrinsic does a series of operations atomically. It first loads the
-   value stored at <tt>ptr</tt>. It then subtracts <tt>delta</tt>, stores the
-   result to <tt>ptr</tt>. It yields the original value stored
-   at <tt>ptr</tt>.</p>
-
-<h5>Examples:</h5>
-<pre>
-%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
-%ptr      = bitcast i8* %mallocP to i32*
-            store i32 8, %ptr
-%result1  = call i32 @llvm.atomic.load.sub.i32.p0i32(i32* %ptr, i32 4)
-                                <i>; yields {i32}:result1 = 8</i>
-%result2  = call i32 @llvm.atomic.load.sub.i32.p0i32(i32* %ptr, i32 2)
-                                <i>; yields {i32}:result2 = 4</i>
-%result3  = call i32 @llvm.atomic.load.sub.i32.p0i32(i32* %ptr, i32 5)
-                                <i>; yields {i32}:result3 = 2</i>
-%memval1  = load i32* %ptr      <i>; yields {i32}:memval1 = -3</i>
-</pre>
-
-</div>
-
-<!-- _______________________________________________________________________ -->
-<h4>
-  <a name="int_atomic_load_and">
-    '<tt>llvm.atomic.load.and.*</tt>' Intrinsic
-  </a>
-  <br>
-  <a name="int_atomic_load_nand">
-    '<tt>llvm.atomic.load.nand.*</tt>' Intrinsic
-  </a>
-  <br>
-  <a name="int_atomic_load_or">
-    '<tt>llvm.atomic.load.or.*</tt>' Intrinsic
-  </a>
-  <br>
-  <a name="int_atomic_load_xor">
-    '<tt>llvm.atomic.load.xor.*</tt>' Intrinsic
-  </a>
-</h4>
-
-<div>
-
-<h5>Syntax:</h5>
-<p>These are overloaded intrinsics. You can
-  use <tt>llvm.atomic.load_and</tt>, <tt>llvm.atomic.load_nand</tt>,
-  <tt>llvm.atomic.load_or</tt>, and <tt>llvm.atomic.load_xor</tt> on any integer
-  bit width and for different address spaces. Not all targets support all bit
-  widths however.</p>
-
-<pre>
-  declare i8 @llvm.atomic.load.and.i8.p0i8(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.and.i16.p0i16(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.and.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.and.i64.p0i64(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<pre>
-  declare i8 @llvm.atomic.load.or.i8.p0i8(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.or.i16.p0i16(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.or.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.or.i64.p0i64(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<pre>
-  declare i8 @llvm.atomic.load.nand.i8.p0i32(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.nand.i16.p0i32(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.nand.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.nand.i64.p0i32(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<pre>
-  declare i8 @llvm.atomic.load.xor.i8.p0i32(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.xor.i16.p0i32(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.xor.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.xor.i64.p0i32(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<h5>Overview:</h5>
-<p>These intrinsics bitwise the operation (and, nand, or, xor) <tt>delta</tt> to
-   the value stored in memory at <tt>ptr</tt>. It yields the original value
-   at <tt>ptr</tt>.</p>
-
-<h5>Arguments:</h5>
-<p>These intrinsics take two arguments, the first a pointer to an integer value
-   and the second an integer value. The result is also an integer value. These
-   integer types can have any bit width, but they must all have the same bit
-   width. The targets may only lower integer representations they support.</p>
-
-<h5>Semantics:</h5>
-<p>These intrinsics does a series of operations atomically. They first load the
-   value stored at <tt>ptr</tt>. They then do the bitwise
-   operation <tt>delta</tt>, store the result to <tt>ptr</tt>. They yield the
-   original value stored at <tt>ptr</tt>.</p>
-
-<h5>Examples:</h5>
-<pre>
-%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
-%ptr      = bitcast i8* %mallocP to i32*
-            store i32 0x0F0F, %ptr
-%result0  = call i32 @llvm.atomic.load.nand.i32.p0i32(i32* %ptr, i32 0xFF)
-                                <i>; yields {i32}:result0 = 0x0F0F</i>
-%result1  = call i32 @llvm.atomic.load.and.i32.p0i32(i32* %ptr, i32 0xFF)
-                                <i>; yields {i32}:result1 = 0xFFFFFFF0</i>
-%result2  = call i32 @llvm.atomic.load.or.i32.p0i32(i32* %ptr, i32 0F)
-                                <i>; yields {i32}:result2 = 0xF0</i>
-%result3  = call i32 @llvm.atomic.load.xor.i32.p0i32(i32* %ptr, i32 0F)
-                                <i>; yields {i32}:result3 = FF</i>
-%memval1  = load i32* %ptr      <i>; yields {i32}:memval1 = F0</i>
-</pre>
-
-</div>
-
-<!-- _______________________________________________________________________ -->
-<h4>
-  <a name="int_atomic_load_max">
-    '<tt>llvm.atomic.load.max.*</tt>' Intrinsic
-  </a>
-  <br>
-  <a name="int_atomic_load_min">
-    '<tt>llvm.atomic.load.min.*</tt>' Intrinsic
-  </a>
-  <br>
-  <a name="int_atomic_load_umax">
-    '<tt>llvm.atomic.load.umax.*</tt>' Intrinsic
-  </a>
-  <br>
-  <a name="int_atomic_load_umin">
-    '<tt>llvm.atomic.load.umin.*</tt>' Intrinsic
-  </a>
-</h4>
-
-<div>
-
-<h5>Syntax:</h5>
-<p>These are overloaded intrinsics. You can use <tt>llvm.atomic.load_max</tt>,
-   <tt>llvm.atomic.load_min</tt>, <tt>llvm.atomic.load_umax</tt>, and
-   <tt>llvm.atomic.load_umin</tt> on any integer bit width and for different
-   address spaces. Not all targets support all bit widths however.</p>
-
-<pre>
-  declare i8 @llvm.atomic.load.max.i8.p0i8(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.max.i16.p0i16(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.max.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.max.i64.p0i64(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<pre>
-  declare i8 @llvm.atomic.load.min.i8.p0i8(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.min.i16.p0i16(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.min.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.min.i64.p0i64(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<pre>
-  declare i8 @llvm.atomic.load.umax.i8.p0i8(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.umax.i16.p0i16(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.umax.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.umax.i64.p0i64(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<pre>
-  declare i8 @llvm.atomic.load.umin.i8.p0i8(i8* &lt;ptr&gt;, i8 &lt;delta&gt;)
-  declare i16 @llvm.atomic.load.umin.i16.p0i16(i16* &lt;ptr&gt;, i16 &lt;delta&gt;)
-  declare i32 @llvm.atomic.load.umin.i32.p0i32(i32* &lt;ptr&gt;, i32 &lt;delta&gt;)
-  declare i64 @llvm.atomic.load.umin.i64.p0i64(i64* &lt;ptr&gt;, i64 &lt;delta&gt;)
-</pre>
-
-<h5>Overview:</h5>
-<p>These intrinsics takes the signed or unsigned minimum or maximum of
-   <tt>delta</tt> and the value stored in memory at <tt>ptr</tt>. It yields the
-   original value at <tt>ptr</tt>.</p>
-
-<h5>Arguments:</h5>
-<p>These intrinsics take two arguments, the first a pointer to an integer value
-   and the second an integer value. The result is also an integer value. These
-   integer types can have any bit width, but they must all have the same bit
-   width. The targets may only lower integer representations they support.</p>
-
-<h5>Semantics:</h5>
-<p>These intrinsics does a series of operations atomically. They first load the
-   value stored at <tt>ptr</tt>. They then do the signed or unsigned min or
-   max <tt>delta</tt> and the value, store the result to <tt>ptr</tt>. They
-   yield the original value stored at <tt>ptr</tt>.</p>
-
-<h5>Examples:</h5>
-<pre>
-%mallocP  = tail call i8* @malloc(i32 ptrtoint (i32* getelementptr (i32* null, i32 1) to i32))
-%ptr      = bitcast i8* %mallocP to i32*
-            store i32 7, %ptr
-%result0  = call i32 @llvm.atomic.load.min.i32.p0i32(i32* %ptr, i32 -2)
-                                <i>; yields {i32}:result0 = 7</i>
-%result1  = call i32 @llvm.atomic.load.max.i32.p0i32(i32* %ptr, i32 8)
-                                <i>; yields {i32}:result1 = -2</i>
-%result2  = call i32 @llvm.atomic.load.umin.i32.p0i32(i32* %ptr, i32 10)
-                                <i>; yields {i32}:result2 = 8</i>
-%result3  = call i32 @llvm.atomic.load.umax.i32.p0i32(i32* %ptr, i32 30)
-                                <i>; yields {i32}:result3 = 8</i>
-%memval1  = load i32* %ptr      <i>; yields {i32}:memval1 = 30</i>
-</pre>
-
-</div>
-
-</div>
-
-<!-- ======================================================================= -->
-<h3>
   <a name="int_memorymarkers">Memory Use Markers</a>
 </h3>
 
@@ -8580,11 +8241,35 @@ LLVM</a>.</p>
    compile time.</p>
 
 </div>
+<!-- _______________________________________________________________________ -->
+<h4>
+  <a name="int_expect">'<tt>llvm.expect</tt>' Intrinsic</a>
+</h4>
 
+<div>
+
+<h5>Syntax:</h5>
+<pre>
+  declare i32 @llvm.expect.i32(i32 &lt;val&gt;, i32 &lt;expected_val&gt;)
+  declare i64 @llvm.expect.i64(i64 &lt;val&gt;, i64 &lt;expected_val&gt;)
+</pre>
+
+<h5>Overview:</h5>
+<p>The <tt>llvm.expect</tt> intrinsic provides information about expected (the
+   most probable) value of <tt>val</tt>, which can be used by optimizers.</p>
+
+<h5>Arguments:</h5>
+<p>The <tt>llvm.expect</tt> intrinsic takes two arguments. The first
+   argument is a value. The second argument is an expected value, this needs to
+   be a constant value, variables are not allowed.</p>
+
+<h5>Semantics:</h5>
+<p>This intrinsic is lowered to the <tt>val</tt>.</p>
 </div>
 
 </div>
 
+</div>
 <!-- *********************************************************************** -->
 <hr>
 <address>

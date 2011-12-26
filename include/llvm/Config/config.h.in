@@ -30,9 +30,6 @@
 /* Define if position independent code is enabled */
 #undef ENABLE_PIC
 
-/* Define if threads enabled */
-#undef ENABLE_THREADS
-
 /* Define if timestamp information (e.g., __DATE___) is allowed */
 #undef ENABLE_TIMESTAMPS
 
@@ -295,6 +292,9 @@
 /* Define to 1 if you have the `powf' function. */
 #undef HAVE_POWF
 
+/* Define to 1 if you have the `pread' function. */
+#undef HAVE_PREAD
+
 /* Define if libtool can extract symbol lists from object files. */
 #undef HAVE_PRELOADED_SYMBOLS
 
@@ -543,14 +543,20 @@
 /* Installation directory for data files */
 #undef LLVM_DATADIR
 
+/* Target triple LLVM will generate code for by default */
+#undef LLVM_DEFAULT_TARGET_TRIPLE
+
 /* Installation directory for documentation */
 #undef LLVM_DOCSDIR
+
+/* Define if threads enabled */
+#undef LLVM_ENABLE_THREADS
 
 /* Installation directory for config files */
 #undef LLVM_ETCDIR
 
-/* Host triple we were built on */
-#undef LLVM_HOSTTRIPLE
+/* Has gcc/MSVC atomic intrinsics */
+#undef LLVM_HAS_ATOMICS
 
 /* Installation directory for include files */
 #undef LLVM_INCLUDEDIR
@@ -563,9 +569,6 @@
 
 /* Installation directory for man pages */
 #undef LLVM_MANDIR
-
-/* Build multithreading support into LLVM */
-#undef LLVM_MULTITHREADED
 
 /* LLVM architecture name for the native architecture, if available */
 #undef LLVM_NATIVE_ARCH

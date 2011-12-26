@@ -358,9 +358,9 @@ getExplicitSectionGlobal(const GlobalValue *GV, SectionKind Kind,
                                           TAA, TAAParsed, StubSize);
   if (!ErrorCode.empty()) {
     // If invalid, report the error with report_fatal_error.
-    report_fatal_error("Global variable '" + GV->getNameStr() +
-                      "' has an invalid section specifier '" + GV->getSection()+
-                      "': " + ErrorCode + ".");
+    report_fatal_error("Global variable '" + GV->getName() +
+                       "' has an invalid section specifier '" +
+                       GV->getSection() + "': " + ErrorCode + ".");
     // Fall back to dropping it into the data section.
     return DataSection;
   }
@@ -379,9 +379,9 @@ getExplicitSectionGlobal(const GlobalValue *GV, SectionKind Kind,
   // to reject it here.
   if (S->getTypeAndAttributes() != TAA || S->getStubSize() != StubSize) {
     // If invalid, report the error with report_fatal_error.
-    report_fatal_error("Global variable '" + GV->getNameStr() +
-                      "' section type or attributes does not match previous"
-                      " section specifier");
+    report_fatal_error("Global variable '" + GV->getName() +
+                       "' section type or attributes does not match previous"
+                       " section specifier");
   }
 
   return S;
@@ -506,7 +506,9 @@ getExprForDwarfGlobalReference(const GlobalValue *GV, Mangler *Mang,
     // Add information about the stub reference to MachOMMI so that the stub
     // gets emitted by the asmprinter.
     MCSymbol *SSym = getContext().GetOrCreateSymbol(Name.str());
-    MachineModuleInfoImpl::StubValueTy &StubSym = MachOMMI.getGVStubEntry(SSym);
+    MachineModuleInfoImpl::StubValueTy &StubSym =
+      GV->hasHiddenVisibility() ? MachOMMI.getHiddenGVStubEntry(SSym) :
+                                  MachOMMI.getGVStubEntry(SSym);
     if (StubSym.getPointer() == 0) {
       MCSymbol *Sym = Mang->getSymbol(GV);
       StubSym = MachineModuleInfoImpl::StubValueTy(Sym, !GV->hasLocalLinkage());

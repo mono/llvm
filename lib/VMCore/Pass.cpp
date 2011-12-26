@@ -25,8 +25,6 @@ using namespace llvm;
 // Pass Implementation
 //
 
-Pass::Pass(PassKind K, char &pid) : Resolver(0), PassID(&pid), Kind(K) { }
-
 // Force out-of-line virtual method.
 Pass::~Pass() { 
   delete Resolver; 
@@ -48,7 +46,7 @@ bool Pass::mustPreserveAnalysisID(char &AID) const {
   return Resolver->getAnalysisIfAvailable(&AID, true) != 0;
 }
 
-// dumpPassStructure - Implement the -debug-passes=Structure option
+// dumpPassStructure - Implement the -debug-pass=Structure option
 void Pass::dumpPassStructure(unsigned Offset) {
   dbgs().indent(Offset*2) << getPassName() << "\n";
 }

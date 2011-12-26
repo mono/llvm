@@ -25,6 +25,8 @@ namespace llvm {
 /// registers, including vreg register classes, use/def chains for registers,
 /// etc.
 class MachineRegisterInfo {
+  const TargetRegisterInfo *const TRI;
+
   /// IsSSA - True when the machine function is in SSA form and virtual
   /// registers have a single def.
   bool IsSSA;
@@ -169,6 +171,14 @@ public:
   /// replaceRegWith - Replace all instances of FromReg with ToReg in the
   /// machine function.  This is like llvm-level X->replaceAllUsesWith(Y),
   /// except that it also changes any definitions of the register as well.
+  ///
+  /// Note that it is usually necessary to first constrain ToReg's register
+  /// class to match the FromReg constraints using:
+  ///
+  ///   constrainRegClass(ToReg, getRegClass(FromReg))
+  ///
+  /// That function will return NULL if the virtual registers have incompatible
+  /// constraints.
   void replaceRegWith(unsigned FromReg, unsigned ToReg);
   
   /// getRegUseDefListHead - Return the head pointer for the register use/def
@@ -215,13 +225,15 @@ public:
   void setRegClass(unsigned Reg, const TargetRegisterClass *RC);
 
   /// constrainRegClass - Constrain the register class of the specified virtual
-  /// register to be a common subclass of RC and the current register class.
-  /// Return the new register class, or NULL if no such class exists.
+  /// register to be a common subclass of RC and the current register class,
+  /// but only if the new class has at least MinNumRegs registers.  Return the
+  /// new register class, or NULL if no such class exists.
   /// This should only be used when the constraint is known to be trivial, like
   /// GR32 -> GR32_NOSP. Beware of increasing register pressure.
   ///
   const TargetRegisterClass *constrainRegClass(unsigned Reg,
-                                               const TargetRegisterClass *RC);
+                                               const TargetRegisterClass *RC,
+                                               unsigned MinNumRegs = 0);
 
   /// recomputeRegClass - Try to find a legal super-class of Reg's register
   /// class that still satisfies the constraints from the instructions using
@@ -271,7 +283,16 @@ public:
   /// isPhysRegUsed - Return true if the specified register is used in this
   /// function.  This only works after register allocation.
   bool isPhysRegUsed(unsigned Reg) const { return UsedPhysRegs[Reg]; }
-  
+
+  /// isPhysRegOrOverlapUsed - Return true if Reg or any overlapping register
+  /// is used in this function.
+  bool isPhysRegOrOverlapUsed(unsigned Reg) const {
+    for (const unsigned *AI = TRI->getOverlaps(Reg); *AI; ++AI)
+      if (isPhysRegUsed(*AI))
+        return true;
+    return false;
+  }
+
   /// setPhysRegUsed - Mark the specified register used in this function.
   /// This should only be called during and after register allocation.
   void setPhysRegUsed(unsigned Reg) { UsedPhysRegs[Reg] = true; }

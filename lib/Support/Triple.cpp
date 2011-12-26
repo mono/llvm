@@ -18,18 +18,18 @@ const char *Triple::getArchTypeName(ArchType Kind) {
   case InvalidArch: return "<invalid>";
   case UnknownArch: return "unknown";
 
-  case alpha:   return "alpha";
   case arm:     return "arm";
-  case bfin:    return "bfin";
   case cellspu: return "cellspu";
+  case hexagon: return "hexagon";
   case mips:    return "mips";
   case mipsel:  return "mipsel";
+  case mips64:  return "mips64";
+  case mips64el:return "mips64el";
   case msp430:  return "msp430";
   case ppc64:   return "powerpc64";
   case ppc:     return "powerpc";
   case sparc:   return "sparc";
   case sparcv9: return "sparcv9";
-  case systemz: return "s390x";
   case tce:     return "tce";
   case thumb:   return "thumb";
   case x86:     return "i386";
@@ -50,12 +50,8 @@ const char *Triple::getArchTypePrefix(ArchType Kind) {
   default:
     return 0;
 
-  case alpha:   return "alpha";
-
   case arm:
   case thumb:   return "arm";
-
-  case bfin:    return "bfin";
 
   case cellspu: return "spu";
 
@@ -63,6 +59,8 @@ const char *Triple::getArchTypePrefix(ArchType Kind) {
   case ppc:     return "ppc";
 
   case mblaze:  return "mblaze";
+
+  case hexagon:   return "hexagon";
 
   case sparcv9:
   case sparc:   return "sparc";
@@ -133,18 +131,18 @@ const char *Triple::getEnvironmentTypeName(EnvironmentType Kind) {
 }
 
 Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
-  if (Name == "alpha")
-    return alpha;
   if (Name == "arm")
     return arm;
-  if (Name == "bfin")
-    return bfin;
   if (Name == "cellspu")
     return cellspu;
   if (Name == "mips")
     return mips;
   if (Name == "mipsel")
     return mipsel;
+  if (Name == "mips64")
+    return mips64;
+  if (Name == "mips64el")
+    return mips64el;
   if (Name == "msp430")
     return msp430;
   if (Name == "ppc64")
@@ -155,12 +153,12 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
     return ppc;
   if (Name == "mblaze")
     return mblaze;
+  if (Name == "hexagon")
+    return hexagon;
   if (Name == "sparc")
     return sparc;
   if (Name == "sparcv9")
     return sparcv9;
-  if (Name == "systemz")
-    return systemz;
   if (Name == "tce")
     return tce;
   if (Name == "thumb")
@@ -275,8 +273,6 @@ Triple::ArchType Triple::ParseArch(StringRef ArchName) {
     return x86;
   else if (ArchName == "amd64" || ArchName == "x86_64")
     return x86_64;
-  else if (ArchName == "bfin")
-    return bfin;
   else if (ArchName == "powerpc")
     return ppc;
   else if ((ArchName == "powerpc64") || (ArchName == "ppu"))
@@ -290,8 +286,6 @@ Triple::ArchType Triple::ParseArch(StringRef ArchName) {
   else if (ArchName == "thumb" ||
            ArchName.startswith("thumbv"))
     return thumb;
-  else if (ArchName.startswith("alpha"))
-    return alpha;
   else if (ArchName == "spu" || ArchName == "cellspu")
     return cellspu;
   else if (ArchName == "msp430")
@@ -302,12 +296,16 @@ Triple::ArchType Triple::ParseArch(StringRef ArchName) {
   else if (ArchName == "mipsel" || ArchName == "mipsallegrexel" ||
            ArchName == "psp")
     return mipsel;
+  else if (ArchName == "mips64" || ArchName == "mips64eb")
+    return mips64;
+  else if (ArchName == "mips64el")
+    return mips64el;
+  else if (ArchName == "hexagon")
+    return hexagon;
   else if (ArchName == "sparc")
     return sparc;
   else if (ArchName == "sparcv9")
     return sparcv9;
-  else if (ArchName == "s390x")
-    return systemz;
   else if (ArchName == "tce")
     return tce;
   else if (ArchName == "xcore")

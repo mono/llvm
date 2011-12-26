@@ -64,8 +64,17 @@ namespace llvm {
     /// in a more literal form.
     bool CanonicalMode;
 
+    /// When invoked from LSR, the expander is in "strength reduction" mode. The
+    /// only difference is that phi's are only reused if they are already in
+    /// "expanded" form.
+    bool LSRMode;
+
     typedef IRBuilder<true, TargetFolder> BuilderType;
     BuilderType Builder;
+
+#ifndef NDEBUG
+    const char *DebugType;
+#endif
 
     friend struct SCEVVisitor<SCEVExpander, Value*>;
 
@@ -73,7 +82,16 @@ namespace llvm {
     /// SCEVExpander - Construct a SCEVExpander in "canonical" mode.
     explicit SCEVExpander(ScalarEvolution &se, const char *name)
       : SE(se), IVName(name), IVIncInsertLoop(0), IVIncInsertPos(0),
-        CanonicalMode(true), Builder(se.getContext(), TargetFolder(se.TD)) {}
+        CanonicalMode(true), LSRMode(false),
+        Builder(se.getContext(), TargetFolder(se.TD)) {
+#ifndef NDEBUG
+      DebugType = "";
+#endif
+    }
+
+#ifndef NDEBUG
+    void setDebugType(const char* s) { DebugType = s; }
+#endif
 
     /// clear - Erase the contents of the InsertedExpressions map so that users
     /// trying to expand the same expression into multiple BasicBlocks or
@@ -88,8 +106,16 @@ namespace llvm {
     /// canonical induction variable of the specified type for the specified
     /// loop (inserting one if there is none).  A canonical induction variable
     /// starts at zero and steps by one on each iteration.
-    PHINode *getOrInsertCanonicalInductionVariable(const Loop *L,
-                                                   Type *Ty);
+    PHINode *getOrInsertCanonicalInductionVariable(const Loop *L, Type *Ty);
+
+    /// hoistStep - Utility for hoisting an IV increment.
+    static bool hoistStep(Instruction *IncV, Instruction *InsertPos,
+                          const DominatorTree *DT);
+
+    /// replaceCongruentIVs - replace congruent phis with their most canonical
+    /// representative. Return the number of phis eliminated.
+    unsigned replaceCongruentIVs(Loop *L, const DominatorTree *DT,
+                                 SmallVectorImpl<WeakVH> &DeadInsts);
 
     /// expandCodeFor - Insert code to directly compute the specified SCEV
     /// expression into the program.  The inserted code is inserted into the
@@ -127,13 +153,14 @@ namespace llvm {
     /// is useful for late optimization passes.
     void disableCanonicalMode() { CanonicalMode = false; }
 
+    void enableLSRMode() { LSRMode = true; }
+
     /// clearInsertPoint - Clear the current insertion point. This is useful
     /// if the instruction that had been serving as the insertion point may
     /// have been deleted.
     void clearInsertPoint() {
       Builder.ClearInsertionPoint();
     }
-
   private:
     LLVMContext &getContext() const { return SE.getContext(); }
 
@@ -208,11 +235,17 @@ namespace llvm {
 
     void restoreInsertPoint(BasicBlock *BB, BasicBlock::iterator I);
 
+    bool isNormalAddRecExprPHI(PHINode *PN, Instruction *IncV, const Loop *L);
+
+    bool isExpandedAddRecExprPHI(PHINode *PN, Instruction *IncV, const Loop *L);
+
     Value *expandAddRecExprLiterally(const SCEVAddRecExpr *);
     PHINode *getAddRecExprPHILiterally(const SCEVAddRecExpr *Normalized,
                                        const Loop *L,
                                        Type *ExpandTy,
                                        Type *IntTy);
+    Value *expandIVInc(PHINode *PN, Value *StepV, const Loop *L,
+                       Type *ExpandTy, Type *IntTy, bool useSubtract);
   };
 }
 

@@ -167,7 +167,9 @@ MBlazeTargetLowering::MBlazeTargetLowering(MBlazeTargetMachine &TM)
   setOperationAction(ISD::SRA_PARTS,          MVT::i32,   Expand);
   setOperationAction(ISD::SRL_PARTS,          MVT::i32,   Expand);
   setOperationAction(ISD::CTLZ,               MVT::i32,   Expand);
+  setOperationAction(ISD::CTLZ_ZERO_UNDEF,    MVT::i32,   Expand);
   setOperationAction(ISD::CTTZ,               MVT::i32,   Expand);
+  setOperationAction(ISD::CTTZ_ZERO_UNDEF,    MVT::i32,   Expand);
   setOperationAction(ISD::CTPOP,              MVT::i32,   Expand);
   setOperationAction(ISD::BSWAP,              MVT::i32,   Expand);
 
@@ -951,7 +953,7 @@ LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv, bool isVarArg,
       SDValue FIN = DAG.getFrameIndex(FI, getPointerTy());
       InVals.push_back(DAG.getLoad(VA.getValVT(), dl, Chain, FIN,
                                    MachinePointerInfo::getFixedStack(FI),
-                                   false, false, 0));
+                                   false, false, false, 0));
     }
   }
 

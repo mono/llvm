@@ -296,12 +296,22 @@ SPUTargetLowering::SPUTargetLowering(SPUTargetMachine &TM)
   setOperationAction(ISD::CTTZ , MVT::i32,   Expand);
   setOperationAction(ISD::CTTZ , MVT::i64,   Expand);
   setOperationAction(ISD::CTTZ , MVT::i128,  Expand);
+  setOperationAction(ISD::CTTZ_ZERO_UNDEF, MVT::i8,    Expand);
+  setOperationAction(ISD::CTTZ_ZERO_UNDEF, MVT::i16,   Expand);
+  setOperationAction(ISD::CTTZ_ZERO_UNDEF, MVT::i32,   Expand);
+  setOperationAction(ISD::CTTZ_ZERO_UNDEF, MVT::i64,   Expand);
+  setOperationAction(ISD::CTTZ_ZERO_UNDEF, MVT::i128,  Expand);
 
   setOperationAction(ISD::CTLZ , MVT::i8,    Promote);
   setOperationAction(ISD::CTLZ , MVT::i16,   Promote);
   setOperationAction(ISD::CTLZ , MVT::i32,   Legal);
   setOperationAction(ISD::CTLZ , MVT::i64,   Expand);
   setOperationAction(ISD::CTLZ , MVT::i128,  Expand);
+  setOperationAction(ISD::CTLZ_ZERO_UNDEF, MVT::i8,    Expand);
+  setOperationAction(ISD::CTLZ_ZERO_UNDEF, MVT::i16,   Expand);
+  setOperationAction(ISD::CTLZ_ZERO_UNDEF, MVT::i32,   Expand);
+  setOperationAction(ISD::CTLZ_ZERO_UNDEF, MVT::i64,   Expand);
+  setOperationAction(ISD::CTLZ_ZERO_UNDEF, MVT::i128,  Expand);
 
   // SPU has a version of select that implements (a&~c)|(b&c), just like
   // select ought to work:
@@ -402,6 +412,9 @@ SPUTargetLowering::SPUTargetLowering(SPUTargetMachine &TM)
        i <= (unsigned)MVT::LAST_VECTOR_VALUETYPE; ++i) {
     MVT::SimpleValueType VT = (MVT::SimpleValueType)i;
 
+    // Set operation actions to legal types only.
+    if (!isTypeLegal(VT)) continue;
+
     // add/sub are legal for all supported vector VT's.
     setOperationAction(ISD::ADD,     VT, Legal);
     setOperationAction(ISD::SUB,     VT, Legal);
@@ -421,6 +434,13 @@ SPUTargetLowering::SPUTargetLowering(SPUTargetMachine &TM)
     setOperationAction(ISD::UDIV,    VT, Expand);
     setOperationAction(ISD::UREM,    VT, Expand);
 
+    // Expand all trunc stores
+    for (unsigned j = (unsigned)MVT::FIRST_VECTOR_VALUETYPE;
+         j <= (unsigned)MVT::LAST_VECTOR_VALUETYPE; ++j) {
+      MVT::SimpleValueType TargetVT = (MVT::SimpleValueType)j;
+    setTruncStoreAction(VT, TargetVT, Expand);
+    }
+
     // Custom lower build_vector, constant pool spills, insert and
     // extract vector elements:
     setOperationAction(ISD::BUILD_VECTOR, VT, Custom);
@@ -430,6 +450,8 @@ SPUTargetLowering::SPUTargetLowering(SPUTargetMachine &TM)
     setOperationAction(ISD::INSERT_VECTOR_ELT, VT, Custom);
     setOperationAction(ISD::VECTOR_SHUFFLE, VT, Custom);
   }
+
+  setOperationAction(ISD::SHL, MVT::v2i64, Expand);
 
   setOperationAction(ISD::AND, MVT::v16i8, Custom);
   setOperationAction(ISD::OR,  MVT::v16i8, Custom);
@@ -655,7 +677,7 @@ LowerLOAD(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
   // Do the load as a i128 to allow possible shifting
   SDValue low = DAG.getLoad(MVT::i128, dl, the_chain, basePtr,
                        lowMemPtr,
-                       LN->isVolatile(), LN->isNonTemporal(), 16);
+                       LN->isVolatile(), LN->isNonTemporal(), false, 16);
 
   // When the size is not greater than alignment we get all data with just
   // one load
@@ -692,7 +714,8 @@ LowerLOAD(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
                                            basePtr,
                                            DAG.getConstant(16, PtrVT)),
                                highMemPtr,
-                               LN->isVolatile(), LN->isNonTemporal(), 16);
+                               LN->isVolatile(), LN->isNonTemporal(), false, 
+                               16);
 
     the_chain = DAG.getNode(ISD::TokenFactor, dl, MVT::Other, low.getValue(1),
                                                               high.getValue(1));
@@ -847,7 +870,8 @@ LowerSTORE(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
 
   // Load the lower part of the memory to which to store.
   SDValue low = DAG.getLoad(vecVT, dl, the_chain, basePtr,
-                          lowMemPtr, SN->isVolatile(), SN->isNonTemporal(), 16);
+                          lowMemPtr, SN->isVolatile(), SN->isNonTemporal(),
+                            false, 16);
 
   // if we don't need to store over the 16 byte boundary, one store suffices
   if (alignment >= StVT.getSizeInBits()/8) {
@@ -947,7 +971,8 @@ LowerSTORE(SDValue Op, SelectionDAG &DAG, const SPUSubtarget *ST) {
                                DAG.getNode(ISD::ADD, dl, PtrVT, basePtr,
                                            DAG.getConstant( 16, PtrVT)),
                                highMemPtr,
-                               SN->isVolatile(), SN->isNonTemporal(), 16);
+                               SN->isVolatile(), SN->isNonTemporal(), 
+                               false, 16);
     the_chain = DAG.getNode(ISD::TokenFactor, dl, MVT::Other, low.getValue(1),
                                                               hi.getValue(1));
 
@@ -1182,7 +1207,7 @@ SPUTargetLowering::LowerFormalArguments(SDValue Chain,
       int FI = MFI->CreateFixedObject(ObjSize, ArgOffset, true);
       SDValue FIN = DAG.getFrameIndex(FI, PtrVT);
       ArgVal = DAG.getLoad(ObjectVT, dl, Chain, FIN, MachinePointerInfo(),
-                           false, false, 0);
+                           false, false, false, 0);
       ArgOffset += StackSlotSize;
     }
 
@@ -1740,9 +1765,11 @@ SPU::LowerV2I64Splat(EVT OpVT, SelectionDAG& DAG, uint64_t SplatVal,
 
     // Both upper and lower are special, lower to a constant pool load:
     if (lower_special && upper_special) {
-      SDValue SplatValCN = DAG.getConstant(SplatVal, MVT::i64);
-      return DAG.getNode(ISD::BUILD_VECTOR, dl, MVT::v2i64,
-                         SplatValCN, SplatValCN);
+      SDValue UpperVal = DAG.getConstant(upper, MVT::i32);
+      SDValue LowerVal = DAG.getConstant(lower, MVT::i32);
+      SDValue BV = DAG.getNode(ISD::BUILD_VECTOR, dl, MVT::v4i32,
+                         UpperVal, LowerVal, UpperVal, LowerVal);
+      return DAG.getNode(ISD::BITCAST, dl, OpVT, BV);
     }
 
     SDValue LO32;

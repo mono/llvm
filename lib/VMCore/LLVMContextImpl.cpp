@@ -21,6 +21,7 @@ LLVMContextImpl::LLVMContextImpl(LLVMContext &C)
   : TheTrueVal(0), TheFalseVal(0),
     VoidTy(C, Type::VoidTyID),
     LabelTy(C, Type::LabelTyID),
+    HalfTy(C, Type::HalfTyID),
     FloatTy(C, Type::FloatTyID),
     DoubleTy(C, Type::DoubleTyID),
     MetadataTy(C, Type::MetadataTyID),
@@ -92,3 +93,24 @@ LLVMContextImpl::~LLVMContextImpl() {
   // Destroy MDStrings.
   DeleteContainerSeconds(MDStringCache);
 }
+
+// ConstantsContext anchors
+void UnaryConstantExpr::anchor() { }
+
+void BinaryConstantExpr::anchor() { }
+
+void SelectConstantExpr::anchor() { }
+
+void ExtractElementConstantExpr::anchor() { }
+
+void InsertElementConstantExpr::anchor() { }
+
+void ShuffleVectorConstantExpr::anchor() { }
+
+void ExtractValueConstantExpr::anchor() { }
+
+void InsertValueConstantExpr::anchor() { }
+
+void GetElementPtrConstantExpr::anchor() { }
+
+void CompareConstantExpr::anchor() { }

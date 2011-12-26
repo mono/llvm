@@ -48,8 +48,10 @@ namespace llvm {
   /// isPowerOfTwo - Return true if the given value is known to have exactly one
   /// bit set when defined. For vectors return true if every element is known to
   /// be a power of two when defined.  Supports values with integer or pointer
-  /// type and vectors of integers.
-  bool isPowerOfTwo(Value *V, const TargetData *TD = 0, unsigned Depth = 0);
+  /// type and vectors of integers.  If 'OrZero' is set then returns true if the
+  /// given value is either a power of two or zero.
+  bool isPowerOfTwo(Value *V, const TargetData *TD = 0, bool OrZero = false,
+                    unsigned Depth = 0);
 
   /// isKnownNonZero - Return true if the given value is known to be non-zero
   /// when defined.  For vectors return true if every element is known to be
@@ -153,6 +155,27 @@ namespace llvm {
   /// onlyUsedByLifetimeMarkers - Return true if the only users of this pointer
   /// are lifetime markers.
   bool onlyUsedByLifetimeMarkers(const Value *V);
+
+  /// isSafeToSpeculativelyExecute - Return true if the instruction does not
+  /// have any effects besides calculating the result and does not have
+  /// undefined behavior.
+  ///
+  /// This method never returns true for an instruction that returns true for
+  /// mayHaveSideEffects; however, this method also does some other checks in
+  /// addition. It checks for undefined behavior, like dividing by zero or
+  /// loading from an invalid pointer (but not for undefined results, like a
+  /// shift with a shift amount larger than the width of the result). It checks
+  /// for malloc and alloca because speculatively executing them might cause a
+  /// memory leak. It also returns false for instructions related to control
+  /// flow, specifically terminators and PHI nodes.
+  ///
+  /// This method only looks at the instruction itself and its operands, so if
+  /// this method returns true, it is safe to move the instruction as long as
+  /// the correct dominance relationships for the operands and users hold.
+  /// However, this method can return true for instructions that read memory;
+  /// for such instructions, moving them may change the resulting value.
+  bool isSafeToSpeculativelyExecute(const Instruction *Inst,
+                                    const TargetData *TD = 0);
 
 } // end namespace llvm
 

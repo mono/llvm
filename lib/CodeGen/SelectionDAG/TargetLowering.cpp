@@ -36,7 +36,7 @@ using namespace llvm;
 /// - the promotion of vector elements. This feature is disabled by default
 /// and only enabled using this flag.
 static cl::opt<bool>
-AllowPromoteIntElem("promote-elements", cl::Hidden,
+AllowPromoteIntElem("promote-elements", cl::Hidden, cl::init(true),
   cl::desc("Allow promotion of integer vector element types"));
 
 namespace llvm {
@@ -317,7 +317,7 @@ static void InitLibcallNames(const char **Names) {
   Names[RTLIB::SYNC_FETCH_AND_OR_8] = "__sync_fetch_and_or_8";
   Names[RTLIB::SYNC_FETCH_AND_XOR_1] = "__sync_fetch_and_xor_1";
   Names[RTLIB::SYNC_FETCH_AND_XOR_2] = "__sync_fetch_and_xor_2";
-  Names[RTLIB::SYNC_FETCH_AND_XOR_4] = "__sync_fetch_and-xor_4";
+  Names[RTLIB::SYNC_FETCH_AND_XOR_4] = "__sync_fetch_and_xor_4";
   Names[RTLIB::SYNC_FETCH_AND_XOR_8] = "__sync_fetch_and_xor_8";
   Names[RTLIB::SYNC_FETCH_AND_NAND_1] = "__sync_fetch_and_nand_1";
   Names[RTLIB::SYNC_FETCH_AND_NAND_2] = "__sync_fetch_and_nand_2";
@@ -572,21 +572,42 @@ TargetLowering::TargetLowering(const TargetMachine &tm,
   // ConstantFP nodes default to expand.  Targets can either change this to
   // Legal, in which case all fp constants are legal, or use isFPImmLegal()
   // to optimize expansions for certain constants.
+  setOperationAction(ISD::ConstantFP, MVT::f16, Expand);
   setOperationAction(ISD::ConstantFP, MVT::f32, Expand);
   setOperationAction(ISD::ConstantFP, MVT::f64, Expand);
   setOperationAction(ISD::ConstantFP, MVT::f80, Expand);
 
   // These library functions default to expand.
-  setOperationAction(ISD::FLOG , MVT::f64, Expand);
-  setOperationAction(ISD::FLOG2, MVT::f64, Expand);
-  setOperationAction(ISD::FLOG10,MVT::f64, Expand);
-  setOperationAction(ISD::FEXP , MVT::f64, Expand);
-  setOperationAction(ISD::FEXP2, MVT::f64, Expand);
-  setOperationAction(ISD::FLOG , MVT::f32, Expand);
-  setOperationAction(ISD::FLOG2, MVT::f32, Expand);
-  setOperationAction(ISD::FLOG10,MVT::f32, Expand);
-  setOperationAction(ISD::FEXP , MVT::f32, Expand);
-  setOperationAction(ISD::FEXP2, MVT::f32, Expand);
+  setOperationAction(ISD::FLOG ,  MVT::f16, Expand);
+  setOperationAction(ISD::FLOG2,  MVT::f16, Expand);
+  setOperationAction(ISD::FLOG10, MVT::f16, Expand);
+  setOperationAction(ISD::FEXP ,  MVT::f16, Expand);
+  setOperationAction(ISD::FEXP2,  MVT::f16, Expand);
+  setOperationAction(ISD::FFLOOR, MVT::f16, Expand);
+  setOperationAction(ISD::FNEARBYINT, MVT::f16, Expand);
+  setOperationAction(ISD::FCEIL,  MVT::f16, Expand);
+  setOperationAction(ISD::FRINT,  MVT::f16, Expand);
+  setOperationAction(ISD::FTRUNC, MVT::f16, Expand);
+  setOperationAction(ISD::FLOG ,  MVT::f32, Expand);
+  setOperationAction(ISD::FLOG2,  MVT::f32, Expand);
+  setOperationAction(ISD::FLOG10, MVT::f32, Expand);
+  setOperationAction(ISD::FEXP ,  MVT::f32, Expand);
+  setOperationAction(ISD::FEXP2,  MVT::f32, Expand);
+  setOperationAction(ISD::FFLOOR, MVT::f32, Expand);
+  setOperationAction(ISD::FNEARBYINT, MVT::f32, Expand);
+  setOperationAction(ISD::FCEIL,  MVT::f32, Expand);
+  setOperationAction(ISD::FRINT,  MVT::f32, Expand);
+  setOperationAction(ISD::FTRUNC, MVT::f32, Expand);
+  setOperationAction(ISD::FLOG ,  MVT::f64, Expand);
+  setOperationAction(ISD::FLOG2,  MVT::f64, Expand);
+  setOperationAction(ISD::FLOG10, MVT::f64, Expand);
+  setOperationAction(ISD::FEXP ,  MVT::f64, Expand);
+  setOperationAction(ISD::FEXP2,  MVT::f64, Expand);
+  setOperationAction(ISD::FFLOOR, MVT::f64, Expand);
+  setOperationAction(ISD::FNEARBYINT, MVT::f64, Expand);
+  setOperationAction(ISD::FCEIL,  MVT::f64, Expand);
+  setOperationAction(ISD::FRINT,  MVT::f64, Expand);
+  setOperationAction(ISD::FTRUNC, MVT::f64, Expand);
 
   // Default ISD::TRAP to expand (which turns it into abort).
   setOperationAction(ISD::TRAP, MVT::Other, Expand);
@@ -610,7 +631,7 @@ TargetLowering::TargetLowering(const TargetMachine &tm,
   ExceptionSelectorRegister = 0;
   BooleanContents = UndefinedBooleanContent;
   BooleanVectorContents = UndefinedBooleanContent;
-  SchedPreferenceInfo = Sched::Latency;
+  SchedPreferenceInfo = Sched::ILP;
   JumpBufSize = 0;
   JumpBufAlignment = 0;
   MinFunctionAlignment = 0;
@@ -1473,9 +1494,8 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
       if (InOp.getNode()->getOpcode() == ISD::ANY_EXTEND) {
         SDValue InnerOp = InOp.getNode()->getOperand(0);
         EVT InnerVT = InnerOp.getValueType();
-        if ((APInt::getHighBitsSet(BitWidth,
-                                   BitWidth - InnerVT.getSizeInBits()) &
-               DemandedMask) == 0 &&
+        unsigned InnerBits = InnerVT.getSizeInBits();
+        if (ShAmt < InnerBits && NewMask.lshr(InnerBits) == 0 &&
             isTypeDesirableForOp(ISD::SHL, InnerVT)) {
           EVT ShTy = getShiftAmountTy(InnerVT);
           if (!APInt(BitWidth, ShAmt).isIntN(ShTy.getSizeInBits()))
@@ -1545,7 +1565,7 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
     // always convert this into a logical shr, even if the shift amount is
     // variable.  The low bit of the shift cannot be an input sign bit unless
     // the shift amount is >= the size of the datatype, which is undefined.
-    if (DemandedMask == 1)
+    if (NewMask == 1)
       return TLO.CombineTo(Op,
                            TLO.DAG.getNode(ISD::SRL, dl, Op.getValueType(),
                                            Op.getOperand(0), Op.getOperand(1)));
@@ -1783,7 +1803,9 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
   case ISD::BITCAST:
     // If this is an FP->Int bitcast and if the sign bit is the only
     // thing demanded, turn this into a FGETSIGN.
-    if (!Op.getOperand(0).getValueType().isVector() &&
+    if (!TLO.LegalOperations() &&
+        !Op.getValueType().isVector() &&
+        !Op.getOperand(0).getValueType().isVector() &&
         NewMask == APInt::getSignBit(Op.getValueType().getSizeInBits()) &&
         Op.getOperand(0).getValueType().isFloatingPoint()) {
       bool OpVTLegal = isOperationLegalOrCustom(ISD::FGETSIGN, Op.getValueType());
@@ -2060,7 +2082,7 @@ TargetLowering::SimplifySetCC(EVT VT, SDValue N0, SDValue N1,
           unsigned NewAlign = MinAlign(Lod->getAlignment(), bestOffset);
           SDValue NewLoad = DAG.getLoad(newVT, dl, Lod->getChain(), Ptr,
                                 Lod->getPointerInfo().getWithOffset(bestOffset),
-                                        false, false, NewAlign);
+                                        false, false, false, NewAlign);
           return DAG.getSetCC(dl, VT,
                               DAG.getNode(ISD::AND, dl, newVT, NewLoad,
                                       DAG.getConstant(bestMask.trunc(bestWidth),
@@ -2760,16 +2782,8 @@ getRegForInlineAsmConstraint(const std::string &Constraint,
 
     // If none of the value types for this register class are valid, we
     // can't use it.  For example, 64-bit reg classes on 32-bit targets.
-    bool isLegal = false;
-    for (TargetRegisterClass::vt_iterator I = RC->vt_begin(), E = RC->vt_end();
-         I != E; ++I) {
-      if (isTypeLegal(*I)) {
-        isLegal = true;
-        break;
-      }
-    }
-
-    if (!isLegal) continue;
+    if (!isLegalRC(RC))
+      continue;
 
     for (TargetRegisterClass::iterator I = RC->begin(), E = RC->end();
          I != E; ++I) {
@@ -3250,8 +3264,9 @@ SDValue TargetLowering::BuildExactSDIV(SDValue Op1, SDValue Op2, DebugLoc dl,
 /// return a DAG expression to select that will generate the same value by
 /// multiplying by a magic number.  See:
 /// <http://the.wall.riscom.net/books/proc/ppc/cwg/code2.html>
-SDValue TargetLowering::BuildSDIV(SDNode *N, SelectionDAG &DAG,
-                                  std::vector<SDNode*>* Created) const {
+SDValue TargetLowering::
+BuildSDIV(SDNode *N, SelectionDAG &DAG, bool IsAfterLegalization,
+          std::vector<SDNode*>* Created) const {
   EVT VT = N->getValueType(0);
   DebugLoc dl= N->getDebugLoc();
 
@@ -3266,10 +3281,12 @@ SDValue TargetLowering::BuildSDIV(SDNode *N, SelectionDAG &DAG,
   // Multiply the numerator (operand 0) by the magic value
   // FIXME: We should support doing a MUL in a wider type
   SDValue Q;
-  if (isOperationLegalOrCustom(ISD::MULHS, VT))
+  if (IsAfterLegalization ? isOperationLegal(ISD::MULHS, VT) :
+                            isOperationLegalOrCustom(ISD::MULHS, VT))
     Q = DAG.getNode(ISD::MULHS, dl, VT, N->getOperand(0),
                     DAG.getConstant(magics.m, VT));
-  else if (isOperationLegalOrCustom(ISD::SMUL_LOHI, VT))
+  else if (IsAfterLegalization ? isOperationLegal(ISD::SMUL_LOHI, VT) :
+                                 isOperationLegalOrCustom(ISD::SMUL_LOHI, VT))
     Q = SDValue(DAG.getNode(ISD::SMUL_LOHI, dl, DAG.getVTList(VT, VT),
                               N->getOperand(0),
                               DAG.getConstant(magics.m, VT)).getNode(), 1);
@@ -3307,8 +3324,9 @@ SDValue TargetLowering::BuildSDIV(SDNode *N, SelectionDAG &DAG,
 /// return a DAG expression to select that will generate the same value by
 /// multiplying by a magic number.  See:
 /// <http://the.wall.riscom.net/books/proc/ppc/cwg/code2.html>
-SDValue TargetLowering::BuildUDIV(SDNode *N, SelectionDAG &DAG,
-                                  std::vector<SDNode*>* Created) const {
+SDValue TargetLowering::
+BuildUDIV(SDNode *N, SelectionDAG &DAG, bool IsAfterLegalization,
+          std::vector<SDNode*>* Created) const {
   EVT VT = N->getValueType(0);
   DebugLoc dl = N->getDebugLoc();
 
@@ -3340,9 +3358,11 @@ SDValue TargetLowering::BuildUDIV(SDNode *N, SelectionDAG &DAG,
 
   // Multiply the numerator (operand 0) by the magic value
   // FIXME: We should support doing a MUL in a wider type
-  if (isOperationLegalOrCustom(ISD::MULHU, VT))
+  if (IsAfterLegalization ? isOperationLegal(ISD::MULHU, VT) :
+                            isOperationLegalOrCustom(ISD::MULHU, VT))
     Q = DAG.getNode(ISD::MULHU, dl, VT, Q, DAG.getConstant(magics.m, VT));
-  else if (isOperationLegalOrCustom(ISD::UMUL_LOHI, VT))
+  else if (IsAfterLegalization ? isOperationLegal(ISD::UMUL_LOHI, VT) :
+                                 isOperationLegalOrCustom(ISD::UMUL_LOHI, VT))
     Q = SDValue(DAG.getNode(ISD::UMUL_LOHI, dl, DAG.getVTList(VT, VT), Q,
                             DAG.getConstant(magics.m, VT)).getNode(), 1);
   else
