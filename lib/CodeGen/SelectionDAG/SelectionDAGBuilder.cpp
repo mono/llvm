@@ -5316,7 +5316,7 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
   }
 
   if (LandingPad)
-    EmitTryRangeStart(LandingPad);
+    BeginLabel = EmitTryRangeStart(LandingPad);
 
   // Check if target-independent constraints permit a tail call here.
   // Target-dependent constraints are checked within TLI.LowerCallTo.
