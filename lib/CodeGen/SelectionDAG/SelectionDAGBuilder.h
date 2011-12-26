@@ -463,7 +463,13 @@ private:
   void addSuccessorWithWeight(MachineBasicBlock *Src, MachineBasicBlock *Dst,
                               uint32_t Weight = 0);
 
-  void handleLoad(const Instruction &I, const Value *SV, Type *Ty, bool isVolatile, bool isNonTemporal, bool isInvariant, unsigned Alignment, const MDNode *TBAAInfo);
+  void handleLoad(const Instruction &I, const Value *SV, Type *Ty,
+				  bool isVolatile, bool isNonTemporal, bool isInvariant,
+				  unsigned Alignment, const MDNode *TBAAInfo);
+
+  void handleStore(const Value *SrcV, const Value *PtrV,
+				   bool isVolatile, bool isNonTemporal,
+				   unsigned Alignment, const MDNode *TBAAInfo);
 
 public:
   void visitSwitchCase(CaseBlock &CB,

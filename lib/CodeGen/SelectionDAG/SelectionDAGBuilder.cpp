@@ -1819,102 +1819,20 @@ void SelectionDAGBuilder::LowerIntrinsicTo(ImmutableCallSite CS, unsigned Intrin
     bool isNonTemporal = false;
     bool isInvariant = false;
 
-    const MDNode *TBAAInfo = NULL; //CS.getMetadata(LLVMContext::MD_tbaa);
+    const MDNode *TBAAInfo = NULL;
 
     handleLoad(*CS.getInstruction(), SV, Ty, isVolatile, isNonTemporal, isInvariant, Alignment, TBAAInfo);
-
-#if 0
-    unsigned Alignment = cast<ConstantInt>(CS.getArgument(1))->getZExtValue();
-    bool isVolatile = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
-    bool isNonTemporal = false;
-
-    SDValue Ptr = getValue(SV);
-
-    Type *Ty = CS.getType();
-
-    SmallVector<EVT, 4> ValueVTs;
-    SmallVector<uint64_t, 4> Offsets;
-    ComputeValueVTs(TLI, Ty, ValueVTs, &Offsets);
-    unsigned NumValues = ValueVTs.size();
-
-    SDValue Root;
-    bool ConstantMemory = false;
-    if (isVolatile)
-      // Serialize volatile loads with other side effects.
-      Root = getRoot();
-    else if (AA->pointsToConstantMemory(SV)) {
-      // Do not serialize (non-volatile) loads of constant memory with anything.
-      Root = DAG.getEntryNode();
-      ConstantMemory = true;
-    } else {
-      // Do not serialize non-volatile loads against each other.
-      Root = DAG.getRoot();
-    }
-
-    SmallVector<SDValue, 4> Values(NumValues);
-    SmallVector<SDValue, 4> Chains(NumValues);
-    EVT PtrVT = Ptr.getValueType();
-    for (unsigned i = 0; i != NumValues; ++i) {
-      SDValue A = DAG.getNode(ISD::ADD, getCurDebugLoc(),
-                              PtrVT, Ptr,
-                              DAG.getConstant(Offsets[i], PtrVT));
-      SDValue L = DAG.getLoad(ValueVTs[i], getCurDebugLoc(), Root,
-                            A, MachinePointerInfo(SV, Offsets[i]), isVolatile, 
-                            isNonTemporal, Alignment);
-
-      Values[i] = L;
-      Chains[i] = L.getValue(1);
-    }
-
-    if (!ConstantMemory) {
-      SDValue Chain = DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
-                                  MVT::Other, &Chains[0], NumValues);
-      if (isVolatile)
-        DAG.setRoot(Chain);
-      else
-        PendingLoads.push_back(Chain);
-    }
-
-    setValue(CS.getInstruction (), DAG.getNode(ISD::MERGE_VALUES, getCurDebugLoc(),
-                                               DAG.getVTList(&ValueVTs[0], NumValues),
-                                               &Values[0], NumValues));
-#endif
     break;
   }
   case Intrinsic::mono_store: {
-    // Same as visitStore ()
     const Value *SrcV = CS.getArgument(0);
     const Value *PtrV = CS.getArgument(1);
     unsigned Alignment = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
     bool isVolatile = cast<ConstantInt>(CS.getArgument(3))->getZExtValue();
     bool isNonTemporal = false;
+    const MDNode *TBAAInfo = NULL;
 
-    SmallVector<EVT, 4> ValueVTs;
-    SmallVector<uint64_t, 4> Offsets;
-    ComputeValueVTs(TLI, SrcV->getType(), ValueVTs, &Offsets);
-    unsigned NumValues = ValueVTs.size();
-
-    // Get the lowered operands. Note that we do this after
-    // checking if NumResults is zero, because with zero results
-    // the operands won't have values in the map.
-    SDValue Src = getValue(SrcV);
-    SDValue Ptr = getValue(PtrV);
-
-    SDValue Root = getRoot();
-    SmallVector<SDValue, 4> Chains(NumValues);
-    EVT PtrVT = Ptr.getValueType();
-
-    for (unsigned i = 0; i != NumValues; ++i) {
-      SDValue Add = DAG.getNode(ISD::ADD, getCurDebugLoc(), PtrVT, Ptr,
-                                DAG.getConstant(Offsets[i], PtrVT));
-      Chains[i] = DAG.getStore(Root, getCurDebugLoc(),
-                               SDValue(Src.getNode(), Src.getResNo() + i),
-                               Add, MachinePointerInfo(PtrV, Offsets[i]),
-                               isVolatile, isNonTemporal, Alignment);
-    }
-
-    DAG.setRoot(DAG.getNode(ISD::TokenFactor, getCurDebugLoc(),
-                            MVT::Other, &Chains[0], NumValues));
+    handleStore(SrcV, PtrV, isVolatile, isNonTemporal, Alignment, TBAAInfo);
     break;
   }
   }
@@ -3321,7 +3239,10 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
   handleLoad (I, SV, Ty, isVolatile, isNonTemporal, isInvariant, Alignment, TBAAInfo);
 }
 
-void SelectionDAGBuilder::handleLoad(const Instruction &I, const Value *SV, Type *Ty, bool isVolatile, bool isNonTemporal, bool isInvariant, unsigned Alignment, const MDNode *TBAAInfo) {
+void SelectionDAGBuilder::handleLoad(const Instruction &I, const Value *SV, Type *Ty,
+                                     bool isVolatile, bool isNonTemporal,
+                                     bool isInvariant, unsigned Alignment,
+                                     const MDNode *TBAAInfo) {
   SmallVector<EVT, 4> ValueVTs;
   SmallVector<uint64_t, 4> Offsets;
   ComputeValueVTs(TLI, Ty, ValueVTs, &Offsets);
@@ -3397,6 +3318,18 @@ void SelectionDAGBuilder::visitStore(const StoreInst &I) {
   const Value *SrcV = I.getOperand(0);
   const Value *PtrV = I.getOperand(1);
 
+  bool isVolatile = I.isVolatile();
+  bool isNonTemporal = I.getMetadata("nontemporal") != 0;
+  unsigned Alignment = I.getAlignment();
+  const MDNode *TBAAInfo = I.getMetadata(LLVMContext::MD_tbaa);
+
+  handleStore (SrcV, PtrV, isVolatile, isNonTemporal, Alignment, TBAAInfo);
+}
+
+void SelectionDAGBuilder::handleStore(const Value *SrcV, const Value *PtrV,
+                                      bool isVolatile, bool isNonTemporal,
+                                      unsigned Alignment, const MDNode *TBAAInfo)
+{
   SmallVector<EVT, 4> ValueVTs;
   SmallVector<uint64_t, 4> Offsets;
   ComputeValueVTs(TLI, SrcV->getType(), ValueVTs, &Offsets);
@@ -3414,10 +3347,6 @@ void SelectionDAGBuilder::visitStore(const StoreInst &I) {
   SmallVector<SDValue, 4> Chains(std::min(unsigned(MaxParallelChains),
                                           NumValues));
   EVT PtrVT = Ptr.getValueType();
-  bool isVolatile = I.isVolatile();
-  bool isNonTemporal = I.getMetadata("nontemporal") != 0;
-  unsigned Alignment = I.getAlignment();
-  const MDNode *TBAAInfo = I.getMetadata(LLVMContext::MD_tbaa);
 
   unsigned ChainI = 0;
   for (unsigned i = 0; i != NumValues; ++i, ++ChainI) {
