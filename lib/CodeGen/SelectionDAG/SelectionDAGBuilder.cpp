@@ -5216,6 +5216,8 @@ SelectionDAGBuilder::EmitTryRangeStart(MachineBasicBlock *LandingPad)
   unsigned CallSiteIndex = MMI.getCurrentCallSite();
   if (CallSiteIndex) {
     MMI.setCallSiteBeginLabel(BeginLabel, CallSiteIndex);
+    LPadToCallSiteMap[LandingPad].push_back(CallSiteIndex);
+
     // Now that the call site is handled, stop tracking it.
     MMI.setCurrentCallSite(0);
   }
@@ -5248,7 +5250,6 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
   PointerType *PT = cast<PointerType>(CS.getCalledValue()->getType());
   FunctionType *FTy = cast<FunctionType>(PT->getElementType());
   Type *RetTy = FTy->getReturnType();
-  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
   MCSymbol *BeginLabel = 0;
 
   TargetLowering::ArgListTy Args;
@@ -5314,27 +5315,8 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
     Args.push_back(Entry);
   }
 
-  if (LandingPad) {
-    // Insert a label before the invoke call to mark the try range.  This can be
-    // used to detect deletion of the invoke via the MachineModuleInfo.
-    BeginLabel = MMI.getContext().CreateTempSymbol();
-
-    // For SjLj, keep track of which landing pads go with which invokes
-    // so as to maintain the ordering of pads in the LSDA.
-    unsigned CallSiteIndex = MMI.getCurrentCallSite();
-    if (CallSiteIndex) {
-      MMI.setCallSiteBeginLabel(BeginLabel, CallSiteIndex);
-      LPadToCallSiteMap[LandingPad].push_back(CallSiteIndex);
-
-      // Now that the call site is handled, stop tracking it.
-      MMI.setCurrentCallSite(0);
-    }
-
-    // Both PendingLoads and PendingExports must be flushed here;
-    // this call might not return.
-    (void)getRoot();
-    DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getControlRoot(), BeginLabel));
-  }
+  if (LandingPad)
+    EmitTryRangeStart(LandingPad);
 
   // Check if target-independent constraints permit a tail call here.
   // Target-dependent constraints are checked within TLI.LowerCallTo.
