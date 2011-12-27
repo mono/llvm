@@ -58,9 +58,6 @@ ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
   Code32Directive = ".code\t32";
 
   SupportsDebugInformation = true;
-
-  // Exceptions handling
-  ExceptionsType = ExceptionHandling::SjLj;
 }
 
 void ARMELFMCAsmInfo::anchor() { }
@@ -77,6 +74,7 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
 
   WeakRefDirective = "\t.weak\t";
   LCOMMDirectiveType = LCOMM::NoAlignment;
+  PCSymbol = ".";
 
   HasLEB128 = true;
   SupportsDebugInformation = true;
