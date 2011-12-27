@@ -2763,6 +2763,17 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     // through a register, since the call instruction's 32-bit
     // pc-relative offset may not be large enough to hold the whole
     // address.
+
+    //
+    // This is a mono specific hack to force llvm to generate direct calls even if
+    // the code model is Large.
+    //
+    if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
+      unsigned char OpFlags = 0;
+      const GlobalValue *GV = G->getGlobal();
+      Callee = DAG.getTargetGlobalAddress(GV, dl, getPointerTy(),
+                                          G->getOffset(), OpFlags);
+    }
   } else if (GlobalAddressSDNode *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
     // If the callee is a GlobalAddress node (quite common, every direct call
     // is) turn it into a TargetGlobalAddress node so that legalize doesn't hack
