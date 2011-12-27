@@ -24,6 +24,7 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MonoMachineFunctionInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -59,11 +60,13 @@ MachineFunction::MachineFunction(const Function *F, const TargetMachine &TM,
   else
     RegInfo = 0;
   MFInfo = 0;
+  MonoInfo = 0;
   FrameInfo = new (Allocator) MachineFrameInfo(*TM.getFrameLowering());
   if (Fn->hasFnAttr(Attribute::StackAlignment))
     FrameInfo->setMaxAlignment(Attribute::getStackAlignmentFromAttrs(
         Fn->getAttributes().getFnAttributes()));
   ConstantPool = new (Allocator) MachineConstantPool(TM.getTargetData());
+  MonoInfo = new (Allocator) MonoMachineFunctionInfo(*this);
   Alignment = TM.getTargetLowering()->getMinFunctionAlignment();
   // FIXME: Shouldn't use pref alignment if explicit alignment is set on Fn.
   if (!Fn->hasFnAttr(Attribute::OptimizeForSize))
@@ -84,6 +87,10 @@ MachineFunction::~MachineFunction() {
   if (MFInfo) {
     MFInfo->~MachineFunctionInfo();
     Allocator.Deallocate(MFInfo);
+  }
+  if (MonoInfo) {
+    MonoInfo->~MonoMachineFunctionInfo();
+    Allocator.Deallocate(MonoInfo);
   }
   FrameInfo->~MachineFrameInfo();         Allocator.Deallocate(FrameInfo);
   ConstantPool->~MachineConstantPool();   Allocator.Deallocate(ConstantPool);
