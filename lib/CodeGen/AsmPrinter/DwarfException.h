@@ -15,6 +15,7 @@
 #define LLVM_CODEGEN_ASMPRINTER_DWARFEXCEPTION_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Module.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include <vector>
 
@@ -42,6 +43,17 @@ protected:
 
   /// MMI - Collected machine module information.
   MachineModuleInfo *MMI;
+
+  /// CallSiteEntry - Structure describing an entry in the call-site table.
+  struct CallSiteEntry {
+    // The 'try-range' is BeginLabel .. EndLabel.
+    MCSymbol *BeginLabel; // zero indicates the start of the function.
+    MCSymbol *EndLabel;   // zero indicates the end of the function.
+
+    // The landing pad starts at PadLabel.
+    MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
+    unsigned Action;
+  };
 
   /// EmitExceptionTable - Emit landing pads and actions.
   ///
@@ -87,16 +99,50 @@ protected:
     unsigned Previous;
   };
 
-  /// CallSiteEntry - Structure describing an entry in the call-site table.
-  struct CallSiteEntry {
-    // The 'try-range' is BeginLabel .. EndLabel.
-    MCSymbol *BeginLabel; // zero indicates the start of the function.
-    MCSymbol *EndLabel;   // zero indicates the end of the function.
-
-    // The landing pad starts at PadLabel.
-    MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
-    unsigned Action;
+  // Mono specific
+  struct MonoEHFrameInfo {
+    const MachineFunction *MF;
+    std::vector<CallSiteEntry> CallSites;
+    std::vector<const GlobalVariable *> TypeInfos;
+    std::vector<unsigned> FilterIds;
+    std::vector<LandingPadInfo> PadInfos;
+    int FunctionNumber;
+    int FrameReg;
+    int ThisOffset;
   };
+
+  struct FunctionEHFrameInfo {
+    MCSymbol *FunctionEHSym;  // L_foo.eh
+    unsigned Number;
+    unsigned PersonalityIndex;
+    bool adjustsStack;
+    bool hasLandingPads;
+    std::vector<MachineMove> Moves;
+    const Function *function;
+
+    MonoEHFrameInfo MonoEH;
+
+    FunctionEHFrameInfo(MCSymbol *EHSym, unsigned Num, unsigned P,
+                        bool hC, bool hL,
+                        const std::vector<MachineMove> &M,
+                        const Function *f):
+      FunctionEHSym(EHSym), Number(Num), PersonalityIndex(P),
+      adjustsStack(hC), hasLandingPads(hL), Moves(M), function (f) { }
+  };
+
+  std::vector<FunctionEHFrameInfo> EHFrames;
+
+  /// UsesLSDA - Indicates whether an FDE that uses the CIE at the given index
+  /// uses an LSDA. If so, then we need to encode that information in the CIE's
+  /// augmentation.
+  DenseMap<unsigned, bool> UsesLSDA;
+
+  // EmitMonoEHFrame - Emit Mono specific exception handling tables
+  void EmitMonoEHFrame(const Function *Personality);
+
+  void PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo);
+
+  void EmitMonoLSDA(const FunctionEHFrameInfo *EHFrameInfo);
 
   /// ComputeActionsTable - Compute the actions table and gather the first
   /// action index for each landing pad site.
@@ -186,6 +232,7 @@ class ARMException : public DwarfException {
   /// shouldEmitTableModule - Per-module flag to indicate if EH tables
   /// should be emitted.
   bool shouldEmitTableModule;
+
 public:
   //===--------------------------------------------------------------------===//
   // Main entry points.

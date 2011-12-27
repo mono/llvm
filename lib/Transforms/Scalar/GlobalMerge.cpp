@@ -192,6 +192,8 @@ bool GlobalMerge::doInitialization(Module &M) {
         I->getName().startswith(".llvm."))
       continue;
 
+    // FIXME: This merges Mono's type_info globals, breaking EH
+/*
     if (TD->getTypeAllocSize(Ty) < MaxOffset) {
       if (TargetLoweringObjectFile::getKindForGlobal(I, TLI->getTargetMachine())
           .isBSSLocal())
@@ -201,6 +203,7 @@ bool GlobalMerge::doInitialization(Module &M) {
       else
         Globals.push_back(I);
     }
+*/
   }
 
   if (Globals.size() > 1)
