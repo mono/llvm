@@ -631,6 +631,7 @@ void Emitter<CodeEmitter>::emitInstruction(MachineInstr &MI,
   if (Desc->TSFlags & X86II::LOCK)
     MCE.emitByte(0xF0);
 
+#if 0
   // Emit segment override opcode prefix as needed.
   switch (Desc->TSFlags & X86II::SegOvrMask) {
   case X86II::FS:
@@ -641,6 +642,25 @@ void Emitter<CodeEmitter>::emitInstruction(MachineInstr &MI,
     break;
   default: llvm_unreachable("Invalid segment!");
   case 0: break;  // No segment override!
+  }
+#endif
+
+  // Recent LLVM changes broke the code above, SegOvrMask is no longer set, so do it ourselves
+  if ((Desc->TSFlags & X86II::FormMask) != X86II::MRMInitReg) {
+    int MemoryOperand = X86II::getMemoryOperandNo(Desc->TSFlags, Opcode);
+    if (MemoryOperand != -1) {
+      unsigned NumOps = Desc->getNumOperands();
+      unsigned CurOp = 0;
+      if (NumOps > 1 && Desc->getOperandConstraint(1, MCOI::TIED_TO) != -1)
+        ++CurOp;
+      MemoryOperand += CurOp;
+
+      switch (MI.getOperand(MemoryOperand+X86::AddrSegmentReg).getReg()) {
+      case X86::FS: MCE.emitByte (0x64); break;
+      case X86::GS: MCE.emitByte (0x65); break;
+      default: break;
+      }
+    }
   }
 
   // Emit the repeat opcode prefix as needed.
