@@ -164,3 +164,21 @@ def RetCC_ARM_AAPCS_VFP : CallingConv<[
                                  S9, S10, S11, S12, S13, S14, S15]>>,
   CCDelegateTo<RetCC_ARM_AAPCS_Common>
 ]>;
+
+def CC_ARM_Mono1_AAPCS : CallingConv<[
+
+	// Mono marks the parameter it wants to pass in this non-abi register with
+	// the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_AAPCS>
+]>;
+
+def CC_ARM_Mono1_APCS : CallingConv<[
+
+	// Mono marks the parameter it wants to pass in this non-abi register with
+	// the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_APCS>
+]>;

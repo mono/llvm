@@ -1132,7 +1132,17 @@ CCAssignFn *ARMTargetLowering::CCAssignFnForNode(CallingConv::ID CC,
   case CallingConv::ARM_AAPCS:
     return (Return ? RetCC_ARM_AAPCS : CC_ARM_AAPCS);
   case CallingConv::ARM_APCS:
-    return (Return ? RetCC_ARM_APCS : CC_ARM_APCS);
+    return (Return ? RetCC_ARM_APCS: CC_ARM_APCS);
+  case CallingConv::Mono1:
+    assert(!(Subtarget->hasVFP2() && getTargetMachine().Options.FloatABIType == FloatABI::Hard));
+    if (Return) {
+      return CCAssignFnForNode(CallingConv::C, true, isVarArg);
+    } else {
+      if (Subtarget->isAAPCS_ABI())
+        return CC_ARM_Mono1_AAPCS;
+      else
+        return CC_ARM_Mono1_APCS;
+    }
   }
 }
 

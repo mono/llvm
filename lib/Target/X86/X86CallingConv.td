@@ -242,6 +242,17 @@ def CC_X86_64_GHC : CallingConv<[
             CCAssignToReg<[XMM1, XMM2, XMM3, XMM4, XMM5, XMM6]>>>
 ]>;
 
+//
+// Mono calling conventions
+//
+
+def CC_X86_64_Mono1 : CallingConv<[
+
+  CCIfInReg<CCAssignToReg<[R10]>>,
+
+  CCDelegateTo<CC_X86_64_C>
+]>;
+
 //===----------------------------------------------------------------------===//
 // X86 C Calling Convention
 //===----------------------------------------------------------------------===//
@@ -373,6 +384,15 @@ def CC_X86_32_GHC : CallingConv<[
   CCIfType<[i32], CCAssignToReg<[EBX, EBP, EDI, ESI]>>
 ]>;
 
+def CC_X86_32_Mono1 : CallingConv<[
+
+	// Mono marks the parameter it wants to pass in this non-abi register with
+	// the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[EDX]>>,
+
+  CCDelegateTo<CC_X86_32_C>
+]>;
+
 //===----------------------------------------------------------------------===//
 // X86 Root Argument Calling Conventions
 //===----------------------------------------------------------------------===//
@@ -383,6 +403,7 @@ def CC_X86_32 : CallingConv<[
   CCIfCC<"CallingConv::X86_ThisCall", CCDelegateTo<CC_X86_32_ThisCall>>,
   CCIfCC<"CallingConv::Fast", CCDelegateTo<CC_X86_32_FastCC>>,
   CCIfCC<"CallingConv::GHC", CCDelegateTo<CC_X86_32_GHC>>,
+  CCIfCC<"CallingConv::Mono1", CCDelegateTo<CC_X86_32_Mono1>>,
 
   // Otherwise, drop to normal X86-32 CC
   CCDelegateTo<CC_X86_32_C>
@@ -391,6 +412,7 @@ def CC_X86_32 : CallingConv<[
 // This is the root argument convention for the X86-64 backend.
 def CC_X86_64 : CallingConv<[
   CCIfCC<"CallingConv::GHC", CCDelegateTo<CC_X86_64_GHC>>,
+  CCIfCC<"CallingConv::Mono1", CCDelegateTo<CC_X86_64_Mono1>>,
 
   // Mingw64 and native Win64 use Win64 CC
   CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
