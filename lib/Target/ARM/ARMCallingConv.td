@@ -171,3 +171,21 @@ def CSR_AAPCS : CalleeSavedRegs<(add LR, R11, R10, R9, R8, R7, R6, R5, R4,
 // iOS ABI deviates from ARM standard ABI. R9 is not a callee-saved register.
 // Also save R7-R4 first to match the stack frame fixed spill areas.
 def CSR_iOS : CalleeSavedRegs<(add LR, R7, R6, R5, R4, (sub CSR_AAPCS, R9))>;
+
+def CC_ARM_Mono1_AAPCS : CallingConv<[
+
+	// Mono marks the parameter it wants to pass in this non-abi register with
+	// the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_AAPCS>
+]>;
+
+def CC_ARM_Mono1_APCS : CallingConv<[
+
+	// Mono marks the parameter it wants to pass in this non-abi register with
+	// the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_APCS>
+]>;
