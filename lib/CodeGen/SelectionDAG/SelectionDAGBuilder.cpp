@@ -1797,6 +1797,50 @@ void SelectionDAGBuilder::visitBitTestCase(BitTestBlock &BB,
   DAG.setRoot(BrAnd);
 }
 
+void SelectionDAGBuilder::LowerIntrinsicTo(ImmutableCallSite CS, unsigned Intrinsic,
+                                           MachineBasicBlock *LandingPad)
+{
+  MCSymbol *BeginLabel = 0;
+
+  if (LandingPad)
+    BeginLabel = EmitTryRangeStart(LandingPad);
+
+  // FIXME: Should merge with visitIntrinsicCall
+  switch (Intrinsic) {
+  default:
+    assert(0);
+  case Intrinsic::mono_load: {
+    const Value *SV = CS.getArgument(0);
+
+    Type *Ty = CS.getType();
+
+    unsigned Alignment = cast<ConstantInt>(CS.getArgument(1))->getZExtValue();
+    bool isVolatile = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
+    bool isNonTemporal = false;
+    bool isInvariant = false;
+
+    const MDNode *TBAAInfo = NULL;
+
+    handleLoad(*CS.getInstruction(), SV, Ty, isVolatile, isNonTemporal, isInvariant, Alignment, TBAAInfo);
+    break;
+  }
+  case Intrinsic::mono_store: {
+    const Value *SrcV = CS.getArgument(0);
+    const Value *PtrV = CS.getArgument(1);
+    unsigned Alignment = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
+    bool isVolatile = cast<ConstantInt>(CS.getArgument(3))->getZExtValue();
+    bool isNonTemporal = false;
+    const MDNode *TBAAInfo = NULL;
+
+    handleStore(SrcV, PtrV, isVolatile, isNonTemporal, Alignment, TBAAInfo);
+    break;
+  }
+  }
+
+  if (LandingPad)
+    EmitTryRangeEnd(LandingPad, BeginLabel);
+}
+
 void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
   MachineBasicBlock *InvokeMBB = FuncInfo.MBB;
 
@@ -1805,10 +1849,18 @@ void SelectionDAGBuilder::visitInvoke(const InvokeInst &I) {
   MachineBasicBlock *LandingPad = FuncInfo.MBBMap[I.getSuccessor(1)];
 
   const Value *Callee(I.getCalledValue());
-  if (isa<InlineAsm>(Callee))
+  if (isa<InlineAsm>(Callee)) {
     visitInlineAsm(&I);
-  else
-    LowerCallTo(&I, getValue(Callee), false, LandingPad);
+  } else {
+    unsigned IID = 0;
+    if (Function *F = I.getCalledFunction())
+      if (F->isDeclaration())
+        IID = F->getIntrinsicID();
+    if (IID)
+      LowerIntrinsicTo (&I, IID, LandingPad);
+    else
+      LowerCallTo(&I, getValue(Callee), false, LandingPad);
+  }
 
   // If the value of the invoke is used outside of its defining block, make it
   // available as a virtual register.
@@ -3175,7 +3227,6 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
     return visitAtomicLoad(I);
 
   const Value *SV = I.getOperand(0);
-  SDValue Ptr = getValue(SV);
 
   Type *Ty = I.getType();
 
@@ -3185,6 +3236,13 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
   unsigned Alignment = I.getAlignment();
   const MDNode *TBAAInfo = I.getMetadata(LLVMContext::MD_tbaa);
 
+  handleLoad (I, SV, Ty, isVolatile, isNonTemporal, isInvariant, Alignment, TBAAInfo);
+}
+
+void SelectionDAGBuilder::handleLoad(const Instruction &I, const Value *SV, Type *Ty,
+                                     bool isVolatile, bool isNonTemporal,
+                                     bool isInvariant, unsigned Alignment,
+                                     const MDNode *TBAAInfo) {
   SmallVector<EVT, 4> ValueVTs;
   SmallVector<uint64_t, 4> Offsets;
   ComputeValueVTs(TLI, Ty, ValueVTs, &Offsets);
@@ -3192,9 +3250,11 @@ void SelectionDAGBuilder::visitLoad(const LoadInst &I) {
   if (NumValues == 0)
     return;
 
+  SDValue Ptr = getValue(SV);
+
   SDValue Root;
   bool ConstantMemory = false;
-  if (I.isVolatile() || NumValues > MaxParallelChains)
+  if (isVolatile || NumValues > MaxParallelChains)
     // Serialize volatile loads with other side effects.
     Root = getRoot();
   else if (AA->pointsToConstantMemory(
@@ -3258,6 +3318,18 @@ void SelectionDAGBuilder::visitStore(const StoreInst &I) {
   const Value *SrcV = I.getOperand(0);
   const Value *PtrV = I.getOperand(1);
 
+  bool isVolatile = I.isVolatile();
+  bool isNonTemporal = I.getMetadata("nontemporal") != 0;
+  unsigned Alignment = I.getAlignment();
+  const MDNode *TBAAInfo = I.getMetadata(LLVMContext::MD_tbaa);
+
+  handleStore (SrcV, PtrV, isVolatile, isNonTemporal, Alignment, TBAAInfo);
+}
+
+void SelectionDAGBuilder::handleStore(const Value *SrcV, const Value *PtrV,
+                                      bool isVolatile, bool isNonTemporal,
+                                      unsigned Alignment, const MDNode *TBAAInfo)
+{
   SmallVector<EVT, 4> ValueVTs;
   SmallVector<uint64_t, 4> Offsets;
   ComputeValueVTs(TLI, SrcV->getType(), ValueVTs, &Offsets);
@@ -3275,10 +3347,6 @@ void SelectionDAGBuilder::visitStore(const StoreInst &I) {
   SmallVector<SDValue, 4> Chains(std::min(unsigned(MaxParallelChains),
                                           NumValues));
   EVT PtrVT = Ptr.getValueType();
-  bool isVolatile = I.isVolatile();
-  bool isNonTemporal = I.getMetadata("nontemporal") != 0;
-  unsigned Alignment = I.getAlignment();
-  const MDNode *TBAAInfo = I.getMetadata(LLVMContext::MD_tbaa);
 
   unsigned ChainI = 0;
   for (unsigned i = 0; i != NumValues; ++i, ++ChainI) {
@@ -5127,7 +5195,53 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   case Intrinsic::lifetime_end:
     // Discard region information.
     return 0;
+  case Intrinsic::mono_load:
+  case Intrinsic::mono_store:
+    LowerIntrinsicTo(&I, Intrinsic);
+    return 0;
   }
+}
+
+MCSymbol*
+SelectionDAGBuilder::EmitTryRangeStart(MachineBasicBlock *LandingPad)
+{
+  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
+
+  // Insert a label before the invoke call to mark the try range.  This can be
+  // used to detect deletion of the invoke via the MachineModuleInfo.
+  MCSymbol *BeginLabel = MMI.getContext().CreateTempSymbol();
+
+  // For SjLj, keep track of which landing pads go with which invokes
+  // so as to maintain the ordering of pads in the LSDA.
+  unsigned CallSiteIndex = MMI.getCurrentCallSite();
+  if (CallSiteIndex) {
+    MMI.setCallSiteBeginLabel(BeginLabel, CallSiteIndex);
+    LPadToCallSiteMap[LandingPad].push_back(CallSiteIndex);
+
+    // Now that the call site is handled, stop tracking it.
+    MMI.setCurrentCallSite(0);
+  }
+
+  // Both PendingLoads and PendingExports must be flushed here;
+  // this call might not return.
+  (void)getRoot();
+  DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getControlRoot(), BeginLabel));
+
+  return BeginLabel;
+}
+
+void
+SelectionDAGBuilder::EmitTryRangeEnd(MachineBasicBlock *LandingPad, MCSymbol *BeginLabel)
+{
+  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
+
+  // Insert a label at the end of the invoke call to mark the try range.  This
+  // can be used to detect deletion of the invoke via the MachineModuleInfo.
+  MCSymbol *EndLabel = MMI.getContext().CreateTempSymbol();
+  DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getRoot(), EndLabel));
+
+  // Inform MachineModuleInfo of range.
+  MMI.addInvoke(LandingPad, BeginLabel, EndLabel);
 }
 
 void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
@@ -5136,7 +5250,6 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
   PointerType *PT = cast<PointerType>(CS.getCalledValue()->getType());
   FunctionType *FTy = cast<FunctionType>(PT->getElementType());
   Type *RetTy = FTy->getReturnType();
-  MachineModuleInfo &MMI = DAG.getMachineFunction().getMMI();
   MCSymbol *BeginLabel = 0;
 
   TargetLowering::ArgListTy Args;
@@ -5202,27 +5315,8 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
     Args.push_back(Entry);
   }
 
-  if (LandingPad) {
-    // Insert a label before the invoke call to mark the try range.  This can be
-    // used to detect deletion of the invoke via the MachineModuleInfo.
-    BeginLabel = MMI.getContext().CreateTempSymbol();
-
-    // For SjLj, keep track of which landing pads go with which invokes
-    // so as to maintain the ordering of pads in the LSDA.
-    unsigned CallSiteIndex = MMI.getCurrentCallSite();
-    if (CallSiteIndex) {
-      MMI.setCallSiteBeginLabel(BeginLabel, CallSiteIndex);
-      LPadToCallSiteMap[LandingPad].push_back(CallSiteIndex);
-
-      // Now that the call site is handled, stop tracking it.
-      MMI.setCurrentCallSite(0);
-    }
-
-    // Both PendingLoads and PendingExports must be flushed here;
-    // this call might not return.
-    (void)getRoot();
-    DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getControlRoot(), BeginLabel));
-  }
+  if (LandingPad)
+    BeginLabel = EmitTryRangeStart(LandingPad);
 
   // Check if target-independent constraints permit a tail call here.
   // Target-dependent constraints are checked within TLI.LowerCallTo.
@@ -5319,15 +5413,8 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
     AssignOrderingToNode(Result.second.getNode());
   }
 
-  if (LandingPad) {
-    // Insert a label at the end of the invoke call to mark the try range.  This
-    // can be used to detect deletion of the invoke via the MachineModuleInfo.
-    MCSymbol *EndLabel = MMI.getContext().CreateTempSymbol();
-    DAG.setRoot(DAG.getEHLabel(getCurDebugLoc(), getRoot(), EndLabel));
-
-    // Inform MachineModuleInfo of range.
-    MMI.addInvoke(LandingPad, BeginLabel, EndLabel);
-  }
+  if (LandingPad)
+    EmitTryRangeEnd (LandingPad, BeginLabel);
 }
 
 /// IsOnlyUsedInZeroEqualityComparison - Return true if it only matters that the

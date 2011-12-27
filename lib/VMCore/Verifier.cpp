@@ -1569,7 +1569,9 @@ void Verifier::visitInstruction(Instruction &I) {
     if (Function *F = dyn_cast<Function>(I.getOperand(i))) {
       // Check to make sure that the "address of" an intrinsic function is never
       // taken.
-      Assert1(!F->isIntrinsic() || (i + 1 == e && isa<CallInst>(I)),
+      Assert1(!F->isIntrinsic() ||
+              (i + 1 == e && (isa<CallInst>(I))) ||
+              isa<InvokeInst>(I),
               "Cannot take the address of an intrinsic!", &I);
       Assert1(F->getParent() == Mod, "Referencing function in another module!",
               &I);

@@ -55,6 +55,9 @@ class NoCapture<int argNo> : IntrinsicProperty {
   int ArgNo = argNo;
 }
 
+// IntrUnwind - This intrinsics can throw exceptions
+def IntrUnwind : IntrinsicProperty;
+
 //===----------------------------------------------------------------------===//
 // Types used by intrinsics.
 //===----------------------------------------------------------------------===//
@@ -445,3 +448,5 @@ include "llvm/IntrinsicsCellSPU.td"
 include "llvm/IntrinsicsXCore.td"
 include "llvm/IntrinsicsPTX.td"
 include "llvm/IntrinsicsHexagon.td"
+
+include "llvm/IntrinsicsMono.td"
