@@ -970,13 +970,24 @@ bool JITEmitter::finishFunction(MachineFunction &F) {
     SavedBufferEnd = BufferEnd;
     SavedCurBufferPtr = CurBufferPtr;
 
-    BufferBegin = CurBufferPtr = MemMgr->startExceptionTable(F.getFunction(),
+    uint8_t *EhStart = NULL;
+    uint8_t *FrameRegister = NULL;
+
+    while (true) {
+      BufferBegin = CurBufferPtr = MemMgr->startExceptionTable(F.getFunction(),
                                                              ActualSize);
-    BufferEnd = BufferBegin+ActualSize;
-    EmittedFunctions[F.getFunction()].ExceptionTable = BufferBegin;
-    uint8_t *EhStart;
-    uint8_t *FrameRegister = DE->EmitDwarfTable(F, *this, FnStart, FnEnd,
-                                                EhStart);
+      BufferEnd = BufferBegin+ActualSize;
+      EmittedFunctions[F.getFunction()].ExceptionTable = BufferBegin;
+      FrameRegister = DE->EmitDwarfTable(F, *this, FnStart, FnEnd,
+                                         EhStart);
+      if (FrameRegister && CurBufferPtr == BufferEnd) {
+        // Buffer overflow, retry with a larger buffer
+        assert(ActualSize);
+        ActualSize *= 2;
+      } else {
+        break;
+      }
+    }
     MemMgr->endExceptionTable(F.getFunction(), BufferBegin, CurBufferPtr,
                               FrameRegister);
     BufferBegin = SavedBufferBegin;
