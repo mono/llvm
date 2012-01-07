@@ -55,9 +55,6 @@ class NoCapture<int argNo> : IntrinsicProperty {
   int ArgNo = argNo;
 }
 
-// IntrUnwind - This intrinsics can throw exceptions
-def IntrUnwind : IntrinsicProperty;
-
 //===----------------------------------------------------------------------===//
 // Types used by intrinsics.
 //===----------------------------------------------------------------------===//
