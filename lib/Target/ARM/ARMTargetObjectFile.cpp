@@ -85,4 +85,7 @@ unsigned ARMMachOTargetObjectFile::getTTypeEncoding() const {
   return DW_EH_PE_indirect | DW_EH_PE_pcrel | DW_EH_PE_sdata4;
 }
 
+unsigned ARMMachOTargetObjectFile::getMonoEHTableEncoding() const {
+	return dwarf::DW_EH_PE_absptr;
+}
 

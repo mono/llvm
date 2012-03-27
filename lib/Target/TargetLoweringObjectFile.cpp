@@ -342,3 +342,6 @@ unsigned TargetLoweringObjectFile::getTTypeEncoding() const {
   return dwarf::DW_EH_PE_absptr;
 }
 
+unsigned TargetLoweringObjectFile::getMonoEHTableEncoding() const {
+	return dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
+}

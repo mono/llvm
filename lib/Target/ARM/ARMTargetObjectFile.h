@@ -58,6 +58,8 @@ public:
   unsigned getFDEEncoding() const;
 
   unsigned getTTypeEncoding() const;
+
+  unsigned getMonoEHTableEncoding() const;
 };
 
 } // end namespace llvm

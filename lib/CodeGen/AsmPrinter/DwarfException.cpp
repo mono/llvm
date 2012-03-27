@@ -1380,7 +1380,13 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
       MCSymbol *EHFuncBeginSym =
         Asm->GetTempSymbol("eh_func_begin", EHFrameInfo.Number);
 	  MCSymbol *FDEBeginSym = Asm->GetTempSymbol ("mono_eh_func_begin", EHFrameInfo.Number);
-	  Asm->EmitLabelDifference(EHFuncBeginSym, EHFrameHdrSym, 4);
+	  if (TLOF.getMonoEHTableEncoding () == dwarf::DW_EH_PE_absptr) {
+		  // On ios, the linker can move functions inside object files so the offsets between two symbols are not assembler constant.
+		  Asm->EmitReference (EHFuncBeginSym, dwarf::DW_EH_PE_absptr);
+	  } else {
+		  // FIXME: Use DW_EH_PE_pcrel in the future
+		  Asm->EmitLabelDifference(EHFuncBeginSym, EHFrameHdrSym, 4);
+	  }
 	  Asm->EmitLabelDifference(FDEBeginSym, EHFrameHdrSym, 4);
   }
   // Emit a last entry to simplify binary searches and to enable the computation of
@@ -1391,7 +1397,10 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   } else {
     MCSymbol *Sym1 = Asm->GetTempSymbol("eh_func_end", EHFrames.size() - 1);
     MCSymbol *Sym2 = Asm->GetTempSymbol ("mono_eh_frame_end");
-    Asm->EmitLabelDifference(Sym1, EHFrameHdrSym, 4);
+	if (TLOF.getMonoEHTableEncoding () == dwarf::DW_EH_PE_absptr)
+		  Asm->EmitReference (Sym1, dwarf::DW_EH_PE_absptr);
+	else
+		Asm->EmitLabelDifference(Sym1, EHFrameHdrSym, 4);
     Asm->EmitLabelDifference(Sym2, EHFrameHdrSym, 4);
   }
 

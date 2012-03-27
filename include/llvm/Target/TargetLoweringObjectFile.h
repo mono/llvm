@@ -233,6 +233,7 @@ public:
   virtual unsigned getLSDAEncoding() const;
   virtual unsigned getFDEEncoding() const;
   virtual unsigned getTTypeEncoding() const;
+  virtual unsigned getMonoEHTableEncoding() const;
 
 protected:
   virtual const MCSection *
