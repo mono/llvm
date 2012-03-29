@@ -27,6 +27,11 @@ void MCObjectFileInfo::InitMachOMCObjectFileInfo(Triple T) {
   TTypeEncoding = dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_pcrel |
     dwarf::DW_EH_PE_sdata4;
 
+  if (T.getOS() == Triple::IOS)
+    MonoEHTableEncoding = dwarf::DW_EH_PE_absptr;
+  else
+    MonoEHTableEncoding = dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
+
   // .comm doesn't support alignment before Leopard.
   if (T.isMacOSX() && T.isMacOSXVersionLT(10, 5))
     CommDirectiveSupportsAlignment = false;
@@ -259,6 +264,8 @@ void MCObjectFileInfo::InitELFMCObjectFileInfo(Triple T) {
         ? dwarf::DW_EH_PE_udata4 : dwarf::DW_EH_PE_absptr;
     }
   }
+
+  MonoEHTableEncoding = dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
 
   StructorOutputOrder = Structors::ReversePriorityOrder;
 
