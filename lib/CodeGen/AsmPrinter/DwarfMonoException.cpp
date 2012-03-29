@@ -494,6 +494,7 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
 
   unsigned PerEncoding = TLOF.getPersonalityEncoding();
+  unsigned FuncAddrEncoding = TLOF.getMonoEHTableEncoding ();
 
   // Size and sign of stack growth.
   int stackGrowth = Asm->getTargetData().getPointerSize();
@@ -549,7 +550,9 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   // Header
 
   Streamer.AddComment("version");
-  Streamer.EmitIntValue(1, 1, 0);
+  Asm->OutStreamer.EmitIntValue(2, 1, 0);
+  Asm->OutStreamer.AddComment ("func addr encoding");
+  Asm->OutStreamer.EmitIntValue (FuncAddrEncoding, 1, 0);
 
   // Search table
   Asm->EmitAlignment(2);
@@ -562,7 +565,13 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
       MCSymbol *EHFuncBeginSym =
         Asm->GetTempSymbol("eh_func_begin", EHFrameInfo.Number);
 	  MCSymbol *FDEBeginSym = Asm->GetTempSymbol ("mono_eh_func_begin", EHFrameInfo.Number);
-	  Asm->EmitLabelDifference(EHFuncBeginSym, EHFrameHdrSym, 4);
+	  if (FuncAddrEncoding == dwarf::DW_EH_PE_absptr) {
+ 		  // On ios, the linker can move functions inside object files so the offsets between two symbols are not assembler constant.
+		  Asm->EmitReference (EHFuncBeginSym, FuncAddrEncoding);
+	  } else {
+ 		  // FIXME: Use DW_EH_PE_pcrel in the future
+		  Asm->EmitLabelDifference(EHFuncBeginSym, EHFrameHdrSym, 4);
+	  }
 	  Asm->EmitLabelDifference(FDEBeginSym, EHFrameHdrSym, 4);
   }
   // Emit a last entry to simplify binary searches and to enable the computation of
@@ -573,7 +582,10 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   } else {
     MCSymbol *Sym1 = Asm->GetTempSymbol("eh_func_end", EHFrames[EHFrames.size() - 1].Number);
     MCSymbol *Sym2 = Asm->GetTempSymbol ("mono_eh_frame_end");
-    Asm->EmitLabelDifference(Sym1, EHFrameHdrSym, 4);
+	if (FuncAddrEncoding == dwarf::DW_EH_PE_absptr)
+		Asm->EmitReference (Sym1, FuncAddrEncoding);
+ 	else
+ 		Asm->EmitLabelDifference(Sym1, EHFrameHdrSym, 4);
     Asm->EmitLabelDifference(Sym2, EHFrameHdrSym, 4);
   }
 
