@@ -154,12 +154,15 @@ void EmitCFIInstruction(MCStreamer &Streamer,
     }
     return;
   }
-  case MCCFIInstruction::Remember:
+  case MCCFIInstruction::RememberState:
     Streamer.EmitIntValue(dwarf::DW_CFA_remember_state, 1);
     return;
-  case MCCFIInstruction::Restore:
+  case MCCFIInstruction::RestoreState:
     Streamer.EmitIntValue(dwarf::DW_CFA_restore_state, 1);
     return;
+  case MCCFIInstruction::Restore:
+  case MCCFIInstruction::Escape:
+    assert(0);
   case MCCFIInstruction::SameValue: {
     unsigned Reg = Instr.getDestination().getReg();
     Streamer.EmitIntValue(dwarf::DW_CFA_same_value, 1);
@@ -499,6 +502,8 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 
   unsigned PerEncoding = TLOF.getPersonalityEncoding();
   unsigned FuncAddrEncoding = TLOF.getMonoEHTableEncoding ();
+
+  outs () << "DOH: " << PerEncoding << "\n";
 
   // Size and sign of stack growth.
   int stackGrowth = Asm->getTargetData().getPointerSize();
