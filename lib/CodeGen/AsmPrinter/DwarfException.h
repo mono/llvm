@@ -137,13 +137,6 @@ protected:
   /// augmentation.
   DenseMap<unsigned, bool> UsesLSDA;
 
-  // EmitMonoEHFrame - Emit Mono specific exception handling tables
-  void EmitMonoEHFrame(const Function *Personality);
-
-  void PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo);
-
-  void EmitMonoLSDA(const FunctionEHFrameInfo *EHFrameInfo);
-
   /// ComputeActionsTable - Compute the actions table and gather the first
   /// action index for each landing pad site.
   unsigned ComputeActionsTable(const SmallVectorImpl<const LandingPadInfo*>&LPs,
@@ -282,6 +275,47 @@ public:
 
   /// EndFunction - Gather and emit post-function exception information.
   virtual void EndFunction();
+};
+
+class DwarfMonoException : public DwarfException {
+  /// shouldEmitPersonality - Per-function flag to indicate if .cfi_personality
+  /// should be emitted.
+  bool shouldEmitPersonality;
+
+  /// shouldEmitLSDA - Per-function flag to indicate if .cfi_lsda
+  /// should be emitted.
+  bool shouldEmitLSDA;
+
+  /// shouldEmitMoves - Per-function flag to indicate if frame moves info
+  /// should be emitted.
+  bool shouldEmitMoves;
+
+  AsmPrinter::CFIMoveType moveTypeModule;
+
+public:
+  //===--------------------------------------------------------------------===//
+  // Main entry points.
+  //
+  DwarfMonoException(AsmPrinter *A);
+  virtual ~DwarfMonoException();
+
+  /// EndModule - Emit all exception information that should come after the
+  /// content.
+  virtual void EndModule();
+
+  /// BeginFunction - Gather pre-function exception information.  Assumes being
+  /// emitted immediately after the function entry point.
+  virtual void BeginFunction(const MachineFunction *MF);
+
+  /// EndFunction - Gather and emit post-function exception information.
+  virtual void EndFunction();
+
+  // EmitMonoEHFrame - Emit Mono specific exception handling tables
+  void EmitMonoEHFrame(const Function *Personality);
+
+  void PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo);
+
+  void EmitMonoLSDA(const FunctionEHFrameInfo *EHFrameInfo);
 };
 
 } // End of namespace llvm

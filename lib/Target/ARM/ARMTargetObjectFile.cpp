@@ -76,4 +76,3 @@ ARMElfTargetObjectFile::getStaticDtorSection(unsigned Priority) const {
   return getContext().getELFSection(Name, ELF::SHT_FINI_ARRAY,
                                     ELF::SHF_ALLOC | ELF::SHF_WRITE,
                                     SectionKind::getDataRel());
-}

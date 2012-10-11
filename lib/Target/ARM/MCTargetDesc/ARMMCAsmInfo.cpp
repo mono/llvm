@@ -58,6 +58,9 @@ ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
   Code32Directive = ".code\t32";
 
   SupportsDebugInformation = true;
+
+  // Mono uses a variant of Dwarf CFI
+  ExceptionsType = ExceptionHandling::DwarfCFI;
 }
 
 void ARMELFMCAsmInfo::anchor() { }
@@ -74,12 +77,15 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
 
   WeakRefDirective = "\t.weak\t";
   LCOMMDirectiveType = LCOMM::NoAlignment;
-  PCSymbol = ".";
 
   HasLEB128 = true;
   SupportsDebugInformation = true;
 
   // Exceptions handling
+  // Mono uses a variant of Dwarf CFI
+  ExceptionsType = ExceptionHandling::DwarfCFI;
+#if 0
   if (EnableARMEHABI)
     ExceptionsType = ExceptionHandling::ARM;
+#endif
 }

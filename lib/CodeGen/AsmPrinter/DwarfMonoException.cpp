@@ -42,6 +42,10 @@
 #include "llvm/ADT/Twine.h"
 using namespace llvm;
 
+// FIXME:
+static cl::opt<bool> DisableGNUEH("disable-gnu-eh-frame", cl::NotHidden,
+                                  cl::desc("Disable generation of GNU .eh_frame"));
+
 static inline const MCExpr *MakeStartMinusEndExpr(const MCStreamer &MCOS,
                                                   const MCSymbol &Start,
                                                   const MCSymbol &End,
@@ -199,7 +203,7 @@ void EmitCFIInstructions(MCStreamer &streamer,
 /// by EmitMonoLSDA and stores it into EHFrameInfo. It is the same as the
 /// beginning of EmitExceptionTable.
 ///
-void DwarfException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
+void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
   const std::vector<const GlobalVariable *> &TypeInfos = MMI->getTypeInfos();
   const std::vector<unsigned> &FilterIds = MMI->getFilterIds();
   const std::vector<LandingPadInfo> &PadInfos = MMI->getLandingPads();
@@ -263,7 +267,7 @@ void DwarfException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
 ///
 ///   We emit the information inline instead of into a separate section.
 ///
-void DwarfException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
+void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
   //
   // The code below is a modified/simplified version of EmitExceptionTable
   //
@@ -489,7 +493,7 @@ void DwarfException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
 }
 
 // EmitMonoEHFrame - Emit Mono specific exception handling tables
-void DwarfException::EmitMonoEHFrame(const Function *Personality)
+void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 {
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
 
@@ -658,4 +662,58 @@ void DwarfException::EmitMonoEHFrame(const Function *Personality)
   }
 
   Streamer.EmitLabel(EHFrameEndSym);
+}
+
+DwarfMonoException::DwarfMonoException(AsmPrinter *A)
+  : DwarfException(A),
+    shouldEmitPersonality(false), shouldEmitLSDA(false), shouldEmitMoves(false),
+    moveTypeModule(AsmPrinter::CFI_M_None) {}
+
+DwarfMonoException::~DwarfMonoException() {}
+
+void DwarfMonoException::BeginFunction(const MachineFunction *MF)
+{
+  Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("eh_func_begin",
+                                                Asm->getFunctionNumber()));
+}
+
+void DwarfMonoException::EndFunction() {
+  Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("eh_func_end",
+                                                Asm->getFunctionNumber()));
+
+  MMI->TidyLandingPads();
+
+  const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
+  MCSymbol *FunctionEHSym =
+    Asm->GetSymbolWithGlobalValueBase(Asm->MF->getFunction(), ".eh",
+                                      TLOF.isFunctionEHFrameSymbolPrivate());
+
+  // Save EH frame information
+  FunctionEHFrameInfo EHFrameInfo =
+    FunctionEHFrameInfo(FunctionEHSym,
+                        Asm->getFunctionNumber(),
+                        MMI->getPersonalityIndex(),
+                        Asm->MF->getFrameInfo()->adjustsStack(),
+                        !MMI->getLandingPads().empty(),
+                        MMI->getFrameMoves(),
+                        Asm->MF->getFunction());
+
+  PrepareMonoLSDA(&EHFrameInfo);
+
+  EHFrames.push_back(EHFrameInfo);
+}
+
+void DwarfMonoException::EndModule() {
+  const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
+
+  // Emit references to all used personality functions
+  const std::vector<const Function*> &Personalities = MMI->getPersonalities();
+  for (size_t i = 0, e = Personalities.size(); i != e; ++i) {
+    if (!Personalities[i])
+      continue;
+    MCSymbol *Sym = Asm->Mang->getSymbol(Personalities[i]);
+    TLOF.emitPersonalityValue(Asm->OutStreamer, Asm->TM, Sym);
+  }
+
+  EmitMonoEHFrame(Personalities[0]);
 }
