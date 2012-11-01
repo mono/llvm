@@ -625,6 +625,10 @@ public:
   void ExportFromCurrentBlock(const Value *V);
   void LowerCallTo(ImmutableCallSite CS, SDValue Callee, bool IsTailCall,
                    MachineBasicBlock *LandingPad = nullptr);
+  void LowerIntrinsicTo(ImmutableCallSite CS, unsigned Intrinsic,
+						MachineBasicBlock *LandingPad = NULL);
+  MCSymbol *EmitTryRangeStart(MachineBasicBlock *LandingPad);
+  void EmitTryRangeEnd(MachineBasicBlock *LandingPad, MCSymbol *BeginLabel);
 
   std::pair<SDValue, SDValue> LowerCallOperands(const CallInst &CI,
                                                 unsigned ArgIdx,
@@ -670,6 +674,15 @@ private:
                          const MachineBasicBlock *Dst) const;
   void addSuccessorWithWeight(MachineBasicBlock *Src, MachineBasicBlock *Dst,
                               uint32_t Weight = 0);
+
+  void handleLoad(const Instruction &I, const Value *SV, Type *Ty,
+				  bool isVolatile, bool isNonTemporal, bool isInvariant,
+				  unsigned Alignment, const MDNode *TBAAInfo);
+
+  void handleStore(const Value *SrcV, const Value *PtrV,
+				   bool isVolatile, bool isNonTemporal,
+				   unsigned Alignment, const MDNode *TBAAInfo);
+
 public:
   void visitSwitchCase(CaseBlock &CB,
                        MachineBasicBlock *SwitchBB);
