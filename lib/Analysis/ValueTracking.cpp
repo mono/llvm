@@ -2008,6 +2008,11 @@ bool llvm::isSafeToSpeculativelyExecute(const Value *V,
     const LoadInst *LI = cast<LoadInst>(Inst);
     if (!LI->isUnordered())
       return false;
+    //
+    // Mono extension, the metadata identifies loads which can't fail.
+    //
+    if (LI->getMetadata("mono.nofail.load"))
+      return true;
     return LI->getPointerOperand()->isDereferenceablePointer();
   }
   case Instruction::Call: {
