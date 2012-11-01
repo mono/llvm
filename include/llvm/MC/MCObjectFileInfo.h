@@ -49,6 +49,7 @@ protected:
   // Section flags for eh_frame
   unsigned EHSectionType;
   unsigned EHSectionFlags;
+  unsigned MonoEHTableEncoding;
 
   /// TextSection - Section directive for standard text.
   ///
@@ -186,6 +187,7 @@ public:
     return CFI ? FDECFIEncoding : FDEEncoding;
   }
   unsigned getTTypeEncoding() const { return TTypeEncoding; }
+  unsigned getMonoEHTableEncoding() const { return MonoEHTableEncoding; }
 
   const MCSection *getTextSection() const { return TextSection; }
   const MCSection *getDataSection() const { return DataSection; }
