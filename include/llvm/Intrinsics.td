@@ -469,3 +469,5 @@ include "llvm/IntrinsicsXCore.td"
 include "llvm/IntrinsicsHexagon.td"
 include "llvm/IntrinsicsNVVM.td"
 include "llvm/IntrinsicsMips.td"
+
+include "llvm/IntrinsicsMono.td"

@@ -411,6 +411,10 @@ public:
   void ExportFromCurrentBlock(const Value *V);
   void LowerCallTo(ImmutableCallSite CS, SDValue Callee, bool IsTailCall,
                    MachineBasicBlock *LandingPad = NULL);
+  void LowerIntrinsicTo(ImmutableCallSite CS, unsigned Intrinsic,
+						MachineBasicBlock *LandingPad = NULL);
+  MCSymbol *EmitTryRangeStart(MachineBasicBlock *LandingPad);
+  void EmitTryRangeEnd(MachineBasicBlock *LandingPad, MCSymbol *BeginLabel);
 
   /// UpdateSplitBlock - When an MBB was split during scheduling, update the
   /// references that ned to refer to the last resulting block.
@@ -450,6 +454,15 @@ private:
                          const MachineBasicBlock *Dst) const;
   void addSuccessorWithWeight(MachineBasicBlock *Src, MachineBasicBlock *Dst,
                               uint32_t Weight = 0);
+
+  void handleLoad(const Instruction &I, const Value *SV, Type *Ty,
+				  bool isVolatile, bool isNonTemporal, bool isInvariant,
+				  unsigned Alignment, const MDNode *TBAAInfo);
+
+  void handleStore(const Value *SrcV, const Value *PtrV,
+				   bool isVolatile, bool isNonTemporal,
+				   unsigned Alignment, const MDNode *TBAAInfo);
+
 public:
   void visitSwitchCase(CaseBlock &CB,
                        MachineBasicBlock *SwitchBB);
