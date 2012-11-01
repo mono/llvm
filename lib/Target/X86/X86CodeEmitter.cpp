@@ -87,6 +87,9 @@ namespace {
     void emitGlobalAddress(const GlobalValue *GV, unsigned Reloc,
                            intptr_t Disp = 0, intptr_t PCAdj = 0,
                            bool Indirect = false);
+	void emitBlockAddress(const MachineInstr& MI,
+						  const MachineOperand &MO,
+						  unsigned Reloc);
     void emitExternalSymbolAddress(const char *ES, unsigned Reloc);
     void emitConstPoolAddress(unsigned CPI, unsigned Reloc, intptr_t Disp = 0,
                               intptr_t PCAdj = 0);
@@ -292,6 +295,35 @@ void Emitter<CodeEmitter>::emitGlobalAddress(const GlobalValue *GV,
     MCE.emitDWordLE(Disp);
   else
     MCE.emitWordLE((int32_t)Disp);
+}
+
+/// emitBlockAddress - Emit the address of a basic block to the code stream
+///
+template<class CodeEmitter>
+void Emitter<CodeEmitter>::emitBlockAddress(const MachineInstr& MI,
+											const MachineOperand &MO,
+											unsigned Reloc)
+{
+	// Ugly, but the BlockAddress refers to the original LLVM bblock
+	const MachineFunction *MF = MI.getParent()->getParent();
+	const MachineBasicBlock *TargetBB = NULL;
+	for (MachineFunction::const_iterator MBB2 = MF->begin(), E = MF->end();
+		 MBB2 != E; ++MBB2) {
+        if (MBB2->getBasicBlock() == MO.getBlockAddress()->getBasicBlock()) {
+			TargetBB = MBB2;
+			break;
+        }
+	}
+	assert(TargetBB);
+	MCE.addRelocation(MachineRelocation::getBB(MCE.getCurrentPCOffset(),
+											   Reloc,
+											   const_cast<MachineBasicBlock*>(TargetBB)));
+	if (Reloc == X86::reloc_absolute_word)
+        MCE.emitWordLE(0);
+	else if (Reloc == X86::reloc_absolute_dword)
+        MCE.emitDWordLE(0);
+	else
+        assert(0);
 }
 
 /// emitExternalSymbolAddress - Arrange for the address of an external symbol to
@@ -1280,6 +1312,8 @@ void Emitter<CodeEmitter>::emitInstruction(MachineInstr &MI,
       bool Indirect = gvNeedsNonLazyPtr(MO1, TM);
       emitGlobalAddress(MO1.getGlobal(), rt, MO1.getOffset(), 0,
                         Indirect);
+    } else if (MO1.isBlockAddress()) {
+		emitBlockAddress(MI, MO1, rt);
     } else if (MO1.isSymbol())
       emitExternalSymbolAddress(MO1.getSymbolName(), rt);
     else if (MO1.isCPI())
@@ -1423,6 +1457,8 @@ void Emitter<CodeEmitter>::emitInstruction(MachineInstr &MI,
       bool Indirect = gvNeedsNonLazyPtr(MO, TM);
       emitGlobalAddress(MO.getGlobal(), rt, MO.getOffset(), 0,
                         Indirect);
+    } else if (MO.isBlockAddress()) {
+		emitBlockAddress(MI, MO, rt);
     } else if (MO.isSymbol())
       emitExternalSymbolAddress(MO.getSymbolName(), rt);
     else if (MO.isCPI())
