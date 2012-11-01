@@ -24,6 +24,7 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MonoMachineFunctionInfo.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/DebugInfo.h"
 #include "llvm/IR/DataLayout.h"
@@ -58,6 +59,7 @@ MachineFunction::MachineFunction(const Function *F, const TargetMachine &TM,
   else
     RegInfo = 0;
   MFInfo = 0;
+  MonoInfo = 0;
   FrameInfo = new (Allocator) MachineFrameInfo(*TM.getFrameLowering(),
                                                TM.Options.RealignStack);
   if (Fn->getAttributes().hasAttribute(AttributeSet::FunctionIndex,
@@ -65,6 +67,7 @@ MachineFunction::MachineFunction(const Function *F, const TargetMachine &TM,
     FrameInfo->ensureMaxAlignment(Fn->getAttributes().
                                 getStackAlignment(AttributeSet::FunctionIndex));
   ConstantPool = new (Allocator) MachineConstantPool(TM.getDataLayout());
+  MonoInfo = new (Allocator) MonoMachineFunctionInfo(*this);
   Alignment = TM.getTargetLowering()->getMinFunctionAlignment();
   // FIXME: Shouldn't use pref alignment if explicit alignment is set on Fn.
   if (!Fn->getAttributes().hasAttribute(AttributeSet::FunctionIndex,
@@ -93,6 +96,10 @@ MachineFunction::~MachineFunction() {
   if (MFInfo) {
     MFInfo->~MachineFunctionInfo();
     Allocator.Deallocate(MFInfo);
+  }
+  if (MonoInfo) {
+    MonoInfo->~MonoMachineFunctionInfo();
+    Allocator.Deallocate(MonoInfo);
   }
 
   FrameInfo->~MachineFrameInfo();
