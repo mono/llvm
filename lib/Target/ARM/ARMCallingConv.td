@@ -214,3 +214,21 @@ def CSR_iOS_ThisReturn : CalleeSavedRegs<(add LR, R7, R6, R5, R4,
 // add is a workaround for not being able to compile empty list:
 // def CSR_GHC : CalleeSavedRegs<()>;
 def CSR_GHC : CalleeSavedRegs<(add)>;
+
+def CC_ARM_Mono1_AAPCS : CallingConv<[
+
+	// Mono marks the parameter it wants to pass in this non-abi register with
+	// the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_AAPCS>
+]>;
+
+def CC_ARM_Mono1_APCS : CallingConv<[
+
+	// Mono marks the parameter it wants to pass in this non-abi register with
+	// the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_APCS>
+]>;
