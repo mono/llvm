@@ -536,6 +536,7 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
               Intrinsic<[], [], []>;
   def int_x86_sse2_mfence : GCCBuiltin<"__builtin_ia32_mfence">,
               Intrinsic<[], [], []>;
+  def int_x86_sse2_pause : Intrinsic<[], []>;
 }
 
 //===----------------------------------------------------------------------===//
