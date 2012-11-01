@@ -709,6 +709,27 @@ void ARMAsmPrinter::EmitEndOfAsmFile(Module &M) {
   // the status quo for ARM and setting EF_ARM_EABI_VER5 as the default.
   if (MCELFStreamer *MES = dyn_cast<MCELFStreamer>(&OutStreamer))
     MES->getAssembler().setELFHeaderEFlags(ELF::EF_ARM_EABI_VER5);
+
+  if (Subtarget->isTargetELF()) {
+    const TargetLoweringObjectFileELF &TLOFELF =
+      static_cast<const TargetLoweringObjectFileELF &>(getObjFileLowering());
+
+    MachineModuleInfoELF &MMIELF = MMI->getObjFileInfo<MachineModuleInfoELF>();
+
+    // Output stubs for external and common global variables.
+    MachineModuleInfoELF::SymbolListTy Stubs = MMIELF.GetGVStubList();
+    if (!Stubs.empty()) {
+      OutStreamer.SwitchSection(TLOFELF.getDataRelSection());
+      const TargetData *TD = TM.getTargetData();
+
+      for (unsigned i = 0, e = Stubs.size(); i != e; ++i) {
+        OutStreamer.EmitLabel(Stubs[i].first);
+        OutStreamer.EmitSymbolValue(Stubs[i].second.getPointer(),
+                                    TD->getPointerSize(), 0);
+      }
+      Stubs.clear();
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//

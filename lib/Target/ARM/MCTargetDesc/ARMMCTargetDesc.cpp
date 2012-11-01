@@ -161,11 +161,20 @@ static MCRegisterInfo *createARMMCRegisterInfo(StringRef Triple) {
 
 static MCAsmInfo *createARMMCAsmInfo(const Target &T, StringRef TT) {
   Triple TheTriple(TT);
+  MCAsmInfo *MAI;
 
   if (TheTriple.isOSDarwin())
-    return new ARMMCAsmInfoDarwin();
+    MAI = new ARMMCAsmInfoDarwin();
+  else
+    MAI = new ARMELFMCAsmInfo();
 
-  return new ARMELFMCAsmInfo();
+  // Initialize initial frame state.
+  // Initial state of the frame pointer is sp
+  MachineLocation Dst(MachineLocation::VirtualFP);
+  MachineLocation Src(ARM::SP, 0);
+  MAI->addInitialFrameState(0, Dst, Src);
+
+  return MAI;
 }
 
 static MCCodeGenInfo *createARMMCCodeGenInfo(StringRef TT, Reloc::Model RM,
