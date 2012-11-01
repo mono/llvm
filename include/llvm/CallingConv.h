@@ -47,6 +47,12 @@ namespace CallingConv {
     // GHC - Calling convention used by the Glasgow Haskell Compiler (GHC).
     GHC = 10,
 
+    // Mono - Calling conventions used by Mono to pass parameters in non-ABI
+    // registers.
+    // Mono marks those parameters with the 'inreg' attribute.
+    // - Mono1: pass rgctx or imt
+    Mono1 = 11,
+
     // Target - This is the start of the target-specific calling conventions,
     // e.g. fastcall and thiscall on X86.
     FirstTargetCC = 64,
