@@ -474,6 +474,7 @@ def int_convertuu  : Intrinsic<[llvm_anyint_ty],
 // Target-specific intrinsics
 //===----------------------------------------------------------------------===//
 
+<<<<<<< HEAD:include/llvm/IR/Intrinsics.td
 include "llvm/IR/IntrinsicsPowerPC.td"
 include "llvm/IR/IntrinsicsX86.td"
 include "llvm/IR/IntrinsicsARM.td"
@@ -482,3 +483,5 @@ include "llvm/IR/IntrinsicsHexagon.td"
 include "llvm/IR/IntrinsicsNVVM.td"
 include "llvm/IR/IntrinsicsMips.td"
 include "llvm/IR/IntrinsicsR600.td"
+
+include "llvm/IR/IntrinsicsMono.td"
