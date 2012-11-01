@@ -378,6 +378,9 @@ void llvm::CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
     assert(VMap.count(II) && "No mapping from source argument specified!");
 #endif
 
+  // BlockAddress remapping requires this
+  VMap[OldFunc] = NewFunc;
+
   PruningFunctionCloner PFC(NewFunc, OldFunc, VMap, ModuleLevelChanges,
                             NameSuffix, CodeInfo, TD);
 
