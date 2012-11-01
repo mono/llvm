@@ -309,7 +309,8 @@ JIT::JIT(Module *M, TargetMachine &tm, TargetJITInfo &tji,
   // Not sure about how to deregister on Darwin.
 #else
   InstallExceptionTableRegister(__register_frame);
-  InstallExceptionTableDeregister(__deregister_frame);
+  // FIXME: This seems to crash inside libgcc
+  //InstallExceptionTableDeregister(__deregister_frame);
 #endif // __APPLE__
 #endif // HAVE_EHTABLE_SUPPORT
 
