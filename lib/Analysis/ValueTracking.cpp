@@ -2010,6 +2010,11 @@ bool llvm::isSafeToSpeculativelyExecute(const Value *V,
         // Speculative load may create a race that did not exist in the source.
         LI->getParent()->getParent()->hasFnAttribute(Attribute::SanitizeThread))
       return false;
+    //
+    // Mono extension, the metadata identifies loads which can't fail.
+    //
+    if (LI->getMetadata("mono.nofail.load"))
+      return true;
     return LI->getPointerOperand()->isDereferenceablePointer();
   }
   case Instruction::Call: {
