@@ -20,6 +20,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Function.h"
@@ -112,6 +113,9 @@ static bool isCSRestore(MachineInstr *MI,
       MI->getOperand(1).getReg() == ARM::SP)
     return true;
 
+  if ((MI->getOpcode() == ARM::LDR_POST_IMM || MI->getOpcode() == ARM::LDR_POST_REG) && isCalleeSavedRegister(MI->getOperand(0).getReg(), CSRegs))
+    return true;
+
   return false;
 }
 
@@ -127,6 +131,54 @@ emitSPUpdate(bool isARM,
   else
     emitT2RegPlusImmediate(MBB, MBBI, dl, ARM::SP, ARM::SP, NumBytes,
                            Pred, PredReg, TII, MIFlags);
+}
+
+//
+// Functions to emit MachineMoves. These use the DWARF unwind terminology, i.e
+// CFA == VirtualFP
+//
+
+// emitDefCfaOffset - Emit a MachineMove to set the CFA offset
+static void
+emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+                 DebugLoc dl, const ARMBaseInstrInfo &TII,
+                 MachineModuleInfo &MMI,
+                 std::vector<MachineMove> &Moves, MCSymbol *FrameLabel,
+                 int CfaOffset) {
+  if (!FrameLabel) {
+    FrameLabel = MMI.getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+  }
+  MachineLocation SPDst(MachineLocation::VirtualFP);
+  MachineLocation SPSrc(MachineLocation::VirtualFP, -CfaOffset);
+  Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
+}
+
+// emitDefCfa - Emit a MachineMove to set the CFA register+offset
+static void
+emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+           DebugLoc dl, const ARMBaseInstrInfo &TII,
+           MachineModuleInfo &MMI,
+           std::vector<MachineMove> &Moves,
+           int CfaReg, int CfaOffset) {
+  MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+
+  MachineLocation SPDst(MachineLocation::VirtualFP);
+  MachineLocation SPSrc(CfaReg, CfaOffset);
+  Moves.push_back(MachineMove(FrameLabel, SPDst, SPSrc));
+}
+
+// emitCfaOffset - Emit a MachineMove to define where Reg is saved
+static void
+emitCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+              DebugLoc dl, const ARMBaseInstrInfo &TII,
+              MachineModuleInfo &MMI,
+              std::vector<MachineMove> &Moves, MCSymbol *FrameLabel,
+              int Reg, int Offset) {
+  MachineLocation CSDst(MachineLocation::VirtualFP, Offset);
+  MachineLocation CSSrc(Reg);
+  Moves.push_back(MachineMove(FrameLabel, CSDst, CSSrc));
 }
 
 void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
@@ -146,6 +198,13 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
   DebugLoc dl = MBBI != MBB.end() ? MBBI->getDebugLoc() : DebugLoc();
   unsigned FramePtr = RegInfo->getFrameRegister(MF);
+  MachineModuleInfo &MMI = MF.getMMI();
+  bool NeedsFrameMoves = MF.getFunction()->needsUnwindTableEntry();
+  // The cfa register
+  int CfaReg = ARM::SP;
+  // The offset between the value of CfaReg and the CFA
+  int CfaOffset = 0;
+  std::vector<MachineMove> &Moves = MMI.getFrameMoves();
 
   // Determine the sizes of each callee-save spill areas and record which frame
   // belongs to which callee-save spill areas.
@@ -162,11 +221,15 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   if (ArgRegsSaveSize)
     emitSPUpdate(isARM, MBB, MBBI, dl, TII, -ArgRegsSaveSize,
                  MachineInstr::FrameSetup);
+  CfaOffset += VARegSaveSize;
 
   if (!AFI->hasStackFrame()) {
     if (NumBytes != 0)
       emitSPUpdate(isARM, MBB, MBBI, dl, TII, -NumBytes,
                    MachineInstr::FrameSetup);
+    CfaOffset += NumBytes;
+    if (NeedsFrameMoves && CfaOffset)
+      emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, NULL, CfaOffset);
     return;
   }
 
@@ -212,6 +275,28 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   // Move past area 1.
   if (GPRCS1Size > 0) MBBI++;
 
+  CfaOffset += GPRCS1Size;
+  if (NeedsFrameMoves) {
+    MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+    // CFA = sp + offset
+    emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, FrameLabel, CfaOffset);
+
+    // Emit moves for the registers in spill area 1
+    for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+      unsigned Reg = CSI[i].getReg();
+      int FI = CSI[i].getFrameIdx();
+      int64_t Offset = MFI->getObjectOffset(FI);
+
+      // The offset is relative to the incoming stack pointer which is
+      // the cfa
+      if (AFI->isGPRCalleeSavedArea1Frame(FI)) {
+        // Reg is saved at cfa + offset
+        emitCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, FrameLabel, Reg, Offset);
+      }
+    }
+  }
+
   // Set FP to point to the stack slot that contains the previous FP.
   // For iOS, FP is R7, which has now been stored in spill area 1.
   // Otherwise, if this is not iOS, all the callee-saved registers go
@@ -225,10 +310,36 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
       .addFrameIndex(FramePtrSpillFI).addImm(0)
       .setMIFlag(MachineInstr::FrameSetup);
     AddDefaultCC(AddDefaultPred(MIB));
+
+    if (NeedsFrameMoves) {
+      // CFA = FramePtr + offset from cfa where fp was stored
+      CfaReg = FramePtr;
+      CfaOffset = MFI->getObjectOffset (FramePtrSpillFI);
+      emitDefCfa(MBB, MBBI, dl, TII, MMI, Moves, CfaReg, CfaOffset);
+    }
   }
 
   // Move past area 2.
   if (GPRCS2Size > 0) MBBI++;
+
+  if (NeedsFrameMoves) {
+    MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+
+    // Emit moves for the registers in spill area 2
+    for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+      unsigned Reg = CSI[i].getReg();
+      int FI = CSI[i].getFrameIdx();
+      int64_t Offset = MFI->getObjectOffset(FI);
+
+      // The offset is relative to the incoming stack pointer which is
+      // the cfa
+      if (AFI->isGPRCalleeSavedArea2Frame(FI)) {
+        // Reg is saved at cfa + offset
+        emitCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, FrameLabel, Reg, Offset);
+      }
+    }
+  }
 
   // Determine starting offsets of spill areas.
   unsigned DPRCSOffset  = NumBytes - (GPRCS1Size + GPRCS2Size + DPRCSSize);
@@ -275,6 +386,11 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
       // an inconsistent state (pointing to the middle of callee-saved area).
       // The interrupt handler can end up clobbering the registers.
       AFI->setShouldRestoreSPFromFP(true);
+
+    if (NeedsFrameMoves && CfaReg == ARM::SP) {
+      CfaOffset += NumBytes;
+      emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, Moves, NULL, CfaOffset);
+    }
   }
 
   if (STI.isTargetELF() && hasFP(MF))
@@ -419,8 +535,9 @@ void ARMFrameLowering::emitEpilogue(MachineFunction &MF,
                                  ARM::SP)
             .addReg(FramePtr));
       }
-    } else if (NumBytes)
+    } else if (NumBytes) {
       emitSPUpdate(isARM, MBB, MBBI, dl, TII, NumBytes);
+    }
 
     // Increment past our save areas.
     if (AFI->getDPRCalleeSavedAreaSize()) {
