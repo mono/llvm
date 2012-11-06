@@ -141,12 +141,12 @@ char MachineScheduler::ID = 0;
 
 char &llvm::MachineSchedulerID = MachineScheduler::ID;
 
-INITIALIZE_PASS_BEGIN(MachineScheduler, "misched",
+INITIALIZE_PASS_BEGIN(MachineScheduler, "misched-2",
                       "Machine Instruction Scheduler", false, false)
 INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
 INITIALIZE_PASS_DEPENDENCY(SlotIndexes)
 INITIALIZE_PASS_DEPENDENCY(LiveIntervals)
-INITIALIZE_PASS_END(MachineScheduler, "misched",
+INITIALIZE_PASS_END(MachineScheduler, "misched-2",
                     "Machine Instruction Scheduler", false, false)
 
 MachineScheduler::MachineScheduler()
