@@ -52,7 +52,7 @@ char MachineFunctionPrinterPass::ID = 0;
 }
 
 char &llvm::MachineFunctionPrinterPassID = MachineFunctionPrinterPass::ID;
-INITIALIZE_PASS(MachineFunctionPrinterPass, "print-machineinstrs",
+INITIALIZE_PASS(MachineFunctionPrinterPass, "print-machineinstrs-2",
                 "Machine Function Printer", false, false)
 
 namespace llvm {
