@@ -125,6 +125,9 @@ void ARMInstPrinter::printOperand(const MCInst *MI, unsigned OpNo,
 
 static void printSOImm(raw_ostream &O, int64_t V, raw_ostream *CommentStream,
                        const MCAsmInfo *MAI) {
+  // clang can't assemble this
+  O << "#" << V;
+#if 0
   // Break it up into two parts that make up a shifter immediate.
   V = ARM_AM::getSOImmVal(V);
   assert(V != -1 && "Not a valid so_imm value!");
@@ -142,6 +145,7 @@ static void printSOImm(raw_ostream &O, int64_t V, raw_ostream *CommentStream,
   } else {
     O << "#" << Imm;
   }
+#endif
 }
 
 
