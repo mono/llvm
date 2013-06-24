@@ -245,6 +245,21 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
   SmallVector<CallSiteEntry, 64> CallSites;
   ComputeCallSiteTable(CallSites, PadMap, LandingPads, FirstActions);
 
+  //
+  // Compute a mapping from method names to their AOT method index
+  //
+  if (FuncIndexes.size () == 0) {
+    const Module *m = MMI->getModule ();
+    NamedMDNode *indexes = m->getNamedMetadata ("mono.function_indexes");
+    assert (indexes);
+    for (unsigned int i = 0; i < indexes->getNumOperands (); ++i) {
+      MDNode *n = indexes->getOperand (i);
+      MDString *s = (MDString*)n->getOperand (0);
+      ConstantInt *idx = (ConstantInt*)n->getOperand (1);
+      FuncIndexes.GetOrCreateValue (s->getString (), (int)idx->getLimitedValue () + 1);
+    }
+  }
+
   MonoEHFrameInfo *MonoEH = &EHFrameInfo->MonoEH;
 
   // Save information for EmitMonoLSDA
@@ -254,6 +269,8 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
   MonoEH->TypeInfos = TypeInfos;
   MonoEH->FilterIds = FilterIds;
   MonoEH->PadInfos = PadInfos;
+  MonoEH->MonoMethodIdx = FuncIndexes.lookup (Asm->MF->getFunction ()->getName ()) - 1;
+  //outs()<<"A:"<<Asm->MF->getFunction()->getName() << " " << MonoEH->MonoMethodIdx << "\n";
 
   int ThisSlot = Asm->MF->getMonoInfo()->getThisStackSlot();
 
@@ -557,7 +574,7 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   // Header
 
   Streamer.AddComment("version");
-  Asm->OutStreamer.EmitIntValue(2, 1, 0);
+  Asm->OutStreamer.EmitIntValue(3, 1, 0);
   Asm->OutStreamer.AddComment ("func addr encoding");
   Asm->OutStreamer.EmitIntValue (FuncAddrEncoding, 1, 0);
 
@@ -569,30 +586,21 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 		   I = EHFrames.begin(), E = EHFrames.end(); I != E; ++I) {
 	  const FunctionEHFrameInfo &EHFrameInfo = *I;
 
-      MCSymbol *EHFuncBeginSym =
-        Asm->GetTempSymbol("eh_func_begin", EHFrameInfo.Number);
+      //
+      // Instead of the function address, we emit the mono method index, which is easier to encode.
+      //
+      Streamer.AddComment("mono method idx");
+      Streamer.EmitIntValue (EHFrameInfo.MonoEH.MonoMethodIdx, 4);
 	  MCSymbol *FDEBeginSym = Asm->GetTempSymbol ("mono_eh_func_begin", EHFrameInfo.Number);
-	  if (FuncAddrEncoding == dwarf::DW_EH_PE_absptr) {
- 		  // On ios, the linker can move functions inside object files so the offsets between two symbols are not assembler constant.
-		  Asm->EmitReference (EHFuncBeginSym, FuncAddrEncoding);
-	  } else {
- 		  // FIXME: Use DW_EH_PE_pcrel in the future
-		  Asm->EmitLabelDifference(EHFuncBeginSym, EHFrameHdrSym, 4);
-	  }
 	  Asm->EmitLabelDifference(FDEBeginSym, EHFrameHdrSym, 4);
   }
   // Emit a last entry to simplify binary searches and to enable the computation of
   // the size of the last function/FDE entry
+  Streamer.EmitIntValue (-1, 4);
   if (EHFrames.size() == 0) {
 	  Asm->EmitLabelDifference(EHFrameHdrSym, EHFrameHdrSym, 4);
-	  Asm->EmitLabelDifference(EHFrameHdrSym, EHFrameHdrSym, 4);
   } else {
-    MCSymbol *Sym1 = Asm->GetTempSymbol("eh_func_end", EHFrames[EHFrames.size() - 1].Number);
     MCSymbol *Sym2 = Asm->GetTempSymbol ("mono_eh_frame_end");
-	if (FuncAddrEncoding == dwarf::DW_EH_PE_absptr)
-		Asm->EmitReference (Sym1, FuncAddrEncoding);
- 	else
- 		Asm->EmitLabelDifference(Sym1, EHFrameHdrSym, 4);
     Asm->EmitLabelDifference(Sym2, EHFrameHdrSym, 4);
   }
 
@@ -668,9 +676,7 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 }
 
 DwarfMonoException::DwarfMonoException(AsmPrinter *A)
-  : DwarfException(A),
-    shouldEmitPersonality(false), shouldEmitLSDA(false), shouldEmitMoves(false),
-    moveTypeModule(AsmPrinter::CFI_M_None) {}
+  : DwarfException(A) {}
 
 DwarfMonoException::~DwarfMonoException() {}
 

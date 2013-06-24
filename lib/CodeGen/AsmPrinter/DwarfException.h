@@ -15,6 +15,7 @@
 #define LLVM_CODEGEN_ASMPRINTER_DWARFEXCEPTION_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Module.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include <vector>
@@ -87,6 +88,7 @@ protected:
     std::vector<unsigned> FilterIds;
     std::vector<LandingPadInfo> PadInfos;
     int FunctionNumber;
+	int MonoMethodIdx;
     int FrameReg;
     int ThisOffset;
   };
@@ -269,19 +271,8 @@ public:
 };
 
 class DwarfMonoException : public DwarfException {
-  /// shouldEmitPersonality - Per-function flag to indicate if .cfi_personality
-  /// should be emitted.
-  bool shouldEmitPersonality;
 
-  /// shouldEmitLSDA - Per-function flag to indicate if .cfi_lsda
-  /// should be emitted.
-  bool shouldEmitLSDA;
-
-  /// shouldEmitMoves - Per-function flag to indicate if frame moves info
-  /// should be emitted.
-  bool shouldEmitMoves;
-
-  AsmPrinter::CFIMoveType moveTypeModule;
+  StringMap<int> FuncIndexes;
 
 public:
   //===--------------------------------------------------------------------===//
