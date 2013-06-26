@@ -517,7 +517,6 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 {
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
 
-  unsigned PerEncoding = TLOF.getPersonalityEncoding();
   unsigned FuncAddrEncoding = TLOF.getMonoEHTableEncoding ();
 
   // Size and sign of stack growth.
@@ -612,13 +611,7 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
   Asm->EmitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
 
-  if (Personality) {
-    Asm->EmitEncodingByte(PerEncoding, "Personality");
-    Streamer.AddComment("Personality");
-    Asm->EmitReference(Personality, PerEncoding);
-  } else {
-    Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "Personality");
-  }
+  Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "Personality");
 
   int CFAOffset = 0;
 
