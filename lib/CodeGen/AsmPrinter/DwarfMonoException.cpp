@@ -26,8 +26,8 @@
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/DataLayout.h"
 #include "llvm/Target/Mangler.h"
-#include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
@@ -521,7 +521,7 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   unsigned FuncAddrEncoding = TLOF.getMonoEHTableEncoding ();
 
   // Size and sign of stack growth.
-  int stackGrowth = Asm->getTargetData().getPointerSize();
+  int stackGrowth = Asm->getDataLayout().getPointerSize();
   if (Asm->TM.getFrameLowering()->getStackGrowthDirection() ==
       TargetFrameLowering::StackGrowsDown)
     stackGrowth *= -1;
