@@ -54,6 +54,7 @@ namespace CallingConv {
     // Mono - Calling conventions used by Mono to pass parameters in non-ABI
     // registers.
     // Mono marks those parameters with the 'inreg' attribute.
+	// Keep this in sync with Core.h
     Mono1 = 12,
 
     // Target - This is the start of the target-specific calling conventions,
