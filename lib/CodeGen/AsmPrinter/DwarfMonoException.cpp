@@ -78,97 +78,183 @@ static const MachineLocation TranslateMachineLocation(
 static void EncodeCFIInstructions (MCStreamer &streamer,
                                    const std::vector<MachineMove> &Moves,
                                    std::vector<MCCFIInstruction> &Instructions) {
-      MCContext &context = streamer.getContext();
-      const MCRegisterInfo &regInfo = context.getRegisterInfo();
+  MCContext &context = streamer.getContext();
+  const MCRegisterInfo &regInfo = context.getRegisterInfo();
       
-      for (int i = 0, n = Moves.size(); i != n; ++i) {
-        MCSymbol *Label = Moves[i].getLabel();
-        const MachineLocation &Dst =
-          TranslateMachineLocation(regInfo, Moves[i].getDestination());
-        const MachineLocation &Src =
-          TranslateMachineLocation(regInfo, Moves[i].getSource());
-        MCCFIInstruction Inst(Label, Dst, Src);
-        Instructions.push_back(Inst);
+  for (int i = 0, n = Moves.size(); i != n; ++i) {
+    MCSymbol *Label = Moves[i].getLabel();
+    const MachineLocation &Dst =
+      TranslateMachineLocation(regInfo, Moves[i].getDestination());
+    const MachineLocation &Src =
+      TranslateMachineLocation(regInfo, Moves[i].getSource());
+
+    //
+    // Dst=VirtualFP
+    //   Src=VirtualFP+offset  -> def_cfa_offset
+    // else
+    //   Src=reg+offset        -> def_cfa
+    // Dst=VirtualFP+offset
+    //   Src=reg               -> offset
+    //
+    if (Dst.isReg()) {
+      if (Dst.getReg() == MachineLocation::VirtualFP) {
+        assert(!Src.isReg());
+        if (Src.getReg () == MachineLocation::VirtualFP) {
+          MCCFIInstruction Inst =
+            MCCFIInstruction::createDefCfaOffset(Label, -Src.getOffset());
+          Instructions.push_back(Inst);
+        } else {
+          MCCFIInstruction Inst =
+            MCCFIInstruction::createDefCfa(Label, Src.getReg(), -Src.getOffset());
+          Instructions.push_back(Inst);
+        }
+      } else {
+        // FIXME: What is this ?
+        //outs () << Dst.getReg () << " " << Src.getReg () << "\n";
       }
+    } else {
+      assert(Src.isReg());
+      unsigned Reg = Src.getReg();
+      int Offset = Dst.getOffset();
+      MCCFIInstruction Inst =
+        MCCFIInstruction::createOffset(Label, Reg, Offset);
+      Instructions.push_back(Inst);
+    }
+  }
 }
 
 void EmitCFIInstruction(MCStreamer &Streamer,
                         const MCCFIInstruction &Instr,
                         int &CFAOffset, int DataAlignmentFactor) {
+  // Same as MCDwarf::EmitCFIInstruction ()
+  // FIXME: Unify
+  int dataAlignmentFactor = DataAlignmentFactor;
+  bool VerboseAsm = Streamer.isVerboseAsm();
+
   switch (Instr.getOperation()) {
-  case MCCFIInstruction::Move:
-  case MCCFIInstruction::RelMove: {
-    const MachineLocation &Dst = Instr.getDestination();
-    const MachineLocation &Src = Instr.getSource();
-    const bool IsRelative = Instr.getOperation() == MCCFIInstruction::RelMove;
-
-    // If advancing cfa.
-    if (Dst.isReg() && Dst.getReg() == MachineLocation::VirtualFP) {
-      if (IsRelative)
-        CFAOffset += Src.getOffset();
-      else
-        CFAOffset = -Src.getOffset();
-
-      if (Src.getReg() == MachineLocation::VirtualFP) {
-        Streamer.AddComment ("def_cfa_offset");
-        Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_offset, 1);
-      } else {
-        Streamer.AddComment ("def_cfa");
-        Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa, 1);
-        Streamer.EmitULEB128IntValue(Src.getReg());
-      }
-
-      Streamer.EmitULEB128IntValue(CFAOffset);
-      return;
+  case MCCFIInstruction::OpUndefined: {
+    unsigned Reg = Instr.getRegister();
+    if (VerboseAsm) {
+      Streamer.AddComment("DW_CFA_undefined");
+      Streamer.AddComment(Twine("Reg ") + Twine(Reg));
     }
-
-    if (Src.isReg() && Src.getReg() == MachineLocation::VirtualFP) {
-      assert(Dst.isReg() && "Machine move not supported yet.");
-        Streamer.AddComment ("def_cfa_register");
-      Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_register, 1);
-      Streamer.EmitULEB128IntValue(Dst.getReg());
-      return;
-    }
-
-    unsigned Reg = Src.getReg();
-
-    int Offset = Dst.getOffset();
-    if (IsRelative)
-      Offset -= CFAOffset;
-    Offset = Offset / DataAlignmentFactor;
-
-    if (Offset < 0) {
-      Streamer.AddComment ("cfa_offset_extended_sf");
-      Streamer.EmitIntValue(dwarf::DW_CFA_offset_extended_sf, 1);
-      Streamer.EmitULEB128IntValue(Reg);
-      Streamer.EmitSLEB128IntValue(Offset);
-    } else if (Reg < 64) {
-      Streamer.AddComment ("cfa_offset");
-      Streamer.EmitIntValue(dwarf::DW_CFA_offset + Reg, 1);
-      Streamer.EmitULEB128IntValue(Offset);
-    } else {
-      Streamer.AddComment ("cfa_offset_extended");
-      Streamer.EmitIntValue(dwarf::DW_CFA_offset_extended, 1);
-      Streamer.EmitULEB128IntValue(Reg);
-      Streamer.EmitULEB128IntValue(Offset);
-    }
-    return;
-  }
-  case MCCFIInstruction::RememberState:
-    Streamer.EmitIntValue(dwarf::DW_CFA_remember_state, 1);
-    return;
-  case MCCFIInstruction::RestoreState:
-    Streamer.EmitIntValue(dwarf::DW_CFA_restore_state, 1);
-    return;
-  case MCCFIInstruction::Restore:
-  case MCCFIInstruction::Escape:
-    assert(0);
-  case MCCFIInstruction::SameValue: {
-    unsigned Reg = Instr.getDestination().getReg();
-    Streamer.EmitIntValue(dwarf::DW_CFA_same_value, 1);
+    Streamer.EmitIntValue(dwarf::DW_CFA_undefined, 1);
     Streamer.EmitULEB128IntValue(Reg);
     return;
   }
+  case MCCFIInstruction::OpAdjustCfaOffset:
+  case MCCFIInstruction::OpDefCfaOffset: {
+    const bool IsRelative =
+      Instr.getOperation() == MCCFIInstruction::OpAdjustCfaOffset;
+
+    if (VerboseAsm)
+      Streamer.AddComment("DW_CFA_def_cfa_offset");
+    Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_offset, 1);
+
+    if (IsRelative)
+      CFAOffset += Instr.getOffset();
+    else
+      CFAOffset = -Instr.getOffset();
+
+    if (VerboseAsm)
+      Streamer.AddComment(Twine("Offset " + Twine(CFAOffset)));
+    Streamer.EmitULEB128IntValue(CFAOffset);
+
+    return;
+  }
+  case MCCFIInstruction::OpDefCfa: {
+    if (VerboseAsm)
+      Streamer.AddComment("DW_CFA_def_cfa");
+    Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa, 1);
+
+    if (VerboseAsm)
+      Streamer.AddComment(Twine("Reg ") + Twine(Instr.getRegister()));
+    Streamer.EmitULEB128IntValue(Instr.getRegister());
+
+    CFAOffset = -Instr.getOffset();
+
+    if (VerboseAsm)
+      Streamer.AddComment(Twine("Offset " + Twine(CFAOffset)));
+    Streamer.EmitULEB128IntValue(CFAOffset);
+
+    return;
+  }
+
+  case MCCFIInstruction::OpDefCfaRegister: {
+    if (VerboseAsm)
+      Streamer.AddComment("DW_CFA_def_cfa_register");
+    Streamer.EmitIntValue(dwarf::DW_CFA_def_cfa_register, 1);
+
+    if (VerboseAsm)
+      Streamer.AddComment(Twine("Reg ") + Twine(Instr.getRegister()));
+    Streamer.EmitULEB128IntValue(Instr.getRegister());
+
+    return;
+  }
+
+  case MCCFIInstruction::OpOffset:
+  case MCCFIInstruction::OpRelOffset: {
+    const bool IsRelative =
+      Instr.getOperation() == MCCFIInstruction::OpRelOffset;
+
+    unsigned Reg = Instr.getRegister();
+    int Offset = Instr.getOffset();
+    if (IsRelative)
+      Offset -= CFAOffset;
+    Offset = Offset / dataAlignmentFactor;
+
+    if (Offset < 0) {
+      if (VerboseAsm) Streamer.AddComment("DW_CFA_offset_extended_sf");
+      Streamer.EmitIntValue(dwarf::DW_CFA_offset_extended_sf, 1);
+      if (VerboseAsm) Streamer.AddComment(Twine("Reg ") + Twine(Reg));
+      Streamer.EmitULEB128IntValue(Reg);
+      if (VerboseAsm) Streamer.AddComment(Twine("Offset ") + Twine(Offset));
+      Streamer.EmitSLEB128IntValue(Offset);
+    } else if (Reg < 64) {
+      if (VerboseAsm) Streamer.AddComment(Twine("DW_CFA_offset + Reg(") +
+                                          Twine(Reg) + ")");
+      Streamer.EmitIntValue(dwarf::DW_CFA_offset + Reg, 1);
+      if (VerboseAsm) Streamer.AddComment(Twine("Offset ") + Twine(Offset));
+      Streamer.EmitULEB128IntValue(Offset);
+    } else {
+      if (VerboseAsm) Streamer.AddComment("DW_CFA_offset_extended");
+      Streamer.EmitIntValue(dwarf::DW_CFA_offset_extended, 1);
+      if (VerboseAsm) Streamer.AddComment(Twine("Reg ") + Twine(Reg));
+      Streamer.EmitULEB128IntValue(Reg);
+      if (VerboseAsm) Streamer.AddComment(Twine("Offset ") + Twine(Offset));
+      Streamer.EmitULEB128IntValue(Offset);
+    }
+    return;
+  }
+  case MCCFIInstruction::OpRememberState:
+    if (VerboseAsm) Streamer.AddComment("DW_CFA_remember_state");
+    Streamer.EmitIntValue(dwarf::DW_CFA_remember_state, 1);
+    return;
+  case MCCFIInstruction::OpRestoreState:
+    if (VerboseAsm) Streamer.AddComment("DW_CFA_restore_state");
+    Streamer.EmitIntValue(dwarf::DW_CFA_restore_state, 1);
+    return;
+  case MCCFIInstruction::OpSameValue: {
+    unsigned Reg = Instr.getRegister();
+    if (VerboseAsm) Streamer.AddComment("DW_CFA_same_value");
+    Streamer.EmitIntValue(dwarf::DW_CFA_same_value, 1);
+    if (VerboseAsm) Streamer.AddComment(Twine("Reg ") + Twine(Reg));
+    Streamer.EmitULEB128IntValue(Reg);
+    return;
+  }
+  case MCCFIInstruction::OpRestore: {
+    unsigned Reg = Instr.getRegister();
+    if (VerboseAsm) {
+      Streamer.AddComment("DW_CFA_restore");
+      Streamer.AddComment(Twine("Reg ") + Twine(Reg));
+    }
+    Streamer.EmitIntValue(dwarf::DW_CFA_restore | Reg, 1);
+    return;
+  }
+  case MCCFIInstruction::OpEscape:
+    if (VerboseAsm) Streamer.AddComment("Escape bytes");
+    Streamer.EmitBytes(Instr.getValues(), 0);
+    return;
   }
   llvm_unreachable("Unhandled case in switch");
 }
