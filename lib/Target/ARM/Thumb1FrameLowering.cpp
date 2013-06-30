@@ -20,7 +20,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Function.h"
+#include "llvm/IR/Function.h"
 
 using namespace llvm;
 
