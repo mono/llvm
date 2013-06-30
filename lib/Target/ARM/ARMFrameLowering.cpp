@@ -221,7 +221,7 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   if (ArgRegsSaveSize)
     emitSPUpdate(isARM, MBB, MBBI, dl, TII, -ArgRegsSaveSize,
                  MachineInstr::FrameSetup);
-  CfaOffset += VARegSaveSize;
+  CfaOffset += ArgRegsSaveSize;
 
   if (!AFI->hasStackFrame()) {
     if (NumBytes != 0)

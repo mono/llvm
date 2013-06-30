@@ -321,7 +321,6 @@ void MCObjectFileInfo::InitELFMCObjectFileInfo(Triple T) {
     LSDAEncoding = dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
     FDEEncoding = dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
     TTypeEncoding = dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
->>>>>>> Add support for Mono EH to the JIT and the static compiler. For the JIT, emit a variant of the C++ EH structures which contains extra information required by mono, i.e. the stack location of 'this'. For the static compiler, emit separate tables instead of the normal C++ tables.
   }
 
   // Solaris requires different flags for .eh_frame to seemingly every other

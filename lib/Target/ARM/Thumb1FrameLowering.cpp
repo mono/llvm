@@ -165,7 +165,7 @@ void Thumb1FrameLowering::emitPrologue(MachineFunction &MF) const {
   if (ArgRegsSaveSize)
     emitSPUpdate(MBB, MBBI, TII, dl, *RegInfo, -ArgRegsSaveSize,
                  MachineInstr::FrameSetup);
-  CfaOffset += VARegSaveSize;
+  CfaOffset += ArgRegsSaveSize;
 
   if (!AFI->hasStackFrame()) {
     if (NumBytes != 0)
