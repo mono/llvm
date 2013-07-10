@@ -255,6 +255,9 @@ void EmitCFIInstruction(MCStreamer &Streamer,
     if (VerboseAsm) Streamer.AddComment("Escape bytes");
     Streamer.EmitBytes(Instr.getValues(), 0);
     return;
+  case MCCFIInstruction::OpRegister:
+	  llvm_unreachable("Unhandled case in switch");	
+	  return;
   }
   llvm_unreachable("Unhandled case in switch");
 }
@@ -659,7 +662,7 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   // Header
 
   Streamer.AddComment("version");
-  Asm->OutStreamer.EmitIntValue(4, 1, 0);
+  Asm->OutStreamer.EmitIntValue(3, 1, 0);
   Asm->OutStreamer.AddComment ("func addr encoding");
   Asm->OutStreamer.EmitIntValue (FuncAddrEncoding, 1, 0);
 
