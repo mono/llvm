@@ -340,12 +340,13 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
   if (FuncIndexes.size () == 0) {
     const Module *m = MMI->getModule ();
     NamedMDNode *indexes = m->getNamedMetadata ("mono.function_indexes");
-    assert (indexes);
-    for (unsigned int i = 0; i < indexes->getNumOperands (); ++i) {
-      MDNode *n = indexes->getOperand (i);
-      MDString *s = (MDString*)n->getOperand (0);
-      ConstantInt *idx = (ConstantInt*)n->getOperand (1);
-      FuncIndexes.GetOrCreateValue (s->getString (), (int)idx->getLimitedValue () + 1);
+	if (indexes) {
+      for (unsigned int i = 0; i < indexes->getNumOperands (); ++i) {
+        MDNode *n = indexes->getOperand (i);
+        MDString *s = (MDString*)n->getOperand (0);
+        ConstantInt *idx = (ConstantInt*)n->getOperand (1);
+        FuncIndexes.GetOrCreateValue (s->getString (), (int)idx->getLimitedValue () + 1);
+      }
     }
   }
 
