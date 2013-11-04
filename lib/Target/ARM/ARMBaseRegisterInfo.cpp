@@ -129,6 +129,14 @@ getReservedRegs(const MachineFunction &MF) const {
   // Some targets reserve R9.
   if (STI.isR9Reserved())
     Reserved.set(ARM::R9);
+
+  const Function *F = MF.getFunction();
+  if (F && F->getCallingConv() == CallingConv::Mono)
+    // FIXME: This is required for some reason, otherwise llvm treats R8 as a callee-saved registers
+    // even if we exclude it in getCalleeSavedRegs (). Luckily, R8 can still be used for argument
+    // passing even if it is 'reserved'.
+    Reserved.set(ARM::R8);
+
   // Reserve D16-D31 if the subtarget doesn't support them.
   if (!STI.hasVFP3() || STI.hasD16()) {
     assert(ARM::D31 == ARM::D16 + 15);
