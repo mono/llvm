@@ -63,8 +63,12 @@ $(ObjDir)/BuildVariables.inc: $(BUILDVARIABLES_SRCPATH) Makefile $(ObjDir)/.dir
 	  >> temp.sed
 	$(Verb) $(ECHO) 's/@LLVM_TARGETS_BUILT@/$(subst /,\/,$(TARGETS_TO_BUILD))/' \
 	  >> temp.sed
+	$(Verb) branch=`git branch | grep '^\*' | cut -d ' ' -f 2`; \
+	version=`git log --no-color --first-parent -n1 --pretty=format:%h`; \
+	git_version="$$branch/$$version"; \
+	$(ECHO) "s,@LLVM_GIT_VERSION@,$$git_version," \
+	  >> temp.sed
 	$(Verb) $(SED) -f temp.sed < $< > $@
-	$(Verb) $(RM) temp.sed
 
 # When cross-compiling, install a version of llvm-config that runs on the host.
 ifeq ($(LLVM_CROSS_COMPILING),1)
