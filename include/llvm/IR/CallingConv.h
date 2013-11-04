@@ -58,6 +58,9 @@ namespace CallingConv {
     // stackmap and patchpoint intrinsics).
     AnyReg = 13,
 
+    // Mono - Calling convention used by Mono
+    Mono = 14,
+
     // Target - This is the start of the target-specific calling conventions,
     // e.g. fastcall and thiscall on X86.
     FirstTargetCC = 64,
