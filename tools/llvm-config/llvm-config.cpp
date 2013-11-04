@@ -274,7 +274,7 @@ int main(int argc, char **argv) {
     if (Arg.startswith("-")) {
       HasAnyOption = true;
       if (Arg == "--version") {
-        OS << PACKAGE_VERSION << '\n';
+        OS << PACKAGE_VERSION << "-mono-" << LLVM_GIT_VERSION << '\n';
       } else if (Arg == "--prefix") {
         OS << ActivePrefix << '\n';
       } else if (Arg == "--bindir") {
