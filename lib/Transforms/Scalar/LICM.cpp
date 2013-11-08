@@ -403,13 +403,6 @@ bool LICM::canSinkOrHoistInst(Instruction &I) {
     if (LI->getMetadata("invariant.load"))
       return true;
 
-    //
-    // Mono extension, the metadata identifies loads which load from constant memory,
-	// so they can't be alised by any stores.
-    //
-    if (I.getMetadata("mono.noalias"))
-      return true;
-
     // Don't hoist loads which have may-aliased stores in loop.
     uint64_t Size = 0;
     if (LI->getType()->isSized())
