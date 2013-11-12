@@ -18,13 +18,16 @@
 #include "llvm/CodeGen/JITCodeEmitter.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/MonoMachineFunctionInfo.h"
 #include "llvm/ExecutionEngine/JITMemoryManager.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MachineLocation.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
@@ -201,7 +204,10 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
   const std::vector<const GlobalVariable *> &TypeInfos = MMI->getTypeInfos();
   const std::vector<unsigned> &FilterIds = MMI->getFilterIds();
   const std::vector<LandingPadInfo> &PadInfos = MMI->getLandingPads();
-  if (PadInfos.empty()) return 0;
+
+  int ThisSlot = MF->getMonoInfo()->getThisStackSlot();
+
+  if (PadInfos.empty() && ThisSlot == -1) return 0;
 
   // Sort the landing pads in order of their type ids.  This is used to fold
   // duplicate actions.
@@ -388,8 +394,25 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
   unsigned char* DwarfExceptionTable = (unsigned char*)JCE->getCurrentPCValue();
 
   // Emit the header.
-  JCE->emitByte(dwarf::DW_EH_PE_omit);
-  // Asm->EOL("LPStart format (DW_EH_PE_omit)");
+
+  if (ThisSlot != -1) {
+    // Keep this in sync with DwarfException::EmitExceptionTable ()
+    JCE->emitByte(dwarf::DW_EH_PE_udata4);
+    JCE->emitULEB128Bytes(0x4d4fef4f);
+    JCE->emitULEB128Bytes(1);
+
+    // Emit 'this' location
+    unsigned FrameReg;
+    int Offset = MF->getTarget ().getFrameLowering ()->getFrameIndexReference (*MF, ThisSlot, FrameReg);
+    FrameReg = MF->getTarget ().getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
+
+    JCE->emitByte((int)dwarf::DW_OP_bregx);
+    JCE->emitULEB128Bytes(FrameReg);
+    JCE->emitSLEB128Bytes(Offset);
+  } else {
+    JCE->emitByte(dwarf::DW_EH_PE_omit);
+    // Asm->EOL("LPStart format (DW_EH_PE_omit)");
+  }
   JCE->emitByte(dwarf::DW_EH_PE_absptr);
   // Asm->EOL("TType format (DW_EH_PE_absptr)");
   JCE->emitULEB128Bytes(TypeOffset);
@@ -550,16 +573,16 @@ JITDwarfEmitter::EmitEHFrame(const Function* Personality,
 
   // If there is a personality and landing pads then point to the language
   // specific data area in the exception table.
-  if (Personality) {
+  if (ExceptionTable) {
     JCE->emitULEB128Bytes(PointerSize == 4 ? 4 : 8);
 
     if (PointerSize == 4) {
-      if (!MMI->getLandingPads().empty())
+      if (ExceptionTable)
         JCE->emitInt32(ExceptionTable-(unsigned char*)JCE->getCurrentPCValue());
       else
         JCE->emitInt32((int)0);
     } else {
-      if (!MMI->getLandingPads().empty())
+      if (ExceptionTable)
         JCE->emitInt64(ExceptionTable-(unsigned char*)JCE->getCurrentPCValue());
       else
         JCE->emitInt64((int)0);
