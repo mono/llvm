@@ -214,11 +214,20 @@ static MCRegisterInfo *createARMMCRegisterInfo(StringRef Triple) {
 
 static MCAsmInfo *createARMMCAsmInfo(const MCRegisterInfo &MRI, StringRef TT) {
   Triple TheTriple(TT);
+  MCAsmInfo *MAI;
 
   if (TheTriple.isOSDarwin())
-    return new ARMMCAsmInfoDarwin();
+    MAI = new ARMMCAsmInfoDarwin();
+  else
+    MAI = new ARMELFMCAsmInfo();
 
-  return new ARMELFMCAsmInfo();
+  // Initialize initial frame state.
+  // Initial state of the frame pointer is sp
+  MCCFIInstruction Inst = MCCFIInstruction::createDefCfa(
+      0, MRI.getDwarfRegNum(ARM::SP, true), 0);
+  MAI->addInitialFrameState(Inst);
+
+  return MAI;
 }
 
 static MCCodeGenInfo *createARMMCCodeGenInfo(StringRef TT, Reloc::Model RM,
