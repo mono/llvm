@@ -20,6 +20,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Function.h"
@@ -101,6 +102,9 @@ static bool isCSRestore(MachineInstr *MI,
       MI->getOperand(1).getReg() == ARM::SP)
     return true;
 
+  if ((MI->getOpcode() == ARM::LDR_POST_IMM || MI->getOpcode() == ARM::LDR_POST_REG) && isCalleeSavedRegister(MI->getOperand(0).getReg(), CSRegs))
+    return true;
+
   return false;
 }
 
@@ -129,6 +133,49 @@ static void emitSPUpdate(bool isARM, MachineBasicBlock &MBB,
                        MIFlags, Pred, PredReg);
 }
 
+//
+// Functions to emit CFI Instructions.
+//
+
+static void
+emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+                 DebugLoc dl, const ARMBaseInstrInfo &TII,
+                 MachineModuleInfo &MMI,
+                 MCSymbol *FrameLabel,
+                 int CfaOffset) {
+  if (!FrameLabel) {
+    FrameLabel = MMI.getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+  }
+  MMI.addFrameInst(MCCFIInstruction::createDefCfaOffset(FrameLabel, -CfaOffset));
+}
+
+static void
+emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+           DebugLoc dl, const ARMBaseInstrInfo &TII,
+		   MachineModuleInfo &MMI,
+           int CfaReg, int CfaOffset) {
+  const MCRegisterInfo *MRI = MMI.getContext().getRegisterInfo();
+
+  MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
+  BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+
+  unsigned DwarfReg = MRI->getDwarfRegNum(CfaReg, true);
+  MMI.addFrameInst(MCCFIInstruction::createDefCfa(FrameLabel, DwarfReg, -CfaOffset));
+}
+
+static void
+emitCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
+              DebugLoc dl, const ARMBaseInstrInfo &TII,
+              MachineModuleInfo &MMI,
+              MCSymbol *FrameLabel,
+              int Reg, int Offset) {
+  const MCRegisterInfo *MRI = MMI.getContext().getRegisterInfo();
+
+  unsigned DwarfReg = MRI->getDwarfRegNum(Reg, true);
+  MMI.addFrameInst(MCCFIInstruction::createOffset(FrameLabel, DwarfReg, Offset));
+}
+
 void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   MachineBasicBlock &MBB = MF.front();
   MachineBasicBlock::iterator MBBI = MBB.begin();
@@ -147,6 +194,12 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   const std::vector<CalleeSavedInfo> &CSI = MFI->getCalleeSavedInfo();
   DebugLoc dl = MBBI != MBB.end() ? MBBI->getDebugLoc() : DebugLoc();
   unsigned FramePtr = RegInfo->getFrameRegister(MF);
+  MachineModuleInfo &MMI = MF.getMMI();
+  bool NeedsFrameInfo = MF.getFunction()->needsUnwindTableEntry();
+  // The cfa register
+  int CfaReg = ARM::SP;
+  // The offset between the value of CfaReg and the CFA
+  int CfaOffset = 0;
 
   // Determine the sizes of each callee-save spill areas and record which frame
   // belongs to which callee-save spill areas.
@@ -163,11 +216,15 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   if (ArgRegsSaveSize)
     emitSPUpdate(isARM, MBB, MBBI, dl, TII, -ArgRegsSaveSize,
                  MachineInstr::FrameSetup);
+  CfaOffset += ArgRegsSaveSize;
 
   if (!AFI->hasStackFrame()) {
     if (NumBytes != 0)
       emitSPUpdate(isARM, MBB, MBBI, dl, TII, -NumBytes,
                    MachineInstr::FrameSetup);
+    CfaOffset += NumBytes;
+    if (NeedsFrameInfo && CfaOffset)
+      emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, NULL, CfaOffset);
     return;
   }
 
@@ -214,6 +271,8 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   if (GPRCS1Size > 0)
     FramePtrPush = LastPush = MBBI++;
 
+  CfaOffset += GPRCS1Size;
+
   // Determine starting offsets of spill areas.
   bool HasFP = hasFP(MF);
   unsigned DPRCSOffset  = NumBytes - (GPRCS1Size + GPRCS2Size + DPRCSSize);
@@ -232,6 +291,23 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   // Move past area 2.
   if (GPRCS2Size > 0) {
     LastPush = MBBI++;
+  }
+
+  if (NeedsFrameInfo) {
+    MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
+
+    // Emit moves for the registers in spill area 2
+    for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
+      unsigned Reg = CSI[i].getReg();
+      int FI = CSI[i].getFrameIdx();
+      int64_t Offset = MFI->getObjectOffset(FI);
+
+      // The offset is relative to the incoming stack pointer which is
+      // the cfa
+	  // Reg is saved at cfa + offset
+	  emitCfaOffset(MBB, MBBI, dl, TII, MMI, FrameLabel, Reg, Offset);
+    }
   }
 
   // Move past area 3.
@@ -273,6 +349,11 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
       // an inconsistent state (pointing to the middle of callee-saved area).
       // The interrupt handler can end up clobbering the registers.
       AFI->setShouldRestoreSPFromFP(true);
+
+    if (NeedsFrameInfo && CfaReg == ARM::SP) {
+      CfaOffset += NumBytes;
+      emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, NULL, CfaOffset);
+    }
   }
 
   // Set FP to point to the stack slot that contains the previous FP.
@@ -281,11 +362,18 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   // into spill area 1, including the FP in R11.  In either case, it
   // is in area one and the adjustment needs to take place just after
   // that push.
-  if (HasFP)
+  if (HasFP) {
     emitRegPlusImmediate(!AFI->isThumbFunction(), MBB, ++FramePtrPush, dl, TII,
                          FramePtr, ARM::SP, FramePtrOffsetInPush,
                          MachineInstr::FrameSetup);
 
+    if (NeedsFrameInfo) {
+      // CFA = FramePtr + offset from cfa where fp was stored
+      CfaReg = FramePtr;
+      CfaOffset = MFI->getObjectOffset (FramePtrSpillFI);
+      emitDefCfa(MBB, MBBI, dl, TII, MMI, CfaReg, CfaOffset);
+    }
+  }
 
   if (STI.isTargetELF() && hasFP(MF))
     MFI->setOffsetAdjustment(MFI->getOffsetAdjustment() -
