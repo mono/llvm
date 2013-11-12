@@ -45,7 +45,7 @@ namespace llvm {
           LessPreciseFPMADOption(false),
           UnsafeFPMath(false), NoInfsFPMath(false),
           NoNaNsFPMath(false), HonorSignDependentRoundingFPMathOption(false),
-          UseSoftFloat(false), NoZerosInBSS(false),
+          UseSoftFloat(false), NoZerosInBSS(false), JITExceptionHandling(false),
           JITEmitDebugInfo(false), JITEmitDebugInfoToDisk(false),
           GuaranteedTailCallOpt(false), DisableTailCalls(false),
           StackAlignmentOverride(0),
@@ -116,6 +116,10 @@ namespace llvm {
     /// .bss section. This flag disables such behaviour (necessary, e.g. for
     /// crt*.o compiling).
     unsigned NoZerosInBSS : 1;
+
+    /// JITExceptionHandling - This flag indicates that the JIT should emit
+    /// exception handling information.
+    unsigned JITExceptionHandling : 1;
 
     /// JITEmitDebugInfo - This flag indicates that the JIT should try to emit
     /// debug information and notify a debugger about it.
@@ -204,6 +208,7 @@ inline bool operator==(const TargetOptions &LHS,
     ARE_EQUAL(HonorSignDependentRoundingFPMathOption) &&
     ARE_EQUAL(UseSoftFloat) &&
     ARE_EQUAL(NoZerosInBSS) &&
+    ARE_EQUAL(JITExceptionHandling) &&
     ARE_EQUAL(JITEmitDebugInfo) &&
     ARE_EQUAL(JITEmitDebugInfoToDisk) &&
     ARE_EQUAL(GuaranteedTailCallOpt) &&
