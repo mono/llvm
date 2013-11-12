@@ -33,8 +33,8 @@ ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
 
   SupportsDebugInformation = true;
 
-  // Exceptions handling
-  ExceptionsType = ExceptionHandling::SjLj;
+  // Mono uses a variant of Dwarf CFI
+  ExceptionsType = ExceptionHandling::DwarfCFI;
 }
 
 void ARMELFMCAsmInfo::anchor() { }
@@ -53,6 +53,10 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
   SupportsDebugInformation = true;
 
   // Exceptions handling
+  // Mono uses a variant of Dwarf CFI
+  ExceptionsType = ExceptionHandling::DwarfCFI;
+#if 0
   if (EnableARMEHABI)
     ExceptionsType = ExceptionHandling::ARM;
+#endif
 }
