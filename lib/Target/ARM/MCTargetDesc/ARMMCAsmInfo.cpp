@@ -34,7 +34,9 @@ ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin(StringRef TT) {
   SupportsDebugInformation = true;
 
   // Exceptions handling
-  ExceptionsType = ExceptionHandling::SjLj;
+  // Mono uses a variant of Dwarf CFI
+  ExceptionsType = ExceptionHandling::DwarfCFI;
+  //ExceptionsType = ExceptionHandling::SjLj;
 
   UseIntegratedAssembler = true;
 }
@@ -67,6 +69,10 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo(StringRef TT) {
     ExceptionsType = ExceptionHandling::ARM;
     break;
   }
+
+  // Mono uses a variant of Dwarf CFI
+  ExceptionsType = ExceptionHandling::DwarfCFI;
+  //ExceptionsType = ExceptionHandling::ARM;
 
   // foo(plt) instead of foo@plt
   UseParensForSymbolVariant = true;

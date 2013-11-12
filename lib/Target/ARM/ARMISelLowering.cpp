@@ -703,7 +703,8 @@ ARMTargetLowering::ARMTargetLowering(TargetMachine &TM)
   setOperationAction(ISD::STACKSAVE,          MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE,       MVT::Other, Expand);
 
-  if (!Subtarget->isTargetMachO()) {
+  // Mono uses dwarf EH on darwin as well
+  if (true) { //!Subtarget->isTargetMachO()) {
     // Non-MachO platforms may return values in these registers via the
     // personality function.
     setExceptionPointerRegister(ARM::R0);
