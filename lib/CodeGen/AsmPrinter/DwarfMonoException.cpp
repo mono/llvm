@@ -745,7 +745,7 @@ void DwarfMonoException::EndModule() {
   for (size_t i = 0, e = Personalities.size(); i != e; ++i) {
     if (!Personalities[i])
       continue;
-    MCSymbol *Sym = Asm->Mang->getSymbol(Personalities[i]);
+    MCSymbol *Sym = TLOF.getSymbol(*Asm->Mang, Personalities[i]);
     TLOF.emitPersonalityValue(Asm->OutStreamer, Asm->TM, Sym);
   }
 
