@@ -279,26 +279,6 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
     FramePtrPush = LastPush = MBBI++;
 
   CfaOffset += GPRCS1Size;
-  if (NeedsFrameInfo) {
-    MCSymbol *FrameLabel = MMI.getContext().CreateTempSymbol();
-    BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
-    // CFA = sp + offset
-    emitDefCfaOffset(MBB, MBBI, dl, TII, MMI, FrameLabel, CfaOffset);
-
-    // Emit moves for the registers in spill area 1
-    for (unsigned i = 0, e = CSI.size(); i != e; ++i) {
-      unsigned Reg = CSI[i].getReg();
-      int FI = CSI[i].getFrameIdx();
-      int64_t Offset = MFI->getObjectOffset(FI);
-
-      // The offset is relative to the incoming stack pointer which is
-      // the cfa
-      if (AFI->isGPRCalleeSavedArea1Frame(FI)) {
-        // Reg is saved at cfa + offset
-        emitCfaOffset(MBB, MBBI, dl, TII, MMI, FrameLabel, Reg, Offset);
-      }
-    }
-  }
 
   // Determine starting offsets of spill areas.
   bool HasFP = hasFP(MF);
@@ -332,10 +312,8 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
 
       // The offset is relative to the incoming stack pointer which is
       // the cfa
-      if (AFI->isGPRCalleeSavedArea2Frame(FI)) {
-        // Reg is saved at cfa + offset
-        emitCfaOffset(MBB, MBBI, dl, TII, MMI, FrameLabel, Reg, Offset);
-      }
+	  // Reg is saved at cfa + offset
+	  emitCfaOffset(MBB, MBBI, dl, TII, MMI, FrameLabel, Reg, Offset);
     }
   }
 
