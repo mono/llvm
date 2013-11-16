@@ -613,6 +613,9 @@ void *JIT::getOrEmitGlobalVariable(const GlobalVariable *GV) {
     // If the global hasn't been emitted to memory yet, allocate space and
     // emit it into memory.
     Ptr = getMemoryForGV(GV);
+    if (Ptr == 0)
+       // Buffer overflow
+       return NULL;
     addGlobalMapping(GV, Ptr);
     EmitGlobalVariable(GV);  // Initialize the variable.
   }

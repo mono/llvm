@@ -40,6 +40,7 @@ class Pass;
 class TargetMachine;
 class TargetRegisterClass;
 struct MachinePointerInfo;
+class MonoMachineFunctionInfo;
 
 template <>
 struct ilist_traits<MachineBasicBlock>
@@ -134,6 +135,8 @@ class MachineFunction {
   /// True if the function includes any inline assembly.
   bool HasInlineAsm;
 
+  MonoMachineFunctionInfo *MonoInfo;
+
   MachineFunction(const MachineFunction &) LLVM_DELETED_FUNCTION;
   void operator=(const MachineFunction&) LLVM_DELETED_FUNCTION;
 public:
@@ -191,6 +194,9 @@ public:
   ///
   MachineConstantPool *getConstantPool() { return ConstantPool; }
   const MachineConstantPool *getConstantPool() const { return ConstantPool; }
+
+  MonoMachineFunctionInfo *getMonoInfo() { return MonoInfo; }
+  const MonoMachineFunctionInfo *getMonoInfo() const { return MonoInfo; }
 
   /// getAlignment - Return the alignment (log2, not bytes) of the function.
   ///
