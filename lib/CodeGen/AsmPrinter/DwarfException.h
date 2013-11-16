@@ -80,10 +80,20 @@ protected:
     unsigned Previous;
   };
 
+  struct MonoCallSiteEntry {
+    // The 'try-range' is BeginLabel .. EndLabel.
+    MCSymbol *BeginLabel; // zero indicates the start of the function.
+    MCSymbol *EndLabel;   // zero indicates the end of the function.
+
+    // The landing pad starts at PadLabel.
+    MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
+	int TypeID;
+  };
+
   // Mono specific
   struct MonoEHFrameInfo {
     const MachineFunction *MF;
-    std::vector<CallSiteEntry> CallSites;
+    std::vector<MonoCallSiteEntry> CallSites;
     std::vector<const GlobalVariable *> TypeInfos;
     std::vector<unsigned> FilterIds;
     std::vector<LandingPadInfo> PadInfos;

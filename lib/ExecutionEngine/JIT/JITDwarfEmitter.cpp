@@ -51,8 +51,8 @@ unsigned char* JITDwarfEmitter::EmitDwarfTable(MachineFunction& F,
   MAI = TM.getMCAsmInfo();
   JCE = &jce;
 
-  unsigned char* ExceptionTable = EmitExceptionTable(&F, StartFunction,
-                                                     EndFunction);
+  unsigned char* ExceptionTable = EmitMonoLSDA(&F, StartFunction,
+                                               EndFunction);
 
   unsigned char* Result = 0;
 
@@ -135,22 +135,6 @@ JITDwarfEmitter::EmitCFIInstructions(intptr_t BaseLabelPtr,
   }
 }
 
-/// SharedTypeIds - How many leading type ids two landing pads have in common.
-static unsigned SharedTypeIds(const LandingPadInfo *L,
-                              const LandingPadInfo *R) {
-  const std::vector<int> &LIds = L->TypeIds, &RIds = R->TypeIds;
-  unsigned LSize = LIds.size(), RSize = RIds.size();
-  unsigned MinSize = LSize < RSize ? LSize : RSize;
-  unsigned Count = 0;
-
-  for (; Count != MinSize; ++Count)
-    if (LIds[Count] != RIds[Count])
-      return Count;
-
-  return Count;
-}
-
-
 /// PadLT - Order landing pads lexicographically by type id.
 static bool PadLT(const LandingPadInfo *L, const LandingPadInfo *R) {
   const std::vector<int> &LIds = L->TypeIds, &RIds = R->TypeIds;
@@ -165,13 +149,6 @@ static bool PadLT(const LandingPadInfo *L, const LandingPadInfo *R) {
 }
 
 namespace {
-
-/// ActionEntry - Structure describing an entry in the actions table.
-struct ActionEntry {
-  int ValueForTypeID; // The value to write - may not be equal to the type id.
-  int NextAction;
-  struct ActionEntry *Previous;
-};
 
 /// PadRange - Structure holding a try-range and the associated landing pad.
 struct PadRange {
@@ -188,26 +165,26 @@ struct CallSiteEntry {
   MCSymbol *BeginLabel; // zero indicates the start of the function.
   MCSymbol *EndLabel;   // zero indicates the end of the function.
   MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
-  unsigned Action;
+  int TypeID;
 };
 
 }
 
-unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
-                                         unsigned char* StartFunction,
-                                         unsigned char* EndFunction) const {
+unsigned char* JITDwarfEmitter::EmitMonoLSDA(MachineFunction* MF,
+                                             unsigned char* StartFunction,
+                                             unsigned char* EndFunction) const {
   assert(MMI && "MachineModuleInfo not registered!");
 
   // Map all labels and get rid of any dead landing pads.
   MMI->TidyLandingPads(JCE->getLabelLocations());
 
   const std::vector<const GlobalVariable *> &TypeInfos = MMI->getTypeInfos();
-  const std::vector<unsigned> &FilterIds = MMI->getFilterIds();
   const std::vector<LandingPadInfo> &PadInfos = MMI->getLandingPads();
 
   int ThisSlot = MF->getMonoInfo()->getThisStackSlot();
 
-  if (PadInfos.empty() && ThisSlot == -1) return 0;
+  if (PadInfos.empty() && ThisSlot == -1)
+    return 0;
 
   // Sort the landing pads in order of their type ids.  This is used to fold
   // duplicate actions.
@@ -216,83 +193,6 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
   for (unsigned i = 0, N = PadInfos.size(); i != N; ++i)
     LandingPads.push_back(&PadInfos[i]);
   std::sort(LandingPads.begin(), LandingPads.end(), PadLT);
-
-  // Negative type ids index into FilterIds, positive type ids index into
-  // TypeInfos.  The value written for a positive type id is just the type
-  // id itself.  For a negative type id, however, the value written is the
-  // (negative) byte offset of the corresponding FilterIds entry.  The byte
-  // offset is usually equal to the type id, because the FilterIds entries
-  // are written using a variable width encoding which outputs one byte per
-  // entry as long as the value written is not too large, but can differ.
-  // This kind of complication does not occur for positive type ids because
-  // type infos are output using a fixed width encoding.
-  // FilterOffsets[i] holds the byte offset corresponding to FilterIds[i].
-  SmallVector<int, 16> FilterOffsets;
-  FilterOffsets.reserve(FilterIds.size());
-  int Offset = -1;
-  for(std::vector<unsigned>::const_iterator I = FilterIds.begin(),
-    E = FilterIds.end(); I != E; ++I) {
-    FilterOffsets.push_back(Offset);
-    Offset -= MCAsmInfo::getULEB128Size(*I);
-  }
-
-  // Compute the actions table and gather the first action index for each
-  // landing pad site.
-  SmallVector<ActionEntry, 32> Actions;
-  SmallVector<unsigned, 64> FirstActions;
-  FirstActions.reserve(LandingPads.size());
-
-  int FirstAction = 0;
-  unsigned SizeActions = 0;
-  for (unsigned i = 0, N = LandingPads.size(); i != N; ++i) {
-    const LandingPadInfo *LP = LandingPads[i];
-    const std::vector<int> &TypeIds = LP->TypeIds;
-    const unsigned NumShared = i ? SharedTypeIds(LP, LandingPads[i-1]) : 0;
-    unsigned SizeSiteActions = 0;
-
-    if (NumShared < TypeIds.size()) {
-      unsigned SizeAction = 0;
-      ActionEntry *PrevAction = 0;
-
-      if (NumShared) {
-        const unsigned SizePrevIds = LandingPads[i-1]->TypeIds.size();
-        assert(Actions.size());
-        PrevAction = &Actions.back();
-        SizeAction = MCAsmInfo::getSLEB128Size(PrevAction->NextAction) +
-          MCAsmInfo::getSLEB128Size(PrevAction->ValueForTypeID);
-        for (unsigned j = NumShared; j != SizePrevIds; ++j) {
-          SizeAction -= MCAsmInfo::getSLEB128Size(PrevAction->ValueForTypeID);
-          SizeAction += -PrevAction->NextAction;
-          PrevAction = PrevAction->Previous;
-        }
-      }
-
-      // Compute the actions.
-      for (unsigned I = NumShared, M = TypeIds.size(); I != M; ++I) {
-        int TypeID = TypeIds[I];
-        assert(-1-TypeID < (int)FilterOffsets.size() && "Unknown filter id!");
-        int ValueForTypeID = TypeID < 0 ? FilterOffsets[-1 - TypeID] : TypeID;
-        unsigned SizeTypeID = MCAsmInfo::getSLEB128Size(ValueForTypeID);
-
-        int NextAction = SizeAction ? -(SizeAction + SizeTypeID) : 0;
-        SizeAction = SizeTypeID + MCAsmInfo::getSLEB128Size(NextAction);
-        SizeSiteActions += SizeAction;
-
-        ActionEntry Action = {ValueForTypeID, NextAction, PrevAction};
-        Actions.push_back(Action);
-
-        PrevAction = &Actions.back();
-      }
-
-      // Record the first action of the landing pad site.
-      FirstAction = SizeActions + SizeSiteActions - SizeAction + 1;
-    } // else identical - re-use previous FirstAction
-
-    FirstActions.push_back(FirstAction);
-
-    // Compute this sites contribution to size.
-    SizeActions += SizeSiteActions;
-  }
 
   // Compute the call-site table.  Entries must be ordered by address.
   SmallVector<CallSiteEntry, 64> CallSites;
@@ -308,22 +208,17 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
     }
   }
 
-  bool MayThrow = false;
   MCSymbol *LastLabel = 0;
   for (MachineFunction::const_iterator I = MF->begin(), E = MF->end();
         I != E; ++I) {
     for (MachineBasicBlock::const_iterator MI = I->begin(), E = I->end();
           MI != E; ++MI) {
       if (!MI->isLabel()) {
-        MayThrow |= MI->isCall();
         continue;
       }
 
       MCSymbol *BeginLabel = MI->getOperand(0).getMCSymbol();
       assert(BeginLabel && "Invalid label!");
-
-      if (BeginLabel == LastLabel)
-        MayThrow = false;
 
       RangeMapType::iterator L = PadMap.find(BeginLabel);
 
@@ -336,17 +231,14 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
       assert(BeginLabel == LandingPad->BeginLabels[P.RangeIndex] &&
               "Inconsistent landing pad map!");
 
-      // If some instruction between the previous try-range and this one may
-      // throw, create a call-site entry with no landing pad for the region
-      // between the try-ranges.
-      if (MayThrow) {
-        CallSiteEntry Site = {LastLabel, BeginLabel, 0, 0};
-        CallSites.push_back(Site);
-      }
+      // Mono emits one landing pad for each CLR exception clause,
+      // and the type info contains the clause index
+      assert (LandingPad->TypeIds.size() == 1);
+      assert (LandingPad->LandingPadLabel);
 
       LastLabel = LandingPad->EndLabels[P.RangeIndex];
       CallSiteEntry Site = {BeginLabel, LastLabel,
-        LandingPad->LandingPadLabel, FirstActions[P.PadIndex]};
+							LandingPad->LandingPadLabel, LandingPad->TypeIds [0]};
 
       assert(Site.BeginLabel && Site.EndLabel && Site.PadLabel &&
               "Invalid landing pad!");
@@ -354,7 +246,7 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
       // Try to merge with the previous call-site.
       if (CallSites.size()) {
         CallSiteEntry &Prev = CallSites.back();
-        if (Site.PadLabel == Prev.PadLabel && Site.Action == Prev.Action) {
+        if (Site.PadLabel == Prev.PadLabel && Site.TypeID == Prev.TypeID) {
           // Extend the range of the previous entry.
           Prev.EndLabel = Site.EndLabel;
           continue;
@@ -365,62 +257,34 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
       CallSites.push_back(Site);
     }
   }
-  // If some instruction between the previous try-range and the end of the
-  // function may throw, create a call-site entry with no landing pad for the
-  // region following the try-range.
-  if (MayThrow) {
-    CallSiteEntry Site = {LastLabel, 0, 0, 0};
-    CallSites.push_back(Site);
-  }
-
-  // Final tallies.
-  unsigned SizeSites = CallSites.size() * (sizeof(int32_t) + // Site start.
-                                            sizeof(int32_t) + // Site length.
-                                            sizeof(int32_t)); // Landing pad.
-  for (unsigned i = 0, e = CallSites.size(); i < e; ++i)
-    SizeSites += MCAsmInfo::getULEB128Size(CallSites[i].Action);
-
-  unsigned SizeTypes = TypeInfos.size() * TD->getPointerSize();
-
-  unsigned TypeOffset = sizeof(int8_t) + // Call site format
-                        // Call-site table length
-                        MCAsmInfo::getULEB128Size(SizeSites) +
-                        SizeSites + SizeActions + SizeTypes;
 
   // Begin the exception table.
   JCE->emitAlignmentWithFill(4, 0);
-  // Asm->EOL("Padding");
 
   unsigned char* DwarfExceptionTable = (unsigned char*)JCE->getCurrentPCValue();
 
+  // Keep this in sync with DwarfMonoException::EmitMonoLSDA ()
+
   // Emit the header.
+  JCE->emitULEB128Bytes(0x4d4fef4f);
+  JCE->emitULEB128Bytes(1);
 
   if (ThisSlot != -1) {
-    // Keep this in sync with DwarfException::EmitExceptionTable ()
-    JCE->emitByte(dwarf::DW_EH_PE_udata4);
-    JCE->emitULEB128Bytes(0x4d4fef4f);
-    JCE->emitULEB128Bytes(1);
-
     // Emit 'this' location
     unsigned FrameReg;
     int Offset = MF->getTarget ().getFrameLowering ()->getFrameIndexReference (*MF, ThisSlot, FrameReg);
     FrameReg = MF->getTarget ().getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
 
+	JCE->emitByte(dwarf::DW_EH_PE_udata4);
     JCE->emitByte((int)dwarf::DW_OP_bregx);
     JCE->emitULEB128Bytes(FrameReg);
     JCE->emitSLEB128Bytes(Offset);
   } else {
     JCE->emitByte(dwarf::DW_EH_PE_omit);
-    // Asm->EOL("LPStart format (DW_EH_PE_omit)");
   }
-  JCE->emitByte(dwarf::DW_EH_PE_absptr);
-  // Asm->EOL("TType format (DW_EH_PE_absptr)");
-  JCE->emitULEB128Bytes(TypeOffset);
-  // Asm->EOL("TType base offset");
-  JCE->emitByte(dwarf::DW_EH_PE_udata4);
-  // Asm->EOL("Call site format (DW_EH_PE_udata4)");
-  JCE->emitULEB128Bytes(SizeSites);
-  // Asm->EOL("Call-site table length");
+
+  JCE->emitULEB128Bytes (CallSites.size ());
+  JCE->emitAlignmentWithFill(4, 0);
 
   // Emit the landing pad site information.
   for (unsigned i = 0; i < CallSites.size(); ++i) {
@@ -436,15 +300,12 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
       JCE->emitInt32(BeginLabelPtr - (intptr_t)StartFunction);
     }
 
-    // Asm->EOL("Region start");
-
     if (!S.EndLabel)
       EndLabelPtr = (intptr_t)EndFunction;
     else
       EndLabelPtr = JCE->getLabelAddress(S.EndLabel);
 
     JCE->emitInt32(EndLabelPtr - BeginLabelPtr);
-    //Asm->EOL("Region length");
 
     if (!S.PadLabel) {
       JCE->emitInt32(0);
@@ -452,45 +313,13 @@ unsigned char* JITDwarfEmitter::EmitExceptionTable(MachineFunction* MF,
       unsigned PadLabelPtr = JCE->getLabelAddress(S.PadLabel);
       JCE->emitInt32(PadLabelPtr - (intptr_t)StartFunction);
     }
-    // Asm->EOL("Landing pad");
 
-    JCE->emitULEB128Bytes(S.Action);
-    // Asm->EOL("Action");
-  }
-
-  // Emit the actions.
-  for (unsigned I = 0, N = Actions.size(); I != N; ++I) {
-    ActionEntry &Action = Actions[I];
-
-    JCE->emitSLEB128Bytes(Action.ValueForTypeID);
-    //Asm->EOL("TypeInfo index");
-    JCE->emitSLEB128Bytes(Action.NextAction);
-    //Asm->EOL("Next action");
-  }
-
-  // Emit the type ids.
-  for (unsigned M = TypeInfos.size(); M; --M) {
-    const GlobalVariable *GV = TypeInfos[M - 1];
-
-    if (GV) {
-      if (TD->getPointerSize() == sizeof(int32_t))
-        JCE->emitInt32((intptr_t)Jit.getOrEmitGlobalVariable(GV));
-      else
-        JCE->emitInt64((intptr_t)Jit.getOrEmitGlobalVariable(GV));
-    } else {
-      if (TD->getPointerSize() == sizeof(int32_t))
-        JCE->emitInt32(0);
-      else
-        JCE->emitInt64(0);
-    }
-    // Asm->EOL("TypeInfo");
-  }
-
-  // Emit the filter typeids.
-  for (unsigned j = 0, M = FilterIds.size(); j < M; ++j) {
-    unsigned TypeID = FilterIds[j];
-    JCE->emitULEB128Bytes(TypeID);
-    //Asm->EOL("Filter TypeInfo index");
+	unsigned int TypeID = S.TypeID;
+    assert (TypeID > 0 && TypeID <= TypeInfos.size ());
+    const GlobalVariable *GV = TypeInfos[TypeID - 1];
+    assert (GV);
+    int ClauseIndex = *(int*)Jit.getOrEmitGlobalVariable(GV);
+    JCE->emitInt32 (ClauseIndex);
   }
 
   JCE->emitAlignmentWithFill(4, 0);

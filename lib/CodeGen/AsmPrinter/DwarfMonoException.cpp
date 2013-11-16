@@ -99,7 +99,9 @@ void EmitCFIInstruction(MCStreamer &Streamer,
     if (IsRelative)
       CFAOffset += Instr.getOffset();
     else
-      CFAOffset = -Instr.getOffset();
+      // The backends pass in a negative value,
+      // then createDefCfaOffset () negates it
+      CFAOffset = Instr.getOffset();
 
     if (VerboseAsm)
       Streamer.AddComment(Twine("Offset " + Twine(CFAOffset)));
@@ -116,6 +118,8 @@ void EmitCFIInstruction(MCStreamer &Streamer,
       Streamer.AddComment(Twine("Reg ") + Twine(Instr.getRegister()));
     Streamer.EmitULEB128IntValue(Instr.getRegister());
 
+    // createX86MCAsmInfo () passes in a positive value, which is
+    // negated by createDefCfa ()
     CFAOffset = -Instr.getOffset();
 
     if (VerboseAsm)
@@ -242,8 +246,8 @@ void EmitCFIInstructions(MCStreamer &streamer,
 ///
 void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
   const std::vector<const GlobalVariable *> &TypeInfos = MMI->getTypeInfos();
-  const std::vector<unsigned> &FilterIds = MMI->getFilterIds();
   const std::vector<LandingPadInfo> &PadInfos = MMI->getLandingPads();
+  const MachineFunction *MF = Asm->MF;
 
   // Sort the landing pads in order of their type ids.  This is used to fold
   // duplicate actions.
@@ -255,11 +259,13 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
 
   std::sort(LandingPads.begin(), LandingPads.end(), PadLT);
 
+#if 0
   // Compute the actions table and gather the first action index for each
   // landing pad site.
   SmallVector<ActionEntry, 32> Actions;
   SmallVector<unsigned, 64> FirstActions;
   ComputeActionsTable(LandingPads, Actions, FirstActions);
+#endif
 
   // Invokes and nounwind calls have entries in PadMap (due to being bracketed
   // by try-range labels when lowered).  Ordinary calls do not, so appropriate
@@ -276,8 +282,58 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
   }
 
   // Compute the call-site table.
-  SmallVector<CallSiteEntry, 64> CallSites;
-  ComputeCallSiteTable(CallSites, PadMap, LandingPads, FirstActions);
+  SmallVector<MonoCallSiteEntry, 64> CallSites;
+  //ComputeCallSiteTable(CallSites, PadMap, LandingPads, FirstActions);
+
+  MCSymbol *LastLabel = 0;
+  for (MachineFunction::const_iterator I = MF->begin(), E = MF->end();
+        I != E; ++I) {
+    for (MachineBasicBlock::const_iterator MI = I->begin(), E = I->end();
+          MI != E; ++MI) {
+      if (!MI->isLabel()) {
+        continue;
+      }
+
+      MCSymbol *BeginLabel = MI->getOperand(0).getMCSymbol();
+      assert(BeginLabel && "Invalid label!");
+
+      RangeMapType::iterator L = PadMap.find(BeginLabel);
+
+      if (L == PadMap.end())
+        continue;
+
+      PadRange P = L->second;
+      const LandingPadInfo *LandingPad = LandingPads[P.PadIndex];
+
+      assert(BeginLabel == LandingPad->BeginLabels[P.RangeIndex] &&
+              "Inconsistent landing pad map!");
+
+      // Mono emits one landing pad for each CLR exception clause,
+      // and the type info contains the clause index
+      assert (LandingPad->TypeIds.size() == 1);
+      assert (LandingPad->LandingPadLabel);
+
+      LastLabel = LandingPad->EndLabels[P.RangeIndex];
+      MonoCallSiteEntry Site = {BeginLabel, LastLabel,
+							LandingPad->LandingPadLabel, LandingPad->TypeIds [0]};
+
+      assert(Site.BeginLabel && Site.EndLabel && Site.PadLabel &&
+              "Invalid landing pad!");
+
+      // Try to merge with the previous call-site.
+      if (CallSites.size()) {
+        MonoCallSiteEntry &Prev = CallSites.back();
+        if (Site.PadLabel == Prev.PadLabel && Site.TypeID == Prev.TypeID) {
+          // Extend the range of the previous entry.
+          Prev.EndLabel = Site.EndLabel;
+          continue;
+        }
+      }
+
+      // Otherwise, create a new call-site.
+      CallSites.push_back(Site);
+    }
+  }
 
   //
   // Compute a mapping from method names to their AOT method index
@@ -302,7 +358,6 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
   MonoEH->FunctionNumber = Asm->getFunctionNumber();
   MonoEH->CallSites.insert(MonoEH->CallSites.begin(), CallSites.begin(), CallSites.end());
   MonoEH->TypeInfos = TypeInfos;
-  MonoEH->FilterIds = FilterIds;
   MonoEH->PadInfos = PadInfos;
   MonoEH->MonoMethodIdx = FuncIndexes.lookup (Asm->MF->getFunction ()->getName ()) - 1;
   //outs()<<"A:"<<Asm->MF->getFunction()->getName() << " " << MonoEH->MonoMethodIdx << "\n";
@@ -320,19 +375,15 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
 
 /// EmitMonoLSDA - Mono's version of EmitExceptionTable
 ///
-///   We emit the information inline instead of into a separate section.
+/// The code below is a modified/simplified version of DwarfException::EmitExceptionTable()
+/// We emit the information inline instead of into a separate section.
 ///
 void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
-  //
-  // The code below is a modified/simplified version of EmitExceptionTable
-  //
-
   // Load saved information from EHFrameInfo
   const MonoEHFrameInfo *MonoEH = &EFI->MonoEH;
   const std::vector<const GlobalVariable *> &TypeInfos = MonoEH->TypeInfos;
-  const std::vector<unsigned> &FilterIds = MonoEH->FilterIds;
   const std::vector<LandingPadInfo> &PadInfos = MonoEH->PadInfos;
-  const std::vector<CallSiteEntry> CallSites = MonoEH->CallSites;
+  const std::vector<MonoCallSiteEntry> CallSites = MonoEH->CallSites;
   int FunctionNumber = MonoEH->FunctionNumber;
   int FrameReg = MonoEH->FrameReg;
   int ThisOffset = MonoEH->ThisOffset;
@@ -346,12 +397,6 @@ void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
     LandingPads.push_back(&PadInfos[i]);
 
   std::sort(LandingPads.begin(), LandingPads.end(), PadLT);
-
-  // Compute the actions table and gather the first action index for each
-  // landing pad site.
-  SmallVector<ActionEntry, 32> Actions;
-  SmallVector<unsigned, 64> FirstActions;
-  unsigned SizeActions=ComputeActionsTable(LandingPads, Actions, FirstActions);
 
   // Invokes and nounwind calls have entries in PadMap (due to being bracketed
   // by try-range labels when lowered).  Ordinary calls do not, so appropriate
@@ -369,40 +414,17 @@ void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
 
   assert(Asm->MAI->getExceptionHandlingType() == ExceptionHandling::DwarfCFI);
 
-  // Final tallies.
-
-  // Call sites.
-  
-  unsigned CallSiteTableLength;
-
-  unsigned SiteStartSize  = 4; // dwarf::DW_EH_PE_udata4
-  unsigned SiteLengthSize = 4; // dwarf::DW_EH_PE_udata4
-  unsigned LandingPadSize = 4; // dwarf::DW_EH_PE_udata4
-  CallSiteTableLength = 
-    CallSites.size() * (SiteStartSize + SiteLengthSize + LandingPadSize);
-
-  for (unsigned i = 0, e = CallSites.size(); i < e; ++i) {
-    CallSiteTableLength += MCAsmInfo::getULEB128Size(CallSites[i].Action);
-  }
-
-  // Type infos.
-  unsigned TTypeEncoding;
-  unsigned TypeFormatSize;
-
   // The type_info itself is emitted
-  TTypeEncoding = dwarf::DW_EH_PE_udata4;
-  TypeFormatSize = Asm->GetSizeOfEncodedValue(TTypeEncoding);
+  int TTypeEncoding = dwarf::DW_EH_PE_udata4;
 
   // Emit the LSDA.
+  // Keep this in sync with JITDwarfEmitter::EmitExceptionTable ()
+  Asm->EmitULEB128(0x4d4fef4f, "MONO Magic", 0);
+  Asm->EmitULEB128(1, "Version", 0);
 
   // Emit the LSDA header.
   if (FrameReg != -1) {
-    // Keep this in sync with JITDwarfEmitter::EmitExceptionTable ()
-    // FIXME: If this method has no clauses, avoid emitting the rest of the info
-    // Mark that this is a mono specific LSDA header using a magic value
-    Asm->EmitEncodingByte(dwarf::DW_EH_PE_udata4, "@LPStart");
-    Asm->EmitULEB128(0x4d4fef4f, "MONO Magic", 0);
-    Asm->EmitULEB128(1, "Version", 0);
+    Asm->EmitEncodingByte(dwarf::DW_EH_PE_udata4, "This encoding");
 
     // Emit 'this' location
     Asm->OutStreamer.AddComment("bregx");
@@ -410,51 +432,14 @@ void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
     Asm->EmitULEB128(FrameReg, "Base reg");
     Asm->EmitSLEB128(ThisOffset, "Offset");
   } else {
-    Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "@LPStart");
+    Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "@This encoding");
   }
-  Asm->EmitEncodingByte(TTypeEncoding, "@TType");
 
-  unsigned SizeTypes = TypeInfos.size() * TypeFormatSize;
-  unsigned CallSiteTableLengthSize =
-    MCAsmInfo::getULEB128Size(CallSiteTableLength);
-  unsigned TTypeBaseOffset =
-    sizeof(int8_t) +                            // Call site format
-    CallSiteTableLengthSize +                   // Call site table length size
-    CallSiteTableLength +                       // Call site table length
-    SizeActions +                               // Actions size
-    SizeTypes;
-
-  Asm->EmitULEB128(TTypeBaseOffset, "@TType base offset", 0);
-
-  assert(Asm->MAI->getExceptionHandlingType() == ExceptionHandling::DwarfCFI);
-
-  // The call-site table is a list of all call sites that may throw an
-  // exception (including C++ 'throw' statements) in the procedure
-  // fragment. It immediately follows the LSDA header. Each entry indicates,
-  // for a given call, the first corresponding action record and corresponding
-  // landing pad.
-  //
-  // The table begins with the number of bytes, stored as an LEB128
-  // compressed, unsigned integer. The records immediately follow the record
-  // count. They are sorted in increasing call-site address. Each record
-  // indicates:
-  //
-  //   * The position of the call-site.
-  //   * The position of the landing pad.
-  //   * The first action record for that call site.
-  //
-  // A missing entry in the call-site table indicates that a call is not
-  // supposed to throw.
-
-  // Emit the landing pad call site table.
-  Asm->EmitEncodingByte(dwarf::DW_EH_PE_udata4, "Call site");
-
-  // Add extra padding if it wasn't added to the TType base offset.
-  Asm->EmitULEB128(CallSiteTableLength, "Call site table length", 0);
-
-  for (std::vector<CallSiteEntry>::const_iterator
+  Asm->EmitULEB128 (CallSites.size (), "Number of call sites");
+  Asm->EmitAlignment(2);
+  for (std::vector<MonoCallSiteEntry>::const_iterator
          I = CallSites.begin(), E = CallSites.end(); I != E; ++I) {
-    const CallSiteEntry &S = *I;
+    const MonoCallSiteEntry &S = *I;
       
     MCSymbol *EHFuncBeginSym =
       Asm->GetTempSymbol("eh_func_begin", FunctionNumber);
@@ -466,63 +451,22 @@ void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
     if (EndLabel == 0)
       EndLabel = Asm->GetTempSymbol("eh_func_end", FunctionNumber);
         
-    // Offset of the call site relative to the previous call site, counted in
-    // number of 16-byte bundles. The first call site is counted relative to
-    // the start of the procedure fragment.
     Asm->OutStreamer.AddComment("Region start");
     Asm->EmitLabelDifference(BeginLabel, EHFuncBeginSym, 4);
       
     Asm->OutStreamer.AddComment("Region length");
     Asm->EmitLabelDifference(EndLabel, BeginLabel, 4);
 
-
-    // Offset of the landing pad, counted in 16-byte bundles relative to the
-    // @LPStart address.
     Asm->OutStreamer.AddComment("Landing pad");
     if (!S.PadLabel)
-      Asm->OutStreamer.EmitIntValue(0, 4/*size*/);
+      Asm->OutStreamer.EmitIntValue(0, 4);
     else
       Asm->EmitLabelDifference(S.PadLabel, EHFuncBeginSym, 4);
 
-    // Offset of the first associated action record, relative to the start of
-    // the action table. This value is biased by 1 (1 indicates the start of
-    // the action table), and 0 indicates that there are no actions.
-    Asm->EmitULEB128(S.Action, "Action");
-  }
-
-  // Emit the Action Table.
-  if (Actions.size() != 0) {
-    Asm->OutStreamer.AddComment("-- Action Record Table --");
-    Asm->OutStreamer.AddBlankLine();
-  }
-  
-  for (SmallVectorImpl<ActionEntry>::const_iterator
-         I = Actions.begin(), E = Actions.end(); I != E; ++I) {
-    const ActionEntry &Action = *I;
-    Asm->OutStreamer.AddComment("Action Record");
-    Asm->OutStreamer.AddBlankLine();
-
-    // Type Filter
-    //
-    //   Used by the runtime to match the type of the thrown exception to the
-    //   type of the catch clauses or the types in the exception specification.
-    Asm->EmitSLEB128(Action.ValueForTypeID, "  TypeInfo index");
-
-    // Action Record
-    //
-    //   Self-relative signed displacement in bytes of the next action record,
-    //   or 0 if there is no next action record.
-    Asm->EmitSLEB128(Action.NextAction, "  Next action");
-  }
-
-  // Emit the Catch TypeInfos.
-  if (!TypeInfos.empty()) {
-    Asm->OutStreamer.AddComment("-- Catch TypeInfos --");
-    Asm->OutStreamer.AddBlankLine();
-  }
-  for (std::vector<const GlobalVariable *>::const_reverse_iterator
-         I = TypeInfos.rbegin(), E = TypeInfos.rend(); I != E; ++I) {
-    const GlobalVariable *GV = *I;
+	unsigned int TypeID = S.TypeID;
+    assert (TypeID > 0 && TypeID <= TypeInfos.size ());
+    const GlobalVariable *GV = TypeInfos[TypeID - 1];
+    assert (GV);
 
     //
     // Mono typeinfos are simple constant integers. Emit the constant itself.
@@ -532,17 +476,6 @@ void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
 
     Asm->OutStreamer.AddComment("TypeInfo");
     Asm->OutStreamer.EmitIntValue(ci->getZExtValue(),Asm->GetSizeOfEncodedValue(TTypeEncoding));
-  }
-
-  // Emit the Exception Specifications.
-  if (!FilterIds.empty()) {
-    Asm->OutStreamer.AddComment("-- Filter IDs --");
-    Asm->OutStreamer.AddBlankLine();
-  }
-  for (std::vector<unsigned>::const_iterator
-         I = FilterIds.begin(), E = FilterIds.end(); I < E; ++I) {
-    unsigned TypeID = *I;
-    Asm->EmitULEB128(TypeID, TypeID != 0 ? "Exception specification" : 0);
   }
 }
 

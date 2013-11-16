@@ -40,9 +40,9 @@ class JITDwarfEmitter {
   JIT& Jit;
   bool stackGrowthDirection;
 
-  unsigned char* EmitExceptionTable(MachineFunction* MF,
-                                    unsigned char* StartFunction,
-                                    unsigned char* EndFunction) const;
+  unsigned char* EmitMonoLSDA(MachineFunction* MF,
+                              unsigned char* StartFunction,
+                              unsigned char* EndFunction) const;
 
   void EmitCFIInstructions(intptr_t BaseLabelPtr,
                       const std::vector<MCCFIInstruction> &Instructions) const;
