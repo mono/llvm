@@ -319,6 +319,8 @@ bool GlobalMerge::doInitialization(Module &M) {
     if (isMustKeepGlobalVariable(I))
       continue;
 
+    // FIXME: This merges Mono's type_info globals, breaking EH
+/*
     if (DL->getTypeAllocSize(Ty) < MaxOffset) {
       if (TargetLoweringObjectFile::getKindForGlobal(I, *TM).isBSSLocal())
         BSSGlobals[AddressSpace].push_back(I);
@@ -327,6 +329,7 @@ bool GlobalMerge::doInitialization(Module &M) {
       else
         Globals[AddressSpace].push_back(I);
     }
+*/
   }
 
   for (DenseMap<unsigned, SmallVector<GlobalVariable*, 16> >::iterator

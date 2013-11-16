@@ -164,6 +164,19 @@ public:
     deallocateFunctionBodyCalls.push_back(DeallocateFunctionBodyCall(Body));
     Base->deallocateFunctionBody(Body);
   }
+
+  virtual uint8_t *startExceptionTable(const Function *F,
+                                       uintptr_t &ActualSize) {
+    llvm_unreachable("Unexpected call!");
+    return 0;
+  }
+  virtual void endExceptionTable(const Function *F, uint8_t *TableStart,
+                                 uint8_t *TableEnd, uint8_t *FrameRegister) {
+    llvm_unreachable("Unexpected call!");
+  }
+  virtual void deallocateExceptionTable(void *ET) {
+    llvm_unreachable("Unexpected call!");
+  }
 };
 
 std::unique_ptr<Module> loadAssembly(LLVMContext &C, const char *Assembly) {

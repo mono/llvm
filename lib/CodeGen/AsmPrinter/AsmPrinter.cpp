@@ -41,6 +41,7 @@
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/MathExtras.h"
@@ -61,6 +62,9 @@ static const char *const EHTimerName = "DWARF Exception Writer";
 static const char *const CodeViewLineTablesGroupName = "CodeView Line Tables";
 
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
+
+cl::opt<bool> EnableMonoEH("enable-mono-eh-frame", cl::NotHidden,
+     cl::desc("Enable generation of Mono specific EH tables"));
 
 char AsmPrinter::ID = 0;
 
@@ -238,10 +242,16 @@ bool AsmPrinter::doInitialization(Module &M) {
     break;
   case ExceptionHandling::SjLj:
   case ExceptionHandling::DwarfCFI:
-    ES = new DwarfCFIException(this);
+    if (EnableMonoEH)
+      ES = new DwarfMonoException(this);
+    else
+      ES = new DwarfCFIException(this);
     break;
   case ExceptionHandling::ARM:
-    ES = new ARMException(this);
+    if (EnableMonoEH)
+      ES = new DwarfMonoException(this);
+    else
+      ES = new ARMException(this);
     break;
   case ExceptionHandling::WinEH:
     switch (MAI->getWinEHEncodingType()) {
@@ -745,7 +755,7 @@ void AsmPrinter::EmitFunctionBody() {
         ++EmittedInsts;
       }
 
-      if (ShouldPrintDebugScopes) {
+      if (ShouldPrintDebugScopes || EnableMonoEH) {
         for (const HandlerInfo &HI : Handlers) {
           NamedRegionTimer T(HI.TimerName, HI.TimerGroupName,
                              TimePassesIsEnabled);
@@ -758,7 +768,8 @@ void AsmPrinter::EmitFunctionBody() {
 
       switch (MI.getOpcode()) {
       case TargetOpcode::CFI_INSTRUCTION:
-        emitCFIInstruction(MI);
+	if (!EnableMonoEH)
+          emitCFIInstruction(MI);
         break;
 
       case TargetOpcode::EH_LABEL:
@@ -785,7 +796,7 @@ void AsmPrinter::EmitFunctionBody() {
         break;
       }
 
-      if (ShouldPrintDebugScopes) {
+      if (ShouldPrintDebugScopes || EnableMonoEH) {
         for (const HandlerInfo &HI : Handlers) {
           NamedRegionTimer T(HI.TimerName, HI.TimerGroupName,
                              TimePassesIsEnabled);

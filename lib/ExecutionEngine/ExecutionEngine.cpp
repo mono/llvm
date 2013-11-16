@@ -64,7 +64,9 @@ ExecutionEngine *(*ExecutionEngine::InterpCtor)(std::unique_ptr<Module> M,
 
 ExecutionEngine::ExecutionEngine(std::unique_ptr<Module> M)
   : EEState(*this),
-    LazyFunctionCreator(nullptr) {
+    LazyFunctionCreator(nullptr),
+    ExceptionTableRegister(nullptr),
+    ExceptionTableDeregister(nullptr) {
   CompilingLazily         = false;
   GVCompilationDisabled   = false;
   SymbolSearchingDisabled = false;
@@ -83,6 +85,16 @@ ExecutionEngine::ExecutionEngine(std::unique_ptr<Module> M)
 
 ExecutionEngine::~ExecutionEngine() {
   clearAllGlobalMappings();
+}
+
+void ExecutionEngine::DeregisterAllTables() {
+  if (ExceptionTableDeregister) {
+    DenseMap<const Function*, void*>::iterator it = AllExceptionTables.begin();
+    DenseMap<const Function*, void*>::iterator ite = AllExceptionTables.end();
+    for (; it != ite; ++it)
+      ExceptionTableDeregister(it->second);
+    AllExceptionTables.clear();
+  }
 }
 
 namespace {

@@ -81,6 +81,78 @@ public:
   /// endFunction - Gather and emit post-function exception information.
   void endFunction(const MachineFunction *) override;
 };
+
+class DwarfMonoException : public EHStreamer {
+
+  struct MonoCallSiteEntry {
+    // The 'try-range' is BeginLabel .. EndLabel.
+    MCSymbol *BeginLabel; // zero indicates the start of the function.
+    MCSymbol *EndLabel;   // zero indicates the end of the function.
+
+    // The landing pad starts at PadLabel.
+    MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
+    int TypeID;
+  };
+
+  // Mono specific
+  struct MonoEHFrameInfo {
+    const MachineFunction *MF;
+    std::vector<MonoCallSiteEntry> CallSites;
+    std::vector<const GlobalVariable *> TypeInfos;
+    std::vector<unsigned> FilterIds;
+    std::vector<LandingPadInfo> PadInfos;
+    int FunctionNumber;
+    int MonoMethodIdx;
+    int FrameReg;
+    int ThisOffset;
+  };
+
+  struct FunctionEHFrameInfo {
+    MCSymbol *FunctionEHSym;  // L_foo.eh
+    unsigned Number;
+    unsigned PersonalityIndex;
+    bool adjustsStack;
+    bool hasLandingPads;
+    std::vector<MCCFIInstruction> Instructions;
+	std::vector<MCSymbol*> EHLabels;
+    const Function *function;
+
+    MonoEHFrameInfo MonoEH;
+
+    FunctionEHFrameInfo(MCSymbol *EHSym, unsigned Num, unsigned P,
+                        bool hC, bool hL,
+                        const std::vector<MCCFIInstruction> &M,
+						const std::vector<MCSymbol*> &EHLabels,
+                        const Function *f):
+      FunctionEHSym(EHSym), Number(Num), PersonalityIndex(P),
+      adjustsStack(hC), hasLandingPads(hL), Instructions(M), EHLabels(EHLabels), function (f) { }
+  };
+
+  std::vector<FunctionEHFrameInfo> EHFrames;
+
+  StringMap<int> FuncIndexes;
+  std::vector<MCSymbol*> EHLabels;
+
+public:
+  DwarfMonoException(AsmPrinter *A);
+  virtual ~DwarfMonoException();
+
+  virtual void endModule();
+
+  virtual void beginFunction(const MachineFunction *MF);
+
+  virtual void endFunction(const MachineFunction *);
+
+  virtual void beginInstruction(const MachineInstr *MI);
+
+  // EmitMonoEHFrame - Emit Mono specific exception handling tables
+  void EmitMonoEHFrame(const Function *Personality);
+
+  void PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo);
+
+  void EmitMonoLSDA(const FunctionEHFrameInfo *EHFrameInfo);
+};
+
 } // End of namespace llvm
 
 #endif
