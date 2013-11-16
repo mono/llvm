@@ -16,6 +16,8 @@
 
 #include "AsmPrinterHandler.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/IR/Module.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include <vector>
 
@@ -44,6 +46,17 @@ protected:
   /// MMI - Collected machine module information.
   MachineModuleInfo *MMI;
 
+  /// CallSiteEntry - Structure describing an entry in the call-site table.
+  struct CallSiteEntry {
+    // The 'try-range' is BeginLabel .. EndLabel.
+    MCSymbol *BeginLabel; // zero indicates the start of the function.
+    MCSymbol *EndLabel;   // zero indicates the end of the function.
+
+    // The landing pad starts at PadLabel.
+    MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
+    unsigned Action;
+  };
+
   /// SharedTypeIds - How many leading type ids two landing pads have in common.
   static unsigned SharedTypeIds(const LandingPadInfo *L,
                                 const LandingPadInfo *R);
@@ -68,16 +81,54 @@ protected:
     unsigned Previous;
   };
 
-  /// CallSiteEntry - Structure describing an entry in the call-site table.
-  struct CallSiteEntry {
+  struct MonoCallSiteEntry {
     // The 'try-range' is BeginLabel .. EndLabel.
     MCSymbol *BeginLabel; // zero indicates the start of the function.
     MCSymbol *EndLabel;   // zero indicates the end of the function.
 
     // The landing pad starts at PadLabel.
     MCSymbol *PadLabel;   // zero indicates that there is no landing pad.
-    unsigned Action;
+	int TypeID;
   };
+
+  // Mono specific
+  struct MonoEHFrameInfo {
+    const MachineFunction *MF;
+    std::vector<MonoCallSiteEntry> CallSites;
+    std::vector<const GlobalVariable *> TypeInfos;
+    std::vector<unsigned> FilterIds;
+    std::vector<LandingPadInfo> PadInfos;
+    int FunctionNumber;
+    int MonoMethodIdx;
+    int FrameReg;
+    int ThisOffset;
+  };
+
+  struct FunctionEHFrameInfo {
+    MCSymbol *FunctionEHSym;  // L_foo.eh
+    unsigned Number;
+    unsigned PersonalityIndex;
+    bool adjustsStack;
+    bool hasLandingPads;
+    std::vector<MCCFIInstruction> Instructions;
+    const Function *function;
+
+    MonoEHFrameInfo MonoEH;
+
+    FunctionEHFrameInfo(MCSymbol *EHSym, unsigned Num, unsigned P,
+                        bool hC, bool hL,
+                        const std::vector<MCCFIInstruction> &M,
+                        const Function *f):
+      FunctionEHSym(EHSym), Number(Num), PersonalityIndex(P),
+      adjustsStack(hC), hasLandingPads(hL), Instructions(M), function (f) { }
+  };
+
+  std::vector<FunctionEHFrameInfo> EHFrames;
+
+  /// UsesLSDA - Indicates whether an FDE that uses the CIE at the given index
+  /// uses an LSDA. If so, then we need to encode that information in the CIE's
+  /// augmentation.
+  DenseMap<unsigned, bool> UsesLSDA;
 
   /// ComputeActionsTable - Compute the actions table and gather the first
   /// action index for each landing pad site.
@@ -235,6 +286,36 @@ public:
 
   /// endFunction - Gather and emit post-function exception information.
   virtual void endFunction(const MachineFunction *);
+};
+
+class DwarfMonoException : public DwarfException {
+
+  StringMap<int> FuncIndexes;
+
+public:
+  //===--------------------------------------------------------------------===//
+  // Main entry points.
+  //
+  DwarfMonoException(AsmPrinter *A);
+  virtual ~DwarfMonoException();
+
+  /// EndModule - Emit all exception information that should come after the
+  /// content.
+  virtual void EndModule();
+
+  /// BeginFunction - Gather pre-function exception information.  Assumes being
+  /// emitted immediately after the function entry point.
+  virtual void BeginFunction(const MachineFunction *MF);
+
+  /// EndFunction - Gather and emit post-function exception information.
+  virtual void EndFunction();
+
+  // EmitMonoEHFrame - Emit Mono specific exception handling tables
+  void EmitMonoEHFrame(const Function *Personality);
+
+  void PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo);
+
+  void EmitMonoLSDA(const FunctionEHFrameInfo *EHFrameInfo);
 };
 
 } // End of namespace llvm
