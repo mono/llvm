@@ -50,6 +50,7 @@ protected:
   /// Section flags for eh_frame
   unsigned EHSectionType;
   unsigned EHSectionFlags;
+  unsigned MonoEHTableEncoding;
 
   /// CompactUnwindDwarfEHFrameOnly - Compact unwind encoding indicating that we
   /// should emit only an EH frame.
@@ -211,6 +212,7 @@ public:
     return CFI ? FDECFIEncoding : FDEEncoding;
   }
   unsigned getTTypeEncoding() const { return TTypeEncoding; }
+  unsigned getMonoEHTableEncoding() const { return MonoEHTableEncoding; }
 
   unsigned getCompactUnwindDwarfEHFrameOnly() const {
     return CompactUnwindDwarfEHFrameOnly;
