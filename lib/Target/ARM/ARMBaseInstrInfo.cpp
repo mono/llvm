@@ -2443,6 +2443,19 @@ optimizeCompareInstr(MachineInstr *CmpInstr, unsigned SrcReg, unsigned SrcReg2,
           return false;
     }
 
+	// FIXME:
+	// Enabling this causes codegen failures with -mtriple=thumbv7-ios:
+	// http://llvm.org/bugs/show_bug.cgi?id=17971
+	// Probably because the alloca is dce-d away even through it sets CPSR.
+	//define internal hidden i1 @FOO() {
+	//BB0:
+	//%0 = alloca i32, align 4
+	//%1 = ptrtoint i32* %0 to i32
+	//%2 = icmp eq i32 %1, 0
+	//ret i1 %2
+	//}
+	return false;
+
     // Toggle the optional operand to CPSR.
     MI->getOperand(5).setReg(ARM::CPSR);
     MI->getOperand(5).setIsDef(true);
