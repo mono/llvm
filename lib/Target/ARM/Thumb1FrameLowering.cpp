@@ -95,7 +95,7 @@ emitDefCfaOffset(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
     FrameLabel = MMI.getContext().CreateTempSymbol();
     BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
   }
-  MMI.addFrameInst(MCCFIInstruction::createDefCfaOffset(FrameLabel, CfaOffset));
+  MMI.addFrameInst(MCCFIInstruction::createDefCfaOffset(FrameLabel, -CfaOffset));
 }
 
 static void
@@ -109,7 +109,7 @@ emitDefCfa(MachineBasicBlock &MBB, MachineBasicBlock::iterator &MBBI,
   BuildMI(MBB, MBBI, dl, TII.get(ARM::PROLOG_LABEL)).addSym(FrameLabel);
 
   unsigned DwarfReg = MRI->getDwarfRegNum(CfaReg, true);
-  MMI.addFrameInst(MCCFIInstruction::createDefCfa(FrameLabel, DwarfReg, CfaOffset));
+  MMI.addFrameInst(MCCFIInstruction::createDefCfa(FrameLabel, DwarfReg, -CfaOffset));
 }
 
 static void
