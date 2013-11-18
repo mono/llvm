@@ -320,6 +320,8 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
       assert(Site.BeginLabel && Site.EndLabel && Site.PadLabel &&
               "Invalid landing pad!");
 
+	  // FIXME: This doesn't work because it includes ranges outside clauses
+#if 0
       // Try to merge with the previous call-site.
       if (CallSites.size()) {
         MonoCallSiteEntry &Prev = CallSites.back();
@@ -329,6 +331,7 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
           continue;
         }
       }
+#endif
 
       // Otherwise, create a new call-site.
       CallSites.push_back(Site);
