@@ -244,6 +244,7 @@ unsigned char* JITDwarfEmitter::EmitMonoLSDA(MachineFunction* MF,
               "Invalid landing pad!");
 
       // Try to merge with the previous call-site.
+#if 0
       if (CallSites.size()) {
         CallSiteEntry &Prev = CallSites.back();
         if (Site.PadLabel == Prev.PadLabel && Site.TypeID == Prev.TypeID) {
@@ -252,6 +253,7 @@ unsigned char* JITDwarfEmitter::EmitMonoLSDA(MachineFunction* MF,
           continue;
         }
       }
+#endif
 
       // Otherwise, create a new call-site.
       CallSites.push_back(Site);
