@@ -205,22 +205,21 @@ bool AsmPrinter::doInitialization(Module &M) {
 
   if (EnableMonoEH) {
     DE = new DwarfMonoException(this);
-    return false;
-  }
-
-  switch (MAI->getExceptionHandlingType()) {
-  case ExceptionHandling::None:
-    break;
-  case ExceptionHandling::SjLj:
-  case ExceptionHandling::DwarfCFI:
-    DE = new DwarfCFIException(this);
-    break;
-  case ExceptionHandling::ARM:
-    DE = new ARMException(this);
-    break;
-  case ExceptionHandling::Win64:
-    DE = new Win64Exception(this);
-    break;
+  } else {
+    switch (MAI->getExceptionHandlingType()) {
+    case ExceptionHandling::None:
+      break;
+    case ExceptionHandling::SjLj:
+    case ExceptionHandling::DwarfCFI:
+      DE = new DwarfCFIException(this);
+      break;
+    case ExceptionHandling::ARM:
+      DE = new ARMException(this);
+      break;
+    case ExceptionHandling::Win64:
+      DE = new Win64Exception(this);
+      break;
+    }
   }
   if (DE)
     Handlers.push_back(HandlerInfo(DE, EHTimerName, DWARFGroupName));

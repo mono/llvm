@@ -293,22 +293,14 @@ class DwarfMonoException : public DwarfException {
   StringMap<int> FuncIndexes;
 
 public:
-  //===--------------------------------------------------------------------===//
-  // Main entry points.
-  //
   DwarfMonoException(AsmPrinter *A);
   virtual ~DwarfMonoException();
 
-  /// EndModule - Emit all exception information that should come after the
-  /// content.
-  virtual void EndModule();
+  virtual void endModule();
 
-  /// BeginFunction - Gather pre-function exception information.  Assumes being
-  /// emitted immediately after the function entry point.
-  virtual void BeginFunction(const MachineFunction *MF);
+  virtual void beginFunction(const MachineFunction *MF);
 
-  /// EndFunction - Gather and emit post-function exception information.
-  virtual void EndFunction();
+  virtual void endFunction(const MachineFunction *);
 
   // EmitMonoEHFrame - Emit Mono specific exception handling tables
   void EmitMonoEHFrame(const Function *Personality);

@@ -641,22 +641,23 @@ DwarfMonoException::DwarfMonoException(AsmPrinter *A)
 
 DwarfMonoException::~DwarfMonoException() {}
 
-void DwarfMonoException::BeginFunction(const MachineFunction *MF)
+void DwarfMonoException::beginFunction(const MachineFunction *MF)
 {
   Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("eh_func_begin",
                                                 Asm->getFunctionNumber()));
 }
 
-void DwarfMonoException::EndFunction() {
+void DwarfMonoException::endFunction(const MachineFunction *MF)
+{
   Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("eh_func_end",
                                                 Asm->getFunctionNumber()));
 
   MMI->TidyLandingPads();
 
-  const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
+  //const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
   MCSymbol *FunctionEHSym =
-    Asm->GetSymbolWithGlobalValueBase(Asm->MF->getFunction(), ".eh",
-                                      TLOF.isFunctionEHFrameSymbolPrivate());
+    Asm->getSymbolWithGlobalValueBase(Asm->MF->getFunction(), ".eh");
+  //TLOF.isFunctionEHFrameSymbolPrivate());
 
   // Save EH frame information
   FunctionEHFrameInfo EHFrameInfo =
@@ -673,7 +674,7 @@ void DwarfMonoException::EndFunction() {
   EHFrames.push_back(EHFrameInfo);
 }
 
-void DwarfMonoException::EndModule() {
+void DwarfMonoException::endModule() {
   const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
 
   // Emit references to all used personality functions
