@@ -369,6 +369,7 @@ void MCAsmStreamer::EmitDataRegion(MCDataRegionType Kind) {
 
 void MCAsmStreamer::EmitVersionMin(MCVersionMinType Kind, unsigned Major,
                                    unsigned Minor, unsigned Update) {
+  return;
   switch (Kind) {
   case MCVM_IOSVersionMin:        OS << "\t.ios_version_min"; break;
   case MCVM_OSXVersionMin:        OS << "\t.macosx_version_min"; break;
