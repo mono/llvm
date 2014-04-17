@@ -275,6 +275,8 @@ int main(int argc, char **argv) {
       HasAnyOption = true;
       if (Arg == "--version") {
         OS << PACKAGE_VERSION << "-mono-" << LLVM_GIT_VERSION << '\n';
+      } else if (Arg == "--mono-api-version") {
+        OS << "1\n";
       } else if (Arg == "--prefix") {
         OS << ActivePrefix << '\n';
       } else if (Arg == "--bindir") {
