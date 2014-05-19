@@ -647,3 +647,7 @@ void MCStreamer::EmitBundleAlignMode(unsigned AlignPow2) {}
 void MCStreamer::EmitBundleLock(bool AlignToEnd) {}
 void MCStreamer::FinishImpl() {}
 void MCStreamer::EmitBundleUnlock() {}
+void MCStreamer::EmitDwarfAdvanceLineAddr(int64_t LineDelta,
+                                  const MCSymbol *LastLabel,
+                                  const MCSymbol *Label,
+                                  unsigned PointerSize) {}
