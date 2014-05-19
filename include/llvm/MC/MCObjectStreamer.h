@@ -117,9 +117,9 @@ public:
                              StringRef FileName) override;
   void EmitDwarfAdvanceLineAddr(int64_t LineDelta, const MCSymbol *LastLabel,
                                 const MCSymbol *Label,
-                                unsigned PointerSize);
+                                unsigned PointerSize) override;
   void EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
-                                 const MCSymbol *Label);
+                                 const MCSymbol *Label) override;
   void EmitGPRel32Value(const MCExpr *Value) override;
   void EmitGPRel64Value(const MCExpr *Value) override;
   void EmitFill(uint64_t NumBytes, uint8_t FillValue) override;
