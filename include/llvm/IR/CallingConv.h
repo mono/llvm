@@ -66,6 +66,9 @@ namespace CallingConv {
     // (almost) all registers.
     PreserveAll = 15,
 
+    // Mono - Calling convention used by Mono
+    Mono = 16,
+
     // Target - This is the start of the target-specific calling conventions,
     // e.g. fastcall and thiscall on X86.
     FirstTargetCC = 64,
