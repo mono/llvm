@@ -311,6 +311,7 @@ typedef enum {
   LLVMColdCallConv        = 9,
   LLVMWebKitJSCallConv    = 12,
   LLVMAnyRegCallConv      = 13,
+  LLVMMono1CallConv       = 16,
   LLVMX86StdcallCallConv  = 64,
   LLVMX86FastcallCallConv = 65
 } LLVMCallConv;
