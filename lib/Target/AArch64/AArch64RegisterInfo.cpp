@@ -86,11 +86,13 @@ AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(AArch64::WZR);
 
   const Function *F = MF.getFunction();
-  if (F && F->getCallingConv() == CallingConv::Mono)
-    // FIXME: This is required for some reason, otherwise llvm treats this as a callee-saved registers
+  if (F && F->getCallingConv() == CallingConv::Mono) {
+    // FIXME: This is required for some reason, otherwise llvm treats these as a callee-saved registers
     // even if we exclude it in getCalleeSavedRegs (). Luckily, the reg can still be used for argument
     // passing even if it is 'reserved'.
     Reserved.set(AArch64::X27);
+    Reserved.set(AArch64::X28);
+  }
 
   if (TFI->hasFP(MF) || STI->isTargetDarwin()) {
     Reserved.set(AArch64::FP);
