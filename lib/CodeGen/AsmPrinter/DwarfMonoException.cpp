@@ -32,6 +32,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/FormattedStream.h"
@@ -371,8 +372,8 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
 
   if (ThisSlot != -1) {
     unsigned FrameReg;
-    MonoEH->ThisOffset = Asm->MF->getTarget ().getFrameLowering ()->getFrameIndexReference (*Asm->MF, ThisSlot, FrameReg);
-    MonoEH->FrameReg = Asm->MF->getTarget ().getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
+    MonoEH->ThisOffset = Asm->MF->getTarget ().getSubtargetImpl ()->getFrameLowering ()->getFrameIndexReference (*Asm->MF, ThisSlot, FrameReg);
+    MonoEH->FrameReg = Asm->MF->getTarget ().getSubtargetImpl ()->getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
   } else {
     MonoEH->FrameReg = -1;
   }
@@ -495,7 +496,7 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 
   // Size and sign of stack growth.
   int stackGrowth = Asm->getDataLayout().getPointerSize();
-  if (Asm->TM.getFrameLowering()->getStackGrowthDirection() ==
+  if (Asm->TM.getSubtargetImpl()->getFrameLowering()->getStackGrowthDirection() ==
       TargetFrameLowering::StackGrowsDown)
     stackGrowth *= -1;
 
@@ -586,7 +587,7 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   Asm->EmitULEB128(1, "CIE Code Alignment Factor");
   Asm->EmitSLEB128(stackGrowth, "CIE Data Alignment Factor");
   Streamer.AddComment("CIE Return Address Column");
-  const TargetRegisterInfo *RI = Asm->TM.getRegisterInfo();
+  const TargetRegisterInfo *RI = Asm->TM.getSubtargetImpl()->getRegisterInfo();
   Asm->EmitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
 
   Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "Personality");

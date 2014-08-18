@@ -408,18 +408,52 @@ void MCAsmStreamer::EmitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol) {
   EmitEOL();
 }
 
+static void emitDwarfSetLineAddr(MCAsmStreamer &OS, int64_t LineDelta,
+                                 const MCSymbol *Label, int PointerSize) {
+  // emit the sequence to set the address
+  OS.EmitIntValue(dwarf::DW_LNS_extended_op, 1);
+  OS.EmitULEB128IntValue(PointerSize + 1);
+  OS.EmitIntValue(dwarf::DW_LNE_set_address, 1);
+  OS.EmitSymbolValue(Label, PointerSize);
+
+  // emit the sequence for the LineDelta (from 1) and a zero address delta.
+  MCDwarfLineAddr::Emit(&OS, LineDelta, 0);
+}
+
+static const MCExpr *buildSymbolDiff(MCAsmStreamer &OS, const MCSymbol *A,
+                                     const MCSymbol *B) {
+  MCContext &Context = OS.getContext();
+  MCSymbolRefExpr::VariantKind Variant = MCSymbolRefExpr::VK_None;
+  const MCExpr *ARef = MCSymbolRefExpr::Create(A, Variant, Context);
+  const MCExpr *BRef = MCSymbolRefExpr::Create(B, Variant, Context);
+  const MCExpr *AddrDelta =
+      MCBinaryExpr::Create(MCBinaryExpr::Sub, ARef, BRef, Context);
+  return AddrDelta;
+}
+
+static const MCExpr *forceExpAbs(MCStreamer &OS, const MCExpr* Expr) {
+  MCContext &Context = OS.getContext();
+  assert(!isa<MCSymbolRefExpr>(Expr));
+  if (Context.getAsmInfo()->hasAggressiveSymbolFolding())
+    return Expr;
+
+  MCSymbol *ABS = Context.CreateTempSymbol();
+  OS.EmitAssignment(ABS, Expr);
+  return MCSymbolRefExpr::Create(ABS, Context);
+}
+
 void MCAsmStreamer::EmitDwarfAdvanceLineAddr(int64_t LineDelta,
                                              const MCSymbol *LastLabel,
                                              const MCSymbol *Label,
                                              unsigned PointerSize) {
-  EmitDwarfSetLineAddr(LineDelta, Label, PointerSize);
+  emitDwarfSetLineAddr(*this, LineDelta, Label, PointerSize);
 }
 
 void MCAsmStreamer::EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
                                               const MCSymbol *Label) {
   EmitIntValue(dwarf::DW_CFA_advance_loc4, 1);
-  const MCExpr *AddrDelta = BuildSymbolDiff(getContext(), Label, LastLabel);
-  AddrDelta = ForceExpAbs(AddrDelta);
+  const MCExpr *AddrDelta = buildSymbolDiff(*this, Label, LastLabel);
+  AddrDelta = forceExpAbs(*this, AddrDelta);
   EmitValue(AddrDelta, 4);
 }
 

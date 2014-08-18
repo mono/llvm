@@ -32,6 +32,7 @@
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 using namespace llvm;
 
 JITDwarfEmitter::JITDwarfEmitter(JIT& theJit) : MMI(0), Jit(theJit) {}
@@ -45,9 +46,9 @@ unsigned char* JITDwarfEmitter::EmitDwarfTable(MachineFunction& F,
   assert(MMI && "MachineModuleInfo not registered!");
 
   const TargetMachine& TM = F.getTarget();
-  TD = TM.getDataLayout();
-  stackGrowthDirection = TM.getFrameLowering()->getStackGrowthDirection();
-  RI = TM.getRegisterInfo();
+  TD = TM.getSubtargetImpl()->getDataLayout();
+  stackGrowthDirection = TM.getSubtargetImpl()->getFrameLowering()->getStackGrowthDirection();
+  RI = TM.getSubtargetImpl()->getRegisterInfo();
   MAI = TM.getMCAsmInfo();
   JCE = &jce;
 
@@ -274,8 +275,8 @@ unsigned char* JITDwarfEmitter::EmitMonoLSDA(MachineFunction* MF,
   if (ThisSlot != -1) {
     // Emit 'this' location
     unsigned FrameReg;
-    int Offset = MF->getTarget ().getFrameLowering ()->getFrameIndexReference (*MF, ThisSlot, FrameReg);
-    FrameReg = MF->getTarget ().getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
+    int Offset = MF->getTarget ().getSubtargetImpl ()->getFrameLowering ()->getFrameIndexReference (*MF, ThisSlot, FrameReg);
+    FrameReg = MF->getTarget ().getSubtargetImpl ()->getRegisterInfo ()->getDwarfRegNum (FrameReg, true);
 
 	JCE->emitByte(dwarf::DW_EH_PE_udata4);
     JCE->emitByte((int)dwarf::DW_OP_bregx);
