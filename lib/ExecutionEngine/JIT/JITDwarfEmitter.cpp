@@ -104,7 +104,7 @@ JITDwarfEmitter::EmitCFIInstructions(intptr_t BaseLabelPtr,
     case MCCFIInstruction::OpDefCfa: {
       JCE->emitByte(dwarf::DW_CFA_def_cfa);
       JCE->emitULEB128Bytes(Instr.getRegister());
-      JCE->emitULEB128Bytes(-Instr.getOffset());
+      JCE->emitULEB128Bytes(Instr.getOffset());
       break;
     }
     case MCCFIInstruction::OpDefCfaRegister: {
