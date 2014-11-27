@@ -237,6 +237,8 @@ public:
     return (StackNaturalAlign != 0) && (Align > StackNaturalAlign);
   }
 
+  unsigned getStackAlignment() const { return StackNaturalAlign; }
+
   bool hasMicrosoftFastStdCallMangling() const {
     return ManglingMode == MM_WINCOFF;
   }
