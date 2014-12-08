@@ -252,7 +252,7 @@ def CC_AArch64_Mono_DarwinPCS : CallingConv<[
 
   // Mono marks the parameter it wants to pass in this non-abi register with
   // the 'inreg' attribute.
-  CCIfInReg<CCAssignToReg<[X27]>>,
+  CCIfInReg<CCAssignToReg<[X15]>>,
 
   CCDelegateTo<CC_AArch64_DarwinPCS>
 ]>;

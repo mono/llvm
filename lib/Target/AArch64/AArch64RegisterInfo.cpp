@@ -87,13 +87,8 @@ AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
 
   const Function *F = MF.getFunction();
   if (F && F->getCallingConv() == CallingConv::Mono) {
-    // FIXME: This is required for some reason, otherwise llvm treats these as a callee-saved registers
-    // even if we exclude it in getCalleeSavedRegs (). Luckily, the reg can still be used for argument
-    // passing even if it is 'reserved'.
-    Reserved.set(AArch64::X27);
-    Reserved.set(AArch64::X28);
-    Reserved.set(AArch64::W27);
-    Reserved.set(AArch64::W28);
+    Reserved.set(AArch64::X15);
+    Reserved.set(AArch64::W15);
   }
 
   if (TFI->hasFP(MF) || STI->isTargetDarwin()) {
@@ -135,10 +130,8 @@ bool AArch64RegisterInfo::isReservedReg(const MachineFunction &MF,
   case AArch64::W19:
   case AArch64::X19:
     return hasBasePointer(MF);
-  case AArch64::X27:
-  case AArch64::W27:
-  case AArch64::X28:
-  case AArch64::W28: {
+  case AArch64::X15:
+  case AArch64::W15: {
      const Function *F = MF.getFunction();
      if (F && F->getCallingConv() == CallingConv::Mono)
      return true;
