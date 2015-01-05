@@ -42,9 +42,10 @@
 #include "llvm/ADT/Twine.h"
 using namespace llvm;
 
-// FIXME:
 static cl::opt<bool> DisableGNUEH("disable-gnu-eh-frame", cl::NotHidden,
                                   cl::desc("Disable generation of GNU .eh_frame"));
+static cl::opt<std::string> MonoEHFrameSymbol("mono-eh-frame-symbol", cl::NotHidden,
+											  cl::desc("Symbol name for the mono eh frame"));
 
 static inline const MCExpr *MakeStartMinusEndExpr(const MCStreamer &MCOS,
                                                   const MCSymbol &Start,
@@ -532,8 +533,16 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   // Can't use rodata as the symbols we reference are in the text segment
   Streamer.SwitchSection(TLOF.getTextSection());
 
+  bool is_global = true;
+
+  std::string symbol_name = MonoEHFrameSymbol;
+  if (symbol_name.length() == 0) {
+	  symbol_name = "mono_eh_frame";
+	  is_global = false;
+  }
+
   MCSymbol *EHFrameHdrSym =
-	  Asm->OutContext.GetOrCreateSymbol(Twine("mono_eh_frame"));
+	  Asm->OutContext.GetOrCreateSymbol(Twine(symbol_name));
   MCSymbol *EHFrameEndSym = Asm->GetTempSymbol ("mono_eh_frame_end");
 
   Asm->EmitAlignment(4);
@@ -543,6 +552,10 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   if (Asm->MAI->hasDotTypeDotSizeDirective()) {
     Streamer.EmitELFSize(EHFrameHdrSym, Length);
     Streamer.EmitSymbolAttribute(EHFrameHdrSym, MCSA_ELF_TypeObject);
+  }
+  if (is_global) {
+	  Streamer.EmitSymbolAttribute (EHFrameHdrSym, MCSA_Global);
+	  Streamer.EmitSymbolAttribute (EHFrameHdrSym, MCSA_PrivateExtern);
   }
 
   // Header
