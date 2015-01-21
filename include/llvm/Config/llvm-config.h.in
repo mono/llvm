@@ -92,4 +92,6 @@
 /* Minor version of the LLVM API */
 #undef LLVM_VERSION_MINOR
 
+#define MONO_API_VERSION 3
+
 #endif
