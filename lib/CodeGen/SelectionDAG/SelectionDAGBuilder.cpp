@@ -2018,23 +2018,40 @@ void SelectionDAGBuilder::LowerIntrinsicTo(ImmutableCallSite CS, unsigned Intrin
 
     Type *Ty = CS.getType();
 
+    const Instruction &I = *CS.getInstruction();
     unsigned Alignment = cast<ConstantInt>(CS.getArgument(1))->getZExtValue();
-    bool isVolatile = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
-    bool isNonTemporal = false;
-    bool isInvariant = false;
-    const MDNode *Ranges = NULL;
+    AtomicOrdering Order = (AtomicOrdering)cast<ConstantInt>(CS.getArgument(3))->getZExtValue();
 
-    handleLoad(*CS.getInstruction(), SV, Ty, isVolatile, isNonTemporal, isInvariant, Alignment, AAMDNodes(), Ranges);
+    if (Order != NotAtomic) {
+      SynchronizationScope Scope = CrossThread;
+
+      handleAtomicLoad(I, Order, Scope, Ty, Alignment, SV);
+    } else {
+      bool isVolatile = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
+      bool isNonTemporal = false;
+      bool isInvariant = false;
+      const MDNode *Ranges = NULL;
+
+      handleLoad(I, SV, Ty, isVolatile, isNonTemporal, isInvariant, Alignment, AAMDNodes(), Ranges);
+    }
     break;
   }
   case Intrinsic::mono_store: {
     const Value *SrcV = CS.getArgument(0);
     const Value *PtrV = CS.getArgument(1);
     unsigned Alignment = cast<ConstantInt>(CS.getArgument(2))->getZExtValue();
-    bool isVolatile = cast<ConstantInt>(CS.getArgument(3))->getZExtValue();
-    bool isNonTemporal = false;
+    AtomicOrdering Order = (AtomicOrdering)cast<ConstantInt>(CS.getArgument(4))->getZExtValue();
 
-    handleStore(SrcV, PtrV, isVolatile, isNonTemporal, Alignment, AAMDNodes());
+    if (Order != NotAtomic) {
+      SynchronizationScope Scope = CrossThread;
+
+      handleAtomicStore(Order, Scope, SrcV, PtrV, Alignment);
+    } else {
+      bool isVolatile = cast<ConstantInt>(CS.getArgument(3))->getZExtValue();
+      bool isNonTemporal = false;
+
+      handleStore(SrcV, PtrV, isVolatile, isNonTemporal, Alignment, AAMDNodes());
+    }
     break;
   }
   }
@@ -3818,31 +3835,43 @@ void SelectionDAGBuilder::visitFence(const FenceInst &I) {
 }
 
 void SelectionDAGBuilder::visitAtomicLoad(const LoadInst &I) {
-  SDLoc dl = getCurSDLoc();
   AtomicOrdering Order = I.getOrdering();
   SynchronizationScope Scope = I.getSynchScope();
+  Type *Type = I.getType();
+  unsigned Alignment = I.getAlignment();
+  const Value *PointerOperand = I.getPointerOperand();
+
+  handleAtomicLoad (I, Order, Scope, Type, Alignment, PointerOperand);
+}
+
+void SelectionDAGBuilder::handleAtomicLoad(const Instruction &I,
+                                           AtomicOrdering Order,
+                                           SynchronizationScope Scope,
+                                           Type *Type,
+                                           unsigned Alignment,
+                                           const Value *PointerOperand) {
+  SDLoc dl = getCurSDLoc();
 
   SDValue InChain = getRoot();
 
   const TargetLowering *TLI = TM.getSubtargetImpl()->getTargetLowering();
-  EVT VT = TLI->getValueType(I.getType());
+  EVT VT = TLI->getValueType(Type);
 
-  if (I.getAlignment() < VT.getSizeInBits() / 8)
+  if (Alignment < VT.getSizeInBits() / 8)
     report_fatal_error("Cannot generate unaligned atomic load");
 
   MachineMemOperand *MMO =
       DAG.getMachineFunction().
-      getMachineMemOperand(MachinePointerInfo(I.getPointerOperand()),
+      getMachineMemOperand(MachinePointerInfo(PointerOperand),
                            MachineMemOperand::MOVolatile |
                            MachineMemOperand::MOLoad,
                            VT.getStoreSize(),
-                           I.getAlignment() ? I.getAlignment() :
-                                              DAG.getEVTAlignment(VT));
+                           Alignment ? Alignment : DAG.getEVTAlignment(VT));
 
   InChain = TLI->prepareVolatileOrAtomicLoad(InChain, dl, DAG);
   SDValue L =
       DAG.getAtomic(ISD::ATOMIC_LOAD, dl, VT, VT, InChain,
-                    getValue(I.getPointerOperand()), MMO,
+                    getValue(PointerOperand), MMO,
                     TLI->getInsertFencesForAtomic() ? Monotonic : Order,
                     Scope);
 
@@ -3857,17 +3886,28 @@ void SelectionDAGBuilder::visitAtomicLoad(const LoadInst &I) {
 }
 
 void SelectionDAGBuilder::visitAtomicStore(const StoreInst &I) {
-  SDLoc dl = getCurSDLoc();
-
   AtomicOrdering Order = I.getOrdering();
   SynchronizationScope Scope = I.getSynchScope();
+  const Value *ValueOperand = I.getValueOperand();
+  const Value *PointerOperand = I.getPointerOperand();
+  unsigned Alignment = I.getAlignment();
+
+  handleAtomicStore (Order, Scope, ValueOperand, PointerOperand, Alignment);
+}
+
+void SelectionDAGBuilder::handleAtomicStore(AtomicOrdering Order,
+                                            SynchronizationScope Scope,
+                                            const Value *ValueOperand,
+                                            const Value *PointerOperand,
+                                            unsigned Alignment) {
+  SDLoc dl = getCurSDLoc();
 
   SDValue InChain = getRoot();
 
   const TargetLowering *TLI = TM.getSubtargetImpl()->getTargetLowering();
-  EVT VT = TLI->getValueType(I.getValueOperand()->getType());
+  EVT VT = TLI->getValueType(ValueOperand->getType());
 
-  if (I.getAlignment() < VT.getSizeInBits() / 8)
+  if (Alignment < VT.getSizeInBits() / 8)
     report_fatal_error("Cannot generate unaligned atomic store");
 
   if (TLI->getInsertFencesForAtomic())
@@ -3877,9 +3917,9 @@ void SelectionDAGBuilder::visitAtomicStore(const StoreInst &I) {
   SDValue OutChain =
     DAG.getAtomic(ISD::ATOMIC_STORE, dl, VT,
                   InChain,
-                  getValue(I.getPointerOperand()),
-                  getValue(I.getValueOperand()),
-                  I.getPointerOperand(), I.getAlignment(),
+                  getValue(PointerOperand),
+                  getValue(ValueOperand),
+                  PointerOperand, Alignment,
                   TLI->getInsertFencesForAtomic() ? Monotonic : Order,
                   Scope);
 

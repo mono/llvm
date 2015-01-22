@@ -690,6 +690,14 @@ private:
 				   bool isVolatile, bool isNonTemporal,
 				   unsigned Alignment, const AAMDNodes &AAInfo);
 
+  void handleAtomicLoad(const Instruction &I, AtomicOrdering Order,
+                        SynchronizationScope Scope, Type *Type, unsigned Alignment,
+                        const Value *PointerOperand);
+
+  void handleAtomicStore(AtomicOrdering Order, SynchronizationScope Scope,
+                         const Value *ValueOperand, const Value *PointerOperand,
+                         unsigned Alignment);
+
 public:
   void visitSwitchCase(CaseBlock &CB,
                        MachineBasicBlock *SwitchBB);
