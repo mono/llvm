@@ -263,14 +263,6 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
           [](const LandingPadInfo *L,
 			 const LandingPadInfo *R) { return L->TypeIds < R->TypeIds; });
 
-#if 0
-  // Compute the actions table and gather the first action index for each
-  // landing pad site.
-  SmallVector<ActionEntry, 32> Actions;
-  SmallVector<unsigned, 64> FirstActions;
-  ComputeActionsTable(LandingPads, Actions, FirstActions);
-#endif
-
   // Invokes and nounwind calls have entries in PadMap (due to being bracketed
   // by try-range labels when lowered).  Ordinary calls do not, so appropriate
   // try-ranges for them need be deduced when using DWARF exception handling.
@@ -287,7 +279,6 @@ void DwarfMonoException::PrepareMonoLSDA(FunctionEHFrameInfo *EHFrameInfo) {
 
   // Compute the call-site table.
   SmallVector<MonoCallSiteEntry, 64> CallSites;
-  //ComputeCallSiteTable(CallSites, PadMap, LandingPads, FirstActions);
 
   MCSymbol *LastLabel = 0;
   for (MachineFunction::const_iterator I = MF->begin(), E = MF->end();
@@ -406,20 +397,6 @@ void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
   std::sort(LandingPads.begin(), LandingPads.end(),
           [](const LandingPadInfo *L,
 			 const LandingPadInfo *R) { return L->TypeIds < R->TypeIds; });
-
-  // Invokes and nounwind calls have entries in PadMap (due to being bracketed
-  // by try-range labels when lowered).  Ordinary calls do not, so appropriate
-  // try-ranges for them need be deduced when using DWARF exception handling.
-  RangeMapType PadMap;
-  for (unsigned i = 0, N = LandingPads.size(); i != N; ++i) {
-    const LandingPadInfo *LandingPad = LandingPads[i];
-    for (unsigned j = 0, E = LandingPad->BeginLabels.size(); j != E; ++j) {
-      MCSymbol *BeginLabel = LandingPad->BeginLabels[j];
-      assert(!PadMap.count(BeginLabel) && "Duplicate landing pad labels!");
-      PadRange P = { i, j };
-      PadMap[BeginLabel] = P;
-    }
-  }
 
   assert(Asm->MAI->getExceptionHandlingType() == ExceptionHandling::DwarfCFI);
 
