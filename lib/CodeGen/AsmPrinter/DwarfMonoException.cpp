@@ -651,6 +651,9 @@ void DwarfMonoException::endFunction(const MachineFunction *MF)
 
   MMI->TidyLandingPads();
 
+  if (Asm->MF->getFunction()->doesNotThrow())
+	  return;
+
   //const TargetLoweringObjectFile &TLOF = Asm->getObjFileLowering();
   MCSymbol *FunctionEHSym =
     Asm->getSymbolWithGlobalValueBase(Asm->MF->getFunction(), ".eh");
