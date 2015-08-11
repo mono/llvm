@@ -42,8 +42,6 @@
 #include "llvm/ADT/Twine.h"
 using namespace llvm;
 
-static cl::opt<bool> DisableGNUEH("disable-gnu-eh-frame", cl::NotHidden,
-                                  cl::desc("Disable generation of GNU .eh_frame"));
 static cl::opt<std::string> MonoEHFrameSymbol("mono-eh-frame-symbol", cl::NotHidden,
 											  cl::desc("Symbol name for the mono eh frame"));
 

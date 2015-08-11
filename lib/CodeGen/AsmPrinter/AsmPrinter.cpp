@@ -66,6 +66,9 @@ STATISTIC(EmittedInsts, "Number of machine instrs printed");
 cl::opt<bool> EnableMonoEH("enable-mono-eh-frame", cl::NotHidden,
      cl::desc("Enable generation of Mono specific EH tables"));
 
+static cl::opt<bool> DisableGNUEH("disable-gnu-eh-frame", cl::NotHidden,
+                                  cl::desc("Disable generation of GNU .eh_frame"));
+
 char AsmPrinter::ID = 0;
 
 typedef DenseMap<GCStrategy*, std::unique_ptr<GCMetadataPrinter>> gcp_map_type;
@@ -242,15 +245,11 @@ bool AsmPrinter::doInitialization(Module &M) {
     break;
   case ExceptionHandling::SjLj:
   case ExceptionHandling::DwarfCFI:
-    if (EnableMonoEH)
-      ES = new DwarfMonoException(this);
-    else
+    if (!DisableGNUEH)
       ES = new DwarfCFIException(this);
     break;
   case ExceptionHandling::ARM:
-    if (EnableMonoEH)
-      ES = new DwarfMonoException(this);
-    else
+    if (!DisableGNUEH)
       ES = new ARMException(this);
     break;
   case ExceptionHandling::WinEH:
@@ -264,6 +263,8 @@ bool AsmPrinter::doInitialization(Module &M) {
   }
   if (ES)
     Handlers.push_back(HandlerInfo(ES, EHTimerName, DWARFGroupName));
+  if (EnableMonoEH)
+    Handlers.push_back(HandlerInfo(new DwarfMonoException(this), EHTimerName, DWARFGroupName));
   return false;
 }
 
