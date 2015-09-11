@@ -536,7 +536,7 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   // Header
 
   Streamer.AddComment("version");
-  Asm->OutStreamer.EmitIntValue(4, 1);
+  Asm->OutStreamer.EmitIntValue(3, 1);
   Asm->OutStreamer.AddComment ("func addr encoding");
   Asm->OutStreamer.EmitIntValue (FuncAddrEncoding, 1);
 
@@ -562,11 +562,10 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 	  Streamer.EmitIntValue (-1, 4);
 	  Asm->EmitLabelDifference(EHFrameHdrSym, EHFrameHdrSym, 4);
   } else {
-	  int n = EHFrames[EHFrames.size()-1].Number;
-	  // Emit the offset to the end of the last function, since it cannot be computed using the next table entry
-	  MCSymbol *Sym2 = Asm->GetTempSymbol("mono_eh_func_end", n);
-      Streamer.AddComment("last method end");
-	  Asm->EmitLabelDifference(Sym2, EHFrameHdrSym, 4);
+	  // Emit the size of the last function, since it cannot be computed using the next table entry
+	  MCSymbol *Sym1 = Asm->GetTempSymbol("mono_eh_func_begin", EHFrames.size() - 1);
+	  MCSymbol *Sym2 = Asm->GetTempSymbol("mono_eh_func_end", EHFrames.size() - 1);
+	  Asm->EmitLabelDifference(Sym2, Sym1, 4);
 	  MCSymbol *Sym3 = Asm->GetTempSymbol ("mono_eh_frame_end");
 	  Asm->EmitLabelDifference(Sym3, EHFrameHdrSym, 4);
   }
