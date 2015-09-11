@@ -426,14 +426,14 @@ void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
     const MonoCallSiteEntry &S = *I;
       
     MCSymbol *EHFuncBeginSym =
-      Asm->GetTempSymbol("mono_eh_func_begin", FunctionNumber);
+      Asm->GetTempSymbol("eh_func_begin", FunctionNumber);
       
     MCSymbol *BeginLabel = S.BeginLabel;
     if (BeginLabel == 0)
       BeginLabel = EHFuncBeginSym;
     MCSymbol *EndLabel = S.EndLabel;
     if (EndLabel == 0)
-      EndLabel = Asm->GetTempSymbol("mono_eh_func_end", FunctionNumber);
+      EndLabel = Asm->GetTempSymbol("eh_func_end", FunctionNumber);
         
     Asm->OutStreamer.AddComment("Region start");
     Asm->EmitLabelDifference(BeginLabel, EHFuncBeginSym, 4);
@@ -563,8 +563,8 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 	  Asm->EmitLabelDifference(EHFrameHdrSym, EHFrameHdrSym, 4);
   } else {
 	  // Emit the size of the last function, since it cannot be computed using the next table entry
-	  MCSymbol *Sym1 = Asm->GetTempSymbol("mono_eh_func_begin", EHFrames.size() - 1);
-	  MCSymbol *Sym2 = Asm->GetTempSymbol("mono_eh_func_end", EHFrames.size() - 1);
+	  MCSymbol *Sym1 = Asm->GetTempSymbol("eh_func_begin", EHFrames.size() - 1);
+	  MCSymbol *Sym2 = Asm->GetTempSymbol("eh_func_end", EHFrames.size() - 1);
 	  Asm->EmitLabelDifference(Sym2, Sym1, 4);
 	  MCSymbol *Sym3 = Asm->GetTempSymbol ("mono_eh_frame_end");
 	  Asm->EmitLabelDifference(Sym3, EHFrameHdrSym, 4);
@@ -637,14 +637,14 @@ DwarfMonoException::~DwarfMonoException() {}
 
 void DwarfMonoException::beginFunction(const MachineFunction *MF)
 {
-  Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("mono_eh_func_begin",
+  Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("eh_func_begin",
                                                 Asm->getFunctionNumber()));
   EHLabels.clear();
 }
 
 void DwarfMonoException::endFunction(const MachineFunction *MF)
 {
-  Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("mono_eh_func_end",
+  Asm->OutStreamer.EmitLabel(Asm->GetTempSymbol("eh_func_end",
                                                 Asm->getFunctionNumber()));
 
   MMI->TidyLandingPads();
