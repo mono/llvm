@@ -586,6 +586,8 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 
   // Initial CIE program
   EmitCFIInstructions(Streamer, Streamer.getContext().getAsmInfo()->getInitialFrameState(), NULL, NULL, CFAOffset, dataAlignmentFactor);
+  Streamer.AddComment("End of CIE program");
+  Streamer.EmitIntValue(dwarf::DW_CFA_nop, 1);
 
   int CIECFAOffset = CFAOffset;
 
