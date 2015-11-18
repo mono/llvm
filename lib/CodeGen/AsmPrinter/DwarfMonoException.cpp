@@ -562,9 +562,11 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
 	  Streamer.EmitIntValue (-1, 4);
 	  Asm->EmitLabelDifference(EHFrameHdrSym, EHFrameHdrSym, 4);
   } else {
+	  const FunctionEHFrameInfo &EHFrameInfo = EHFrames [EHFrames.size() - 1];
+      int Index = EHFrameInfo.Number;
 	  // Emit the size of the last function, since it cannot be computed using the next table entry
-	  MCSymbol *Sym1 = Asm->GetTempSymbol("eh_func_begin", EHFrames.size() - 1);
-	  MCSymbol *Sym2 = Asm->GetTempSymbol("eh_func_end", EHFrames.size() - 1);
+	  MCSymbol *Sym1 = Asm->GetTempSymbol("eh_func_begin", Index);
+	  MCSymbol *Sym2 = Asm->GetTempSymbol("eh_func_end", Index);
 	  Asm->EmitLabelDifference(Sym2, Sym1, 4);
 	  MCSymbol *Sym3 = Asm->GetTempSymbol ("mono_eh_frame_end");
 	  Asm->EmitLabelDifference(Sym3, EHFrameHdrSym, 4);
