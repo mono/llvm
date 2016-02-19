@@ -108,6 +108,8 @@ MachineFunction::MachineFunction(const Function *F, const TargetMachine &TM,
          "Target-incompatible DataLayout attached\n");
 
   PSVManager = llvm::make_unique<PseudoSourceValueManager>();
+
+  MonoThisSlot = -1;
 }
 
 MachineFunction::~MachineFunction() {

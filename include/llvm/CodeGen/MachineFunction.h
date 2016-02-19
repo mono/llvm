@@ -154,6 +154,9 @@ class MachineFunction {
   // Allocation management for pseudo source values.
   std::unique_ptr<PseudoSourceValueManager> PSVManager;
 
+  // Stack slot containing the this pointer for mono compiled functions
+  int MonoThisSlot;
+
   MachineFunction(const MachineFunction &) = delete;
   void operator=(const MachineFunction&) = delete;
 public:
@@ -165,6 +168,9 @@ public:
   MCContext &getContext() const { return Ctx; }
 
   PseudoSourceValueManager &getPSVManager() const { return *PSVManager; }
+
+  int getMonoThisSlot() const { return MonoThisSlot; }
+  void setMonoThisSlot(int Slot) { MonoThisSlot = Slot; }
 
   /// Return the DataLayout attached to the Module associated to this MF.
   const DataLayout &getDataLayout() const;
