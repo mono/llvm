@@ -855,6 +855,9 @@ public:
   /// This implements the CodeView '.cv_fpo_data' assembler directive.
   virtual void EmitCVFPOData(const MCSymbol *ProcSym, SMLoc Loc = {}) {}
 
+  virtual void EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
+                                         const MCSymbol *Label) {}
+
   /// Emit the absolute difference between two symbols.
   ///
   /// \pre Offset of \c Hi is greater than the offset \c Lo.
