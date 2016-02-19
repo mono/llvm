@@ -1454,6 +1454,8 @@ void DwarfDebug::collectEntityInfo(DwarfCompileUnit &TheCU,
 
 // Process beginning of an instruction.
 void DwarfDebug::beginInstruction(const MachineInstr *MI) {
+  if (!MMI->hasDebugInfo())
+	  return;
   DebugHandlerBase::beginInstruction(MI);
   assert(CurMI);
 
