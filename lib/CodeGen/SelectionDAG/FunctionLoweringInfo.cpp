@@ -160,6 +160,17 @@ void FunctionLoweringInfo::set(const Function &fn, MachineFunction &mf,
           // Update the catch handler information.
           if (Iter != CatchObjects.end())
             *Iter->second = FrameIndex;
+
+          //
+          // The mono exception handling code needs to location of the 'this' pointer
+          // to handle stack traces containing generic shared methods.
+          // To implement this, it saves the this pointer to an alloca which is marked with
+          // the 'mono.this' custom metadata. We save the stack slot used by this alloca
+          // in MachineFunction, so the dwarf exception info emission code can use it to
+          // compute the reg+offset for it, and save it into the LSDA.
+          //
+          if (AI->getMetadata("mono.this"))
+            MF->setMonoThisSlot(StaticAllocaMap[AI]);
         } else {
           // FIXME: Overaligned static allocas should be grouped into
           // a single dynamic allocation instead of using a separate
