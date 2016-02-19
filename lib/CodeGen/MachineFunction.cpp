@@ -188,6 +188,8 @@ void MachineFunction::init() {
   PSVManager =
     llvm::make_unique<PseudoSourceValueManager>(*(getSubtarget().
                                                   getInstrInfo()));
+
+  MonoThisSlot = -1;
 }
 
 MachineFunction::~MachineFunction() {
