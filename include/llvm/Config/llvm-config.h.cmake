@@ -82,4 +82,7 @@
  */
 #cmakedefine01 LLVM_FORCE_ENABLE_STATS
 
+/* Mono api version */
+#cmakedefine MONO_API_VERSION ${MONO_API_VERSION}
+
 #endif
