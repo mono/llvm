@@ -314,4 +314,23 @@ def CSR_GenericInt : CalleeSavedRegs<(add LR, (sequence "R%u", 12, 0))>;
 // registers.
 def CSR_FIQ : CalleeSavedRegs<(add LR, R11, (sequence "R%u", 7, 0))>;
 
+//===----------------------------------------------------------------------===//
+// ARM Mono calling conventions
+//===----------------------------------------------------------------------===//
+
+def CC_ARM_Mono_APCS : CallingConv<[
+  // Mono marks the parameter it wants to pass in this non-abi register with
+  // the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_APCS>
+]>;
+
+def CC_ARM_Mono_AAPCS : CallingConv<[
+  // Mono marks the parameter it wants to pass in this non-abi register with
+  // the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_AAPCS>
+]>;
 

@@ -76,6 +76,9 @@ namespace CallingConv {
     // CXX_FAST_TLS - Calling convention for access functions.
     CXX_FAST_TLS = 17,
 
+    // Mono - Calling convention used by Mono
+    Mono = 18,
+
     // Target - This is the start of the target-specific calling conventions,
     // e.g. fastcall and thiscall on X86.
     FirstTargetCC = 64,
