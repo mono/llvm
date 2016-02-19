@@ -77,4 +77,7 @@
 /* LLVM version string */
 #define LLVM_VERSION_STRING "${PACKAGE_VERSION}"
 
+/* Mono api version */
+#cmakedefine MONO_API_VERSION ${MONO_API_VERSION}
+
 #endif
