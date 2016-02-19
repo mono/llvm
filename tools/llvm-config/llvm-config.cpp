@@ -474,7 +474,9 @@ int main(int argc, char **argv) {
     if (Arg.startswith("-")) {
       HasAnyOption = true;
       if (Arg == "--version") {
-        OS << PACKAGE_VERSION << '\n';
+        OS << PACKAGE_VERSION << "-mono" << '\n';
+      } else if (Arg == "--mono-api-version") {
+        OS << MONO_API_VERSION << '\n';
       } else if (Arg == "--prefix") {
         OS << ActivePrefix << '\n';
       } else if (Arg == "--bindir") {
