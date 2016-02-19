@@ -1418,6 +1418,15 @@ CCAssignFn *ARMTargetLowering::CCAssignFnForNode(CallingConv::ID CC,
     return (Return ? RetFastCC_ARM_APCS : FastCC_ARM_APCS);
   case CallingConv::GHC:
     return (Return ? RetCC_ARM_APCS : CC_ARM_APCS_GHC);
+  case CallingConv::Mono:
+    if (Return) {
+      return CCAssignFnForNode(CallingConv::C, true, isVarArg);
+    } else {
+      if (Subtarget->isAAPCS_ABI())
+        return CC_ARM_Mono_AAPCS;
+      else
+        return CC_ARM_Mono_APCS;
+    }
   }
 }
 

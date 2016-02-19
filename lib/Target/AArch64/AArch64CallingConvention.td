@@ -310,3 +310,17 @@ def CSR_AArch64_AllRegs
                            (sequence "Q%u", 0, 31))>;
 
 def CSR_AArch64_NoRegs : CalleeSavedRegs<(add)>;
+
+//===----------------------------------------------------------------------===//
+// AARCH64 Mono calling conventions
+//===----------------------------------------------------------------------===//
+
+def CC_AArch64_Mono_DarwinPCS : CallingConv<[
+
+  // Mono marks the parameter it wants to pass in this non-abi register with
+  // the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[X15]>>,
+
+  CCDelegateTo<CC_AArch64_DarwinPCS>
+]>;
+

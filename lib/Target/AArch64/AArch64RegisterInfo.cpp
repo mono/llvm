@@ -111,6 +111,12 @@ AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(AArch64::WSP);
   Reserved.set(AArch64::WZR);
 
+  const Function *F = MF.getFunction();
+  if (F && F->getCallingConv() == CallingConv::Mono) {
+    Reserved.set(AArch64::X15);
+    Reserved.set(AArch64::W15);
+  }
+
   if (TFI->hasFP(MF) || TT.isOSDarwin()) {
     Reserved.set(AArch64::FP);
     Reserved.set(AArch64::W29);
@@ -150,6 +156,12 @@ bool AArch64RegisterInfo::isReservedReg(const MachineFunction &MF,
   case AArch64::W19:
   case AArch64::X19:
     return hasBasePointer(MF);
+  case AArch64::X15:
+  case AArch64::W15: {
+     const Function *F = MF.getFunction();
+     if (F && F->getCallingConv() == CallingConv::Mono)
+     return true;
+  }
   }
 
   return false;
