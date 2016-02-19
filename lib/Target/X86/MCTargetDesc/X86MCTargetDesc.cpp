@@ -263,7 +263,7 @@ static MCAsmInfo *createX86MCAsmInfo(const MCRegisterInfo &MRI,
   // Initial state of the frame pointer is esp+stackGrowth.
   unsigned StackPtr = is64Bit ? X86::RSP : X86::ESP;
   MCCFIInstruction Inst = MCCFIInstruction::createDefCfa(
-      nullptr, MRI.getDwarfRegNum(StackPtr, true), -stackGrowth);
+      nullptr, MRI.getDwarfRegNum(StackPtr, true), stackGrowth);
   MAI->addInitialFrameState(Inst);
 
   // Add return address to move list

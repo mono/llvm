@@ -17,6 +17,7 @@
 #include "DwarfDebug.h"
 #include "DwarfException.h"
 #include "WinException.h"
+#include "MonoException.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
@@ -139,6 +140,12 @@ STATISTIC(EmittedInsts, "Number of machine instrs printed");
 static cl::opt<bool>
     PrintSchedule("print-schedule", cl::Hidden, cl::init(false),
                   cl::desc("Print 'sched: [latency:throughput]' in .s output"));
+
+cl::opt<bool> EnableMonoEH("enable-mono-eh-frame", cl::NotHidden,
+     cl::desc("Enable generation of Mono specific EH tables"));
+
+static cl::opt<bool> DisableGNUEH("disable-gnu-eh-frame", cl::NotHidden,
+                                  cl::desc("Disable generation of GNU .eh_frame"));
 
 char AsmPrinter::ID = 0;
 
@@ -334,10 +341,12 @@ bool AsmPrinter::doInitialization(Module &M) {
     break;
   case ExceptionHandling::SjLj:
   case ExceptionHandling::DwarfCFI:
-    ES = new DwarfCFIException(this);
+    if (!DisableGNUEH)
+      ES = new DwarfCFIException(this);
     break;
   case ExceptionHandling::ARM:
-    ES = new ARMException(this);
+    if (!DisableGNUEH)
+      ES = new ARMException(this);
     break;
   case ExceptionHandling::WinEH:
     switch (MAI->getWinEHEncodingType()) {
@@ -354,6 +363,8 @@ bool AsmPrinter::doInitialization(Module &M) {
   if (ES)
     Handlers.push_back(HandlerInfo(ES, EHTimerName, EHTimerDescription,
                                    DWARFGroupName, DWARFGroupDescription));
+  if (EnableMonoEH)
+    Handlers.push_back(HandlerInfo(new MonoException(this), EHTimerName, EHTimerDescription, DWARFGroupName, DWARFGroupDescription));
   return false;
 }
 
@@ -1010,7 +1021,7 @@ void AsmPrinter::EmitFunctionBody() {
         ++NumInstsInFunction;
       }
 
-      if (ShouldPrintDebugScopes) {
+      if (ShouldPrintDebugScopes || EnableMonoEH) {
         for (const HandlerInfo &HI : Handlers) {
           NamedRegionTimer T(HI.TimerName, HI.TimerDescription,
                              HI.TimerGroupName, HI.TimerGroupDescription,
@@ -1026,7 +1037,8 @@ void AsmPrinter::EmitFunctionBody() {
 
       switch (MI.getOpcode()) {
       case TargetOpcode::CFI_INSTRUCTION:
-        emitCFIInstruction(MI);
+        if (!EnableMonoEH)
+          emitCFIInstruction(MI);
         break;
       case TargetOpcode::LOCAL_ESCAPE:
         emitFrameAlloc(MI);
@@ -1055,7 +1067,7 @@ void AsmPrinter::EmitFunctionBody() {
         break;
       }
 
-      if (ShouldPrintDebugScopes) {
+      if (ShouldPrintDebugScopes || EnableMonoEH) {
         for (const HandlerInfo &HI : Handlers) {
           NamedRegionTimer T(HI.TimerName, HI.TimerDescription,
                              HI.TimerGroupName, HI.TimerGroupDescription,
@@ -1113,7 +1125,7 @@ void AsmPrinter::EmitFunctionBody() {
   EmitFunctionBodyEnd();
 
   if (needFuncLabelsForEHOrDebugInfo(*MF, MMI) ||
-      MAI->hasDotTypeDotSizeDirective()) {
+      MAI->hasDotTypeDotSizeDirective() || EnableMonoEH) {
     // Create a symbol for the end of function.
     CurrentFnEnd = createTempSymbol("func_end");
     OutStreamer->EmitLabel(CurrentFnEnd);
@@ -1447,7 +1459,7 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   CurrentFnBegin = nullptr;
   CurExceptionSym = nullptr;
   bool NeedsLocalForSize = MAI->needsLocalForSize();
-  if (needFuncLabelsForEHOrDebugInfo(MF, MMI) || NeedsLocalForSize) {
+  if (needFuncLabelsForEHOrDebugInfo(MF, MMI) || NeedsLocalForSize || EnableMonoEH) {
     CurrentFnBegin = createTempSymbol("func_begin");
     if (NeedsLocalForSize)
       CurrentFnSymForSize = CurrentFnBegin;
