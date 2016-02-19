@@ -240,7 +240,8 @@ typedef enum {
   LLVMAMDGPUHSCallConv      = 93,
   LLVMMSP430BUILTINCallConv = 94,
   LLVMAMDGPULSCallConv      = 95,
-  LLVMAMDGPUESCallConv      = 96
+  LLVMAMDGPUESCallConv      = 96,
+  LLVMMono1CallConv         = 97
 } LLVMCallConv;
 
 typedef enum {

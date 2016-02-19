@@ -2895,6 +2895,8 @@ CCAssignFn *AArch64TargetLowering::CCAssignFnForCall(CallingConv::ID CC,
     return IsVarArg ? CC_AArch64_DarwinPCS_VarArg : CC_AArch64_DarwinPCS;
   case CallingConv::Win64:
     return IsVarArg ? CC_AArch64_Win64_VarArg : CC_AArch64_AAPCS;
+  case CallingConv::Mono:
+    return CC_AArch64_Mono_DarwinPCS;
   }
 }
 
