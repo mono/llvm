@@ -860,6 +860,9 @@ public:
       ArrayRef<std::pair<const MCSymbol *, const MCSymbol *>> Ranges,
       StringRef FixedSizePortion);
 
+  virtual void EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
+                                         const MCSymbol *Label) {}
+
   /// This implements the CodeView '.cv_stringtable' assembler directive.
   virtual void EmitCVStringTableDirective() {}
 
