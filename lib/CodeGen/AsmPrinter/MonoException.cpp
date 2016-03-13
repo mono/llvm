@@ -52,8 +52,8 @@ using namespace llvm;
 //   a symbol.
 //
 
-static cl::opt<std::string> MonoEHFrameSymbol("mono-eh-frame-symbol", cl::NotHidden,
-											  cl::desc("Symbol name for the mono eh frame"));
+cl::opt<std::string> MonoEHFrameSymbol("mono-eh-frame-symbol", cl::NotHidden,
+                                       cl::desc("Symbol name for the mono eh frame"));
 
 // Emit a CFI instruction in DWARF format
 static void
@@ -378,6 +378,9 @@ MonoException::endFunction(const MachineFunction *MF)
 
   MMI->TidyLandingPads();
 
+  if (Asm->MF->getFunction()->doesNotThrow())
+	  return;
+
   int monoMethodIdx = FuncIndexes.lookup (Asm->MF->getFunction ()->getName ()) - 1;
 
   //outs () << "D: " << Asm->MF->getFunction()->getName() << " " << monoMethodIdx << "\n";
@@ -593,7 +596,7 @@ MonoException::endModule()
       streamer.EmitLabel(info.FDESym);
 
       // Emit augmentation
-      if (info.HasLandingPads) {
+      if (info.HasLandingPads || info.FrameReg != -1) {
         // Need an extra has_augmentation field as the augmentation size is always encoded
         // in 4 bytes
         Asm->EmitULEB128(1, "Has augmentation");
