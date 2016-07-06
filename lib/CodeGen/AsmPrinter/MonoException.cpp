@@ -378,9 +378,6 @@ MonoException::endFunction(const MachineFunction *MF)
 
   MMI->TidyLandingPads();
 
-  if (Asm->MF->getFunction()->doesNotThrow())
-	  return;
-
   int monoMethodIdx = FuncIndexes.lookup (Asm->MF->getFunction ()->getName ()) - 1;
 
   //outs () << "D: " << Asm->MF->getFunction()->getName() << " " << monoMethodIdx << "\n";
