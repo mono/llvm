@@ -380,6 +380,9 @@ MonoException::endFunction(const MachineFunction *MF)
 
   int monoMethodIdx = FuncIndexes.lookup (Asm->MF->getFunction ()->getName ()) - 1;
 
+  if (monoMethodIdx == -1)
+    return;
+
   //outs () << "D: " << Asm->MF->getFunction()->getName() << " " << monoMethodIdx << "\n";
 
   // Save information for use by endModule ()
