@@ -114,7 +114,11 @@ emitCFIInstruction(MCStreamer &Streamer,
       Streamer.AddComment(Twine("Reg ") + Twine(Instr.getRegister()));
     Streamer.EmitULEB128IntValue(Instr.getRegister());
 
-    CFAOffset = -Instr.getOffset();
+    // The backends pass in a negative value,
+    // then createDefCfaOffset () negates it
+    CFAOffset = Instr.getOffset();
+    if (CFAOffset < 0)
+      __builtin_trap ();
     assert(CFAOffset >= 0);
 
     if (VerboseAsm)
