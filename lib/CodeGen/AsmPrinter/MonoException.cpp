@@ -117,8 +117,10 @@ emitCFIInstruction(MCStreamer &Streamer,
     // The backends pass in a negative value,
     // then createDefCfaOffset () negates it
     CFAOffset = Instr.getOffset();
-    if (CFAOffset < 0)
+    if (CFAOffset < 0) {
+      outs () << CFAOffset << "\n";
       __builtin_trap ();
+    }
     assert(CFAOffset >= 0);
 
     if (VerboseAsm)
