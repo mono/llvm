@@ -508,13 +508,9 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   // Can't use rodata as the symbols we reference are in the text segment
   Streamer.SwitchSection(TLOF.getTextSection());
 
-  bool is_global = true;
-
   std::string symbol_name = MonoEHFrameSymbol;
-  if (symbol_name.length() == 0) {
+  if (symbol_name.length() == 0)
 	  symbol_name = "mono_eh_frame";
-	  is_global = false;
-  }
 
   MCSymbol *EHFrameHdrSym =
 	  Asm->OutContext.GetOrCreateSymbol(Twine(symbol_name));
@@ -527,10 +523,6 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
   if (Asm->MAI->hasDotTypeDotSizeDirective()) {
     Streamer.EmitELFSize(EHFrameHdrSym, Length);
     Streamer.EmitSymbolAttribute(EHFrameHdrSym, MCSA_ELF_TypeObject);
-  }
-  if (is_global) {
-	  Streamer.EmitSymbolAttribute (EHFrameHdrSym, MCSA_Global);
-	  Streamer.EmitSymbolAttribute (EHFrameHdrSym, MCSA_PrivateExtern);
   }
 
   // Header
