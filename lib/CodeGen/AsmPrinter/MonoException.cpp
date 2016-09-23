@@ -525,8 +525,6 @@ MonoException::endModule()
   // Symbol
   Asm->EmitAlignment(4);
   streamer.EmitLabel(tableSymbol);
-  streamer.EmitSymbolAttribute(tableSymbol, MCSA_Global);
-  streamer.EmitSymbolAttribute(tableSymbol, MCSA_PrivateExtern);
   streamer.EmitSymbolAttribute(tableSymbol, MCSA_ELF_TypeObject);
   if (Asm->MAI->hasDotTypeDotSizeDirective()) {
     const MCExpr *SizeExp = MCBinaryExpr::createSub(
