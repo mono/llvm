@@ -6,15 +6,38 @@
 
 # Note: Expects to be ran out of $(repo)/build/mono-llvm-3.9
 
+ifeq ($(LLVM_TARGET),ARMV7)
 Makefile:
+	@echo "Building package for $(LLVM_TARGET)"
+	CC="arm-linux-gnueabihf-gcc-4.7" CXX="arm-linux-gnueabihf-g++-4.7" LDFLAGS="-L../../lib -lstdc++" cmake ../.. \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_CROSSCOMPILING=True \
+		-DLLVM_DEFAULT_TARGET_TRIPLE=arm-linux-gnueabihf \
+		-DLLVM_TABLEGEN=/usr/local/bin/llvm-tblgen \
+		-DCLANG_TABLEGEN=/bin/clang-tblgen \
+		-DLLVM_TARGET_ARCH=ARM \
+		-DLLVM_TARGETS_TO_BUILD=ARM \
+		-DCMAKE_C_FLAGS="-I../../include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG -D__NO_CTYPE_INLINE -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" \
+		-DCMAKE_CXX_FLAGS="-I../../include -march=armv7-a -mcpu=cortex-a9 -mfloat-abi=hard -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG -D__NO_CTYPE_INLINE -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" 
+endif
+
+ifeq ($(LLVM_TARGET),HOST)
+Makefile:
+	@echo "Building package for $(LLVM_TARGET)"
 	LDFLAGS="-L../../lib -lstdc++" cmake ../.. \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_C_FLAGS="-I../../include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG -D__NO_CTYPE_INLINE -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" \
 		-DCMAKE_CXX_FLAGS="-I../../include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG -D__NO_CTYPE_INLINE -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" 
-
+endif
 
 override_dh_auto_build: Makefile
 	dh_auto_build
+
+ifeq ($(LLVM_TARGET),ARMV7)
+override_dh_shlibdeps:
+	echo "Skipping shlibdeps because not working in cross environment"
+	echo "dh_shlibdeps tries to find a target-arch copy of every library on the host system, in some cases not practical"
+endif
 
 override_dh_auto_configure:
 	echo "Skipping auto configure"
