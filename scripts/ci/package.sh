@@ -45,7 +45,13 @@ cd $PKG_DIR
 
 echo "MAKING DEB"
 
+if [ $LLVM_TARGET = "ARMV7" ]; then
+dpkg-buildpackage -d -us -uc -aarmhf
+fi
+
+if [ $LLVM_TARGET = "HOST" ]; then
 dpkg-buildpackage -d -us -uc
+fi
 
 echo "DONE"
 
