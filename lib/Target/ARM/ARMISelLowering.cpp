@@ -1295,6 +1295,8 @@ ARMTargetLowering::getEffectiveCallingConv(CallingConv::ID CC,
       return CallingConv::ARM_AAPCS_VFP;
     else
       return CallingConv::ARM_AAPCS;
+  case CallingConv::Mono:
+	  return CallingConv::Mono;
   }
 }
 
