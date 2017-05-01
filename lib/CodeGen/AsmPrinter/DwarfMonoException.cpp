@@ -623,6 +623,8 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
       Streamer.AddBlankLine();
   }
 
+  Asm->EmitAlignment(8);
+
   Streamer.EmitLabel(EHFrameEndSym);
 }
 
