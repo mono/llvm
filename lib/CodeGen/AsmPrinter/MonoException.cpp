@@ -621,6 +621,8 @@ MonoException::endModule()
       streamer.AddBlankLine();
   }
 
+  Asm->EmitAlignment(8);
+
   streamer.EmitLabel(tableEndSym);
 }
 
