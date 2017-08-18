@@ -627,6 +627,7 @@ MonoException::endModule()
   }
 
   streamer.EmitLabel(tableEndSym);
+  Asm->EmitAlignment(3);
 }
 
 void
