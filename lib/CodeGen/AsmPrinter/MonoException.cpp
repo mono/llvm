@@ -20,6 +20,10 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetLoweringObjectFile.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -28,12 +32,8 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolELF.h"
 #include "llvm/IR/DataLayout.h"
-#include "llvm/Target/TargetFrameLowering.h"
-#include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/TargetRegisterInfo.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormattedStream.h"
@@ -445,8 +445,8 @@ MonoException::EmitMonoLSDA(const EHInfo *info)
 
   // Emit the LSDA.
   // Keep this in sync with JITDwarfEmitter::EmitExceptionTable ()
-  Asm->EmitULEB128(0x4d4fef4f, "MONO Magic", 0);
-  Asm->EmitULEB128(1, "Version", 0);
+  Asm->EmitULEB128(0x4d4fef4f, "MONO Magic");
+  Asm->EmitULEB128(1, "Version");
 
   // Emit the LSDA header.
   if (FrameReg != -1) {
