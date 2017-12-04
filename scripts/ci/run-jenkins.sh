@@ -17,5 +17,5 @@ mkdir tmp-bin
 cp usr/bin/{llc,opt,llvm-dis} tmp-bin/
 rm usr/bin/*
 cp tmp-bin/* usr/bin/
-rm usr/lib/libLTO.* usr/lib/*.dylib
+rm -f usr/lib/libLTO.* usr/lib/*.dylib
 tar cvzf llvm-osx64-$GIT_COMMIT.tar.gz usr
