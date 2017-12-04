@@ -13,4 +13,8 @@ cd build
 ../configure --prefix=$PWD/usr --enable-targets="arm arm64" $LLVM_BASE_CONFIGURE_FLAGS CC="ccache clang" CXX="ccache clang++"  CXXFLAGS="-Qunused-arguments"
 make -j4
 make install
+mkdir tmp-bin
+cp usr/bin/{llc,opt,llvm-dis} tmp-bin/
+rm usr/bin/*
+cp tmp-bin/* usr/bin/
 tar cvzf llvm-osx64-$GIT_COMMIT.tar.gz usr
