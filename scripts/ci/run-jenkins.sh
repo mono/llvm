@@ -14,7 +14,7 @@ cd build
 make -j4
 make install
 mkdir tmp-bin
-cp usr/bin/{llc,opt,llvm-dis} tmp-bin/
+cp usr/bin/{llc,opt,llvm-dis,llvm-config} tmp-bin/
 rm usr/bin/*
 cp tmp-bin/* usr/bin/
 rm -f usr/lib/libLTO.* usr/lib/*.dylib
