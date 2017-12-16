@@ -24,6 +24,10 @@ mkdir tmp-bin
 cp usr64/bin/{llc,opt,llvm-dis,llvm-config} tmp-bin/
 rm usr64/bin/*
 cp tmp-bin/* usr64/bin/
+mkdir tmp-bin2
+cp usr32/bin/llvm-config tmp-bin2
+rm usr32/bin/*
+cp tmp-bin2/* usr32/bin/
 # Don't need 32 bit binaries
-rm -f usr64/lib/libLTO.* usr64/lib/*.dylib usr32/lib/libLTO.* usr32/lib/*.dylib usr32/bin/*
+rm -f usr64/lib/libLTO.* usr64/lib/*.dylib usr32/lib/libLTO.* usr32/lib/*.dylib
 tar cvzf llvm-osx64-$GIT_COMMIT.tar.gz usr64 usr32
