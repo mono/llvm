@@ -13,9 +13,14 @@ cd build
 ../configure --prefix=$PWD/usr --enable-targets="arm arm64" $LLVM_BASE_CONFIGURE_FLAGS CXXFLAGS="-Qunused-arguments"
 make -j4
 make install
+mkdir -p build32
+cd build32
+../configure --prefix=$PWD/usr32 --enable-targets="arm arm64" $LLVM_BASE_CONFIGURE_FLAGS CXXFLAGS="-Qunused-arguments"
+make -j4
+make install
 mkdir tmp-bin
 cp usr/bin/{llc,opt,llvm-dis,llvm-config} tmp-bin/
 rm usr/bin/*
 cp tmp-bin/* usr/bin/
-rm -f usr/lib/libLTO.* usr/lib/*.dylib
-tar cvzf llvm-osx64-$GIT_COMMIT.tar.gz usr
+rm -f usr/lib/libLTO.* usr/lib/*.dylib usr32/lib/libLTO.* usr32/lib/*.dylib usr32/bin/*
+tar cvzf llvm-osx64-$GIT_COMMIT.tar.gz usr usr32
