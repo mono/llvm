@@ -10,7 +10,7 @@ LLVM_BASE_CONFIGURE_FLAGS="--enable-libcpp --enable-optimized --enable-assertion
 
 mkdir -p build
 cd build
-../configure --prefix=$PWD/../usr --enable-targets="arm arm64" $LLVM_BASE_CONFIGURE_FLAGS CXXFLAGS="-Qunused-arguments"
+../configure --prefix=$PWD/../usr64 --enable-targets="arm arm64" $LLVM_BASE_CONFIGURE_FLAGS CXXFLAGS="-Qunused-arguments"
 make -j4
 make install
 cd ..
@@ -21,8 +21,9 @@ make -j4
 make install
 cd ..
 mkdir tmp-bin
-cp usr/bin/{llc,opt,llvm-dis,llvm-config} tmp-bin/
-rm usr/bin/*
-cp tmp-bin/* usr/bin/
-rm -f usr/lib/libLTO.* usr/lib/*.dylib usr32/lib/libLTO.* usr32/lib/*.dylib usr32/bin/*
-tar cvzf llvm-osx64-$GIT_COMMIT.tar.gz usr usr32
+cp usr64/bin/{llc,opt,llvm-dis,llvm-config} tmp-bin/
+rm usr64/bin/*
+cp tmp-bin/* usr64/bin/
+# Don't need 32 bit binaries
+rm -f usr64/lib/libLTO.* usr64/lib/*.dylib usr32/lib/libLTO.* usr32/lib/*.dylib usr32/bin/*
+tar cvzf llvm-osx64-$GIT_COMMIT.tar.gz usr64 usr32
