@@ -7,42 +7,17 @@ set -e
 
 TOP_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../../" && pwd )"
 
-echo "Cloning Clang"
-
-cd $TOP_DIR/tools
- 
-if [ ! -d "clang" ]; then
-git clone https://github.com/llvm-mirror/clang.git
-cd clang
-git checkout f37acf6b6adf1cc6c103981332f6db7f2002dcdc
-fi
-
-mkdir -p $TOP_DIR/build
-
-cd $TOP_DIR/build
-
-export PKG_DIR=$TOP_DIR/build/mono-llvm-3.9
-
-echo "INSTALLING LLVM TO BUILD DIR"
-
-mkdir -p $PKG_DIR
-
-cp -r $TOP_DIR/scripts/ci/debian $PKG_DIR/debian
-
-cd $PKG_DIR
-
 echo "MAKING DEB"
 
-if [ $LLVM_TARGET = "ARMV7" ]; then
-dpkg-buildpackage -d -us -uc -aarmhf
-fi
+mkdir -p $TOP_DIR/build/mono-llvm-3.9
+pushd $TOP_DIR/build/mono-llvm-3.9
 
-if [ $LLVM_TARGET = "HOST" ]; then
+cp -r $TOP_DIR/scripts/ci/debian debian
+
 dpkg-buildpackage -d -us -uc
-fi
+
+popd # $TOP_DIR/build/mono-llvm-3.9
 
 echo "DONE"
-
-cd ../
 
 
