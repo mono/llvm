@@ -10,7 +10,7 @@ LLVM_BASE_CONFIGURE_FLAGS="--enable-libcpp --enable-optimized --enable-assertion
 
 mkdir -p build
 cd build
-../configure --prefix=$PWD/../usr64 --enable-targets="arm arm64" $LLVM_BASE_CONFIGURE_FLAGS CXXFLAGS="-Qunused-arguments"
+../configure --prefix=$PWD/../usr64 --enable-targets="arm arm64 x86 x86_64" $LLVM_BASE_CONFIGURE_FLAGS CXXFLAGS="-Qunused-arguments"
 make -j4
 make install
 cd ..
