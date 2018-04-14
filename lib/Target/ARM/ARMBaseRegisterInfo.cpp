@@ -193,8 +193,8 @@ getReservedRegs(const MachineFunction &MF) const {
   // Some targets reserve R9.
   if (STI.isR9Reserved())
     markSuperRegs(Reserved, ARM::R9);
-  const Function *F = MF.getFunction();
-  if (F && F->getCallingConv() == CallingConv::Mono)
+  const Function &F = MF.getFunction();
+  if (F.getCallingConv() == CallingConv::Mono)
     // FIXME: This is required for some reason, otherwise llvm treats R8 as a callee-saved registers
     // even if we exclude it in getCalleeSavedRegs (). Luckily, R8 can still be used for argument
     // passing even if it is 'reserved'.
