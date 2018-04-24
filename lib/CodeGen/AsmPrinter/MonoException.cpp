@@ -119,7 +119,7 @@ emitCFIInstruction(MCStreamer &Streamer,
     CFAOffset = Instr.getOffset();
     if (CFAOffset < 0) {
       outs () << CFAOffset << "\n";
-      __builtin_trap ();
+      LLVM_BUILTIN_TRAP;
     }
     assert(CFAOffset >= 0);
 
