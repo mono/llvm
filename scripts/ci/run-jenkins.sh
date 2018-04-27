@@ -3,27 +3,31 @@
 echo "ENVIRONMENT:"
 env
 
-#COMMON_ACVARS="ac_cv_func_fstatat=no ac_cv_func_readlinkat=no ac_cv_func_futimens=no ac_cv_func_utimensat=no"
+llvm_base_CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=X86;ARM;AArch64 -G Ninja"
 
-LLVM_BASE_CONFIGURE_FLAGS="--enable-libcpp --enable-optimized --enable-assertions=no --disable-jit --disable-docs --disable-doxygen"
-#LLVM_BASE_CONFIGURE_ENVIRONMENT="$COMMON_ACVARS"
+llvm64_CMAKE_FLAGS="$llvm_base_CMAKE_FLAGS"
+llvm32_CMAKE_FLAGS="$llvm_base_CMAKE_FLAGS -DLLVM_BUILD_32_BITS=On"
 
 mkdir -p build
 cd build
-../configure --prefix=$PWD/../usr64 --enable-targets="arm arm64 x86 x86_64" $LLVM_BASE_CONFIGURE_FLAGS CXXFLAGS="-Qunused-arguments"
-make -j4
-make install
+cmake $llvm64_CMAKE_FLAGS -DCMAKE_INSTALL_PREFIX=$PWD/../usr64 ../
+ninja
+ninja install
 cd ..
 mkdir -p build32
 cd build32
-../configure --prefix=$PWD/../usr32 --build=i386-apple-darwin11.2.0 --enable-targets="arm arm64" $LLVM_BASE_CONFIGURE_FLAGS CXXFLAGS="-Qunused-arguments"
-make -j4
-make install
+cmake $llvm64_CMAKE_FLAGS -DCMAKE_INSTALL_PREFIX=$PWD/../usr32 ../
+ninja
+ninja install
 cd ..
+
+rm -rf tmp-bin
 mkdir tmp-bin
 cp usr64/bin/{llc,opt,llvm-dis,llvm-config} tmp-bin/
 rm usr64/bin/*
 cp tmp-bin/* usr64/bin/
+
+rm -rf tmp-bin2
 mkdir tmp-bin2
 cp usr32/bin/llvm-config tmp-bin2
 rm usr32/bin/*
