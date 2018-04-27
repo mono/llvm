@@ -1,0 +1,36 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+# Note: Expects to be ran out of $(repo)/build/mono-llvm-3.9
+
+DEB_HOST_ARCH_BITS := $(shell dpkg-architecture -qDEB_HOST_ARCH_BITS)
+
+ifeq ($(DEB_HOST_ARCH_BITS), 32)
+        LINUX32 := linux32
+endif
+
+Makefile:
+	@echo "Building package for $(LLVM_TARGET)"
+	LDFLAGS="-L../../lib -lstdc++" $(LINUX32) cmake ../.. \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_C_FLAGS="-I../../include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG -D__NO_CTYPE_INLINE -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" \
+		-DCMAKE_CXX_FLAGS="-I../../include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -DNDEBUG -D__NO_CTYPE_INLINE -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS" \
+		-DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM"
+
+override_dh_auto_build: Makefile
+	dh_auto_build
+
+override_dh_auto_configure:
+	echo "Skipping auto configure"
+
+override_dh_usrlocal:
+	echo "Skipping userlocal"
+
+override_dh_auto_test:
+	echo "Skipping test"
+
+%:
+	dh $@ 
