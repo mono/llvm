@@ -11,8 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Support/ThreadPool.h"
-
 #include "llvm/Config/llvm-config.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
@@ -20,6 +18,8 @@
 using namespace llvm;
 
 #if LLVM_ENABLE_THREADS
+
+#include "llvm/Support/ThreadPool.h"
 
 // Default to hardware_concurrency
 ThreadPool::ThreadPool() : ThreadPool(hardware_concurrency()) {}
@@ -109,6 +109,8 @@ ThreadPool::~ThreadPool() {
 
 #else // LLVM_ENABLE_THREADS Disabled
 
+#if 0
+
 ThreadPool::ThreadPool() : ThreadPool(0) {}
 
 // No threads are launched, issue a warning if ThreadCount is not 0
@@ -142,5 +144,7 @@ std::shared_future<void> ThreadPool::asyncImpl(TaskTy Task) {
 ThreadPool::~ThreadPool() {
   wait();
 }
+
+#endif
 
 #endif
