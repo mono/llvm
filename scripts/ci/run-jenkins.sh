@@ -3,17 +3,19 @@
 echo "ENVIRONMENT:"
 env
 
-llvm_base_CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=X86;ARM;AArch64 -G Ninja"
+llvm_base_CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=X86;ARM;AArch64 -DLLVM_BUILD_TESTS=Off -DLLVM_INCLUDE_TESTS=Off -DLLVM_TOOLS_TO_BUILD=opt;llc;llvm-config;llvm-dis -G Ninja"
 
 llvm64_CMAKE_FLAGS="$llvm_base_CMAKE_FLAGS"
 llvm32_CMAKE_FLAGS="$llvm_base_CMAKE_FLAGS -DLLVM_BUILD_32_BITS=On"
 
+rm -rf build
 mkdir -p build
 cd build
 cmake $llvm64_CMAKE_FLAGS -DCMAKE_INSTALL_PREFIX=$PWD/../usr64 ../
 ninja
 ninja install
 cd ..
+rm -rf build32
 mkdir -p build32
 cd build32
 cmake $llvm64_CMAKE_FLAGS -DCMAKE_INSTALL_PREFIX=$PWD/../usr32 ../
