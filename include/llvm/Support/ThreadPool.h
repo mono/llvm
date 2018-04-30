@@ -48,6 +48,7 @@ public:
   /// Blocking destructor: the pool will wait for all the threads to complete.
   ~ThreadPool();
 
+#if LLVM_ENABLE_THREADS
   /// Asynchronous submission of a task to the pool. The returned future can be
   /// used to wait for the task to finish and is *non-blocking* on destruction.
   template <typename Function, typename... Args>
@@ -63,6 +64,15 @@ public:
   inline std::shared_future<void> async(Function &&F) {
     return asyncImpl(std::forward<Function>(F));
   }
+#else
+  template <typename Function, typename... Args>
+  inline void async(Function &&F, Args &&... ArgList) {
+  }
+
+  template <typename Function>
+  inline void async(Function &&F) {
+  }
+#endif
 
   /// Blocking wait for all the threads to complete and the queue to be empty.
   /// It is an error to try to add new tasks while blocking on this call.
@@ -79,6 +89,7 @@ private:
   /// Tasks waiting for execution in the pool.
   std::queue<PackagedTaskTy> Tasks;
 
+#if LLVM_ENABLE_THREADS
   /// Locking and signaling for accessing the Tasks queue.
   std::mutex QueueLock;
   std::condition_variable QueueCondition;
@@ -86,6 +97,7 @@ private:
   /// Locking and signaling for job completion
   std::mutex CompletionLock;
   std::condition_variable CompletionCondition;
+#endif
 
   /// Keep track of the number of thread actually busy
   std::atomic<unsigned> ActiveThreads;

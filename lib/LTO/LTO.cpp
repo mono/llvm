@@ -1036,7 +1036,9 @@ class InProcessThinBackend : public ThinBackendProc {
   std::set<GlobalValue::GUID> CfiFunctionDecls;
 
   Optional<Error> Err;
+#if LLVM_ENABLE_THREADS
   std::mutex ErrMu;
+#endif
 
 public:
   InProcessThinBackend(
@@ -1115,7 +1117,9 @@ public:
               AddStream, Cache, Task, BM, CombinedIndex, ImportList, ExportList,
               ResolvedODR, DefinedGlobals, ModuleMap);
           if (E) {
+#if LLVM_ENABLE_THREADS
             std::unique_lock<std::mutex> L(ErrMu);
+#endif
             if (Err)
               Err = joinErrors(std::move(*Err), std::move(E));
             else
