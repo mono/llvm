@@ -501,6 +501,11 @@ option(LLVM_BUILD_EXAMPLES
   "Build the LLVM example programs. If OFF, just generate build targets." OFF)
 option(LLVM_INCLUDE_EXAMPLES "Generate build targets for the LLVM examples" ON)
 
+option(LLVM_BUILD_EXECUTION_ENGINE
+	"Build lib/ExecutionEngine." ON)
+
+option(LLVM_TOOLS_TO_BUILD "List of tools to build" "")
+
 option(LLVM_BUILD_TESTS
   "Build LLVM unit tests. If OFF, just generate build targets." OFF)
 option(LLVM_INCLUDE_TESTS "Generate build targets for the LLVM unit tests." ON)

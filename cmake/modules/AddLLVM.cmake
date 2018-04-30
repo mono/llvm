@@ -965,10 +965,19 @@ macro(add_llvm_subdirectory project type name)
     option(${project}_${type}_${nameUPPER}_BUILD
            "Whether to build ${name} as part of ${project}" On)
     mark_as_advanced(${project}_${type}_${name}_BUILD)
-    if(${project}_${type}_${nameUPPER}_BUILD)
-      add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/${add_llvm_external_dir} ${add_llvm_external_dir})
-      # Don't process it in add_llvm_implicit_projects().
-      set(${project}_${type}_${nameUPPER}_BUILD OFF)
+    if("${project}${type}" STREQUAL "LLVMTOOL" AND (NOT "${LLVM_TOOLS_TO_BUILD}" STREQUAL ""))
+      if("${name}" IN_LIST LLVM_TOOLS_TO_BUILD)
+        message("Building tool ${name}.")
+	    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/${add_llvm_external_dir} ${add_llvm_external_dir})
+        # Don't process it in add_llvm_implicit_projects().
+        set(${project}_${type}_${nameUPPER}_BUILD OFF)
+      endif()
+    else()
+	  if(${${project}_${type}_${nameUPPER}_BUILD})
+        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/${add_llvm_external_dir} ${add_llvm_external_dir})
+        # Don't process it in add_llvm_implicit_projects().
+        set(${project}_${type}_${nameUPPER}_BUILD OFF)
+      endif()
     endif()
   else()
     set(LLVM_EXTERNAL_${nameUPPER}_SOURCE_DIR
@@ -1328,6 +1337,9 @@ function(add_lit_target target comment)
     add_custom_target(${target}
       COMMAND ${CMAKE_COMMAND} -E echo "${target} does nothing, no tools built.")
     message(STATUS "${target} does nothing.")
+  endif()
+  if( NOT LLVM_BUILD_TESTS )
+    return()
   endif()
   if (ARG_DEPENDS)
     add_dependencies(${target} ${ARG_DEPENDS})
