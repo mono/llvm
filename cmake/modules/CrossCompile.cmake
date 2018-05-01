@@ -45,6 +45,7 @@ function(llvm_create_cross_target_internal target_name toolchain buildtype)
         -G "${CMAKE_GENERATOR}" -DLLVM_TARGETS_TO_BUILD=${LLVM_TARGETS_TO_BUILD}
         ${CROSS_TOOLCHAIN_FLAGS_${target_name}} ${CMAKE_SOURCE_DIR}
         -DLLVM_TARGET_IS_CROSSCOMPILE_HOST=TRUE
+        -DLLVM_TOOLS_TO_BUILD="all"
       WORKING_DIRECTORY ${LLVM_${target_name}_BUILD} )
   endif(NOT IS_DIRECTORY ${LLVM_${target_name}_BUILD})
 
