@@ -598,7 +598,7 @@ void DwarfMonoException::EmitMonoEHFrame(const Function *Personality)
       // No need for length, CIE, PC begin, PC range, alignment
 
       // Emit augmentation
-      if (EHFrameInfo.hasLandingPads) {
+      if (EHFrameInfo.hasLandingPads || EHFrameInfo.MonoEH.FrameReg != -1) {
         // Need an extra has_augmentation field as the augmentation size is always encoded
         // in 4 bytes
         Asm->EmitULEB128(1, "Has augmentation");
