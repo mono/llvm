@@ -965,7 +965,7 @@ macro(add_llvm_subdirectory project type name)
     option(${project}_${type}_${nameUPPER}_BUILD
            "Whether to build ${name} as part of ${project}" On)
     mark_as_advanced(${project}_${type}_${name}_BUILD)
-    if("${project}${type}" STREQUAL "LLVMTOOL" AND (NOT "${LLVM_TOOLS_TO_BUILD}" STREQUAL ""))
+    if("${project}${type}" STREQUAL "LLVMTOOL" AND (NOT "${LLVM_TOOLS_TO_BUILD}" STREQUAL "all"))
       if("${name}" IN_LIST LLVM_TOOLS_TO_BUILD)
         message("Building tool ${name}.")
 	    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/${add_llvm_external_dir} ${add_llvm_external_dir})
