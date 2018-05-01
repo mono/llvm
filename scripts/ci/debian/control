@@ -2,7 +2,7 @@ Source: mono-llvm
 Priority: optional
 Maintainer: Alex Kyte <alkyte@microsoft.com>
 Build-Depends: debhelper (>= 7.0.50~), flex, bison, dejagnu, tcl, expect, cmake, perl, libtool, chrpath, texinfo, sharutils, libffi-dev (>= 3.0.9), lsb-release, patchutils, diffstat, xz-utils, python-dev, libedit-dev, swig, python-six, python-sphinx, ocaml-nox, binutils-dev, libjsoncpp-dev, lcov, procps, help2man, dh-ocaml, zlib1g-dev
-Standards-Version: 3.9.4
+Standards-Version: 6.0.1
 Section: libs
 Homepage: https://github.com/mono/llvm.git
 
@@ -16,4 +16,4 @@ Description: The mono fork of llvm
  some backends but not others. In this fork some
  mono-specific changes have been made. This package
  is set at a specific commit, this is not the release
- package of 3.9.
+ package of 6.0.

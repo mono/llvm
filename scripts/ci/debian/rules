@@ -4,7 +4,7 @@
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
-# Note: Expects to be ran out of $(repo)/build/mono-llvm-3.9
+# Note: Expects to be ran out of $(repo)/build/mono-llvm-6.0
 
 DEB_HOST_ARCH_BITS := $(shell dpkg-architecture -qDEB_HOST_ARCH_BITS)
 
