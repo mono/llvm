@@ -63,8 +63,12 @@ extern cl::opt<bool> LTODiscardValueNames;
 
 namespace {
 
+#if LLVM_ENABLE_THREADS
 static cl::opt<int> ThreadCount("threads",
                                 cl::init(std::thread::hardware_concurrency()));
+#else
+static cl::opt<int> ThreadCount("threads", cl::init (0));
+#endif
 
 static void diagnosticHandler(const DiagnosticInfo &DI) {
   DiagnosticPrinterRawOStream DP(errs());
