@@ -18,7 +18,7 @@ cd ..
 rm -rf build32
 mkdir -p build32
 cd build32
-cmake $llvm64_CMAKE_FLAGS -DCMAKE_INSTALL_PREFIX=$PWD/../usr32 ../
+cmake $llvm32_CMAKE_FLAGS -DCMAKE_INSTALL_PREFIX=$PWD/../usr32 ../
 ninja
 ninja install
 cd ..
