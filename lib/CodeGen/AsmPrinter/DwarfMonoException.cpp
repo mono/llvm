@@ -396,7 +396,6 @@ void DwarfMonoException::EmitMonoLSDA(const FunctionEHFrameInfo *EFI) {
           [](const LandingPadInfo *L,
 			 const LandingPadInfo *R) { return L->TypeIds < R->TypeIds; });
 
-  assert(Asm->MAI->getExceptionHandlingType() == ExceptionHandling::DwarfCFI);
 
   // The type_info itself is emitted
   int TTypeEncoding = dwarf::DW_EH_PE_udata4;

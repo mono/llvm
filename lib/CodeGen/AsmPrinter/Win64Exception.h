@@ -29,11 +29,15 @@ class Win64Exception : public EHStreamer {
   /// Per-function flag to indicate if frame moves info should be emitted.
   bool shouldEmitMoves;
 
+  /// Per-function flag to indicate if personality info should be disabled.
+  bool disableEmitPersonality;
+
 public:
   //===--------------------------------------------------------------------===//
   // Main entry points.
   //
   Win64Exception(AsmPrinter *A);
+  Win64Exception(AsmPrinter *A, bool disableEmitPersonality);
   virtual ~Win64Exception();
 
   /// Emit all exception information that should come after the content.

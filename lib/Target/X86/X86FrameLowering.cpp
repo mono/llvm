@@ -473,8 +473,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
       MF.getTarget().getMCAsmInfo()->getExceptionHandlingType() ==
       ExceptionHandling::WinEH; // Not necessarily synonymous with IsWin64.
   bool NeedsWinEH = IsWinEH && Fn->needsUnwindTableEntry();
-  bool NeedsDwarfCFI =
-      !IsWinEH && (MMI.hasDebugInfo() || Fn->needsUnwindTableEntry());
+  bool NeedsDwarfCFI = Fn->getCallingConv() == CallingConv::Mono ?
+      (MMI.hasDebugInfo() || Fn->needsUnwindTableEntry()) :
+      !IsWinEH && (MMI.hasDebugInfo () || Fn->needsUnwindTableEntry ());
   bool UseLEA = STI.useLeaForSP();
   unsigned StackAlign = getStackAlignment();
   unsigned SlotSize = RegInfo->getSlotSize();
