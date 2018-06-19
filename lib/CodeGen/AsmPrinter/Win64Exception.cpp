@@ -39,7 +39,11 @@ using namespace llvm;
 
 Win64Exception::Win64Exception(AsmPrinter *A)
   : EHStreamer(A), shouldEmitPersonality(false), shouldEmitLSDA(false),
-    shouldEmitMoves(false) {}
+    shouldEmitMoves(false), disableEmitPersonality(false) {}
+
+Win64Exception::Win64Exception (AsmPrinter *A, bool disableEmitPersonality)
+  : EHStreamer(A), shouldEmitPersonality(false), shouldEmitLSDA(false),
+    shouldEmitMoves(false), disableEmitPersonality(disableEmitPersonality) {}
 
 Win64Exception::~Win64Exception() {}
 
@@ -62,8 +66,9 @@ void Win64Exception::beginFunction(const MachineFunction *MF) {
   unsigned PerEncoding = TLOF.getPersonalityEncoding();
   const Function *Per = MMI->getPersonalities()[MMI->getPersonalityIndex()];
 
-  shouldEmitPersonality = hasLandingPads &&
-    PerEncoding != dwarf::DW_EH_PE_omit && Per;
+  if (!disableEmitPersonality)
+    shouldEmitPersonality = hasLandingPads &&
+      PerEncoding != dwarf::DW_EH_PE_omit && Per;
 
   unsigned LSDAEncoding = TLOF.getLSDAEncoding();
   shouldEmitLSDA = shouldEmitPersonality &&

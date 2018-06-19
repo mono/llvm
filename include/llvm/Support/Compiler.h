@@ -61,7 +61,7 @@
 #define LLVM_MSC_PREREQ(version) 0
 #endif
 
-#ifndef _MSC_VER
+#if !defined(_MSC_VER) || (defined(_MSC_VER) && _MSC_VER >= 1910)
 #define LLVM_NOEXCEPT noexcept
 #else
 #define LLVM_NOEXCEPT
@@ -117,7 +117,7 @@
 #define LLVM_DELETED_FUNCTION
 #endif
 
-#if __has_feature(cxx_constexpr) || defined(__GXX_EXPERIMENTAL_CXX0X__)
+#if __has_feature(cxx_constexpr) || defined(__GXX_EXPERIMENTAL_CXX0X__) || (defined(_MSC_VER) && _MSC_VER >= 1900)
 # define LLVM_CONSTEXPR constexpr
 #else
 # define LLVM_CONSTEXPR
