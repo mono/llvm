@@ -364,7 +364,7 @@ bool AsmPrinter::doInitialization(Module &M) {
     Handlers.push_back(HandlerInfo(ES, EHTimerName, EHTimerDescription,
                                    DWARFGroupName, DWARFGroupDescription));
   if (EnableMonoEH)
-    Handlers.push_back(HandlerInfo(new MonoException(this), EHTimerName, EHTimerDescription, DWARFGroupName, DWARFGroupDescription));
+    Handlers.push_back(HandlerInfo(new MonoException(this, DisableGNUEH), EHTimerName, EHTimerDescription, DWARFGroupName, DWARFGroupDescription));
   return false;
 }
 

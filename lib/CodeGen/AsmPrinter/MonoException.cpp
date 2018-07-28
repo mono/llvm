@@ -240,10 +240,11 @@ emitCFIInstructions(MCStreamer &streamer,
   }
 }
 
-MonoException::MonoException(AsmPrinter *A)
+MonoException::MonoException(AsmPrinter *A, bool disableGNUEH)
   : EHStreamer(A)
 {
   RI = nullptr;
+  DisableGNUEH = disableGNUEH;
 }
 
 MonoException::~MonoException()
@@ -403,6 +404,10 @@ MonoException::endFunction(const MachineFunction *MF)
   info.HasLandingPads = !MF->getLandingPads().empty();
   info.Instructions = MF->getFrameInstructions();
   assert (info.Instructions.size () == info.EHLabels.size());
+
+  if (DisableGNUEH)
+    /* ARMAsmPrinter generates references to this */
+    Asm->OutStreamer->EmitLabel(Asm->getCurExceptionSym());
 
   PrepareMonoLSDA(&info);
 
