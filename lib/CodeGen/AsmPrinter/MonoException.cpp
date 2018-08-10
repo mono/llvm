@@ -21,7 +21,6 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
-#include "llvm/CodeGen/TargetLoweringObjectFile.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -34,6 +33,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormattedStream.h"
@@ -459,7 +459,7 @@ MonoException::EmitMonoLSDA(const EHInfo *info)
 
     // Emit 'this' location
     Asm->OutStreamer->AddComment("bregx");
-    Asm->EmitInt8((int)dwarf::DW_OP_bregx);
+    Asm->emitInt8((int)dwarf::DW_OP_bregx);
     Asm->EmitULEB128(FrameReg, "Base reg");
     Asm->EmitSLEB128(ThisOffset, "Offset");
   } else {
@@ -585,7 +585,7 @@ MonoException::endModule()
   streamer.AddComment("CIE Return Address Column");
   // RI can be null if there are no methods
   if (RI)
-    Asm->EmitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
+    Asm->emitInt8(RI->getDwarfRegNum(RI->getRARegister(), true));
   Asm->EmitEncodingByte(dwarf::DW_EH_PE_omit, "Personality");
 
   int cfaOffset = 0;
