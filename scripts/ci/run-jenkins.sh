@@ -25,7 +25,7 @@ cp usr64/bin/{llc,opt,llvm-dis,llvm-config} tmp-bin/
 rm usr64/bin/*
 cp tmp-bin/* usr64/bin/
 mkdir tmp-bin2
-cp usr32/bin/llvm-config tmp-bin2
+cp usr32/bin/{llc,opt,llvm-dis,llvm-config} tmp-bin2
 rm usr32/bin/*
 cp tmp-bin2/* usr32/bin/
 # Don't need 32 bit binaries
