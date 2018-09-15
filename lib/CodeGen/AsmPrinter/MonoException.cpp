@@ -254,6 +254,8 @@ MonoException::~MonoException()
 void
 MonoException::beginFunction(const MachineFunction *MF)
 {
+  if (DisableGNUEH && Asm->MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
+    static_cast<ARMTargetStreamer*>(Asm->OutStreamer->getTargetStreamer())->emitFnStart();
   EHLabels.clear();
 }
 
@@ -414,6 +416,8 @@ MonoException::endFunction(const MachineFunction *MF)
   Frames.push_back(info);
   EHLabels.clear();
 
+  if (DisableGNUEH && Asm->MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
+    static_cast<ARMTargetStreamer*>(Asm->OutStreamer->getTargetStreamer())->emitFnEnd();
 }
 
 /// EmitMonoLSDA - Mono's version of EmitExceptionTable
