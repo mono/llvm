@@ -334,3 +334,11 @@ def CC_ARM_Mono_AAPCS : CallingConv<[
   CCDelegateTo<CC_ARM_AAPCS>
 ]>;
 
+def CC_ARM_Mono_AAPCS_VFP : CallingConv<[
+  // Mono marks the parameter it wants to pass in this non-abi register with
+  // the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_AAPCS_VFP>
+]>;
+
