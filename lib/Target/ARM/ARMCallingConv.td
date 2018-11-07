@@ -261,3 +261,11 @@ def CSR_GenericInt : CalleeSavedRegs<(add LR, (sequence "R%u", 12, 0))>;
 def CSR_FIQ : CalleeSavedRegs<(add LR, R11, (sequence "R%u", 7, 0))>;
 
 
+def CC_ARM_Mono_AAPCS_VFP : CallingConv<[
+  // Mono marks the parameter it wants to pass in this non-abi register with
+  // the 'inreg' attribute.
+  CCIfInReg<CCAssignToReg<[R8]>>,
+
+  CCDelegateTo<CC_ARM_AAPCS_VFP>
+]>;
+
