@@ -44,6 +44,13 @@ WinException::WinException(AsmPrinter *A) : EHStreamer(A) {
   isAArch64 = Asm->TM.getTargetTriple().isAArch64();
 }
 
+WinException::WinException(AsmPrinter *A, bool disableEmitPersonality)
+: EHStreamer(A), disableEmitPersonality(disableEmitPersonality) {
+  // MSVC's EH tables are always composed of 32-bit words.  All known 64-bit
+  // platforms use an imagerel32 relocation to refer to symbols.
+  useImageRel32 = (A->getDataLayout().getPointerSizeInBits() == 64);
+}
+
 WinException::~WinException() {}
 
 /// endModule - Emit all exception information that should come after the
@@ -81,9 +88,11 @@ void WinException::beginFunction(const MachineFunction *MF) {
                               !isNoOpWithoutInvoke(Per) &&
                               F.needsUnwindTableEntry();
 
-  shouldEmitPersonality =
-      forceEmitPersonality || ((hasLandingPads || hasEHFunclets) &&
-                               PerEncoding != dwarf::DW_EH_PE_omit && PerFn);
+  if (!disableEmitPersonality) {
+    shouldEmitPersonality =
+        forceEmitPersonality || ((hasLandingPads || hasEHFunclets) &&
+                                 PerEncoding != dwarf::DW_EH_PE_omit && PerFn);
+  }
 
   unsigned LSDAEncoding = TLOF.getLSDAEncoding();
   shouldEmitLSDA = shouldEmitPersonality &&

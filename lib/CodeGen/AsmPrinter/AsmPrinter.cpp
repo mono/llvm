@@ -374,7 +374,10 @@ bool AsmPrinter::doInitialization(Module &M) {
       break;
     case WinEH::EncodingType::X86:
     case WinEH::EncodingType::Itanium:
-      ES = new WinException(this);
+      if (!EnableMonoEH)
+        ES = new WinException(this);
+      else
+        ES = new WinException(this, true);
       break;
     }
     break;

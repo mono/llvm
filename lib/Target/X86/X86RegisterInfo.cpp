@@ -294,6 +294,9 @@ X86RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   if (MF->getFunction().hasFnAttribute("no_caller_saved_registers"))
     CC = CallingConv::X86_INTR;
 
+  if (CC == CallingConv::Mono && IsWin64)
+    CC = CallingConv::Win64;
+
   switch (CC) {
   case CallingConv::GHC:
   case CallingConv::HiPE:
@@ -408,6 +411,9 @@ X86RegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   bool HasSSE = Subtarget.hasSSE1();
   bool HasAVX = Subtarget.hasAVX();
   bool HasAVX512 = Subtarget.hasAVX512();
+
+  if ( CC == CallingConv::Mono && IsWin64)
+    CC = CallingConv::Win64;
 
   switch (CC) {
   case CallingConv::GHC:

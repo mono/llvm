@@ -3897,15 +3897,23 @@ struct VarArgAMD64Helper : public VarArgHelper {
     // nonzero shadow.
   }
 
+  bool isTargetWin64() const {
+    Triple TargetTriple(F.getParent()->getTargetTriple());
+    return TargetTriple.isArch64Bit() && TargetTriple.isOSWindows();
+  }
+
   void visitVAStartInst(VAStartInst &I) override {
-    if (F.getCallingConv() == CallingConv::Win64)
+    if (F.getCallingConv() == CallingConv::Win64 ||
+        F.getCallingConv() == CallingConv::Mono && isTargetWin64())
       return;
     VAStartInstrumentationList.push_back(&I);
     unpoisonVAListTagForInst(I);
   }
 
   void visitVACopyInst(VACopyInst &I) override {
-    if (F.getCallingConv() == CallingConv::Win64) return;
+    if (F.getCallingConv() == CallingConv::Win64 ||
+        F.getCallingConv() == CallingConv::Mono && isTargetWin64())
+      return;
     unpoisonVAListTagForInst(I);
   }
 

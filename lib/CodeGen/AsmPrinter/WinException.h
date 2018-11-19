@@ -34,6 +34,9 @@ class LLVM_LIBRARY_VISIBILITY WinException : public EHStreamer {
   /// Per-function flag to indicate if frame moves info should be emitted.
   bool shouldEmitMoves = false;
 
+  /// Per-function flag to indicate if personality info should be disabled.
+  bool disableEmitPersonality = false;
+
   /// True if this is a 64-bit target and we should use image relative offsets.
   bool useImageRel32 = false;
 
@@ -91,6 +94,7 @@ public:
   // Main entry points.
   //
   WinException(AsmPrinter *A);
+  WinException(AsmPrinter *A, bool disableEmitPersonality);
   ~WinException() override;
 
   /// Emit all exception information that should come after the content.
