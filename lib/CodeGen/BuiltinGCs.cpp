@@ -122,6 +122,20 @@ public:
   }
 };
 
+/// A GCStrategy for the Mono Runtime.
+class MonoGC : public GCStrategy {
+public:
+  MonoGC() {
+    UseStatepoints = true;
+    // These options are all gc.root specific, we specify them so that the
+    // gc.root lowering code doesn't run.
+    InitRoots = false;
+    NeededSafePoints = 0;
+    UsesMetadata = false;
+    CustomRoots = false;
+  }
+};
+
 } // end anonymous namespace
 
 // Register all the above so that they can be found at runtime.  Note that
@@ -135,6 +149,7 @@ static GCRegistry::Add<ShadowStackGC>
 static GCRegistry::Add<StatepointGC> D("statepoint-example",
                                        "an example strategy for statepoint");
 static GCRegistry::Add<CoreCLRGC> E("coreclr", "CoreCLR-compatible GC");
+static GCRegistry::Add<MonoGC> F("mono", "Mono-compatible GC");
 
 // Provide hooks to ensure the containing library is fully loaded.
 void llvm::linkErlangGC() {}
@@ -142,3 +157,4 @@ void llvm::linkOcamlGC() {}
 void llvm::linkShadowStackGC() {}
 void llvm::linkStatepointExampleGC() {}
 void llvm::linkCoreCLRGC() {}
+void llvm::linkMonoGC() {}
