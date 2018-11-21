@@ -2808,6 +2808,17 @@ private:
   // Request is
   //   <p, BB3> -> ?
   // The function tries to find or build phi [b1, BB1], [b2, BB2] in BB3
+  #if defined(__MINGW32__)
+  // This function triggers an optimization error in i686-w64-mingw32-gcc/i686-w64-mingw32-g++
+  // at least observed in 5.3.1 and 5.4.0. Since these mingw releases are the ones currently
+  // fetched by package managers building LLVM cross compilers targeting Windows, this make sure
+  // this method only gets compiled with an optimization level not triggering this bug. When the
+  // optimization error occurs it results in an incorrect stack pointer restore after the call to
+  // MatchPhiSet and since this method uses FPO next instruction loading NewPhiNodes relative stack pointer
+  // will get incorrect value triggering an access violation.
+  #pragma GCC push_options
+  #pragma GCC optimize ("O1")
+  #endif
   Value *findCommon(FoldAddrToValueMapping &Map) {
     // Tracks of new created Phi nodes.
     SmallPtrSet<PHINode *, 32> NewPhiNodes;
@@ -2849,6 +2860,9 @@ private:
     }
     return Result;
   }
+  #if defined(__MINGW32__)
+  #pragma GCC pop_options
+  #endif
 
   /// \brief Destroy nodes from a set.
   template <typename T> void DestroyNodes(SmallPtrSetImpl<T *> &Instructions) {
