@@ -29,14 +29,15 @@ namespace llvm {
 /// This is a utility class that provides an abstraction for the common
 /// functionality between Instructions and ConstantExprs.
 class Operator : public User {
-public:
+protected:
   // The Operator class is intended to be used as a utility, and is never itself
   // instantiated.
-  Operator() = delete;
-  ~Operator() = delete;
+  Operator() = default;
+  ~Operator() = default;
 
   void *operator new(size_t s) = delete;
 
+public:
   /// Return the opcode for this Instruction or ConstantExpr.
   unsigned getOpcode() const {
     if (const Instruction *I = dyn_cast<Instruction>(this))
