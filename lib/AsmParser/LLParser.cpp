@@ -1746,6 +1746,7 @@ void LLParser::ParseOptionalDLLStorageClass(unsigned &Res) {
 ///   ::= 'amdgpu_ps'
 ///   ::= 'amdgpu_cs'
 ///   ::= 'amdgpu_kernel'
+///   ::= 'monocc'
 ///   ::= 'cc' UINT
 ///
 bool LLParser::ParseOptionalCallingConv(unsigned &CC) {
@@ -1790,6 +1791,7 @@ bool LLParser::ParseOptionalCallingConv(unsigned &CC) {
   case lltok::kw_amdgpu_ps:      CC = CallingConv::AMDGPU_PS; break;
   case lltok::kw_amdgpu_cs:      CC = CallingConv::AMDGPU_CS; break;
   case lltok::kw_amdgpu_kernel:  CC = CallingConv::AMDGPU_KERNEL; break;
+  case lltok::kw_monocc:         CC = CallingConv::Mono; break;
   case lltok::kw_cc: {
       Lex.Lex();
       return ParseUInt32(CC);
