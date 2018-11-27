@@ -103,6 +103,9 @@ public:
   void operator delete(void*, unsigned) {
     llvm_unreachable("Constructor throws?");
   }
+  void operator delete(void*, unsigned, unsigned) {
+    llvm_unreachable("Constructor throws?");
+  }
   /// \brief Placement delete - required by std, but never called.
   void operator delete(void*, unsigned, bool) {
     llvm_unreachable("Constructor throws?");

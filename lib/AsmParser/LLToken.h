@@ -165,6 +165,7 @@ enum Kind {
   kw_amdgpu_ps,
   kw_amdgpu_cs,
   kw_amdgpu_kernel,
+  kw_monocc,
 
   // Attributes:
   kw_attributes,

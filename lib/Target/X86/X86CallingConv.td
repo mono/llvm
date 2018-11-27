@@ -706,6 +706,9 @@ def CC_X86_64_AnyReg : CallingConv<[
 def CC_X86_64_Mono : CallingConv<[
   CCIfInReg<CCAssignToReg<[R10]>>,
 
+  // Mingw64 and native Win64 use Win64 CC
+  CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
+  // Otherwise, drop to normal X86-64 CC
   CCDelegateTo<CC_X86_64_C>
 ]>;
 
