@@ -450,8 +450,10 @@ static bool shouldRewriteFunction(Function &F) {
     const auto &FunctionGCName = F.getGC();
     const StringRef StatepointExampleName("statepoint-example");
     const StringRef CoreCLRName("coreclr");
+    const StringRef MonoName("mono");
     return (StatepointExampleName == FunctionGCName) ||
-           (CoreCLRName == FunctionGCName);
+           (CoreCLRName == FunctionGCName) ||
+           (MonoName == FunctionGCName);
   } else
     return false;
 }

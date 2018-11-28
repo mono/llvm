@@ -24,6 +24,9 @@ class GCMetadataPrinter;
 /// Creates a CoreCLR-compatible garbage collector.
 void linkCoreCLRGC();
 
+/// Creates a Mono-compatible garbage collector.
+void linkMonoGC();
+
 /// Creates an ocaml-compatible garbage collector.
 void linkOcamlGC();
 

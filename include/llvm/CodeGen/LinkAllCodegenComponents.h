@@ -37,6 +37,7 @@ namespace {
       (void) llvm::createDefaultPBQPRegisterAllocator();
 
       llvm::linkCoreCLRGC();
+      llvm::linkMonoGC();
       llvm::linkOcamlGC();
       llvm::linkErlangGC();
       llvm::linkShadowStackGC();
