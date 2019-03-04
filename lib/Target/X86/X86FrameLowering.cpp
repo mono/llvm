@@ -1048,6 +1048,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
 
   uint64_t NumBytes = 0;
   int stackGrowth = -SlotSize;
+  int StackOffset = 2 * stackGrowth;
 
   // Find the funclet establisher parameter
   unsigned Establisher = X86::NoRegister;
@@ -1101,12 +1102,14 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       // Define the current CFA rule to use the provided offset.
       assert(StackSize);
       BuildCFI(MBB, MBBI, DL,
-               MCCFIInstruction::createDefCfaOffset(nullptr, 2 * stackGrowth));
+               MCCFIInstruction::createDefCfaOffset(nullptr, StackOffset));
 
       // Change the rule for the FramePtr to be an "offset" rule.
       unsigned DwarfFramePtr = TRI->getDwarfRegNum(MachineFramePtr, true);
       BuildCFI(MBB, MBBI, DL, MCCFIInstruction::createOffset(
-                                  nullptr, DwarfFramePtr, 2 * stackGrowth));
+                                  nullptr, DwarfFramePtr, StackOffset));
+
+      StackOffset += stackGrowth;
     }
 
     if (NeedsWinCFI) {
@@ -1154,7 +1157,6 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
 
   // Skip the callee-saved push instructions.
   bool PushedRegs = false;
-  int StackOffset = 2 * stackGrowth;
 
   while (MBBI != MBB.end() &&
          MBBI->getFlag(MachineInstr::FrameSetup) &&
@@ -1164,12 +1166,19 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     unsigned Reg = MBBI->getOperand(0).getReg();
     ++MBBI;
 
-    if (!HasFP && NeedsDwarfCFI) {
+    if (!HasFP && NeedsDwarfCFI || (IsWin64Prologue && NeedsDwarfCFI)) {
       // Mark callee-saved push instruction.
       // Define the current CFA rule to use the provided offset.
       assert(StackSize);
       BuildCFI(MBB, MBBI, DL,
                MCCFIInstruction::createDefCfaOffset(nullptr, StackOffset));
+
+      if (IsWin64Prologue && NeedsDwarfCFI) {
+        unsigned DwarfReg= TRI->getDwarfRegNum(Reg, true);
+        BuildCFI(MBB, MBBI, DL,
+                 MCCFIInstruction::createOffset(nullptr, DwarfReg, StackOffset));
+      }
+
       StackOffset += stackGrowth;
     }
 
@@ -1271,6 +1280,13 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
         .setMIFlag(MachineInstr::FrameSetup);
   }
 
+  // When emitting Dwarf CFI on Win64 account for adjustment at correct
+  // location in stream.
+  if (IsWin64Prologue && NeedsDwarfCFI && NumBytes) {
+    BuildCFI(MBB, MBBI, DL,
+             MCCFIInstruction::createAdjustCfaOffset(nullptr, NumBytes));
+  }
+
   int SEHFrameOffset = 0;
   unsigned SPOrEstablisher;
   if (IsFunclet) {
@@ -1325,6 +1341,21 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       if (isAsynchronousEHPersonality(Personality))
         MF.getWinEHFuncInfo()->SEHSetFrameOffset = SEHFrameOffset;
     }
+
+    if (NeedsDwarfCFI && !IsFunclet) {
+      // Define the current CFA to use the EBP/RBP register.
+      unsigned DwarfFramePtr = TRI->getDwarfRegNum(FramePtr, true);
+      BuildCFI(MBB, MBBI, DL,
+               MCCFIInstruction::createDefCfaRegister(nullptr, DwarfFramePtr));
+
+      if (SEHFrameOffset) {
+        // Framepointer has been adjusted with an offset, make sure
+        // it is reflected in CFA offset.
+        BuildCFI(MBB, MBBI, DL,
+                 MCCFIInstruction::createAdjustCfaOffset(nullptr, -SEHFrameOffset));
+      }
+    }
+
   } else if (IsFunclet && STI.is32Bit()) {
     // Reset EBP / ESI to something good for funclets.
     MBBI = restoreWin32EHStackPointers(MBB, MBBI, DL);
@@ -1432,7 +1463,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     }
   }
 
-  if (((!HasFP && NumBytes) || PushedRegs) && NeedsDwarfCFI) {
+  if (((!HasFP && NumBytes) || PushedRegs) && NeedsDwarfCFI && !IsWin64Prologue) {
     // Mark end of stack pointer adjustment.
     if (!HasFP && NumBytes) {
       // Define the current CFA rule to use the provided offset.
