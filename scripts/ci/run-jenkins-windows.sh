@@ -27,7 +27,7 @@ function win32_format_path {
 echo "ENVIRONMENT:"
 env
 
-RUN_JENKINS_WINDOWS_SCRIPT_PATH=$(cd "$(dirname "$0")"; pwd)
+RUN_JENKINS_WINDOWS_SCRIPT_PATH=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 RUN_JENKINS_WINDOWS_SCRIPT_PATH=$(win32_format_path "$RUN_JENKINS_WINDOWS_SCRIPT_PATH/run-jenkins-windows.bat")
 
 WINDOWS_CMD=$(which cmd.exe)
