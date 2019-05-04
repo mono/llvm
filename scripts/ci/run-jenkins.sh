@@ -1,22 +1,24 @@
 #!/bin/bash -e
 
+RUN_JENKINS_SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
 host_uname="$(uname)"
 case "$host_uname" in
     CYGWIN*)
-        ./run-jenkins-windows.sh
+        $RUN_JENKINS_SCRIPT_DIR/run-jenkins-windows.sh
         ;;
     Linux)
         host_uname="$(uname -a)"
         case "$host_uname" in
             *Microsoft*)
-                ./run-jenkins-windows.sh
+                $RUN_JENKINS_SCRIPT_DIR/run-jenkins-windows.sh
                 ;;
             *)
-                ./run-jenkins-linux.sh
+                $RUN_JENKINS_SCRIPT_DIR/run-jenkins-linux.sh
                 ;;
         esac
         ;;
     Darwin)
-        ./run-jenkins-osx.sh
+        $RUN_JENKINS_SCRIPT_DIR/run-jenkins-osx.sh
         ;;
 esac
