@@ -28,14 +28,14 @@ echo "ENVIRONMENT:"
 env
 
 RUN_JENKINS_WINDOWS_SCRIPT_PATH=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
-RUN_JENKINS_WINDOWS_SCRIPT_PATH=$(win32_format_path "$RUN_JENKINS_WINDOWS_SCRIPT_PATH/run-jenkins-windows.bat")
+RUN_JENKINS_WINDOWS_SCRIPT_PATH_WINDOWS=$(win32_format_path "$RUN_JENKINS_WINDOWS_SCRIPT_PATH/run-jenkins-windows.bat")
 
 WINDOWS_CMD=$(which cmd.exe)
 if [ ! -f $WINDOWS_CMD ]; then
     WINDOWS_CMD=$WINDIR/System32/cmd.exe
 fi
 
-"$WINDOWS_CMD" /c "$RUN_JENKINS_WINDOWS_SCRIPT_PATH"
+"$WINDOWS_CMD" /c "$RUN_JENKINS_WINDOWS_SCRIPT_PATH_WINDOWS"
 
 GIT_COMMIT=$(git rev-parse HEAD)
-tar cvzf llvm-llvmwin64-msvc-$GIT_COMMIT-Windows.tar.gz -C out/llvm-llvmwin64-msvc .
+tar cvzf llvm-llvmwin64-msvc-$GIT_COMMIT-Windows.tar.gz -C $RUN_JENKINS_WINDOWS_SCRIPT_PATH/out/llvm-llvmwin64-msvc .
