@@ -1,5 +1,3 @@
 # Windows line ending
-run-jenkins-windows.bat text eol=crlf
-setup-windows-env.bat text eol=crlf
-setup-vs-msvcbuild-env.bat text eol=crlf
-build-external-llvm.bat text eol=crlf
+*.sh text eol=lf
+*.bat text eol=crlf
