@@ -254,8 +254,7 @@ MonoException::~MonoException()
 void
 MonoException::beginFunction(const MachineFunction *MF)
 {
-  if (DisableGNUEH && Asm->MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
-    static_cast<ARMTargetStreamer*>(Asm->OutStreamer->getTargetStreamer())->emitFnStart();
+  EmitFnStart();
   EHLabels.clear();
 }
 
@@ -364,6 +363,20 @@ MonoException::PrepareMonoLSDA(EHInfo *info)
 }
 
 void
+MonoException::EmitFnStart(void)
+{
+  if (DisableGNUEH && Asm->MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
+    static_cast<ARMTargetStreamer*>(Asm->OutStreamer->getTargetStreamer())->emitFnStart();
+}
+
+void
+MonoException::EmitFnEnd(void)
+{
+  if (DisableGNUEH && Asm->MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
+    static_cast<ARMTargetStreamer*>(Asm->OutStreamer->getTargetStreamer())->emitFnEnd();
+}
+
+void
 MonoException::endFunction(const MachineFunction *MF)
 {
   //
@@ -390,8 +403,10 @@ MonoException::endFunction(const MachineFunction *MF)
 
   int monoMethodIdx = FuncIndexes.lookup (Asm->MF->getFunction ().getName ()) - 1;
 
-  if (monoMethodIdx == -1)
+  if (monoMethodIdx == -1) {
+    EmitFnEnd ();
     return;
+  }
 
   //outs () << "D: " << Asm->MF->getFunction()->getName() << " " << monoMethodIdx << "\n";
 
@@ -416,8 +431,7 @@ MonoException::endFunction(const MachineFunction *MF)
   Frames.push_back(info);
   EHLabels.clear();
 
-  if (DisableGNUEH && Asm->MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
-    static_cast<ARMTargetStreamer*>(Asm->OutStreamer->getTargetStreamer())->emitFnEnd();
+  EmitFnEnd ();
 }
 
 /// EmitMonoLSDA - Mono's version of EmitExceptionTable

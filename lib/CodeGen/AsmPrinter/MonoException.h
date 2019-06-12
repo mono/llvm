@@ -67,6 +67,8 @@ private:
 
   void PrepareMonoLSDA(EHInfo *info);
   void EmitMonoLSDA(const EHInfo *info);
+  void EmitFnStart();
+  void EmitFnEnd();
 
   std::vector<MCSymbol*> EHLabels;
   std::vector<EHInfo> Frames;
