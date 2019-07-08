@@ -355,6 +355,7 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF,
   unsigned ArgRegsSaveSize = AFI->getArgRegsSaveSize();
   unsigned NumBytes = MFI.getStackSize();
   const std::vector<CalleeSavedInfo> &CSI = MFI.getCalleeSavedInfo();
+  bool AvoidNonfpCFA = false;
 
   // Debug location must be unknown since the first debug location is used
   // to determine the end of the prologue.
@@ -580,6 +581,7 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF,
                          dl, TII, FramePtr, ARM::SP,
                          PushSize + FramePtrOffsetInPush,
                          MachineInstr::FrameSetup);
+#if 0
     if (FramePtrOffsetInPush + PushSize != 0) {
       unsigned CFIIndex = MF.addFrameInst(MCCFIInstruction::createDefCfa(
           nullptr, MRI->getDwarfRegNum(FramePtr, true),
@@ -595,6 +597,15 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF,
           .addCFIIndex(CFIIndex)
           .setMIFlags(MachineInstr::FrameSetup);
     }
+#else
+    /* on iOS `r7 + 8` is always the previous stack pointer */
+    unsigned CFIIndex = MF.addFrameInst(MCCFIInstruction::createDefCfa(nullptr, MRI->getDwarfRegNum(FramePtr, true), -8));
+    BuildMI(MBB, AfterPush, dl, TII.get(TargetOpcode::CFI_INSTRUCTION))
+      .addCFIIndex(CFIIndex)
+      .setMIFlags(MachineInstr::FrameSetup);
+
+    AvoidNonfpCFA = true;
+#endif
   }
 
   // Now that the prologue's actual instructions are finalised, we can insert
@@ -683,7 +694,8 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF,
   // throughout the process. If we have a frame pointer, it takes over the job
   // half-way through, so only the first few .cfi_def_cfa_offset instructions
   // actually get emitted.
-  DefCFAOffsetCandidates.emitDefCFAOffsets(MBB, dl, TII, HasFP);
+  if (!AvoidNonfpCFA)
+    DefCFAOffsetCandidates.emitDefCFAOffsets(MBB, dl, TII, HasFP);
 
   if (STI.isTargetELF() && hasFP(MF))
     MFI.setOffsetAdjustment(MFI.getOffsetAdjustment() -
