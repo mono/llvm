@@ -191,6 +191,9 @@ AArch64RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   markSuperRegs(Reserved, AArch64::WSP);
   markSuperRegs(Reserved, AArch64::WZR);
 
+  if (MF.getFunction().getCallingConv() == CallingConv::Mono)
+    markSuperRegs(Reserved, AArch64::W15);
+
   if (TFI->hasFP(MF) || TT.isOSDarwin())
     markSuperRegs(Reserved, AArch64::W29);
 

@@ -716,6 +716,12 @@ def CC_X86_64_AnyReg : CallingConv<[
   CCCustom<"CC_X86_AnyReg_Error">
 ]>;
 
+def CC_X86_64_Mono : CallingConv<[
+  CCIfInReg<CCAssignToReg<[R10]>>,
+
+  CCDelegateTo<CC_X86_64_C>
+]>;
+
 //===----------------------------------------------------------------------===//
 // X86 C Calling Convention
 //===----------------------------------------------------------------------===//
@@ -986,6 +992,12 @@ def CC_Intel_OCL_BI : CallingConv<[
   CCDelegateTo<CC_X86_32_C>
 ]>;
 
+def CC_X86_32_Mono : CallingConv<[
+  CCIfInReg<CCAssignToReg<[EDX]>>,
+
+  CCDelegateTo<CC_X86_32_C>
+]>;
+
 //===----------------------------------------------------------------------===//
 // X86 Root Argument Calling Conventions
 //===----------------------------------------------------------------------===//
@@ -1003,6 +1015,7 @@ def CC_X86_32 : CallingConv<[
   CCIfCC<"CallingConv::GHC", CCDelegateTo<CC_X86_32_GHC>>,
   CCIfCC<"CallingConv::HiPE", CCDelegateTo<CC_X86_32_HiPE>>,
   CCIfCC<"CallingConv::X86_RegCall", CCDelegateTo<CC_X86_32_RegCall>>,
+  CCIfCC<"CallingConv::Mono", CCDelegateTo<CC_X86_32_Mono>>,
 
   // Otherwise, drop to normal X86-32 CC
   CCDelegateTo<CC_X86_32_C>
@@ -1023,6 +1036,7 @@ def CC_X86_64 : CallingConv<[
     CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_RegCall>>>,
   CCIfCC<"CallingConv::X86_RegCall", CCDelegateTo<CC_X86_SysV64_RegCall>>,
   CCIfCC<"CallingConv::X86_INTR", CCCustom<"CC_X86_Intr">>,
+  CCIfCC<"CallingConv::Mono", CCDelegateTo<CC_X86_64_Mono>>,
 
   // Mingw64 and native Win64 use Win64 CC
   CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,
