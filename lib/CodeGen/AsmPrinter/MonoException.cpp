@@ -242,10 +242,11 @@ emitCFIInstructions(MCStreamer &streamer,
   }
 }
 
-MonoException::MonoException(AsmPrinter *A)
+MonoException::MonoException(AsmPrinter *A, bool disableGNUEH)
   : EHStreamer(A)
 {
   RI = nullptr;
+  DisableGNUEH = disableGNUEH;
 }
 
 MonoException::~MonoException()
@@ -255,6 +256,7 @@ MonoException::~MonoException()
 void
 MonoException::beginFunction(const MachineFunction *MF)
 {
+  EmitFnStart();
   EHLabels.clear();
 }
 
@@ -363,6 +365,20 @@ MonoException::PrepareMonoLSDA(EHInfo *info)
 }
 
 void
+MonoException::EmitFnStart(void)
+{
+  if (DisableGNUEH && Asm->MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
+    static_cast<ARMTargetStreamer*>(Asm->OutStreamer->getTargetStreamer())->emitFnStart();
+}
+
+void
+MonoException::EmitFnEnd(void)
+{
+  if (DisableGNUEH && Asm->MAI->getExceptionHandlingType() == ExceptionHandling::ARM)
+    static_cast<ARMTargetStreamer*>(Asm->OutStreamer->getTargetStreamer())->emitFnEnd();
+}
+
+void
 MonoException::endFunction(const MachineFunction *MF)
 {
   //
@@ -389,8 +405,10 @@ MonoException::endFunction(const MachineFunction *MF)
 
   int monoMethodIdx = FuncIndexes.lookup (Asm->MF->getFunction ().getName ()) - 1;
 
-  if (monoMethodIdx == -1)
+  if (monoMethodIdx == -1) {
+    EmitFnEnd ();
     return;
+  }
 
   //outs () << "D: " << Asm->MF->getFunction()->getName() << " " << monoMethodIdx << "\n";
 
@@ -406,11 +424,16 @@ MonoException::endFunction(const MachineFunction *MF)
   info.Instructions = MF->getFrameInstructions();
   assert (info.Instructions.size () == info.EHLabels.size());
 
+  if (DisableGNUEH)
+    /* ARMAsmPrinter generates references to this */
+    Asm->OutStreamer->EmitLabel(Asm->getCurExceptionSym());
+
   PrepareMonoLSDA(&info);
 
   Frames.push_back(info);
   EHLabels.clear();
 
+  EmitFnEnd ();
 }
 
 /// EmitMonoLSDA - Mono's version of EmitExceptionTable

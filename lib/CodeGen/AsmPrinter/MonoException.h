@@ -19,7 +19,7 @@ class TargetRegisterInfo;
 
 class MonoException : public EHStreamer {
 public:
-  MonoException(AsmPrinter *A);
+    MonoException(AsmPrinter *A, bool disableGNUEH);
   virtual ~MonoException();
 
   virtual void endModule();
@@ -67,11 +67,14 @@ private:
 
   void PrepareMonoLSDA(EHInfo *info);
   void EmitMonoLSDA(const EHInfo *info);
+  void EmitFnStart();
+  void EmitFnEnd();
 
   std::vector<MCSymbol*> EHLabels;
   std::vector<EHInfo> Frames;
   StringMap<int> FuncIndexes;
   const TargetRegisterInfo *RI;
+  bool DisableGNUEH;
 };
 } // End of namespace llvm
 

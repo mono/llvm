@@ -394,7 +394,7 @@ bool AsmPrinter::doInitialization(Module &M) {
                           DWARFGroupDescription);
 
   if (EnableMonoEH) {
-      MonoException *mono_eh = new MonoException (this);
+      MonoException *mono_eh = new MonoException (this, DisableGNUEH);
       Handlers.push_back(HandlerInfo(std::unique_ptr<MonoException> (mono_eh), EHTimerName, EHTimerDescription, DWARFGroupName, DWARFGroupDescription));
   }
   return false;

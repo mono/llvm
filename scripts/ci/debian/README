@@ -1,0 +1,7 @@
+The Debian Package mono-llvm
+----------------------------
+
+Comments regarding the Package
+
+This package is a build of the mono fork of llvm. The mono project requires a number of patches
+in order to use LLVM for some of our backends.
