@@ -345,6 +345,7 @@ def CC_ARM_Mono_AAPCS : CallingConv<[
   CCDelegateTo<CC_ARM_AAPCS>
 ]>;
 
+let Entry = 1 in
 def CC_ARM_Mono_AAPCS_VFP : CallingConv<[
   // Mono marks the parameter it wants to pass in this non-abi register with
   // the 'inreg' attribute.
@@ -352,4 +353,3 @@ def CC_ARM_Mono_AAPCS_VFP : CallingConv<[
 
   CCDelegateTo<CC_ARM_AAPCS_VFP>
 ]>;
-

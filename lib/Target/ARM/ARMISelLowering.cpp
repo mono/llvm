@@ -1851,7 +1851,7 @@ CCAssignFn *ARMTargetLowering::CCAssignFnForNode(CallingConv::ID CC,
     } else {
       if (!Subtarget->isAAPCS_ABI())
         return CC_ARM_Mono_APCS;
-      else if (Subtarget->hasVFP2() && !Subtarget->isThumb1Only() &&
+      else if (Subtarget->hasVFP2Base() && !Subtarget->isThumb1Only() &&
                getTargetMachine().Options.FloatABIType == FloatABI::Hard &&
                !isVarArg)
         return CC_ARM_Mono_AAPCS_VFP;

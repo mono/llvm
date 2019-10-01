@@ -50,6 +50,9 @@ bool CC_ARM_Mono_AAPCS(unsigned ValNo, MVT ValVT, MVT LocVT,
 bool CC_ARM_Mono_APCS(unsigned ValNo, MVT ValVT, MVT LocVT,
                  CCValAssign::LocInfo LocInfo, ISD::ArgFlagsTy ArgFlags,
                  CCState &State);
+bool CC_ARM_Mono_AAPCS_VFP(unsigned ValNo, MVT ValVT, MVT LocVT,
+                 CCValAssign::LocInfo LocInfo, ISD::ArgFlagsTy ArgFlags,
+                 CCState &State);
 } // namespace llvm
 
 #endif
