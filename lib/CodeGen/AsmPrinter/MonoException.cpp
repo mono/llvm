@@ -220,13 +220,14 @@ static void
 emitCFIInstructions(MCStreamer &streamer,
                     const std::vector<MCCFIInstruction> &Instrs,
                     MCSymbol *BaseLabel,
-                    const std::vector<MCSymbol*> *Labels,
                     int &CFAOffset,
                     int DataAlignmentFactor)
 {
   for (unsigned i = 0, N = Instrs.size(); i < N; ++i) {
     const MCCFIInstruction &Instr = Instrs[i];
-    MCSymbol *Label = Labels ? ((*Labels)[i]) : NULL;
+    MCSymbol *Label = Instr.getLabel();
+    // Throw out move if the label is invalid.
+    if (Label && !Label->isDefined()) continue; // Not emitted, in dead code.
 
     // Advance row if new location.
     if (BaseLabel && Label) {
@@ -257,7 +258,6 @@ void
 MonoException::beginFunction(const MachineFunction *MF)
 {
   EmitFnStart();
-  EHLabels.clear();
 }
 
 void
@@ -418,11 +418,9 @@ MonoException::endFunction(const MachineFunction *MF)
   info.FunctionNumber = Asm->getFunctionNumber();
   info.BeginSym = Asm->getFunctionBegin ();
   info.EndSym = Asm->getFunctionEnd ();
-  info.EHLabels = EHLabels;
   info.MonoMethodIdx = monoMethodIdx;
   info.HasLandingPads = !MF->getLandingPads().empty();
   info.Instructions = MF->getFrameInstructions();
-  assert (info.Instructions.size () == info.EHLabels.size());
 
   if (DisableGNUEH)
     /* ARMAsmPrinter generates references to this */
@@ -431,7 +429,6 @@ MonoException::endFunction(const MachineFunction *MF)
   PrepareMonoLSDA(&info);
 
   Frames.push_back(info);
-  EHLabels.clear();
 
   EmitFnEnd ();
 }
@@ -609,7 +606,7 @@ MonoException::endModule()
   int cfaOffset = 0;
 
   // Initial CIE program
-  emitCFIInstructions(streamer, streamer.getContext().getAsmInfo()->getInitialFrameState(), NULL, NULL, cfaOffset, stackGrowth);
+  emitCFIInstructions(streamer, streamer.getContext().getAsmInfo()->getInitialFrameState(), NULL, cfaOffset, stackGrowth);
   streamer.AddComment("End of CIE program");
   streamer.EmitIntValue(dwarf::DW_CFA_nop, 1);
 
@@ -644,7 +641,7 @@ MonoException::endModule()
 
       // Emit unwind info
       cfaOffset = cieCfaOffset;
-      emitCFIInstructions(streamer, info.Instructions, info.BeginSym, &info.EHLabels, cfaOffset, dataAlignmentFactor);
+      emitCFIInstructions(streamer, info.Instructions, info.BeginSym, cfaOffset, dataAlignmentFactor);
 
       streamer.AddBlankLine();
   }
@@ -656,18 +653,4 @@ MonoException::endModule()
 void
 MonoException::beginInstruction(const MachineInstr *MI)
 {
-	if (MI->getOpcode() == TargetOpcode::CFI_INSTRUCTION) {
-		unsigned CFIIndex = MI->getOperand(0).getCFIIndex();
-
-		//outs () << "D: " << CFIIndex << " " << EHLabels.size() << "\n";
-
-		/* Emit a label and save the label-cfi index association */
-		if (CFIIndex != EHLabels.size())
-			assert (0);
-
-		MCSymbol *Label = Asm->OutContext.createTempSymbol();
-		Asm->OutStreamer->EmitLabel(Label);
-
-		EHLabels.push_back(Label);
-	}
 }

@@ -45,7 +45,6 @@ private:
   struct EHInfo {
     int FunctionNumber, MonoMethodIdx;
 	MCSymbol *BeginSym, *EndSym, *FDESym;
-	std::vector<MCSymbol*> EHLabels;
     std::vector<MCCFIInstruction> Instructions;
     std::vector<MonoCallSiteEntry> CallSites;
     std::vector<const GlobalValue *> TypeInfos;
@@ -70,7 +69,6 @@ private:
   void EmitFnStart();
   void EmitFnEnd();
 
-  std::vector<MCSymbol*> EHLabels;
   std::vector<EHInfo> Frames;
   StringMap<int> FuncIndexes;
   const TargetRegisterInfo *RI;
@@ -101,7 +99,6 @@ class DwarfMonoException : public EHStreamer {
     bool adjustsStack;
     bool hasLandingPads;
     std::vector<MCCFIInstruction> Instructions;
-	std::vector<MCSymbol*> EHLabels;
     const Function *function;
 
     MonoEHFrameInfo MonoEH;
@@ -109,16 +106,14 @@ class DwarfMonoException : public EHStreamer {
     FunctionEHFrameInfo(MCSymbol *EHSym, unsigned Num, unsigned P,
                         bool hC, bool hL,
                         const std::vector<MCCFIInstruction> &M,
-						const std::vector<MCSymbol*> &EHLabels,
                         const Function *f):
       FunctionEHSym(EHSym), Number(Num), PersonalityIndex(P),
-      adjustsStack(hC), hasLandingPads(hL), Instructions(M), EHLabels(EHLabels), function (f) { }
+      adjustsStack(hC), hasLandingPads(hL), Instructions(M), function (f) { }
   };
 
   std::vector<FunctionEHFrameInfo> EHFrames;
 
   StringMap<int> FuncIndexes;
-  std::vector<MCSymbol*> EHLabels;
 
 public:
   DwarfMonoException(AsmPrinter *A);
