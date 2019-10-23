@@ -17,6 +17,11 @@ namespace llvm {
 
 class TargetRegisterInfo;
 
+struct MonoLabeledCfiInstruction {
+  MCSymbol *Label;
+  unsigned int CfiIndex;
+};
+
 class MonoException : public EHStreamer {
 public:
   MonoException(AsmPrinter *A, bool disableGNUEH);
@@ -45,11 +50,11 @@ private:
   struct EHInfo {
     int FunctionNumber, MonoMethodIdx;
 	MCSymbol *BeginSym, *EndSym, *FDESym;
-	std::vector<MCSymbol*> EHLabels;
     std::vector<MCCFIInstruction> Instructions;
     std::vector<MonoCallSiteEntry> CallSites;
     std::vector<const GlobalValue *> TypeInfos;
     std::vector<LandingPadInfo> PadInfos;
+    std::vector<MonoLabeledCfiInstruction> CfiInstructions;
     int FrameReg;
     int ThisOffset;
     bool HasLandingPads;
@@ -70,7 +75,7 @@ private:
   void EmitFnStart();
   void EmitFnEnd();
 
-  std::vector<MCSymbol*> EHLabels;
+  std::vector<MonoLabeledCfiInstruction> CfiInstructions;
   std::vector<EHInfo> Frames;
   StringMap<int> FuncIndexes;
   const TargetRegisterInfo *RI;
